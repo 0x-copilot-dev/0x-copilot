@@ -6,7 +6,7 @@ alwaysApply: false
 
 # AI Backend Engineering
 
-- Read `services/ai-backend/docs/README.md`, the relevant PRD, and the matching spec before implementation.
+- Read `services/ai-backend/docs/README.md`, relevant architecture docs, and the matching spec before implementation. Read PRDs only for future product or architecture work that has not shipped yet.
 - `services/ai-backend` is the canonical AI backend service path.
 - Keep orchestration separate from connector side effects.
 - Use dependency inversion for registries, stores, MCP clients, and subagent runners.

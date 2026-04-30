@@ -3,6 +3,10 @@
 Product-facing API facade for Enterprise Search apps. It shapes app responses,
 proxies service calls, and owns client-compatible streaming surfaces.
 
+See `ARCHITECTURE.md` for the forwarding matrix, `TESTING.md` for test
+guidance, and `docs/specs/product-api-surface.md` for the current app-facing
+route surface.
+
 ## Local Environment
 
 Use a service-local virtual environment. Do not reuse `backend`, `ai-backend`,

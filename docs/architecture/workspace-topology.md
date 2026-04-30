@@ -7,8 +7,8 @@ Enterprise Search should be developed as one GitHub monorepo with multiple deplo
 ```mermaid
 flowchart TD
   WebFrontend[Web Frontend] --> BackendFacade[Backend Facade]
-  MacApp[Mac App] --> BackendFacade
-  WindowsApp[Windows App] --> BackendFacade
+  MacApp[Mac App Planned] --> BackendFacade
+  WindowsApp[Windows App Planned] --> BackendFacade
   BackendFacade --> CoreBackend[Core Backend]
   BackendFacade --> AiBackend[AI Backend]
   CoreBackend --> ProductDB[Product Database]
@@ -17,22 +17,26 @@ flowchart TD
   AiBackend --> VectorStores[Vector Stores]
 ```
 
-## Target Layout
+## Current And Target Layout
+
+The target architecture includes clients and shared packages that are not all
+implemented yet. Planned paths should stay out of builds and imports until they
+exist on disk.
 
 ```text
 enterprise-search/
   apps/
-    frontend/
-    mac/
-    windows/
+    frontend/        # implemented
+    mac/             # planned
+    windows/         # planned
   services/
-    backend-facade/
-    backend/
-    ai-backend/
+    backend-facade/  # implemented
+    backend/         # implemented
+    ai-backend/      # implemented
   packages/
-    api-types/
-    shared-config/
-    design-system/
+    api-types/       # implemented
+    design-system/   # implemented
+    shared-config/   # planned
   infra/
     docker/
     compose.yaml
@@ -48,7 +52,9 @@ enterprise-search/
 
 - Apps call `backend-facade`.
 - `backend-facade` calls `backend` and `ai-backend`.
-- `backend` owns product state and may emit events/jobs for other services.
+- `backend` currently owns MCP registration, OAuth/token state, user skills, and
+  audit events. It is the target home for product state and may emit events/jobs
+  for other services as those concerns are implemented.
 - `ai-backend` may call MCP servers, enterprise connectors, vector stores, and LLM providers through typed ports.
 - Shared packages provide contracts and generated clients, not hidden runtime coupling.
 

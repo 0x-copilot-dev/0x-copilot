@@ -1,0 +1,14 @@
+---
+description: Backend and facade service engineering rules
+globs: "{services/backend/**,services/backend-facade/**}"
+alwaysApply: false
+---
+
+# Backend Services
+
+- Read the service `README.md`, `ARCHITECTURE.md`, and `TESTING.md` before changing service behavior.
+- `services/backend` owns MCP registration, OAuth/token state, user skills, and audit events today.
+- `services/backend-facade` is the app-facing API surface; it forwards to backend services and must not import their Python modules.
+- Keep `/internal/v1/*` off the facade unless an accepted spec updates the service boundary.
+- Do not add sibling services to `PYTHONPATH` or reuse another service's `.venv`.
+- Update `packages/api-types` and facade/product API docs when app-facing payloads or routes change.

@@ -17,6 +17,15 @@ Minimum rule-loading requirements:
 - For workspace architecture or service boundary work, read:
   - `.cursor/rules/workspace-architecture.mdc`
   - `.cursor/rules/service-boundaries.mdc`
+- For `apps/frontend/**` work, read:
+  - `.cursor/rules/frontend-app.mdc`
+  - `.cursor/rules/frontend-design-system.mdc` when touching shared UI usage
+- For `services/backend/**` or `services/backend-facade/**` work, read:
+  - `.cursor/rules/backend-services.mdc`
+- For `packages/api-types/**` work, read:
+  - `.cursor/rules/packages-api-types.mdc`
+- For `packages/design-system/**` work, read:
+  - `.cursor/rules/frontend-design-system.mdc`
 - For CI/CD, Docker, or workflow work, read:
   - `.cursor/rules/ci-cd-docker.mdc`
 

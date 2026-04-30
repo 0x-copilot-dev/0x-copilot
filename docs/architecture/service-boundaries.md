@@ -6,47 +6,65 @@ This product will grow across web, Mac, Windows, backend services, AI orchestrat
 
 ## Component Responsibilities
 
+This section describes both implemented ownership and target ownership. Planned
+components are marked explicitly so current build and import paths stay tied to
+what exists on disk.
+
 ### `apps/frontend`
 
-Owns the web work surface: search experience, agent interaction, source review, admin screens, and web-specific UX. It talks to `backend-facade`.
+Implemented. Owns the web work surface: search experience, agent interaction,
+source review, admin screens, and web-specific UX. It talks to `backend-facade`.
 
 ### `apps/mac`
 
-Owns the macOS client: desktop search, executive workflows, notifications, and macOS-specific capabilities. It talks to `backend-facade`.
+Planned. Owns the macOS client: desktop search, executive workflows,
+notifications, and macOS-specific capabilities. It talks to `backend-facade`.
 
 ### `apps/windows`
 
-Owns the Windows desktop client: enterprise desktop workflows, native shell integration, and distribution concerns. It talks to `backend-facade`.
+Planned. Owns the Windows desktop client: enterprise desktop workflows, native
+shell integration, and distribution concerns. It talks to `backend-facade`.
 
 ### `services/backend-facade`
 
-Owns the public product API for apps. It shapes responses, aggregates backend service calls, handles app-compatible streaming, and preserves a stable API even if internal services change.
+Implemented. Owns the public product API for apps. It shapes responses,
+aggregates backend service calls, handles app-compatible streaming, and
+preserves a stable API even if internal services change.
 
 It should not own AI orchestration, product persistence, or connector side effects.
 
 ### `services/backend`
 
-Owns core product backend concerns: tenants, user/org mapping, auth integration, permissions, product database, admin workflows, background jobs, and audit records.
+Implemented current slice: MCP registration, OAuth state, token storage, user
+skills, and audit events. Target ownership: tenants, user/org mapping, auth
+integration, permissions, product database, admin workflows, background jobs,
+and audit records.
 
 It should not own LLM agent orchestration or UI presentation state.
 
 ### `services/ai-backend`
 
-Owns AI orchestration: Deep Agents runtime, LangGraph execution, LangChain tool wiring, dynamic tool loading, dynamic MCP loading, skills, context/memory management, subagents, streaming events, and retrieval orchestration.
+Implemented. Owns AI orchestration: Deep Agents runtime, LangGraph execution,
+LangChain tool wiring, dynamic tool loading, dynamic MCP loading, skills,
+context/memory management, subagents, streaming events, and retrieval
+orchestration.
 
 It should not own tenant auth, billing/admin state, product persistence, or app-specific presentation logic.
 
 ### `packages/api-types`
 
-Owns stable schemas, generated clients, and public contracts between apps and services.
+Implemented. Owns stable TypeScript schemas and public contracts between apps
+and services. Generated clients are target direction, not current behavior.
 
 ### `packages/shared-config`
 
-Owns shared lint, formatting, testing, Docker, and CI config when that config is genuinely common.
+Planned. Owns shared lint, formatting, testing, Docker, and CI config when that
+config is genuinely common.
 
 ### `packages/design-system`
 
-Owns stable design tokens and shared UI primitives. Do not force native and web UI into one abstraction before the product needs it.
+Implemented for web. Owns stable design tokens and shared UI primitives. Do not
+force native and web UI into one abstraction before the product needs it.
 
 ## Shared Package Rule
 

@@ -8,9 +8,10 @@ alwaysApply: true
 - Treat `enterprise-search` as one GitHub monorepo with multiple independently deployable components.
 - Runtime architecture can be microservice-style: each service owns its API, Docker image, dependency environment, tests, and deploy path.
 - Apps call `backend-facade`; apps must not call internal services directly without an accepted spec.
-- `backend` owns tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
+- `backend` currently owns MCP registration, OAuth/token state, user skills, and audit events. It is the target home for tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
 - `services/ai-backend` is the canonical AI backend service path.
 - Shared packages are for stable contracts and cross-cutting primitives, not hidden business logic.
+- `apps/mac`, `apps/windows`, and `packages/shared-config` are planned paths. Do not reference them from builds or imports until they exist.
 - Deployable apps and services must not import implementation code from sibling apps/services; use APIs, queues/events, or generated contracts.
 - Do not add sibling services/apps to `PYTHONPATH`, use relative imports across deployable boundaries, or run one Python service with another service's `.venv`.
 - Python services use their own service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.

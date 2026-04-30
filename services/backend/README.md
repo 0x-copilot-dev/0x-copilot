@@ -1,8 +1,13 @@
 # Backend
 
-Core product backend for Enterprise Search. This service owns tenants, user/org
-scope, product persistence, MCP registration, OAuth state, token storage, and
-audit events.
+Core product backend for Enterprise Search. The current implementation owns MCP
+registration, OAuth state, token storage, user skills, and audit events. Tenant
+auth, permissions, broad product persistence, admin workflows, billing, and jobs
+are target backend responsibilities that should land here as those features are
+implemented.
+
+See `ARCHITECTURE.md` for module ownership and `TESTING.md` for the service test
+strategy. Internal service routes are specified in `docs/specs/internal-api.md`.
 
 ## Local Environment
 

@@ -4,24 +4,28 @@ Enterprise Search is the workspace for a broader enterprise work surface: one pr
 
 This is one GitHub monorepo with multiple deployable components. The runtime architecture is microservice-style: each service owns its API, Docker image, local dependency environment, tests, and deployment path.
 
-The workspace now includes initial deployable scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, and `packages/api-types`.
+The workspace now includes initial deployable scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, `packages/api-types`, and `packages/design-system`.
 
-## Target Repository Layout
+## Current And Target Repository Layout
+
+Implemented paths are present today. Planned paths describe the target
+architecture and should not be imported from or referenced by builds until they
+exist.
 
 ```text
 enterprise-search/
   apps/
-    frontend/
-    mac/
-    windows/
+    frontend/        # implemented
+    mac/             # planned
+    windows/         # planned
   services/
-    backend-facade/
-    backend/
-    ai-backend/
+    backend-facade/  # implemented
+    backend/         # implemented
+    ai-backend/      # implemented
   packages/
-    api-types/
-    shared-config/
-    design-system/
+    api-types/       # implemented
+    design-system/   # implemented
+    shared-config/   # planned
   infra/
     docker/
     compose.yaml
@@ -43,17 +47,17 @@ Monorepo and microservices are separate decisions. This repo should keep related
 - Microservice-style runtime: backend services are independently built, tested, containerized, and deployed.
 - Shared packages: stable contracts and cross-cutting primitives only, not a place to hide business ownership.
 
-## Planned Components
+## Components
 
-- `services/ai-backend`: AI orchestration backend for Deep Agents, LangGraph, LangChain tools, dynamic MCP loading, skills, context/memory management, subagents, streaming, and retrieval orchestration.
-- `services/backend-facade`: stable product-facing API surface that frontend and native apps call. It hides internal service topology.
-- `services/backend`: core backend services for product data, persistence, tenant/auth integration, permissions, billing/admin workflows, and operational jobs.
-- `apps/frontend`: web work surface for enterprise search, agent interaction, source review, workflow execution, and admin views.
-- `apps/windows`: Windows desktop client for desktop workflows and enterprise distribution.
-- `apps/mac`: macOS desktop client for executive workflows, desktop search, and notifications.
-- `packages/api-types`: shared API schemas, generated clients, and contract types.
-- `packages/shared-config`: shared lint, formatting, TypeScript, Python, and CI config where appropriate.
-- `packages/design-system`: shared design tokens and UI primitives when stable enough to share.
+- `services/ai-backend`: implemented AI orchestration backend for Deep Agents, LangGraph, LangChain tools, dynamic MCP loading, skills, context/memory management, subagents, streaming, and retrieval orchestration.
+- `services/backend-facade`: implemented product-facing API surface that frontend and native apps call. It hides internal service topology.
+- `services/backend`: implemented core backend slice for MCP registration, OAuth state, token storage, user skills, and audit events. Tenant auth, permissions, billing/admin workflows, broader product persistence, and operational jobs remain target backend responsibilities.
+- `apps/frontend`: implemented web work surface for enterprise search, agent interaction, source review, workflow execution, and admin views.
+- `apps/windows`: planned Windows desktop client for desktop workflows and enterprise distribution.
+- `apps/mac`: planned macOS desktop client for executive workflows, desktop search, and notifications.
+- `packages/api-types`: implemented shared API schemas and contract types.
+- `packages/design-system`: implemented shared design tokens and UI primitives for web.
+- `packages/shared-config`: planned shared lint, formatting, TypeScript, Python, and CI config where appropriate.
 
 ## System Direction
 
@@ -63,7 +67,7 @@ The product should feel like a trusted operating layer for enterprise work, not 
 
 - Apps call `backend-facade`, not internal services directly.
 - `backend-facade` owns product-facing APIs, request aggregation, response shaping, and app-compatible streaming surfaces.
-- `backend` owns tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
+- `backend` currently owns MCP registration, OAuth/token state, user skills, and audit events. It is the target home for tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
 - `ai-backend` owns agent orchestration, tools, skills, MCP, memory, subagents, streaming events, and retrieval orchestration.
 - Shared packages hold stable contracts and generated clients. They should not contain hidden business logic that makes ownership ambiguous.
 
@@ -96,10 +100,12 @@ Starting CI/CD model:
 
 ## Current Status
 
-The workspace now includes initial scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, and `packages/api-types`.
+The workspace now includes initial scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, `packages/api-types`, and `packages/design-system`.
 
 Start there:
 
+- `apps/README.md`
+- `packages/README.md`
 - `services/ai-backend/README.md`
 - `services/ai-backend/docs/README.md`
 - `docs/architecture/workspace-topology.md`

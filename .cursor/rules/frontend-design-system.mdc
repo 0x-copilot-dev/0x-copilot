@@ -1,0 +1,14 @@
+---
+description: Design system and shared UI rules
+globs: "{packages/design-system/**,apps/frontend/**}"
+alwaysApply: false
+---
+
+# Frontend Design System
+
+- Read `packages/design-system/README.md` and `TESTING.md` before changing shared primitives or tokens.
+- Keep app-specific workflows, data fetching, routing, and product copy out of `packages/design-system`.
+- Prefer CSS tokens and existing primitive variants over one-off colors, spacing, or typography.
+- Preserve native semantics, keyboard access, labels, and disabled states.
+- Only promote UI from `apps/frontend` after it is stable and reusable.
+- Run design-system typecheck and affected frontend checks when practical.
