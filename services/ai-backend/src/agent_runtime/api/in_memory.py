@@ -26,6 +26,8 @@ from agent_runtime.api.contracts import (
     RunRecord,
 )
 from agent_runtime.api.errors import RuntimeApiError
+from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.contracts import OutboxStatus, RuntimeWorkerClaim, RuntimeWorkerResult
 
 
 class InMemoryRuntimeApiStore:
@@ -41,6 +43,12 @@ class InMemoryRuntimeApiStore:
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
+        self._queue_order: list[str] = []
+        self._queue_payloads: dict[str, dict[str, object]] = {}
+        self._queue_statuses: dict[str, OutboxStatus] = {}
+        self._queue_attempts: dict[str, int] = {}
+        self._queue_available_at: dict[str, datetime] = {}
+        self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
         self.audit_log: list[tuple[str, object]] = []
         self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency: dict[tuple[str, str, str], str] = {}
@@ -297,16 +305,84 @@ class InMemoryRuntimeApiStore:
         """Enqueue a run command for deterministic worker tests."""
 
         self.run_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+        )
 
     def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         """Enqueue a cancel command for deterministic worker tests."""
 
         self.cancel_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_CANCEL_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+        )
 
     def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
         """Enqueue an approval resolution command for deterministic worker tests."""
 
         self.approval_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.APPROVAL_RESOLVED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=command.approval_id,
+        )
+
+    def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lock_expires_at: datetime,
+    ) -> RuntimeWorkerClaim | None:
+        """Claim the next available queued command, respecting unexpired locks."""
+
+        now = datetime.now(UTC)
+        for command_id in self._queue_order:
+            status_value = self._queue_statuses[command_id]
+            if status_value in {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER}:
+                continue
+            if self._queue_available_at[command_id] > now:
+                continue
+            active_claim = self._queue_claims.get(command_id)
+            if active_claim is not None and active_claim.lock_expires_at > now:
+                continue
+            claim = self._claim_command(
+                command_id=command_id,
+                worker_id=worker_id,
+                lock_expires_at=lock_expires_at,
+            )
+            self._queue_claims[command_id] = claim
+            self._queue_statuses[command_id] = OutboxStatus.CLAIMED
+            return claim
+        return None
+
+    def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
+        """Mark a claimed command complete."""
+
+        self._queue_statuses[result.command_id] = OutboxStatus.COMPLETED
+        self._queue_claims.pop(result.command_id, None)
+
+    def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
+        """Release a command so another worker may claim it later."""
+
+        self._queue_statuses[result.command_id] = OutboxStatus.RETRY
+        self._queue_available_at[result.command_id] = result.retry_available_at or datetime.now(UTC)
+        self._queue_claims.pop(result.command_id, None)
+
+    def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
+        """Mark a command permanently failed after retries are exhausted."""
+
+        self._queue_statuses[result.command_id] = OutboxStatus.DEAD_LETTER
+        self._queue_claims.pop(result.command_id, None)
 
     def seed_approval_request(self, record: ApprovalRequestRecord) -> ApprovalRequestRecord:
         """Add a pending approval request for API tests or future worker fakes."""
@@ -329,3 +405,45 @@ class InMemoryRuntimeApiStore:
                 retryable=False,
                 correlation_id=request.runtime_context.trace_id,
             )
+
+    def _register_command(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        org_id: str,
+        run_id: str,
+        approval_id: str | None,
+    ) -> None:
+        self._queue_order.append(command_id)
+        self._queue_payloads[command_id] = {
+            "command_id": command_id,
+            "command_type": command_type,
+            "org_id": org_id,
+            "run_id": run_id,
+            "approval_id": approval_id,
+        }
+        self._queue_statuses[command_id] = OutboxStatus.PENDING
+        self._queue_attempts[command_id] = 0
+        self._queue_available_at[command_id] = datetime.now(UTC)
+
+    def _claim_command(
+        self,
+        *,
+        command_id: str,
+        worker_id: str,
+        lock_expires_at: datetime,
+    ) -> RuntimeWorkerClaim:
+        payload = self._queue_payloads[command_id]
+        self._queue_attempts[command_id] += 1
+        return RuntimeWorkerClaim(
+            command_id=command_id,
+            command_type=str(payload["command_type"]),
+            org_id=str(payload["org_id"]),
+            run_id=str(payload["run_id"]),
+            approval_id=payload["approval_id"] if isinstance(payload["approval_id"], str) else None,
+            locked_by=worker_id,
+            lock_expires_at=lock_expires_at,
+            attempts=self._queue_attempts[command_id],
+            payload=payload,
+        )

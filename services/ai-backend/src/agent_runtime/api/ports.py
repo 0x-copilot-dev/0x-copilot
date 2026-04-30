@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.api.contracts import (
@@ -20,6 +21,7 @@ from agent_runtime.api.contracts import (
     RuntimeRunCommand,
     RunRecord,
 )
+from agent_runtime.persistence.contracts import RuntimeWorkerClaim, RuntimeWorkerResult
 
 
 @runtime_checkable
@@ -128,3 +130,20 @@ class RuntimeQueuePort(Protocol):
 
     def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
         """Enqueue an approval resolution command for workers."""
+
+    def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lock_expires_at: datetime,
+    ) -> RuntimeWorkerClaim | None:
+        """Claim the next available runtime command for a worker."""
+
+    def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
+        """Mark a claimed command complete."""
+
+    def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
+        """Release a claimed command for retry after its available time."""
+
+    def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
+        """Mark a command permanently failed after retries are exhausted."""

@@ -30,6 +30,13 @@ from agent_runtime.memory import (
     MemoryScopeType,
     TokenBudgetPolicy,
 )
+from agent_runtime.persistence import (
+    CheckpointRecord,
+    ContextPayloadRecord,
+    MemoryItemRecord,
+    MemoryScopeRecord,
+    OutboxEventRecord,
+)
 from agent_runtime.skills import SkillAccessPolicy, SkillManifest, SkillSource
 from agent_runtime.subagents import (
     AsyncSubagentLifecycle,
@@ -49,15 +56,20 @@ __all__ = [
     "AsyncTaskStatus",
     "ContextCompressionEvent",
     "ContextCompressionStrategy",
+    "CheckpointRecord",
     "ConfiguredRuntimeGraph",
+    "ContextPayloadRecord",
     "DynamicSubagentCatalog",
     "FeatureFlag",
     "LangGraphStreamNormalizer",
     "MemoryPathPolicy",
     "MemoryScope",
+    "MemoryItemRecord",
+    "MemoryScopeRecord",
     "MemoryScopeType",
     "ModelConfig",
     "ObservationEvent",
+    "OutboxEventRecord",
     "RuntimeDependencies",
     "RuntimeErrorCode",
     "RuntimeErrorEnvelope",

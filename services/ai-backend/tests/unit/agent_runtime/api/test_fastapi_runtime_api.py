@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from agent_runtime.api.app import RuntimeApiAppFactory
 from agent_runtime.api.contracts import ApprovalRequestRecord
 from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.persistence.contracts import RuntimeWorkerResult
 
 
 class FastApiRuntimeApiTestMixin:
@@ -199,6 +201,52 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert response.json()["status"] == "approved"
         assert len(store.approval_commands) == 1
         assert store.approval_requests[self.Values.APPROVAL_ID].status == "approved"
+
+    def test_worker_queue_claim_retry_and_dead_letter_semantics(self) -> None:
+        client, store = self.create_client()
+        conversation = self.create_conversation(client)
+        run = self.create_run(client, conversation["conversation_id"])
+
+        first_claim = store.claim_next(
+            worker_id="worker_1",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        locked_claim = store.claim_next(
+            worker_id="worker_2",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+
+        assert first_claim is not None
+        assert first_claim.run_id == run["run_id"]
+        assert first_claim.attempts == 1
+        assert locked_claim is None
+
+        store.mark_retry(
+            result=RuntimeWorkerResult(
+                command_id=first_claim.command_id,
+                succeeded=False,
+                retry_available_at=datetime.now(UTC),
+            )
+        )
+        retry_claim = store.claim_next(
+            worker_id="worker_2",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+
+        assert retry_claim is not None
+        assert retry_claim.locked_by == "worker_2"
+        assert retry_claim.attempts == 2
+
+        store.mark_dead_letter(
+            result=RuntimeWorkerResult(command_id=retry_claim.command_id, succeeded=False)
+        )
+        assert (
+            store.claim_next(
+                worker_id="worker_3",
+                lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            )
+            is None
+        )
 
     def test_safe_error_mapping_for_missing_run_and_invalid_payload(self) -> None:
         client, _store = self.create_client()
