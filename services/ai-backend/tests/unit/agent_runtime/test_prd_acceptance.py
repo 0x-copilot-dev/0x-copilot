@@ -144,7 +144,7 @@ class FakeSubagentRunner:
         return None
 
 
-def test_all_implemented_prds_wire_together_without_live_llm_calls(
+def test_runtime_capability_stack_wires_together_without_live_llm_calls(
     tmp_path,
     model_config: ModelConfig,
 ) -> None:

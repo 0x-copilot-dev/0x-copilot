@@ -5,8 +5,14 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from agent_runtime.agent.contracts import StreamEventSource
 from agent_runtime.api.app import RuntimeApiAppFactory
-from agent_runtime.api.contracts import ApprovalRequestRecord
+from agent_runtime.api.contracts import (
+    AgentRunStatus,
+    ApprovalRequestRecord,
+    RuntimeApiEventType,
+)
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.contracts import RuntimeWorkerResult
@@ -247,6 +253,137 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             )
             is None
         )
+
+    def test_runtime_api_acceptance_flow_covers_multi_turn_lifecycle(self) -> None:
+        client, store = self.create_client()
+        conversation = self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        producer = RuntimeEventProducer(persistence=store, event_store=store)
+
+        first_run = self.create_run(client, conversation_id)
+        first_claim = store.claim_next(
+            worker_id="worker_1",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        assert first_claim is not None
+        assert first_claim.run_id == first_run["run_id"]
+
+        running = store.update_run_status(
+            run_id=first_run["run_id"],
+            status=AgentRunStatus.RUNNING,
+        )
+        producer.append_api_event(
+            run=running,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_STARTED,
+            payload={"message": "Worker started.", "authorization": self.Values.SECRET},
+        )
+        completed = store.update_run_status(
+            run_id=first_run["run_id"],
+            status=AgentRunStatus.COMPLETED,
+        )
+        producer.append_api_event(
+            run=completed,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_COMPLETED,
+            payload={"message": "Worker completed."},
+        )
+        store.mark_complete(
+            result=RuntimeWorkerResult(command_id=first_claim.command_id, succeeded=True)
+        )
+
+        replay = client.get(
+            f"/v1/agent/runs/{first_run['run_id']}/events",
+            params={
+                "org_id": self.Values.ORG_ID,
+                "user_id": self.Values.USER_ID,
+                "after_sequence": 1,
+            },
+        )
+        stream = client.get(
+            f"/v1/agent/runs/{first_run['run_id']}/stream",
+            params={
+                "org_id": self.Values.ORG_ID,
+                "user_id": self.Values.USER_ID,
+                "after_sequence": 1,
+            },
+        )
+
+        assert replay.status_code == 200
+        assert [event["event_type"] for event in replay.json()["events"]] == [
+            "run_started",
+            "run_completed",
+        ]
+        assert replay.json()["events"][0]["payload"]["authorization"] == "[redacted]"
+        assert "run_started" in stream.text
+        assert "heartbeat" not in stream.text
+
+        follow_up_payload = self.run_payload(conversation_id, run_id="run_followup_123")
+        follow_up_payload["user_input"] = (
+            "Now focus only on launch risks without named owners."
+        )
+        follow_up_payload["idempotency_key"] = "idem_followup_123"
+        follow_up_payload["runtime_context"]["request_id"] = "request_followup_123"
+        follow_up_payload["runtime_context"]["trace_id"] = "trace_followup_123"
+        second_response = client.post("/v1/agent/runs", json=follow_up_payload)
+        second_run = second_response.json()
+
+        messages = client.get(
+            f"/v1/agent/conversations/{conversation_id}/messages",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+        second_claim = store.claim_next(
+            worker_id="worker_2",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+
+        assert second_response.status_code == 200
+        assert second_claim is not None
+        assert second_claim.run_id == second_run["run_id"]
+        assert [message["content_text"] for message in messages.json()["messages"]] == [
+            self.Values.USER_INPUT,
+            "Now focus only on launch risks without named owners.",
+        ]
+
+        store.seed_approval_request(
+            ApprovalRequestRecord(
+                approval_id=self.Values.APPROVAL_ID,
+                run_id=second_run["run_id"],
+                conversation_id=conversation_id,
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+            )
+        )
+        approval = client.post(
+            f"/v1/agent/approvals/{self.Values.APPROVAL_ID}/decision",
+            params={"org_id": self.Values.ORG_ID},
+            json={"decision": "approved", "decided_by_user_id": self.Values.USER_ID},
+        )
+        cancel = client.post(
+            f"/v1/agent/runs/{second_run['run_id']}/cancel",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+            json={
+                "requested_by_user_id": self.Values.USER_ID,
+                "reason": "User wants to rewrite the later-turn request.",
+            },
+        )
+        second_replay = client.get(
+            f"/v1/agent/runs/{second_run['run_id']}/events",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+
+        assert approval.status_code == 200
+        assert approval.json()["status"] == "approved"
+        assert cancel.status_code == 200
+        assert cancel.json()["status"] == "cancelling"
+        assert len(store.run_commands) == 2
+        assert len(store.approval_commands) == 1
+        assert len(store.cancel_commands) == 1
+        assert [event["event_type"] for event in second_replay.json()["events"]] == [
+            "run_queued",
+            "approval_resolved",
+            "run_cancelling",
+        ]
 
     def test_safe_error_mapping_for_missing_run_and_invalid_payload(self) -> None:
         client, _store = self.create_client()

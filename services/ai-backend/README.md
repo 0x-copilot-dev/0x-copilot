@@ -2,7 +2,7 @@
 
 Python backend workspace for the agent runtime layer.
 
-This backend now contains the implemented agent runtime foundation for dynamic tools, skills, MCP loading, context and memory management, subagents, streaming, and typed contracts. Future implementation agents should read the architecture docs, relevant technical spec, testing guidance, and engineering rules before changing runtime behavior.
+This backend now contains the implemented agent runtime foundation for dynamic tools, skills, MCP loading, context and memory management, subagents, streaming, the narrow FastAPI runtime API, replayable runtime events, and persistence contracts/schema. Future implementation agents should read the architecture docs, relevant technical spec, testing guidance, and engineering rules before changing runtime behavior.
 
 ## Workspace Context
 
@@ -45,6 +45,7 @@ The long-term product is closer to a trusted operating layer for enterprise work
 
 - Python
 - FastAPI for the narrow runtime HTTP API while `backend-facade` is not implemented
+- PostgreSQL-compatible runtime persistence schema, with deterministic in-memory ports for unit tests and local development
 - LangChain for LLM integrations, tools, retrievers, and agent building blocks
 - LangGraph for stateful agent workflows and graph orchestration
 - Deep agents for longer-running research, planning, and multi-step agent behavior
@@ -57,7 +58,7 @@ Start here:
 
 - `docs/README.md` for the documentation index
 - `docs/architecture/` for current architecture, runtime contracts, package structure, and data flows
-- `docs/specs/` for technical architecture and typed contracts
+- `docs/specs/` for implemented technical architecture and typed contracts
 - `docs/testing/` for unit test strategy, edge cases, and fixtures
 - `docs/rules/` for engineering rules every agent must follow
 

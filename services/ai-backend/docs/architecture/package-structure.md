@@ -33,6 +33,8 @@ services/ai-backend/
       memory/
       mcp/
       observability/
+      persistence/
+        postgres/
       skills/
       subagents/
       tools/
@@ -43,6 +45,7 @@ services/ai-backend/
         agent/
         memory/
         mcp/
+        persistence/
         skills/
         subagents/
         tools/
@@ -58,6 +61,7 @@ services/ai-backend/
 - `memory/`: backend routing, scoped memory policy, token budget metrics, and summarization observability.
 - `subagents/`: sync/async subagent definitions, task/result contracts, and handoff policy.
 - `observability/`: redaction, trace, and correlation helpers shared by stream and compression contracts.
+- `persistence/`: durable runtime records, PostgreSQL migration catalog, payload/checkpoint ports, and persistence constants.
 - Future connector implementations should live outside the core runtime contracts and satisfy the existing provider/client/runner ports.
 - Runtime API code stays thin and delegates to runtime services and ports. Product API ownership still belongs in `backend-facade`; the current FastAPI runtime API is the accepted narrow streaming-phase exception.
 
@@ -72,7 +76,7 @@ flowchart TD
   AgentRuntime --> Ports[Abstract Ports]
   Ports --> Connectors[Future Connector Implementations]
   Ports --> McpClients[MCP Clients]
-  Ports --> Stores[Stores]
+  Ports --> Stores[Persistence and Event Stores]
   Ports --> Runners[Subagent Runners]
 ```
 

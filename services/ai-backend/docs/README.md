@@ -1,6 +1,6 @@
 # AI Backend Docs
 
-This directory documents the current enterprise AI backend runtime. The original seven implementation PRDs have been completed and removed; the technical specs, architecture docs, testing guidance, and rules are now the source of truth for implemented runtime work. New PRDs may be added for future API, persistence, and deployment phases before implementation begins.
+This directory documents the current enterprise AI backend runtime. Completed implementation PRDs have been removed; the technical specs, architecture docs, testing guidance, and rules are now the source of truth for implemented runtime work. New PRDs may be added only for future product or architecture work before implementation begins.
 
 ## Workspace Context
 
@@ -22,10 +22,9 @@ The FastAPI runtime API docs are that narrow exception for the first frontend-fa
 1. Workspace topology and service boundaries in `../../../docs/architecture/`
 2. `architecture/system-overview.md`
 3. `architecture/data-flow.md`
-4. The matching PRD in `prds/`, when planning future work
-5. The matching technical spec in `specs/`
-6. `testing/unit-testing-strategy.md` and `testing/edge-case-matrix.md`
-7. The relevant rule docs in `rules/`
+4. The matching technical spec in `specs/`
+5. `testing/unit-testing-strategy.md` and `testing/edge-case-matrix.md`
+6. The relevant rule docs in `rules/`
 
 ## Feature Map
 
@@ -39,8 +38,9 @@ The FastAPI runtime API docs are that narrow exception for the first frontend-fa
 | Context and memory | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/05-context-memory-management-spec.md` |
 | Subagents and async agents | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/06-subagents-and-async-agents-spec.md` |
 | Streaming and observability | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/07-streaming-and-observability-spec.md` |
-| FastAPI runtime API | `prds/01-fastapi-runtime-api-prd.md`, `prds/02-runtime-events-producer-consumer-prd.md` | `specs/04-runtime-api-technical-spec.md` |
-| Agent runtime persistence | `prds/03-agent-runtime-persistence-prd.md` | `specs/04-runtime-api-technical-spec.md` |
+| FastAPI runtime API | `architecture/data-flow.md`, `architecture/package-structure.md` | `specs/08-fastapi-runtime-api-spec.md` |
+| Runtime events producer/consumer | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/09-runtime-events-producer-consumer-spec.md` |
+| Agent runtime persistence | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/10-agent-runtime-persistence-spec.md` |
 
 ## Definition of Ready For New Runtime Work
 

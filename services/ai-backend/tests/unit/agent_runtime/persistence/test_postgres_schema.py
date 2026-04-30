@@ -24,7 +24,7 @@ class PostgresSchemaTestMixin:
 
 
 class TestPostgresSchema(PostgresSchemaTestMixin):
-    def test_initial_migration_covers_prd_three_table_set(self) -> None:
+    def test_initial_migration_covers_runtime_persistence_table_set(self) -> None:
         migration = PostgresMigrationCatalog.initial_runtime_persistence()
         ordered = PostgresMigrationCatalog.ordered_migrations()
 

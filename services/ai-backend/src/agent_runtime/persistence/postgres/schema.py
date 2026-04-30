@@ -450,7 +450,7 @@ class PostgresMigrationCatalog:
 
     @classmethod
     def initial_runtime_persistence(cls) -> PostgresMigration:
-        """Return the first migration implementing the PRD 3 table set."""
+        """Return the first migration implementing runtime persistence tables."""
 
         return PostgresMigration(
             migration_id=Values.MIGRATION_ID,

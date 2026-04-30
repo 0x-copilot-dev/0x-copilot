@@ -46,7 +46,7 @@ class MessageStatus(StrEnum):
 
 
 class AgentRunStatus(StrEnum):
-    """Runtime run states required by the producer/consumer PRD."""
+    """Runtime run states used by the producer/consumer event contract."""
 
     QUEUED = "queued"
     RUNNING = "running"

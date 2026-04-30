@@ -2,7 +2,7 @@
 
 ## Current State
 
-The AI backend is now an implemented Python runtime layer for an enterprise AI work surface. It owns agent orchestration, typed capability discovery, lazy loading, memory policy, subagent delegation, and product-safe stream events. Product APIs still belong in `backend-facade`; durable business state and connector ownership still belong in sibling backend services.
+The AI backend is now an implemented Python runtime layer for an enterprise AI work surface. It owns agent orchestration, typed capability discovery, lazy loading, memory policy, subagent delegation, product-safe stream events, a narrow FastAPI runtime API, and PostgreSQL-compatible runtime persistence contracts/schema. Product APIs still belong in `backend-facade`; durable non-agent business state and connector ownership still belong in sibling backend services.
 
 The runtime does not yet include production Slack, Google Workspace, Atlassian, Jira, or internal API adapters. Those systems are represented by typed tool, MCP, and subagent boundaries that can be satisfied by fakes in unit tests and real adapters later.
 
@@ -10,8 +10,11 @@ The runtime does not yet include production Slack, Google Workspace, Atlassian, 
 
 ```mermaid
 flowchart TD
-  UserRequest[User Request] --> Facade[backend-facade API]
-  Facade --> RuntimeContext[AgentRuntimeContext]
+  UserRequest[User Request] --> RuntimeAPI[FastAPI Runtime API]
+  RuntimeAPI --> Persistence[Persistence and Event Ports]
+  RuntimeAPI --> Queue[Runtime Queue Port]
+  Queue --> Worker[Runtime Worker]
+  Worker --> RuntimeContext[AgentRuntimeContext]
   RuntimeContext --> RuntimeFactory[create_agent_runtime]
   RuntimeFactory --> DeepAgent[Deep Agents Runtime]
 
@@ -46,7 +49,9 @@ flowchart TD
   DeepAgent --> RawEvents[LangGraph stream chunks]
   RawEvents --> StreamNormalizer
   StreamNormalizer --> StreamEvents[StreamEvent records]
-  StreamEvents --> WorkSurfaceUI[Product UI]
+  StreamEvents --> EventEnvelope[RuntimeEventEnvelope]
+  EventEnvelope --> Persistence
+  Persistence --> WorkSurfaceUI[Product UI]
 ```
 
 ## Implementation Boundaries
@@ -58,6 +63,8 @@ flowchart TD
 - `memory/` owns scoped memory routes, read/write policy, user/org/agent namespaces, token budgets, offloading, summarization fallback, compression events, and optimistic concurrency fakes.
 - `subagents/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
 - `observability/` owns redaction and trace helpers used by stream and compression contracts.
+- `api/` owns the narrow FastAPI runtime API, safe HTTP errors, replay/SSE transport, in-memory test ports, and producer orchestration over persistence, event store, and queue ports.
+- `persistence/` owns durable runtime records, PostgreSQL schema migrations, and future payload/checkpoint storage ports.
 
 ## What Works Today
 
@@ -68,13 +75,16 @@ flowchart TD
 - Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
 - Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
 - LangGraph stream chunks normalize into stable `StreamEvent` contracts with source, type, trace correlation, parent task IDs, and redacted payloads.
+- FastAPI endpoints create conversations, enqueue runs, replay events, stream SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
+- Runtime event envelopes provide ordered per-run sequence numbers, UI timeline fields, redacted payloads, and replay cursors.
+- Persistence contracts and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.
 - Unit tests use fake model builders, fake tool providers, fake MCP clients, fake memory stores, fake subagent runners, and fake stream chunks. No tests require live LLMs or external credentials.
 
 ## Current Non-Goals
 
 - No production connector SDK calls in the runtime package.
-- No final product API shape in `services/ai-backend`.
-- No durable production persistence selection.
+- No broad product API ownership in `services/ai-backend` beyond the narrow runtime API exception.
+- No production database repository, external broker, deployed runtime worker process, or connector adapter implementation yet.
 - No custom replacement for Deep Agents' native context compression until production behavior is measured.
 - No side-effecting model action without typed parsing, permission checks, and connector-layer implementation.
 

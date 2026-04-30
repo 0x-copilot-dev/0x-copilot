@@ -7,7 +7,10 @@ Every request starts with typed context and compact capability discovery. The mo
 ```mermaid
 sequenceDiagram
   participant User
-  participant Facade as backend-facade
+  participant API as FastAPI Runtime API
+  participant Store as Persistence/Event Ports
+  participant Queue as Runtime Queue
+  participant Worker as Runtime Worker
   participant Factory as create_agent_runtime
   participant Runtime as Deep Agents runtime
   participant Registries as Tool/MCP/Skill/Subagent registries
@@ -15,16 +18,21 @@ sequenceDiagram
   participant Normalizer as LangGraphStreamNormalizer
   participant UI as Work surface UI
 
-  User->>Facade: Natural-language request
-  Facade->>Factory: AgentRuntimeContext + messages
+  User->>API: Natural-language request
+  API->>Store: Create conversation message and queued run
+  API->>Store: Append run_queued event
+  API->>Queue: Enqueue runtime command
+  Worker->>Queue: Claim command
+  Worker->>Store: Load conversation history and run state
+  Worker->>Factory: AgentRuntimeContext + messages
   Factory->>Registries: List authorized compact cards and definitions
   Registries-->>Factory: ToolCard, McpServerCard, skill directories, SubagentDefinition
   Factory->>Memory: Create scoped memory backend
   Factory-->>Runtime: Deep Agents graph with typed dependencies
   Runtime-->>Normalizer: Raw LangGraph stream chunks
-  Normalizer-->>UI: Redacted StreamEvent updates
-  Runtime-->>Facade: Final response or typed error envelope
-  Facade-->>User: Product response
+  Normalizer-->>Store: Redacted StreamEvent updates
+  Store-->>UI: Replayable RuntimeEventEnvelope updates
+  Runtime-->>Worker: Final response or typed error envelope
 ```
 
 ## Dynamic Capability Loading
@@ -74,6 +82,20 @@ These examples describe where the backend is today. They assume future Slack, ca
 3. `Summarize my meetings from last week, what was promised, drop a Slack message to all relevant people asking for updates, and share any relevant Jira tickets.`
 4. `Find the latest launch plan, summarize the risks, and show me which sources support each risk.`
 5. `Research customer escalations from Q3, compare Slack discussions with Jira tickets, and give me a concise action plan.`
+
+## Mid-Conversation And Later-Turn Examples
+
+The runtime API persists each user turn as a message and each accepted request as a separate run. Later turns reuse the same `conversation_id` while getting their own `run_id`, event sequence, approval state, cancellation state, and replay cursor.
+
+Example conversation:
+
+1. `Find the latest launch plan, summarize the risks, and show sources for each risk.`
+2. `Now only show the risks that do not have a named owner.`
+3. `For those ownerless risks, draft a Slack update to the launch channel, but ask me before sending.`
+4. `Actually cancel that draft run; I want to change the tone.`
+5. `Try again, make it executive-friendly, and keep the Jira links.`
+
+The first turn should create the conversation and first queued run. Each later turn should append a new user message to the same conversation, enqueue a new run, and let clients replay or stream that run's events independently.
 
 ## Flow 1: Simple Greeting
 
