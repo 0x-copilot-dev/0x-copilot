@@ -29,6 +29,7 @@ Deep Agents should still read the actual skill files from configured backends.
 
 - Skills are procedural memory; always-relevant context belongs in `AGENTS.md` memory.
 - Descriptions must be precise because the model matches skills from frontmatter.
+- Source precedence is numeric and deterministic: higher `precedence` wins for duplicate skill names, while Deep Agents receives source directories in ascending precedence order because later sources override earlier ones.
 - Custom subagents do not inherit main-agent skills unless configured.
 - Skill scripts require sandbox design before execution.
 

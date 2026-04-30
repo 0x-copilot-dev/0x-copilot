@@ -12,6 +12,7 @@ from enterprise_search_ai.agent.contracts import (
     StreamEventSource,
     StreamEventType,
 )
+from enterprise_search_ai.skills import SkillAccessPolicy, SkillManifest, SkillSource
 
 __all__ = [
     "AgentRuntimeContext",
@@ -20,6 +21,9 @@ __all__ = [
     "RuntimeDependencies",
     "RuntimeErrorCode",
     "RuntimeErrorEnvelope",
+    "SkillAccessPolicy",
+    "SkillManifest",
+    "SkillSource",
     "SkillSourceConfig",
     "StreamEvent",
     "StreamEventSource",

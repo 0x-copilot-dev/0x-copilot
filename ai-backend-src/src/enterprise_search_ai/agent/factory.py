@@ -15,6 +15,8 @@ from enterprise_search_ai.agent.contracts import (
     RuntimeErrorCode,
 )
 from enterprise_search_ai.agent.errors import AgentRuntimeError
+from enterprise_search_ai.skills.constants import Keys as SkillKeys
+from enterprise_search_ai.skills.sources import SkillSourceRegistry
 
 AgentBuilder = Callable[..., object]
 
@@ -35,6 +37,7 @@ class RuntimeHarness:
     mcp_servers: tuple[object, ...]
     subagents: tuple[object, ...]
     memory_backend: object
+    skill_directories: tuple[str, ...]
 
 
 def create_agent_runtime(
@@ -60,6 +63,9 @@ def create_agent_runtime(
         runtime_dependencies.subagent_catalog.list_available_subagents(runtime_context)
     )
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
+    skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
+        runtime_dependencies.skill_source_config
+    )
 
     try:
         agent = builder(
@@ -71,7 +77,7 @@ def create_agent_runtime(
             subagents=subagents,
             memory_backend=memory_backend,
             stream_normalizer=runtime_dependencies.stream_normalizer,
-            skill_source_config=runtime_dependencies.skill_source_config,
+            **{SkillKeys.DeepAgents.SKILLS: skill_directories},
         )
     except AgentRuntimeError:
         raise
@@ -91,6 +97,7 @@ def create_agent_runtime(
         mcp_servers=mcp_servers,
         subagents=subagents,
         memory_backend=memory_backend,
+        skill_directories=skill_directories,
     )
 
 
@@ -99,6 +106,7 @@ def _build_deep_agent(
     tools: Sequence[object],
     model_config: object,
     instructions: str,
+    skills: Sequence[str] = (),
     **_: object,
 ) -> object:
     """Build the concrete Deep Agents graph without importing it at module load."""
@@ -114,11 +122,14 @@ def _build_deep_agent(
         ) from exc
 
     model_name = getattr(model_config, "model_name")
-    return create_deep_agent(
-        tools=list(tools),
-        instructions=instructions,
-        model=model_name,
-    )
+    create_kwargs: dict[str, object] = {
+        "tools": list(tools),
+        "instructions": instructions,
+        "model": model_name,
+    }
+    if skills:
+        create_kwargs[SkillKeys.DeepAgents.SKILLS] = list(skills)
+    return create_deep_agent(**create_kwargs)
 
 
 def _parse_context(context: AgentRuntimeContext | dict[str, Any]) -> AgentRuntimeContext:

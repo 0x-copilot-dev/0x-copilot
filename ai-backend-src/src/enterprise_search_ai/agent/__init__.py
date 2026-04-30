@@ -14,6 +14,7 @@ from enterprise_search_ai.agent.contracts import (
 )
 from enterprise_search_ai.agent.errors import AgentRuntimeError
 from enterprise_search_ai.agent.factory import RuntimeHarness, create_agent_runtime
+from enterprise_search_ai.skills import SkillAccessPolicy, SkillManifest, SkillSource
 
 __all__ = [
     "AgentRuntimeContext",
@@ -24,6 +25,9 @@ __all__ = [
     "RuntimeErrorCode",
     "RuntimeErrorEnvelope",
     "RuntimeHarness",
+    "SkillAccessPolicy",
+    "SkillManifest",
+    "SkillSource",
     "SkillSourceConfig",
     "StreamEvent",
     "StreamEventSource",

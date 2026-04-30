@@ -18,6 +18,7 @@ from enterprise_search_ai.agent.ports import (
     SubagentCatalog,
     ToolRegistry,
 )
+from enterprise_search_ai.skills.sources import SkillSourceConfig
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -162,28 +163,6 @@ class AgentRuntimeContext(RuntimeContract):
             msg = "trace_id contains unsupported characters"
             raise ValueError(msg)
         return normalized
-
-
-class SkillSourceConfig(RuntimeContract):
-    """Local or configured skill roots available to the runtime."""
-
-    roots: tuple[str, ...] = Field(default_factory=tuple)
-    enabled: bool = True
-
-    @field_validator("roots", mode="before")
-    @classmethod
-    def _normalize_roots(cls, value: object) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            values = (value,)
-        else:
-            try:
-                values = tuple(value)  # type: ignore[arg-type]
-            except TypeError as exc:
-                msg = "roots must be a string or iterable of strings"
-                raise ValueError(msg) from exc
-        return tuple(_normalize_nonempty_string(root, "skill root") for root in values)
 
 
 class RuntimeDependencies(RuntimeContract):
