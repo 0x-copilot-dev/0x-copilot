@@ -15,13 +15,16 @@ Implemented modules:
 - `observability/tracing.py`: trace IDs and correlation helpers.
 - `observability/redaction.py`: payload redaction helpers.
 
-The worker uses LangGraph streaming with `stream_mode=["messages", "updates", "custom", "values"]`
-and falls back to `["messages", "values"]` when a graph does not support the
-richer stream modes. Provider text chunks from OpenAI, Anthropic, Gemini, or any
-compatible LangChain chat model are emitted as `model_delta` events. Non-model
-chunks are normalized through `LangGraphStreamNormalizer` and persisted as
-replayable runtime events. The exact provider text belongs in `payload.delta`;
-the terminal full answer is emitted as `final_response`.
+The worker uses Deep Agents/LangGraph v2 streaming with
+`stream_mode=["messages", "updates", "custom", "values"]`, `subgraphs=True`,
+and `version="v2"` so main-agent and subagent progress, tokens, tool calls, and
+custom updates arrive with namespace metadata. It falls back to
+`["messages", "values"]` when a graph does not support the richer stream options.
+Provider text chunks from OpenAI, Anthropic, Gemini, or any compatible LangChain
+chat model are emitted as `model_delta` events. Non-model chunks are normalized
+through `LangGraphStreamNormalizer` and persisted as replayable runtime events.
+The exact provider text belongs in `payload.delta`; the terminal full answer is
+emitted as `final_response`.
 
 ## Pydantic Contracts
 
@@ -41,6 +44,9 @@ Payloads must be redacted before serialization. Unknown event fields should be p
 - Stream events should be additive and backwards-compatible.
 - Redaction happens before event emission.
 - Internal summarization tokens should be filterable from user-facing streams.
+- Raw private chain-of-thought is not a product event. Surface Deep Agents-style
+  `updates`, `messages`, `custom`, tool, subagent, and `reasoning_summary`
+  events with safe summaries and redacted payloads.
 - Clients should concatenate `payload.delta` from `model_delta` events for live text display, then reconcile against `final_response`.
 
 ## Unit Tests

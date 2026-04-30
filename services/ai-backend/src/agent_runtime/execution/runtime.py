@@ -25,6 +25,22 @@ class RuntimeStreamModes:
     LEGACY = ["messages", "values"]
 
 
+class RuntimeStreamOptions:
+    """Deep Agents/LangGraph stream options used by the runtime."""
+
+    @classmethod
+    def rich(cls) -> dict[str, object]:
+        return {
+            "stream_mode": RuntimeStreamModes.RICH,
+            "subgraphs": True,
+            "version": "v2",
+        }
+
+    @classmethod
+    def legacy(cls) -> dict[str, object]:
+        return {"stream_mode": RuntimeStreamModes.LEGACY}
+
+
 def runtime_run_handle(harness: RuntimeHarness) -> RuntimeRunHandle:
     """Return the product-owned run handle before graph execution completes."""
 
@@ -271,7 +287,7 @@ async def astream_runtime(
         async for chunk in harness.agent.astream(
             {"messages": list(messages)},
             config=runtime_config(harness),
-            stream_mode=RuntimeStreamModes.RICH,
+            **RuntimeStreamOptions.rich(),
         ):
             yield chunk
     except (TypeError, ValueError) as exc:
@@ -287,7 +303,7 @@ async def astream_runtime(
             async for chunk in harness.agent.astream(
                 {"messages": list(messages)},
                 config=runtime_config(harness),
-                stream_mode=RuntimeStreamModes.LEGACY,
+                **RuntimeStreamOptions.legacy(),
             ):
                 yield chunk
         except AgentRuntimeError as retry_exc:

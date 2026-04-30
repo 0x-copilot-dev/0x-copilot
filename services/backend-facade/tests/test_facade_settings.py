@@ -76,6 +76,29 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_123"}
 
+    def test_facade_uses_development_identity_without_bearer_token(self, monkeypatch) -> None:
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            assert args[1] == "POST"
+            assert args[2] == "/v1/agent/conversations"
+            assert kwargs["json"]["org_id"] == "org_123"
+            assert kwargs["json"]["user_id"] == "user_123"
+            assert kwargs["json"]["request_context"]["permission_scopes"] == ("runtime:use",)
+            return {"conversation_id": "conv_dev"}
+
+        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
+        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
+        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.post(
+            "/v1/agent/conversations",
+            json={"org_id": "forged_org", "user_id": "forged_user"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"conversation_id": "conv_dev"}
+
     def test_facade_forwards_run_cancel_to_ai(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
