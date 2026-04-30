@@ -10,34 +10,50 @@ class Keys:
 
     class Field:
         AFTER_SEQUENCE = "after_sequence"
+        API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
         ASSISTANT_ID = "assistant_id"
+        CALL_ID = "call_id"
         CONVERSATION_ID = "conversation_id"
         CORRELATION_ID = "correlation_id"
         CREATED_AT = "created_at"
         DECISION = "decision"
+        DISPLAY_TITLE = "display_title"
         EVENT_ID = "event_id"
         EVENT_TYPE = "event_type"
         IDEMPOTENCY_KEY = "idempotency_key"
         MESSAGE_ID = "message_id"
         METADATA = "metadata"
         ORG_ID = "org_id"
+        PARENT_EVENT_ID = "parent_event_id"
+        PARENT_SPAN_ID = "parent_span_id"
         PARENT_TASK_ID = "parent_task_id"
         PAYLOAD = "payload"
         REASON = "reason"
+        REDACTION_STATE = "redaction_state"
         REQUESTED_BY_USER_ID = "requested_by_user_id"
         RUN_ID = "run_id"
         SEQUENCE_NO = "sequence_no"
         SOURCE = "source"
+        SPAN_ID = "span_id"
         STATUS = "status"
+        SUBAGENT_ID = "subagent_id"
+        SUBAGENT_NAME = "subagent_name"
+        SUMMARY = "summary"
+        TASK_ID = "task_id"
         TITLE = "title"
+        TOOL_NAME = "tool_name"
         TRACE_ID = "trace_id"
+        VISIBILITY = "visibility"
         USER_ID = "user_id"
         USER_INPUT = "user_input"
 
     class Payload:
+        DELTA = "delta"
+        DISPLAY_TITLE = "display_title"
         MESSAGE = "message"
         REASON = "reason"
+        SUMMARY = "summary"
 
     class Query:
         AFTER_SEQUENCE = "after_sequence"
@@ -68,6 +84,15 @@ class Values:
     MAX_MESSAGE_LIMIT = 200
     SSE_EVENT_NAME = "runtime_event"
 
+    class Status:
+        CANCELLED = "cancelled"
+        COMPLETED = "completed"
+        FAILED = "failed"
+        QUEUED = "queued"
+        RUNNING = "running"
+        STARTED = "started"
+        WAITING = "waiting"
+
 
 class Patterns:
     """Compiled validators for API IDs and slugs."""
@@ -89,9 +114,25 @@ class Messages:
 
     class Event:
         APPROVAL_RESOLVED = "Approval decision was recorded."
+        FINAL_RESPONSE = "Final response"
         HEARTBEAT = "Runtime stream heartbeat."
+        REASONING = "Thinking"
         RUN_CANCELLING = "Run cancellation was requested."
         RUN_QUEUED = "Run was queued for runtime execution."
+        SUBAGENT = "Subagent update"
+        TOOL_CALL = "Calling tool"
+
+        @classmethod
+        def subagent_title(cls, subagent_name: str) -> str:
+            return f"{subagent_name} subagent"
+
+        @classmethod
+        def tool_completed_title(cls, tool_name: str) -> str:
+            return f"{tool_name} completed"
+
+        @classmethod
+        def tool_started_title(cls, tool_name: str) -> str:
+            return f"Calling {tool_name}"
 
     class Validation:
         @classmethod
