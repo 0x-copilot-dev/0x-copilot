@@ -44,6 +44,7 @@ The long-term product is closer to a trusted operating layer for enterprise work
 ## Stack
 
 - Python
+- FastAPI for the narrow runtime HTTP API while `backend-facade` is not implemented
 - LangChain for LLM integrations, tools, retrievers, and agent building blocks
 - LangGraph for stateful agent workflows and graph orchestration
 - Deep agents for longer-running research, planning, and multi-step agent behavior

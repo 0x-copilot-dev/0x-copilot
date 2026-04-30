@@ -12,6 +12,14 @@ services/ai-backend/
     agent_runtime/
       __init__.py
       settings.py
+      api/
+        app.py
+        contracts.py
+        errors.py
+        in_memory.py
+        ports.py
+        service.py
+        streaming.py
       agent/
         contracts.py
         errors.py
@@ -42,6 +50,7 @@ services/ai-backend/
 
 ## Module Ownership
 
+- `api/`: narrow FastAPI runtime API exception for conversation, run, event replay, streaming, cancellation, and approval endpoints. It must stay thin over persistence, event store, and queue ports.
 - `agent/`: Deep Agents factory, LangGraph graph exports, runtime wiring, stream normalization, dependency ports, and middleware composition.
 - `tools/`: dynamic tool cards, full tool specs, and built-in loader tools. Tools should call connector interfaces, not raw SDKs.
 - `skills/`: local Agent Skills bundles and skill discovery helpers. `SKILL.md` remains the source of truth.
@@ -50,7 +59,7 @@ services/ai-backend/
 - `subagents/`: sync/async subagent definitions, task/result contracts, and handoff policy.
 - `observability/`: redaction, trace, and correlation helpers shared by stream and compression contracts.
 - Future connector implementations should live outside the core runtime contracts and satisfy the existing provider/client/runner ports.
-- Future API code should stay thin and delegate to runtime services. Product API ownership still belongs in `backend-facade` unless a later architecture decision creates a narrow exception.
+- Runtime API code stays thin and delegates to runtime services and ports. Product API ownership still belongs in `backend-facade`; the current FastAPI runtime API is the accepted narrow streaming-phase exception.
 
 ## Dependency Direction
 

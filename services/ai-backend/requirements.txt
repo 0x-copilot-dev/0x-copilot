@@ -4,6 +4,8 @@
 langchain==1.2.16
 langgraph==1.1.10
 deepagents==0.5.5
+fastapi==0.136.1
+httpx==0.28.1
 pydantic==2.13.3
 pytest==9.0.3
 

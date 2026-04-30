@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, FeatureFlag, ModelConfig
+from agent_runtime.agent.contracts import (
+    AgentRuntimeContext,
+    FeatureFlag,
+    ModelConfig,
+    RuntimeRunContext,
+    RuntimeRunHandle,
+)
 
 
 def test_runtime_context_normalizes_roles_permissions_and_connectors(
@@ -20,7 +26,7 @@ def test_runtime_context_normalizes_roles_permissions_and_connectors(
     assert runtime_context_admin.trace_id == "trace_123"
 
 
-def test_missing_trace_id_is_generated(model_config: ModelConfig) -> None:
+def test_missing_runtime_ids_are_generated(model_config: ModelConfig) -> None:
     context = AgentRuntimeContext(
         user_id="user_123",
         org_id="org_456",
@@ -28,7 +34,28 @@ def test_missing_trace_id_is_generated(model_config: ModelConfig) -> None:
         model_profile=model_config,
     )
 
+    assert context.request_id
+    assert context.run_id
     assert context.trace_id
+    assert isinstance(context.run_context, RuntimeRunContext)
+
+
+def test_runtime_run_handle_uses_product_owned_ids(
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    context = runtime_context_admin.model_copy(
+        update={
+            "request_id": "request_123",
+            "run_id": "run_123",
+            "trace_id": "trace_123",
+        }
+    )
+    handle = RuntimeRunHandle.from_context(context)
+
+    assert handle.request_id == "request_123"
+    assert handle.run_id == "run_123"
+    assert handle.trace_id == "trace_123"
+    assert handle.status == "accepted"
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,9 @@ from agent_runtime.agent.contracts import (
     RuntimeDependencies,
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
+    RuntimeRunContext,
+    RuntimeRunHandle,
+    RuntimeRunStatus,
     SkillSourceConfig,
     StreamSource,
     StreamEvent,
@@ -19,6 +22,7 @@ from agent_runtime.agent.contracts import (
 )
 from agent_runtime.agent.errors import AgentRuntimeError
 from agent_runtime.agent.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.agent.graph import ConfiguredRuntimeGraph, UnconfiguredRuntimeGraph
 from agent_runtime.agent.streaming import LangGraphStreamNormalizer
 from agent_runtime.memory import (
     ContextCompressionEvent,
@@ -44,6 +48,7 @@ __all__ = [
     "AgentRuntimeContext",
     "AgentRuntimeError",
     "AsyncSubagentLifecycle",
+    "ConfiguredRuntimeGraph",
     "AsyncTaskState",
     "AsyncTaskStatus",
     "ContextCompressionEvent",
@@ -59,6 +64,9 @@ __all__ = [
     "RuntimeDependencies",
     "RuntimeErrorCode",
     "RuntimeErrorEnvelope",
+    "RuntimeRunContext",
+    "RuntimeRunHandle",
+    "RuntimeRunStatus",
     "RuntimeHarness",
     "RuntimeContextReference",
     "SkillAccessPolicy",
@@ -76,5 +84,6 @@ __all__ = [
     "ToolCallEvent",
     "ToolResultEvent",
     "TokenBudgetPolicy",
+    "UnconfiguredRuntimeGraph",
     "create_agent_runtime",
 ]

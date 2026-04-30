@@ -1,0 +1,130 @@
+"""Port protocols for runtime API persistence, event replay, and queueing."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Sequence
+from typing import Protocol, runtime_checkable
+
+from agent_runtime.api.contracts import (
+    AgentRunStatus,
+    ApprovalDecisionRecord,
+    ApprovalRequestRecord,
+    ConversationRecord,
+    CreateConversationRequest,
+    CreateRunRequest,
+    MessageRecord,
+    RuntimeApprovalResolvedCommand,
+    RuntimeCancelCommand,
+    RuntimeEventDraft,
+    RuntimeEventEnvelope,
+    RuntimeRunCommand,
+    RunRecord,
+)
+
+
+@runtime_checkable
+class PersistencePort(Protocol):
+    """Conversation, message, run, approval, and audit persistence boundary."""
+
+    def create_conversation(self, request: CreateConversationRequest) -> ConversationRecord:
+        """Create or idempotently return a conversation."""
+
+    def get_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        """Return a conversation for the tenant/user scope."""
+
+    def list_messages(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        limit: int,
+        include_deleted: bool = False,
+    ) -> Sequence[MessageRecord]:
+        """Return ordered conversation messages."""
+
+    def create_run_with_user_message(
+        self,
+        *,
+        request: CreateRunRequest,
+        conversation: ConversationRecord,
+    ) -> tuple[RunRecord, MessageRecord, bool]:
+        """Create a user message and run, or return an idempotent existing run."""
+
+    def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
+        """Return a run scoped by organization."""
+
+    def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
+        """Update mutable run status and return the new record."""
+
+    def set_run_latest_sequence(self, *, run_id: str, latest_sequence_no: int) -> RunRecord:
+        """Persist latest event sequence for run inspection."""
+
+    def record_approval_decision(
+        self,
+        *,
+        record: ApprovalDecisionRecord,
+    ) -> ApprovalDecisionRecord:
+        """Persist an approval decision."""
+
+    def get_approval_request(
+        self,
+        *,
+        org_id: str,
+        approval_id: str,
+    ) -> ApprovalRequestRecord | None:
+        """Return a pending or resolved approval request."""
+
+    def write_audit_log(self, *, event_type: str, record: object) -> None:
+        """Append an audit record for security-relevant actions."""
+
+
+@runtime_checkable
+class EventStorePort(Protocol):
+    """Append-only event persistence and replay boundary."""
+
+    def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
+        """Append one event with the next per-run sequence number."""
+
+    def append_events(self, events: Sequence[RuntimeEventDraft]) -> Sequence[RuntimeEventEnvelope]:
+        """Append multiple events in order."""
+
+    def list_events_after(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        after_sequence: int,
+    ) -> Sequence[RuntimeEventEnvelope]:
+        """Return persisted events after a sequence number."""
+
+    def get_latest_sequence(self, *, run_id: str) -> int:
+        """Return latest persisted sequence number for a run."""
+
+    def subscribe_run_events(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        after_sequence: int,
+    ) -> AsyncIterator[RuntimeEventEnvelope]:
+        """Yield replayed and live events for a run."""
+
+
+@runtime_checkable
+class RuntimeQueuePort(Protocol):
+    """Durable command queue boundary for runtime workers."""
+
+    def enqueue_run(self, command: RuntimeRunCommand) -> None:
+        """Enqueue a run command for workers."""
+
+    def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
+        """Enqueue a cancellation command for workers."""
+
+    def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
+        """Enqueue an approval resolution command for workers."""

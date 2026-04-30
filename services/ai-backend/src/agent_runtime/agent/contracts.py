@@ -9,7 +9,14 @@ import re
 from typing import Any, TypeAlias
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    ValidationInfo,
+    field_validator,
+)
 
 from agent_runtime.agent.ports import (
     McpRegistry,
@@ -64,6 +71,15 @@ class RuntimeErrorCode(StrEnum):
     CONFIGURATION_ERROR = "configuration_error"
     DEPENDENCY_ERROR = "dependency_error"
     RUNTIME_FACTORY_ERROR = "runtime_factory_error"
+
+
+class RuntimeRunStatus(StrEnum):
+    """Product-visible status for request-scoped runtime runs."""
+
+    ACCEPTED = "accepted"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class StreamEventSource(StrEnum):
@@ -122,6 +138,64 @@ class ModelConfig(RuntimeContract):
         return normalized
 
 
+class RuntimeRunContext(RuntimeContract):
+    """Product-owned IDs propagated through LangGraph, traces, and logs."""
+
+    request_id: str = Field(default_factory=lambda: uuid4().hex)
+    run_id: str = Field(default_factory=lambda: uuid4().hex)
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
+    parent_trace_id: str | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: JsonObject = Field(default_factory=dict)
+
+    @field_validator("request_id", "run_id", "trace_id", mode="before")
+    @classmethod
+    def _normalize_required_id(cls, value: object, info: ValidationInfo) -> str:
+        return _normalize_runtime_id(value, info.field_name)
+
+    @field_validator("parent_trace_id", mode="before")
+    @classmethod
+    def _normalize_optional_parent_trace_id(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return _normalize_runtime_id(value, "parent_trace_id")
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _redact_metadata(cls, value: object) -> JsonObject:
+        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+
+
+class RuntimeRunHandle(RuntimeContract):
+    """Small response returned once a product-owned run has been created."""
+
+    request_id: str
+    run_id: str
+    trace_id: str
+    status: RuntimeRunStatus = RuntimeRunStatus.ACCEPTED
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("request_id", "run_id", "trace_id")
+    @classmethod
+    def _normalize_handle_id(cls, value: object, info: ValidationInfo) -> str:
+        return _normalize_runtime_id(value, info.field_name)
+
+    @classmethod
+    def from_context(
+        cls,
+        context: "AgentRuntimeContext",
+        *,
+        status: RuntimeRunStatus = RuntimeRunStatus.ACCEPTED,
+    ) -> "RuntimeRunHandle":
+        return cls(
+            request_id=context.request_id,
+            run_id=context.run_id,
+            trace_id=context.trace_id,
+            status=status,
+            created_at=context.started_at,
+        )
+
+
 class AgentRuntimeContext(RuntimeContract):
     """Request-level identity, authorization, model, and trace context."""
 
@@ -131,7 +205,12 @@ class AgentRuntimeContext(RuntimeContract):
     permission_scopes: frozenset[str] = Field(default_factory=frozenset)
     connector_scopes: dict[str, frozenset[str]] = Field(default_factory=dict)
     model_profile: ModelConfig
+    request_id: str = Field(default_factory=lambda: uuid4().hex)
+    run_id: str = Field(default_factory=lambda: uuid4().hex)
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
+    parent_trace_id: str | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
 
     @field_validator("user_id", "org_id")
@@ -171,16 +250,35 @@ class AgentRuntimeContext(RuntimeContract):
             )
         return normalized
 
-    @field_validator("trace_id", mode="before")
+    @field_validator("request_id", "run_id", "trace_id", mode="before")
     @classmethod
-    def _normalize_trace_id(cls, value: object) -> str:
+    def _normalize_runtime_identifier(cls, value: object, info: ValidationInfo) -> str:
+        return _normalize_runtime_id(value, info.field_name)
+
+    @field_validator("parent_trace_id", mode="before")
+    @classmethod
+    def _normalize_parent_trace_id(cls, value: object) -> str | None:
         if value is None:
-            return uuid4().hex
-        normalized = _normalize_nonempty_string(value, "trace_id")
-        if not _ID_PATTERN.fullmatch(normalized):
-            msg = "trace_id contains unsupported characters"
-            raise ValueError(msg)
-        return normalized
+            return None
+        return _normalize_runtime_id(value, "parent_trace_id")
+
+    @field_validator("trace_metadata", mode="before")
+    @classmethod
+    def _redact_trace_metadata(cls, value: object) -> JsonObject:
+        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+
+    @property
+    def run_context(self) -> RuntimeRunContext:
+        """Return the request/run ID bundle used by graph config and observability."""
+
+        return RuntimeRunContext(
+            request_id=self.request_id,
+            run_id=self.run_id,
+            trace_id=self.trace_id,
+            parent_trace_id=self.parent_trace_id,
+            started_at=self.started_at,
+            metadata=self.trace_metadata,
+        )
 
 
 class RuntimeDependencies(RuntimeContract):
@@ -478,6 +576,16 @@ def _normalize_nonempty_string(value: object, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
         msg = f"{field_name} must not be empty"
+        raise ValueError(msg)
+    return normalized
+
+
+def _normalize_runtime_id(value: object, field_name: str) -> str:
+    if value is None:
+        return uuid4().hex
+    normalized = _normalize_nonempty_string(value, field_name)
+    if not _ID_PATTERN.fullmatch(normalized):
+        msg = f"{field_name} contains unsupported characters"
         raise ValueError(msg)
     return normalized
 
