@@ -33,7 +33,9 @@ class MemoryAccessRequest(RuntimeContract):
     def _normalize_optional_content(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return MemoryValueNormalizer.normalize_nonempty_string(value, Keys.Field.CONTENT)
+        return MemoryValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.CONTENT
+        )
 
 
 class MemoryPolicyDecision:
@@ -95,7 +97,9 @@ class MemoryPolicyAuthorizer:
     ) -> MemoryPathPolicy | None:
         """Return the most specific policy matching the supplied memory path."""
 
-        normalized_path = MemoryValueNormalizer.normalize_memory_path(path, Keys.Field.PATH)
+        normalized_path = MemoryValueNormalizer.normalize_memory_path(
+            path, Keys.Field.PATH
+        )
         candidates = tuple(
             policy
             for policy in (policies or cls.default_policies())
@@ -129,8 +133,9 @@ class MemoryPolicyAuthorizer:
         if actor_role not in allowed_roles:
             return MemoryPolicyDecision.deny(Messages.Errors.MEMORY_POLICY_DENIED)
 
-        if operation is MemoryAccessOperation.WRITE and MemoryWriteGuard.is_prompt_injection(
-            content
+        if (
+            operation is MemoryAccessOperation.WRITE
+            and MemoryWriteGuard.is_prompt_injection(content)
         ):
             return MemoryPolicyDecision.deny(Messages.Errors.PROMPT_INJECTION_REJECTED)
 

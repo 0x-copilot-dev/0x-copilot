@@ -5,13 +5,19 @@ from __future__ import annotations
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.ports import EventStorePort, PersistencePort
-from runtime_api.schemas import AgentRunStatus, RuntimeApiEventType, RuntimeCancelCommand
+from runtime_api.schemas import (
+    AgentRunStatus,
+    RuntimeApiEventType,
+    RuntimeCancelCommand,
+)
 
 
 class RuntimeCancelHandler:
     """Apply a queued cancellation request."""
 
-    def __init__(self, *, persistence: PersistencePort, event_store: EventStorePort) -> None:
+    def __init__(
+        self, *, persistence: PersistencePort, event_store: EventStorePort
+    ) -> None:
         self.persistence = persistence
         self.event_store = event_store
         self.event_producer = RuntimeEventProducer(

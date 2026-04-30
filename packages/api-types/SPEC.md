@@ -36,13 +36,13 @@ run status enum constants between the Python server and this package.
 
 ## Alignment Matrix
 
-| TypeScript surface | Server owner | Product route owner |
-| --- | --- | --- |
-| MCP types | `services/backend` | `services/backend-facade` |
-| Skill types | `services/backend` | `services/backend-facade` |
+| TypeScript surface         | Server owner          | Product route owner       |
+| -------------------------- | --------------------- | ------------------------- |
+| MCP types                  | `services/backend`    | `services/backend-facade` |
+| Skill types                | `services/backend`    | `services/backend-facade` |
 | Conversation and run types | `services/ai-backend` | `services/backend-facade` |
-| Runtime event types | `services/ai-backend` | `services/backend-facade` |
-| Approval types | `services/ai-backend` | `services/backend-facade` |
+| Runtime event types        | `services/ai-backend` | `services/backend-facade` |
+| Approval types             | `services/ai-backend` | `services/backend-facade` |
 
 ## Compatibility Policy
 

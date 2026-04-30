@@ -51,4 +51,3 @@ All server-provided schemas must be validated before they are shown to the agent
 - MCP tool has no description.
 - Auth token expires mid-load.
 - Server returns many tools and exceeds load budget.
-

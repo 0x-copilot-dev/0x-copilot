@@ -55,4 +55,3 @@
 - Subagent event arrives before task metadata.
 - Summarization tokens appear in user-facing stream.
 - Tool result contains secrets or oversized payload.
-

@@ -36,7 +36,10 @@ from agent_runtime.context.memory import (
     TokenBudgetPolicy,
 )
 from agent_runtime.context.memory.policy import MemoryPolicyAuthorizer
-from agent_runtime.capabilities.skills.sources import SkillSourceConfig, SkillSourceRegistry
+from agent_runtime.capabilities.skills.sources import (
+    SkillSourceConfig,
+    SkillSourceRegistry,
+)
 from agent_runtime.delegation.subagents import (
     AsyncSubagentLaunch,
     AsyncSubagentLifecycle,
@@ -291,7 +294,9 @@ Use this only when source-backed research is needed.
 
     assert harness.agent == {"agent": "fake"}
     assert builder.calls[0].model_name == context.model_profile.model_name
-    assert builder.calls[0].skill_directories == (str(skill_root.resolve(strict=False)),)
+    assert builder.calls[0].skill_directories == (
+        str(skill_root.resolve(strict=False)),
+    )
     assert tuple(card.name for card in harness.tools) == ("doc_search",)
     assert "args_schema" not in harness.tools[0].model_dump()
     assert tuple(card.name for card in harness.mcp_servers) == ("drive_mcp",)
@@ -315,7 +320,9 @@ Use this only when source-backed research is needed.
     )
     assert mcp_result.succeeded
     assert mcp_result.loaded_server is not None
-    assert tuple(tool.name for tool in mcp_result.loaded_server.tools) == ("drive_search",)
+    assert tuple(tool.name for tool in mcp_result.loaded_server.tools) == (
+        "drive_search",
+    )
     assert mcp_provider.created_for == ["drive_mcp"]
 
     memory_plan = harness.memory_backend

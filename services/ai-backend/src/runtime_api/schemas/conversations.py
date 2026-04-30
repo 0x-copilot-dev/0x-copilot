@@ -9,7 +9,12 @@ from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_v
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys, Values
-from runtime_api.schemas.common import ConversationStatus, MessageRole, MessageStatus, RuntimeApiValueNormalizer
+from runtime_api.schemas.common import (
+    ConversationStatus,
+    MessageRole,
+    MessageStatus,
+    RuntimeApiValueNormalizer,
+)
 
 
 class CreateConversationRequest(RuntimeContract):
@@ -30,18 +35,21 @@ class CreateConversationRequest(RuntimeContract):
     @field_validator(Keys.Field.TITLE, mode="before")
     @classmethod
     def _normalize_title(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, Keys.Field.TITLE)
+        return RuntimeApiValueNormalizer.normalize_optional_text(
+            value, Keys.Field.TITLE
+        )
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
+        return RuntimeApiValueNormalizer.normalize_optional_id(
+            value, Keys.Field.IDEMPOTENCY_KEY
+        )
 
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
         return RuntimeApiValueNormalizer.redact_json_object(value)
-
 
 
 class ConversationRecord(RuntimeContract):
@@ -73,7 +81,9 @@ class ConversationRecord(RuntimeContract):
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
+        return RuntimeApiValueNormalizer.normalize_optional_id(
+            value, Keys.Field.IDEMPOTENCY_KEY
+        )
 
     def to_response(self) -> "ConversationResponse":
         """Return the stable public conversation shape."""
@@ -93,7 +103,6 @@ class ConversationRecord(RuntimeContract):
         )
 
 
-
 class ConversationResponse(RuntimeContract):
     """Conversation metadata returned by the API."""
 
@@ -108,7 +117,6 @@ class ConversationResponse(RuntimeContract):
     archived_at: datetime | None = None
     metadata: JsonObject = Field(default_factory=dict)
     schema_version: PositiveInt
-
 
 
 class MessageRecord(RuntimeContract):
@@ -139,7 +147,9 @@ class MessageRecord(RuntimeContract):
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
         return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
 
-    @field_validator(Keys.Field.RUN_ID, "parent_message_id", Keys.Field.TRACE_ID, mode="before")
+    @field_validator(
+        Keys.Field.RUN_ID, "parent_message_id", Keys.Field.TRACE_ID, mode="before"
+    )
     @classmethod
     def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
         return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
@@ -147,7 +157,9 @@ class MessageRecord(RuntimeContract):
     @field_validator("content_text", "content_format")
     @classmethod
     def _normalize_text(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_nonempty_string(value, info.field_name)
+        return RuntimeApiValueNormalizer.normalize_nonempty_string(
+            value, info.field_name
+        )
 
     def to_response(self) -> "MessageResponse":
         """Return the stable public message shape."""
@@ -170,7 +182,6 @@ class MessageRecord(RuntimeContract):
         )
 
 
-
 class MessageResponse(RuntimeContract):
     """Conversation message returned to clients."""
 
@@ -188,7 +199,6 @@ class MessageResponse(RuntimeContract):
     created_at: datetime
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
-
 
 
 class MessageListResponse(RuntimeContract):

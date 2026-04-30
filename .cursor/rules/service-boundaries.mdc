@@ -19,4 +19,3 @@ alwaysApply: false
 - Do not put tenant auth ownership, billing/admin state, or product persistence in `services/ai-backend`.
 - Treat `apps/mac`, `apps/windows`, and `packages/shared-config` as planned until they exist on disk.
 - Add or update a service-boundary doc before creating a new service or shared package.
-

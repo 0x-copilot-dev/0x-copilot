@@ -88,7 +88,9 @@ def test_langsmith_extra_contains_product_ids_without_raw_identity(
 ) -> None:
     context = make_context(model_config)
 
-    extra = TraceContext.langsmith_extra_for(context, operation=TraceNames.RUNTIME_INVOKE)
+    extra = TraceContext.langsmith_extra_for(
+        context, operation=TraceNames.RUNTIME_INVOKE
+    )
     metadata = extra["metadata"]
 
     assert metadata["request_id"] == "request_123"  # type: ignore[index]

@@ -35,7 +35,6 @@ class AsyncTaskRecord(RuntimeContract):
     safe_error_message: str | None = None
 
 
-
 class SubagentResultRecord(RuntimeContract):
     """Persisted subagent result and compact summaries."""
 

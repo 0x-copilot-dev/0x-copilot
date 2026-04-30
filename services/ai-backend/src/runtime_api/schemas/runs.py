@@ -4,9 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import Field, NonNegativeInt, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    Field,
+    NonNegativeInt,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, JsonObject, RuntimeContract, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    JsonObject,
+    RuntimeContract,
+    RuntimeErrorEnvelope,
+)
 from agent_runtime.api.constants import Keys, Values
 from runtime_api.schemas.common import AgentRunStatus, RuntimeApiValueNormalizer
 
@@ -58,7 +69,9 @@ class CreateRunRequest(RuntimeContract):
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
     idempotency_key: str | None = None
     model: ModelSelectionRequest | None = None
-    request_context: RuntimeRequestContext = Field(default_factory=RuntimeRequestContext)
+    request_context: RuntimeRequestContext = Field(
+        default_factory=RuntimeRequestContext
+    )
     runtime_context: AgentRuntimeContext | None = Field(default=None, exclude=True)
     request_options: JsonObject = Field(default_factory=dict)
 
@@ -69,18 +82,24 @@ class CreateRunRequest(RuntimeContract):
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, mode="before")
     @classmethod
-    def _normalize_optional_identity(cls, value: object, info: ValidationInfo) -> str | None:
+    def _normalize_optional_identity(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
 
     @field_validator(Keys.Field.USER_INPUT, "content_format")
     @classmethod
     def _normalize_text(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_nonempty_string(value, info.field_name)
+        return RuntimeApiValueNormalizer.normalize_nonempty_string(
+            value, info.field_name
+        )
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
+        return RuntimeApiValueNormalizer.normalize_optional_id(
+            value, Keys.Field.IDEMPOTENCY_KEY
+        )
 
     @field_validator("request_options", mode="before")
     @classmethod
@@ -90,11 +109,14 @@ class CreateRunRequest(RuntimeContract):
     @model_validator(mode="after")
     def _require_identity_or_context(self) -> "CreateRunRequest":
         if self.runtime_context is not None:
-            raise ValueError("runtime_context is server-owned and cannot be supplied by clients")
+            raise ValueError(
+                "runtime_context is server-owned and cannot be supplied by clients"
+            )
         if self.org_id is None or self.user_id is None:
-            raise ValueError("org_id and user_id are required when runtime_context is omitted")
+            raise ValueError(
+                "org_id and user_id are required when runtime_context is omitted"
+            )
         return self
-
 
 
 class RunRecord(RuntimeContract):
@@ -135,7 +157,9 @@ class RunRecord(RuntimeContract):
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
+        return RuntimeApiValueNormalizer.normalize_optional_id(
+            value, Keys.Field.IDEMPOTENCY_KEY
+        )
 
     def to_response(self) -> "RunStatusResponse":
         """Return the public run status shape."""
@@ -155,7 +179,6 @@ class RunRecord(RuntimeContract):
         )
 
 
-
 class CreateRunResponse(RuntimeContract):
     """Run handle returned after producer transaction commits."""
 
@@ -167,7 +190,6 @@ class CreateRunResponse(RuntimeContract):
     stream_url: str
     events_url: str
     created_at: datetime
-
 
 
 class RunStatusResponse(RuntimeContract):
@@ -186,7 +208,6 @@ class RunStatusResponse(RuntimeContract):
     latest_sequence_no: NonNegativeInt = 0
 
 
-
 class CancelRunRequest(RuntimeContract):
     """Request to cancel long-running work."""
 
@@ -196,13 +217,16 @@ class CancelRunRequest(RuntimeContract):
     @field_validator(Keys.Field.REQUESTED_BY_USER_ID)
     @classmethod
     def _normalize_requested_by_user_id(cls, value: object) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, Keys.Field.REQUESTED_BY_USER_ID)
+        return RuntimeApiValueNormalizer.normalize_id(
+            value, Keys.Field.REQUESTED_BY_USER_ID
+        )
 
     @field_validator(Keys.Field.REASON, mode="before")
     @classmethod
     def _normalize_reason(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, Keys.Field.REASON)
-
+        return RuntimeApiValueNormalizer.normalize_optional_text(
+            value, Keys.Field.REASON
+        )
 
 
 class CancelRunResponse(RuntimeContract):

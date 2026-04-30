@@ -24,7 +24,6 @@ class RuntimeRunCommand(RuntimeContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-
 class RuntimeCancelCommand(RuntimeContract):
     """Durable command requesting best-effort run cancellation."""
 
@@ -34,7 +33,6 @@ class RuntimeCancelCommand(RuntimeContract):
     requested_by_user_id: str
     reason: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
 
 
 class RuntimeApprovalResolvedCommand(RuntimeContract):

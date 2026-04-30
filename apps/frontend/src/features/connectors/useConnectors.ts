@@ -7,7 +7,7 @@ import {
   listMcpServers,
   skipMcpAuth,
   startMcpAuth,
-  updateMcpServer
+  updateMcpServer,
 } from "../../api/mcpApi";
 
 export interface ConnectorState {
@@ -22,7 +22,9 @@ export interface ConnectorState {
   skipAuth: (serverId: string) => Promise<void>;
 }
 
-export function useConnectors(identity: RequestIdentity | null): ConnectorState {
+export function useConnectors(
+  identity: RequestIdentity | null,
+): ConnectorState {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,16 +76,16 @@ export function useConnectors(identity: RequestIdentity | null): ConnectorState 
         const currentIdentity = requireIdentity(identity);
         await skipMcpAuth(serverId, currentIdentity);
         await refresh();
-      }
+      },
     }),
-    [identity, refresh]
+    [identity, refresh],
   );
 
   return {
     servers,
     loading,
     error,
-    ...actions
+    ...actions,
   };
 }
 

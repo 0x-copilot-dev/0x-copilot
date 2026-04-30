@@ -29,7 +29,9 @@ from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerR
 class PersistencePort(Protocol):
     """Conversation, message, run, approval, and audit persistence boundary."""
 
-    def create_conversation(self, request: CreateConversationRequest) -> ConversationRecord:
+    def create_conversation(
+        self, request: CreateConversationRequest
+    ) -> ConversationRecord:
         """Create or idempotently return a conversation."""
 
     def get_conversation(
@@ -68,7 +70,9 @@ class PersistencePort(Protocol):
     def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
         """Update mutable run status and return the new record."""
 
-    def set_run_latest_sequence(self, *, run_id: str, latest_sequence_no: int) -> RunRecord:
+    def set_run_latest_sequence(
+        self, *, run_id: str, latest_sequence_no: int
+    ) -> RunRecord:
         """Persist latest event sequence for run inspection."""
 
     def record_approval_decision(
@@ -106,7 +110,9 @@ class EventStorePort(Protocol):
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number."""
 
-    def append_events(self, events: Sequence[RuntimeEventDraft]) -> Sequence[RuntimeEventEnvelope]:
+    def append_events(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
         """Append multiple events in order."""
 
     def list_events_after(
@@ -121,6 +127,7 @@ class EventStorePort(Protocol):
     def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
+
 @runtime_checkable
 class RuntimeQueuePort(Protocol):
     """Durable command queue boundary for runtime workers."""
@@ -131,7 +138,9 @@ class RuntimeQueuePort(Protocol):
     def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         """Enqueue a cancellation command for workers."""
 
-    def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
+    def enqueue_approval_resolved(
+        self, command: RuntimeApprovalResolvedCommand
+    ) -> None:
         """Enqueue an approval resolution command for workers."""
 
     def claim_next(

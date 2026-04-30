@@ -43,10 +43,13 @@ def test_in_memory_runtime_queue_claim_retry_and_dead_letter() -> None:
 
     assert first_claim is not None
     assert first_claim.run_id == "run_123"
-    assert store.claim_next(
-        worker_id="worker_2",
-        lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
-    ) is None
+    assert (
+        store.claim_next(
+            worker_id="worker_2",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        is None
+    )
 
     store.mark_retry(
         result=RuntimeWorkerResult(
@@ -66,7 +69,10 @@ def test_in_memory_runtime_queue_claim_retry_and_dead_letter() -> None:
     store.mark_dead_letter(
         result=RuntimeWorkerResult(command_id=retry_claim.command_id, succeeded=False)
     )
-    assert store.claim_next(
-        worker_id="worker_3",
-        lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
-    ) is None
+    assert (
+        store.claim_next(
+            worker_id="worker_3",
+            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        is None
+    )

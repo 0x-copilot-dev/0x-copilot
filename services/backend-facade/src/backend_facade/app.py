@@ -50,7 +50,9 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         }
 
     @app.post("/v1/mcp/servers")
-    async def create_mcp_server(request: Request, payload: dict[str, object]) -> dict[str, object]:
+    async def create_mcp_server(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json(
             app,
@@ -104,7 +106,9 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         )
 
     @app.post("/v1/mcp/servers/{server_id}/auth/start")
-    async def start_mcp_auth(request: Request, server_id: str, payload: dict[str, object]) -> dict[str, object]:
+    async def start_mcp_auth(
+        request: Request, server_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json(
             app,
@@ -144,7 +148,9 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         )
 
     @app.post("/v1/agent/conversations")
-    async def create_conversation(request: Request, payload: FacadeConversationRequest) -> dict[str, object]:
+    async def create_conversation(
+        request: Request, payload: FacadeConversationRequest
+    ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json_to_ai(
             app,
@@ -180,23 +186,31 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/messages",
-            params=identity.scoped_params({"limit": limit, "include_deleted": include_deleted}),
+            params=identity.scoped_params(
+                {"limit": limit, "include_deleted": include_deleted}
+            ),
             identity=identity,
         )
 
     @app.post("/v1/agent/runs")
-    async def create_run(request: Request, payload: FacadeRunRequest) -> dict[str, object]:
+    async def create_run(
+        request: Request, payload: FacadeRunRequest
+    ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json_to_ai(
             app,
             "POST",
             "/v1/agent/runs",
-            json=identity.scoped_payload(payload.model_dump(exclude_none=True), include_request_context=True),
+            json=identity.scoped_payload(
+                payload.model_dump(exclude_none=True), include_request_context=True
+            ),
             identity=identity,
         )
 
     @app.post("/v1/skills")
-    async def create_skill(request: Request, payload: dict[str, object]) -> dict[str, object]:
+    async def create_skill(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json(
             app,
@@ -428,7 +442,9 @@ async def _forward_json(
         return {}
     payload = response.json()
     if not isinstance(payload, dict):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object"
+        )
     return payload
 
 

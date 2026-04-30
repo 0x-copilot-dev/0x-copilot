@@ -48,7 +48,9 @@ class SubagentTestMixin:
                 raise RuntimeError(SubagentTestMixin.Values.SECRET_ERROR)
             return self.launch
 
-        async def check(self, state: AsyncTaskState) -> SubagentResult | Mapping[str, object] | None:
+        async def check(
+            self, state: AsyncTaskState
+        ) -> SubagentResult | Mapping[str, object] | None:
             if self.fail_on_check:
                 raise RuntimeError(SubagentTestMixin.Values.SECRET_ERROR)
             return self.next_result
@@ -83,9 +85,7 @@ class SubagentTestMixin:
         RAW_RESEARCHER_NAME = "Researcher"
         RELEVANT_SUMMARY = "The supervisor needs compact launch risk research."
         RESEARCH_SKILL = "research"
-        RESEARCHER_DESCRIPTION = (
-            "Investigates enterprise sources and returns concise grounded research summaries."
-        )
+        RESEARCHER_DESCRIPTION = "Investigates enterprise sources and returns concise grounded research summaries."
         RESEARCHER_NAME = "researcher"
         RESPONSE = "The main launch risk is incomplete owner assignment."
         RUN_ID = "run_123"
@@ -141,7 +141,9 @@ class SubagentTestMixin:
         self,
         definitions: Sequence[SubagentDefinition | Mapping[str, object]],
     ) -> DynamicSubagentCatalog:
-        return DynamicSubagentCatalog(providers=(self.FakeDefinitionProvider(definitions),))
+        return DynamicSubagentCatalog(
+            providers=(self.FakeDefinitionProvider(definitions),)
+        )
 
     def make_runner(
         self,

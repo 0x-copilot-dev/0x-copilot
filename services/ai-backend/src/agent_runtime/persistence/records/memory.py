@@ -9,7 +9,10 @@ from pydantic import Field, PositiveInt, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.persistence.constants import Keys
-from agent_runtime.persistence.records.common import PersistenceValueNormalizer, RuntimeMemoryScopeType
+from agent_runtime.persistence.records.common import (
+    PersistenceValueNormalizer,
+    RuntimeMemoryScopeType,
+)
 
 
 class MemoryScopeRecord(RuntimeContract):
@@ -29,13 +32,14 @@ class MemoryScopeRecord(RuntimeContract):
     @field_validator(Keys.Field.NAMESPACE_HASH)
     @classmethod
     def _normalize_namespace_hash(cls, value: object) -> str:
-        return PersistenceValueNormalizer.normalize_sha256(value, Keys.Field.NAMESPACE_HASH)
+        return PersistenceValueNormalizer.normalize_sha256(
+            value, Keys.Field.NAMESPACE_HASH
+        )
 
     @field_validator("namespace", mode="before")
     @classmethod
     def _redact_namespace(cls, value: object) -> JsonObject:
         return PersistenceValueNormalizer.redact_json_object(value)
-
 
 
 class MemoryItemRecord(RuntimeContract):

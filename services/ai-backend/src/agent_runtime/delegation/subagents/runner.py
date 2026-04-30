@@ -81,7 +81,9 @@ class AsyncSubagentLifecycle:
     catalog: DynamicSubagentCatalog
     runner: SubagentRunner
     store: InMemoryAsyncTaskStore = field(default_factory=InMemoryAsyncTaskStore)
-    clock: Callable[[], datetime] = field(default_factory=lambda: lambda: datetime.now(UTC))
+    clock: Callable[[], datetime] = field(
+        default_factory=lambda: lambda: datetime.now(UTC)
+    )
 
     async def start(
         self,
@@ -208,7 +210,9 @@ class AsyncSubagentLifecycle:
         self.store.save(completed)
         return AsyncTaskLifecycleResult.from_state(completed, result=result)
 
-    async def update(self, task_id: str, task: SubagentTask) -> AsyncTaskLifecycleResult:
+    async def update(
+        self, task_id: str, task: SubagentTask
+    ) -> AsyncTaskLifecycleResult:
         """Update a running subagent task with a compact replacement handoff."""
 
         state = self.store.get(task_id)

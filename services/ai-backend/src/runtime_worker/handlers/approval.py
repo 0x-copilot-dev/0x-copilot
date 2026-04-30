@@ -9,7 +9,9 @@ from runtime_api.schemas import RuntimeApprovalResolvedCommand
 class RuntimeApprovalHandler:
     """Consume durable approval-resolution commands after the API records the decision."""
 
-    def __init__(self, *, persistence: PersistencePort, event_store: EventStorePort) -> None:
+    def __init__(
+        self, *, persistence: PersistencePort, event_store: EventStorePort
+    ) -> None:
         self.persistence = persistence
         self.event_store = event_store
 

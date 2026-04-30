@@ -8,10 +8,10 @@ persistence, AI orchestration, connector side effects, or service credentials.
 
 The app calls `backend-facade` through `/v1/*`.
 
-| Frontend API module | Route family | Upstream owner |
-| --- | --- | --- |
+| Frontend API module   | Route family  | Upstream owner                                                   |
+| --------------------- | ------------- | ---------------------------------------------------------------- |
 | `src/api/agentApi.ts` | `/v1/agent/*` | `services/ai-backend`, reached through `services/backend-facade` |
-| `src/api/mcpApi.ts` | `/v1/mcp/*` | `services/backend`, reached through `services/backend-facade` |
+| `src/api/mcpApi.ts`   | `/v1/mcp/*`   | `services/backend`, reached through `services/backend-facade`    |
 
 Use `src/api/*` as the only browser route-client layer. Add a new module there
 when a route family becomes part of the shipped frontend surface.

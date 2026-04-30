@@ -48,4 +48,3 @@ Required models:
 - Task ID is truncated by model output.
 - Subagent returns oversized raw data.
 - User updates task while previous run is active.
-

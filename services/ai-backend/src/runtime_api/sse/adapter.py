@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
 from runtime_api.schemas import (
-    AgentRunStatus,
     RuntimeApiEventType,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,

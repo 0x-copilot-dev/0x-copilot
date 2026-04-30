@@ -9,15 +9,15 @@ from agent_runtime.persistence.schema.postgres import (
 
 class PostgresSchemaTestMixin:
     TENANT_SCOPED_TABLES = frozenset(
-        table
-        for table in AGENT_RUNTIME_TABLES
-        if table != "runtime_consumer_cursors"
+        table for table in AGENT_RUNTIME_TABLES if table != "runtime_consumer_cursors"
     )
 
     def table_segment(self, table_name: str) -> str:
         marker = f"CREATE TABLE IF NOT EXISTS {table_name}"
         start = POSTGRES_AGENT_RUNTIME_MIGRATION_SQL.index(marker)
-        next_marker = POSTGRES_AGENT_RUNTIME_MIGRATION_SQL.find("CREATE TABLE IF NOT EXISTS", start + 1)
+        next_marker = POSTGRES_AGENT_RUNTIME_MIGRATION_SQL.find(
+            "CREATE TABLE IF NOT EXISTS", start + 1
+        )
         if next_marker == -1:
             return POSTGRES_AGENT_RUNTIME_MIGRATION_SQL[start:]
         return POSTGRES_AGENT_RUNTIME_MIGRATION_SQL[start:next_marker]
@@ -39,7 +39,13 @@ class TestPostgresSchema(PostgresSchemaTestMixin):
             assert "org_id TEXT NOT NULL" in self.table_segment(table_name)
 
         assert "idx_runtime_events_run_sequence" in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
-        assert "ON runtime_events (run_id, sequence_no)" in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
-        assert "idx_runtime_outbox_status_available" in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
+        assert (
+            "ON runtime_events (run_id, sequence_no)"
+            in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
+        )
+        assert (
+            "idx_runtime_outbox_status_available"
+            in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
+        )
         assert "locked_by TEXT" in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
         assert "lock_expires_at TIMESTAMPTZ" in POSTGRES_AGENT_RUNTIME_MIGRATION_SQL

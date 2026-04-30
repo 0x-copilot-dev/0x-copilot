@@ -10,7 +10,10 @@ from pydantic import Field, ValidationError
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.capabilities.skills.virtual import VirtualSkillBundle, VirtualSkillRegistry
+from agent_runtime.capabilities.skills.virtual import (
+    VirtualSkillBundle,
+    VirtualSkillRegistry,
+)
 
 
 class LoadSkillInput(RuntimeContract):
@@ -30,7 +33,9 @@ class LoadSkillTool:
         "Use this only when a compact Skill card is relevant to the user request."
     )
 
-    async def ainvoke(self, raw_input: LoadSkillInput | Mapping[str, Any] | str) -> dict[str, Any]:
+    async def ainvoke(
+        self, raw_input: LoadSkillInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
         parsed_input = LoadSkillInputParser.parse(raw_input)
         if isinstance(parsed_input, dict):
             return parsed_input
@@ -47,7 +52,9 @@ class LoadSkillTool:
             }
         return self._bundle_payload(bundle)
 
-    async def __call__(self, raw_input: LoadSkillInput | Mapping[str, Any] | str) -> dict[str, Any]:
+    async def __call__(
+        self, raw_input: LoadSkillInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
         return await self.ainvoke(raw_input)
 
     @classmethod
@@ -61,7 +68,9 @@ class LoadSkillInputParser:
     """Parser for untrusted model input to the Skill loader."""
 
     @classmethod
-    def parse(cls, raw_input: LoadSkillInput | Mapping[str, Any] | str) -> LoadSkillInput | dict[str, Any]:
+    def parse(
+        cls, raw_input: LoadSkillInput | Mapping[str, Any] | str
+    ) -> LoadSkillInput | dict[str, Any]:
         if isinstance(raw_input, LoadSkillInput):
             return raw_input
         if isinstance(raw_input, str):

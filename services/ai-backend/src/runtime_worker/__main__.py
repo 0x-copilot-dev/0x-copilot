@@ -13,7 +13,9 @@ from runtime_worker.loop import RuntimeWorker
 async def amain() -> None:
     """Start the runtime worker loop."""
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     logger = logging.getLogger("runtime_worker")
     settings = RuntimeSettings.load()
     ports = RuntimeAdapterFactory.from_settings(settings)

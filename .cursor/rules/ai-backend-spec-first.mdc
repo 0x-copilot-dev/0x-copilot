@@ -11,4 +11,3 @@ alwaysApply: false
 - Keep implementation decisions consistent with Deep Agents, LangGraph, LangChain, and Agent Skills primitives.
 - Do not remove edge cases to simplify implementation.
 - Treat docs as the contract future agents must implement against.
-

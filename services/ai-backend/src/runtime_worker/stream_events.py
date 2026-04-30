@@ -89,7 +89,9 @@ class RuntimeStreamPartAdapter:
             )
             return
 
-        if stream_type not in {"updates", "custom"} or self.contains_explicit_api_event(data):
+        if stream_type not in {"updates", "custom"} or self.contains_explicit_api_event(
+            data
+        ):
             return
 
         if stream_type == "updates" and self.append_subagent_lifecycle_events(
@@ -105,8 +107,12 @@ class RuntimeStreamPartAdapter:
             return
         self.event_producer.append_api_event(
             run=run,
-            source=StreamEventSource.SUBAGENT if namespace.is_subagent else StreamEventSource.MAIN_AGENT,
-            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS if namespace.is_subagent else RuntimeApiEventType.PROGRESS,
+            source=StreamEventSource.SUBAGENT
+            if namespace.is_subagent
+            else StreamEventSource.MAIN_AGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS
+            if namespace.is_subagent
+            else RuntimeApiEventType.PROGRESS,
             payload=payload,
             metadata=metadata,
             parent_task_id=parent_task_id,
@@ -248,7 +254,9 @@ class RuntimeStreamPartAdapter:
         return tuple(payloads)
 
     @classmethod
-    def collect_explicit_api_payloads(cls, value: object, payloads: list[JsonObject]) -> None:
+    def collect_explicit_api_payloads(
+        cls, value: object, payloads: list[JsonObject]
+    ) -> None:
         if isinstance(value, Mapping):
             payload = cls.payload_mapping(value)
             if cls.api_event_type(payload) is not None:
@@ -257,7 +265,9 @@ class RuntimeStreamPartAdapter:
             for item in value.values():
                 cls.collect_explicit_api_payloads(item, payloads)
             return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             for item in value:
                 cls.collect_explicit_api_payloads(item, payloads)
 
@@ -284,8 +294,14 @@ class RuntimeStreamPartAdapter:
         return safe_payload
 
     @classmethod
-    def api_event_type(cls, payload: Mapping[str, object]) -> RuntimeApiEventType | None:
-        value = payload.get("api_event_type") or payload.get("event_type") or payload.get("event")
+    def api_event_type(
+        cls, payload: Mapping[str, object]
+    ) -> RuntimeApiEventType | None:
+        value = (
+            payload.get("api_event_type")
+            or payload.get("event_type")
+            or payload.get("event")
+        )
         if not isinstance(value, str):
             return None
         try:
@@ -309,12 +325,16 @@ class RuntimeStreamPartAdapter:
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
         }:
             return StreamEventSource.TOOL
-        if event_type in {
-            RuntimeApiEventType.SUBAGENT_UPDATE,
-            RuntimeApiEventType.SUBAGENT_STARTED,
-            RuntimeApiEventType.SUBAGENT_PROGRESS,
-            RuntimeApiEventType.SUBAGENT_COMPLETED,
-        } or namespace.is_subagent:
+        if (
+            event_type
+            in {
+                RuntimeApiEventType.SUBAGENT_UPDATE,
+                RuntimeApiEventType.SUBAGENT_STARTED,
+                RuntimeApiEventType.SUBAGENT_PROGRESS,
+                RuntimeApiEventType.SUBAGENT_COMPLETED,
+            }
+            or namespace.is_subagent
+        ):
             return StreamEventSource.SUBAGENT
         return StreamEventSource.MAIN_AGENT
 
@@ -323,15 +343,23 @@ class RuntimeStreamPartAdapter:
         if isinstance(message, Mapping):
             value = message.get("tool_call_chunks") or message.get("tool_calls") or ()
         else:
-            value = getattr(message, "tool_call_chunks", None) or getattr(message, "tool_calls", ())
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            value = getattr(message, "tool_call_chunks", None) or getattr(
+                message, "tool_calls", ()
+            )
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             return tuple(value)
         return ()
 
     @classmethod
     def tool_call_payload(cls, tool_call: object) -> JsonObject:
         payload = cls.payload_mapping(tool_call)
-        tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name")) or "unknown_tool"
+        tool_name = (
+            cls.text(payload.get("name"))
+            or cls.text(payload.get("tool_name"))
+            or "unknown_tool"
+        )
         call_id = (
             cls.text(payload.get("id"))
             or cls.text(payload.get("call_id"))
@@ -354,19 +382,34 @@ class RuntimeStreamPartAdapter:
     def is_tool_result_message(cls, message: object) -> bool:
         if isinstance(message, Mapping):
             return message.get("type") in {"tool", "tool_result"}
-        return bool(getattr(message, "tool_call_id", None)) or getattr(message, "type", None) == "tool"
+        return (
+            bool(getattr(message, "tool_call_id", None))
+            or getattr(message, "type", None) == "tool"
+        )
 
     @classmethod
     def tool_result_payload(cls, message: object) -> JsonObject:
         payload = cls.payload_mapping(message)
-        tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name")) or "unknown_tool"
+        tool_name = (
+            cls.text(payload.get("name"))
+            or cls.text(payload.get("tool_name"))
+            or "unknown_tool"
+        )
         call_id = (
             cls.text(payload.get("tool_call_id"))
             or cls.text(payload.get("id"))
             or cls.text(payload.get("call_id"))
             or TraceContext.event_id()
         )
-        excluded = {"type", "name", "id", "tool_call_id", "call_id", "tool_name", "status"}
+        excluded = {
+            "type",
+            "name",
+            "id",
+            "tool_call_id",
+            "call_id",
+            "tool_name",
+            "status",
+        }
         output = {key: value for key, value in payload.items() if key not in excluded}
         return {
             "tool_name": tool_name,
@@ -381,10 +424,14 @@ class RuntimeStreamPartAdapter:
         for message in cls.update_messages(value):
             for tool_call in cls.tool_call_chunks(message):
                 payload = cls.payload_mapping(tool_call)
-                tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name"))
+                tool_name = cls.text(payload.get("name")) or cls.text(
+                    payload.get("tool_name")
+                )
                 if tool_name != "task":
                     continue
-                call_id = cls.text(payload.get("id")) or cls.text(payload.get("call_id"))
+                call_id = cls.text(payload.get("id")) or cls.text(
+                    payload.get("call_id")
+                )
                 if call_id is None:
                     continue
                 args = payload.get("args")
@@ -414,7 +461,9 @@ class RuntimeStreamPartAdapter:
             if not cls.is_tool_result_message(message):
                 continue
             payload = cls.payload_mapping(message)
-            tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name"))
+            tool_name = cls.text(payload.get("name")) or cls.text(
+                payload.get("tool_name")
+            )
             if tool_name != "task":
                 continue
             call_id = (
@@ -455,7 +504,9 @@ class RuntimeStreamPartAdapter:
             for item in value.values():
                 cls.collect_update_messages(item, messages)
             return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             for item in value:
                 cls.collect_update_messages(item, messages)
 
@@ -471,9 +522,14 @@ class RuntimeStreamPartAdapter:
     def json_value(cls, value: object) -> object:
         if isinstance(value, Mapping):
             return {str(key): cls.json_value(item) for key, item in value.items()}
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             values = [cls.json_value(item) for item in value]
-            if all(isinstance(item, str | int | float | bool) or item is None for item in values):
+            if all(
+                isinstance(item, str | int | float | bool) or item is None
+                for item in values
+            ):
                 return values
             text = cls.text_from_content_blocks(values)
             return text if text is not None else str(values)
@@ -512,7 +568,9 @@ class RuntimeStreamPartAdapter:
     def content_delta_to_text(cls, value: object) -> str | None:
         if isinstance(value, str):
             return value or None
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             parts: list[str] = []
             for item in value:
                 if isinstance(item, str):

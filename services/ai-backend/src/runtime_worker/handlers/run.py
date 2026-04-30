@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode, StreamEventSource
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeDependencies,
+    RuntimeErrorCode,
+    StreamEventSource,
+)
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -46,8 +51,8 @@ class RuntimeRunHandler:
         self.persistence = persistence
         self.event_store = event_store
         self.settings = settings or RuntimeSettings.load()
-        self.dependencies_factory = dependencies_factory or DefaultRuntimeDependenciesFactory(
-            self.settings
+        self.dependencies_factory = (
+            dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
         )
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
@@ -71,7 +76,9 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             )
 
-        run = self.persistence.update_run_status(run_id=command.run_id, status=AgentRunStatus.RUNNING)
+        run = self.persistence.update_run_status(
+            run_id=command.run_id, status=AgentRunStatus.RUNNING
+        )
         self._append_lifecycle(run, RuntimeApiEventType.RUN_STARTED, "Run started")
 
         try:
@@ -81,7 +88,8 @@ class RuntimeRunHandler:
             )
             messages = self._messages_for_run(command)
             if command.runtime_context.model_profile.supports_streaming and (
-                self._runtime_streamer_explicit or callable(getattr(harness.agent, "astream", None))
+                self._runtime_streamer_explicit
+                or callable(getattr(harness.agent, "astream", None))
             ):
                 result = await self._stream_runtime(command, run, harness, messages)
             else:
@@ -111,8 +119,12 @@ class RuntimeRunHandler:
                     payload={"message": final_text},
                 )
         except TimeoutError as exc:
-            failed = self.persistence.update_run_status(run_id=command.run_id, status=AgentRunStatus.TIMED_OUT)
-            self._append_lifecycle(failed, RuntimeApiEventType.RUN_FAILED, "Run timed out")
+            failed = self.persistence.update_run_status(
+                run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
+            )
+            self._append_lifecycle(
+                failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
+            )
             raise AgentRuntimeError(
                 RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
                 "Runtime invocation timed out.",
@@ -120,14 +132,22 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             ) from exc
         except Exception:
-            failed = self.persistence.update_run_status(run_id=command.run_id, status=AgentRunStatus.FAILED)
+            failed = self.persistence.update_run_status(
+                run_id=command.run_id, status=AgentRunStatus.FAILED
+            )
             self._append_lifecycle(failed, RuntimeApiEventType.RUN_FAILED, "Run failed")
             raise
 
-        completed = self.persistence.update_run_status(run_id=command.run_id, status=AgentRunStatus.COMPLETED)
-        self._append_lifecycle(completed, RuntimeApiEventType.RUN_COMPLETED, "Run completed")
+        completed = self.persistence.update_run_status(
+            run_id=command.run_id, status=AgentRunStatus.COMPLETED
+        )
+        self._append_lifecycle(
+            completed, RuntimeApiEventType.RUN_COMPLETED, "Run completed"
+        )
 
-    def _messages_for_run(self, command: RuntimeRunCommand) -> tuple[dict[str, str], ...]:
+    def _messages_for_run(
+        self, command: RuntimeRunCommand
+    ) -> tuple[dict[str, str], ...]:
         records = self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
@@ -136,7 +156,8 @@ class RuntimeRunHandler:
         return tuple(
             {"role": message.role.value, "content": message.content_text}
             for message in records
-            if message.role in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
+            if message.role
+            in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
         )
 
     async def _stream_runtime(
@@ -148,13 +169,17 @@ class RuntimeRunHandler:
     ) -> object:
         final_result: object | None = None
         deltas: list[str] = []
-        async with asyncio.timeout(command.runtime_context.model_profile.timeout_seconds):
+        async with asyncio.timeout(
+            command.runtime_context.model_profile.timeout_seconds
+        ):
             async for chunk in self.runtime_streamer(harness, messages):
                 candidate = self.stream_event_mapper.stream_result_candidate(chunk)
                 if candidate is not None:
                     final_result = candidate
                 delta = self.stream_event_mapper.stream_delta(chunk)
-                self.stream_event_mapper.append_activity_events(run=run, chunk=chunk, delta=delta)
+                self.stream_event_mapper.append_activity_events(
+                    run=run, chunk=chunk, delta=delta
+                )
                 if delta is None:
                     continue
                 deltas.append(delta)
@@ -185,7 +210,9 @@ class RuntimeRunHandler:
             source=source,
             event_type=event_type,
             summary=summary,
-            status="completed" if event_type == RuntimeApiEventType.FINAL_RESPONSE else None,
+            status="completed"
+            if event_type == RuntimeApiEventType.FINAL_RESPONSE
+            else None,
             payload=payload or {"status": event_type.value},
         )
 
@@ -220,7 +247,9 @@ class RuntimeRunHandler:
     def _content_to_text(cls, value: object) -> str | None:
         if isinstance(value, str):
             return value.strip() or None
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             parts: list[str] = []
             for item in value:
                 if isinstance(item, str):

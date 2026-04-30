@@ -56,12 +56,16 @@ class RuntimeEventTimelineTestMixin:
                 model={"provider": "openai", "model_name": "gpt-4.1-mini"},
                 request_context={
                     "roles": sorted(runtime_context_admin.roles),
-                    "permission_scopes": sorted(runtime_context_admin.permission_scopes),
+                    "permission_scopes": sorted(
+                        runtime_context_admin.permission_scopes
+                    ),
                     "connector_scopes": {
                         key: sorted(value)
                         for key, value in runtime_context_admin.connector_scopes.items()
                     },
-                    "feature_flags": [flag.value for flag in runtime_context_admin.feature_flags],
+                    "feature_flags": [
+                        flag.value for flag in runtime_context_admin.feature_flags
+                    ],
                 },
             )
         )
@@ -152,7 +156,9 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             delta=None,
         )
         result_envelope = next(
-            event for event in _store.events_by_run[run.run_id] if event.event_type == "tool_result"
+            event
+            for event in _store.events_by_run[run.run_id]
+            if event.event_type == "tool_result"
         )
 
         assert delta_envelope.event_type is RuntimeApiEventType.TOOL_CALL_DELTA

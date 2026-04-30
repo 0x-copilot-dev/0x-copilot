@@ -44,7 +44,9 @@ class PersistenceContractsTestMixin:
 
 
 class TestPersistenceContracts(PersistenceContractsTestMixin):
-    def test_runtime_persistence_records_validate_and_redact_json_payloads(self) -> None:
+    def test_runtime_persistence_records_validate_and_redact_json_payloads(
+        self,
+    ) -> None:
         outbox = OutboxEventRecord(
             aggregate_type="agent_run",
             aggregate_id=self.Values.RUN_ID,

@@ -28,7 +28,11 @@ from agent_runtime.persistence.records import (
     ToolInvocationStatus,
     ToolSideEffectClass,
 )
-from agent_runtime.persistence.ports import CheckpointStorePort, MemoryMetadataPort, PayloadStoragePort
+from agent_runtime.persistence.ports import (
+    CheckpointStorePort,
+    MemoryMetadataPort,
+    PayloadStoragePort,
+)
 
 __all__ = [
     "AsyncTaskRecord",

@@ -27,12 +27,12 @@ routes must deny direct browser or internet access to this path prefix.
 
 ## MCP Routes
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/internal/v1/mcp/cards` | List enabled MCP server cards for an org/user scope |
-| `POST` | `/internal/v1/mcp/servers/{server_id}/auth/start` | Start OAuth for a server on behalf of an internal caller |
-| `POST` | `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session |
-| `POST` | `/internal/v1/mcp/servers/{server_id}/test-token` | Upsert a token for local/test flows |
+| Method | Path                                                  | Purpose                                                  |
+| ------ | ----------------------------------------------------- | -------------------------------------------------------- |
+| `GET`  | `/internal/v1/mcp/cards`                              | List enabled MCP server cards for an org/user scope      |
+| `POST` | `/internal/v1/mcp/servers/{server_id}/auth/start`     | Start OAuth for a server on behalf of an internal caller |
+| `POST` | `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session                 |
+| `POST` | `/internal/v1/mcp/servers/{server_id}/test-token`     | Upsert a token for local/test flows                      |
 
 All MCP routes require scoped identity from trusted service headers in
 production. Local development may still pass `org_id` and `user_id` query/body
@@ -43,11 +43,11 @@ They must not be forwarded through the product facade.
 
 ## Skill Routes
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/internal/v1/skills/cards` | List enabled skill cards for runtime selection |
-| `GET` | `/internal/v1/skills/{skill_id}` | Fetch the full internal skill bundle by ID |
-| `GET` | `/internal/v1/skills/by-name/{name}` | Fetch the full internal skill bundle by stable name |
+| Method | Path                                 | Purpose                                             |
+| ------ | ------------------------------------ | --------------------------------------------------- |
+| `GET`  | `/internal/v1/skills/cards`          | List enabled skill cards for runtime selection      |
+| `GET`  | `/internal/v1/skills/{skill_id}`     | Fetch the full internal skill bundle by ID          |
+| `GET`  | `/internal/v1/skills/by-name/{name}` | Fetch the full internal skill bundle by stable name |
 
 Skill cards are summaries used for selection. Skill bundles include the
 model-consumable markdown and metadata required by the runtime.

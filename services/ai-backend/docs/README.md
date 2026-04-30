@@ -28,19 +28,19 @@ The FastAPI runtime API remains limited to conversations, runs, event replay, st
 
 ## Feature Map
 
-| Feature | Current docs | Spec |
-| --- | --- | --- |
-| Product vision | `prds/00-product-vision.md`, `architecture/system-overview.md` | `architecture/runtime-contracts.md` |
-| Runtime foundation | `architecture/system-overview.md`, `architecture/package-structure.md` | `specs/01-runtime-foundation-spec.md` |
-| Dynamic tool loading | `architecture/data-flow.md` | `specs/02-dynamic-tool-loading-spec.md` |
-| Skills middleware | `architecture/data-flow.md` | `specs/03-skills-middleware-spec.md` |
-| Dynamic MCP loading | `architecture/data-flow.md` | `specs/04-dynamic-mcp-loading-spec.md` |
-| Context and memory | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/05-context-memory-management-spec.md` |
-| Subagents and async agents | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/06-subagents-and-async-agents-spec.md` |
-| Streaming and observability | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/07-streaming-and-observability-spec.md` |
-| FastAPI runtime API | `architecture/data-flow.md`, `architecture/package-structure.md` | `specs/08-fastapi-runtime-api-spec.md` |
-| Runtime events producer/consumer | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/09-runtime-events-producer-consumer-spec.md` |
-| Agent runtime persistence | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/10-agent-runtime-persistence-spec.md` |
+| Feature                          | Current docs                                                           | Spec                                                |
+| -------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
+| Product vision                   | `prds/00-product-vision.md`, `architecture/system-overview.md`         | `architecture/runtime-contracts.md`                 |
+| Runtime foundation               | `architecture/system-overview.md`, `architecture/package-structure.md` | `specs/01-runtime-foundation-spec.md`               |
+| Dynamic tool loading             | `architecture/data-flow.md`                                            | `specs/02-dynamic-tool-loading-spec.md`             |
+| Skills middleware                | `architecture/data-flow.md`                                            | `specs/03-skills-middleware-spec.md`                |
+| Dynamic MCP loading              | `architecture/data-flow.md`                                            | `specs/04-dynamic-mcp-loading-spec.md`              |
+| Context and memory               | `architecture/data-flow.md`, `architecture/runtime-contracts.md`       | `specs/05-context-memory-management-spec.md`        |
+| Subagents and async agents       | `architecture/data-flow.md`, `architecture/runtime-contracts.md`       | `specs/06-subagents-and-async-agents-spec.md`       |
+| Streaming and observability      | `architecture/data-flow.md`, `architecture/runtime-contracts.md`       | `specs/07-streaming-and-observability-spec.md`      |
+| FastAPI runtime API              | `architecture/data-flow.md`, `architecture/package-structure.md`       | `specs/08-fastapi-runtime-api-spec.md`              |
+| Runtime events producer/consumer | `architecture/data-flow.md`, `architecture/runtime-contracts.md`       | `specs/09-runtime-events-producer-consumer-spec.md` |
+| Agent runtime persistence        | `architecture/data-flow.md`, `architecture/runtime-contracts.md`       | `specs/10-agent-runtime-persistence-spec.md`        |
 
 ## Definition of Ready For New Runtime Work
 
@@ -55,4 +55,3 @@ A future feature is ready for implementation when its architecture note or spec 
 ## Definition of Done
 
 An implementation PR must include focused unit tests for the contract, registry, middleware, and failure paths it touches. It must prove edge-case handling with deterministic fake tools, fake MCP servers, fake stores, fake model builders, fake stream chunks, and fake subagent runners rather than relying on external services.
-

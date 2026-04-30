@@ -8,8 +8,8 @@ export default defineConfig({
     proxy: {
       "/v1": {
         target: process.env.BACKEND_FACADE_URL ?? "http://127.0.0.1:8200",
-        changeOrigin: true
-      }
-    }
-  }
+        changeOrigin: true,
+      },
+    },
+  },
 });

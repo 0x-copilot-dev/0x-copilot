@@ -7,9 +7,16 @@ from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, field_validator
 
-from agent_runtime.execution.contracts import JsonObject, RuntimeContract, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import (
+    JsonObject,
+    RuntimeContract,
+    RuntimeErrorEnvelope,
+)
 from agent_runtime.persistence.constants import Keys
-from agent_runtime.persistence.records.common import OutboxStatus, PersistenceValueNormalizer
+from agent_runtime.persistence.records.common import (
+    OutboxStatus,
+    PersistenceValueNormalizer,
+)
 
 
 class OutboxEventRecord(RuntimeContract):
@@ -42,13 +49,14 @@ class OutboxEventRecord(RuntimeContract):
     @field_validator(Keys.Field.LOCKED_BY, mode="before")
     @classmethod
     def _normalize_optional_locked_by(cls, value: object) -> str | None:
-        return PersistenceValueNormalizer.normalize_optional_id(value, Keys.Field.LOCKED_BY)
+        return PersistenceValueNormalizer.normalize_optional_id(
+            value, Keys.Field.LOCKED_BY
+        )
 
     @field_validator(Keys.Field.PAYLOAD, mode="before")
     @classmethod
     def _redact_payload(cls, value: object) -> JsonObject:
         return PersistenceValueNormalizer.redact_json_object(value)
-
 
 
 class RuntimeWorkerClaim(RuntimeContract):
@@ -87,6 +95,7 @@ class RuntimeWorkerClaim(RuntimeContract):
     def _normalize_command_type(cls, value: object) -> str:
         return PersistenceValueNormalizer.normalize_slug(value, "command_type")
 
+
 class RuntimeWorkerResult(RuntimeContract):
     """A worker result used to complete, retry, or dead-letter a claim."""
 
@@ -100,7 +109,6 @@ class RuntimeWorkerResult(RuntimeContract):
     @classmethod
     def _normalize_command_id(cls, value: object) -> str:
         return PersistenceValueNormalizer.normalize_id(value, Keys.Field.COMMAND_ID)
-
 
 
 class ConsumerCursorRecord(RuntimeContract):
@@ -125,4 +133,6 @@ class ConsumerCursorRecord(RuntimeContract):
     @field_validator(Keys.Field.CONSUMER_NAME)
     @classmethod
     def _normalize_consumer_name(cls, value: object) -> str:
-        return PersistenceValueNormalizer.normalize_slug(value, Keys.Field.CONSUMER_NAME)
+        return PersistenceValueNormalizer.normalize_slug(
+            value, Keys.Field.CONSUMER_NAME
+        )

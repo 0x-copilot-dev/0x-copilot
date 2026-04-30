@@ -26,7 +26,9 @@ class RuntimeAdapterFactory:
     """Build runtime adapters for API and worker processes."""
 
     @classmethod
-    def from_settings(cls, settings: RuntimeSettings, *, migrate: bool = True) -> RuntimePorts:
+    def from_settings(
+        cls, settings: RuntimeSettings, *, migrate: bool = True
+    ) -> RuntimePorts:
         backend = settings.store.backend
         if backend == "in_memory":
             store = InMemoryRuntimeApiStore()

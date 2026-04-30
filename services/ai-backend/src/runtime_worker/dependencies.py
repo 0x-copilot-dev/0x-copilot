@@ -7,9 +7,16 @@ from collections.abc import Sequence
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
-from agent_runtime.capabilities.skills.virtual import BackendSkillProvider, VirtualSkillRegistry
+from agent_runtime.capabilities.skills.virtual import (
+    BackendSkillProvider,
+    VirtualSkillRegistry,
+)
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeDependencies,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 

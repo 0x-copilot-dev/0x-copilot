@@ -30,4 +30,3 @@ Minimum rule-loading requirements:
   - `.cursor/rules/ci-cd-docker.mdc`
 
 Do not assume rule contents from memory. Re-read the rule files in the current workspace before making changes.
-

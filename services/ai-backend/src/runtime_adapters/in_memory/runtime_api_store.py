@@ -31,7 +31,11 @@ from runtime_api.schemas import (
 )
 from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.records import OutboxStatus, RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import (
+    OutboxStatus,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+)
 
 RuntimeApiServiceTerminalStatuses = frozenset(
     {
@@ -65,9 +69,13 @@ class InMemoryRuntimeApiStore:
         self.audit_log: list[tuple[str, object]] = []
         self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency: dict[tuple[str, str, str], str] = {}
-        self._run_idempotency_fingerprint: dict[tuple[str, str, str], tuple[str, str]] = {}
+        self._run_idempotency_fingerprint: dict[
+            tuple[str, str, str], tuple[str, str]
+        ] = {}
 
-    def create_conversation(self, request: CreateConversationRequest) -> ConversationRecord:
+    def create_conversation(
+        self, request: CreateConversationRequest
+    ) -> ConversationRecord:
         """Create or idempotently return a scoped conversation."""
 
         if request.idempotency_key is not None:
@@ -201,7 +209,11 @@ class InMemoryRuntimeApiStore:
         updates: dict[str, object] = {"status": status}
         if status == AgentRunStatus.RUNNING and run.started_at is None:
             updates["started_at"] = datetime.now(UTC)
-        if status in {AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.TIMED_OUT}:
+        if status in {
+            AgentRunStatus.COMPLETED,
+            AgentRunStatus.FAILED,
+            AgentRunStatus.TIMED_OUT,
+        }:
             updates["completed_at"] = datetime.now(UTC)
         if status == AgentRunStatus.CANCELLED:
             updates["cancelled_at"] = datetime.now(UTC)
@@ -209,10 +221,14 @@ class InMemoryRuntimeApiStore:
         self.runs[run_id] = updated
         return updated
 
-    def set_run_latest_sequence(self, *, run_id: str, latest_sequence_no: int) -> RunRecord:
+    def set_run_latest_sequence(
+        self, *, run_id: str, latest_sequence_no: int
+    ) -> RunRecord:
         """Persist latest event sequence for run inspection."""
 
-        updated = self.runs[run_id].model_copy(update={"latest_sequence_no": latest_sequence_no})
+        updated = self.runs[run_id].model_copy(
+            update={"latest_sequence_no": latest_sequence_no}
+        )
         self.runs[run_id] = updated
         return updated
 
@@ -269,12 +285,19 @@ class InMemoryRuntimeApiStore:
             if conversation.status != ConversationStatus.ARCHIVED:
                 conversations_archived += 1
             self.conversations[conversation_id] = conversation.model_copy(
-                update={"status": ConversationStatus.ARCHIVED, "archived_at": now, "updated_at": now}
+                update={
+                    "status": ConversationStatus.ARCHIVED,
+                    "archived_at": now,
+                    "updated_at": now,
+                }
             )
 
         messages_tombstoned = 0
         for message_id, message in tuple(self.messages.items()):
-            if message.org_id != org_id or message.conversation_id not in conversation_ids:
+            if (
+                message.org_id != org_id
+                or message.conversation_id not in conversation_ids
+            ):
                 continue
             if message.deleted_at is None:
                 messages_tombstoned += 1
@@ -359,7 +382,9 @@ class InMemoryRuntimeApiStore:
         events.append(envelope)
         return envelope
 
-    def append_events(self, events: Sequence[RuntimeEventDraft]) -> Sequence[RuntimeEventEnvelope]:
+    def append_events(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
         """Append multiple events in input order."""
 
         return tuple(self.append_event(event) for event in events)
@@ -413,7 +438,9 @@ class InMemoryRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
-    def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
+    def enqueue_approval_resolved(
+        self, command: RuntimeApprovalResolvedCommand
+    ) -> None:
         """Enqueue an approval resolution command for deterministic worker tests."""
 
         self.approval_commands.append(command)
@@ -464,7 +491,9 @@ class InMemoryRuntimeApiStore:
         """Release a command so another worker may claim it later."""
 
         self._queue_statuses[result.command_id] = OutboxStatus.RETRY
-        self._queue_available_at[result.command_id] = result.retry_available_at or datetime.now(UTC)
+        self._queue_available_at[result.command_id] = (
+            result.retry_available_at or datetime.now(UTC)
+        )
         self._queue_claims.pop(result.command_id, None)
 
     def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
@@ -473,7 +502,9 @@ class InMemoryRuntimeApiStore:
         self._queue_statuses[result.command_id] = OutboxStatus.DEAD_LETTER
         self._queue_claims.pop(result.command_id, None)
 
-    def seed_approval_request(self, record: ApprovalRequestRecord) -> ApprovalRequestRecord:
+    def seed_approval_request(
+        self, record: ApprovalRequestRecord
+    ) -> ApprovalRequestRecord:
         """Add a pending approval request for API tests or future worker fakes."""
 
         self.approval_requests[record.approval_id] = record
@@ -532,7 +563,9 @@ class InMemoryRuntimeApiStore:
             command_type=str(payload["command_type"]),
             org_id=str(payload["org_id"]),
             run_id=str(payload["run_id"]),
-            approval_id=payload["approval_id"] if isinstance(payload["approval_id"], str) else None,
+            approval_id=payload["approval_id"]
+            if isinstance(payload["approval_id"], str)
+            else None,
             locked_by=worker_id,
             lock_expires_at=lock_expires_at,
             attempts=self._queue_attempts[command_id],

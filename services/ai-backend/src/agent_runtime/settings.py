@@ -71,7 +71,9 @@ class RuntimeSettings(RuntimeContract):
     environment: RuntimeEnvironment = RuntimeEnvironment.DEVELOPMENT
     default_model: ModelConfig
     default_timeout_seconds: float = Field(default=60, gt=0, le=600)
-    execution: RuntimeExecutionSettings = Field(default_factory=RuntimeExecutionSettings)
+    execution: RuntimeExecutionSettings = Field(
+        default_factory=RuntimeExecutionSettings
+    )
     store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
     mcp: RuntimeMcpSettings = Field(default_factory=RuntimeMcpSettings)
     skills: RuntimeSkillSettings = Field(default_factory=RuntimeSkillSettings)
@@ -93,11 +95,15 @@ class RuntimeSettings(RuntimeContract):
         values: dict[str, str] = {}
         values.update(
             cls._load_env_file(
-                Path(template_file) if template_file is not None else service_root / "env_example"
+                Path(template_file)
+                if template_file is not None
+                else service_root / "env_example"
             )
         )
         values.update(
-            cls._load_env_file(Path(env_file) if env_file is not None else service_root / ".env")
+            cls._load_env_file(
+                Path(env_file) if env_file is not None else service_root / ".env"
+            )
         )
         values.update(dict(environ if environ is not None else os.environ))
         if environ is None:
@@ -108,21 +114,29 @@ class RuntimeSettings(RuntimeContract):
         default_model = ModelConfig(
             provider=default_provider,
             model_name=cls._get(values, "RUNTIME_DEFAULT_MODEL", "gpt-4.1-mini"),
-            max_input_tokens=cls._int(values, "RUNTIME_DEFAULT_MAX_INPUT_TOKENS", 128000),
+            max_input_tokens=cls._int(
+                values, "RUNTIME_DEFAULT_MAX_INPUT_TOKENS", 128000
+            ),
             timeout_seconds=default_timeout,
             temperature=cls._float(values, "RUNTIME_DEFAULT_TEMPERATURE", 0),
-            supports_streaming=cls._bool(values, "RUNTIME_DEFAULT_SUPPORTS_STREAMING", True),
+            supports_streaming=cls._bool(
+                values, "RUNTIME_DEFAULT_SUPPORTS_STREAMING", True
+            ),
         )
         return cls(
             environment=RuntimeEnvironment(
-                cls._get(values, "RUNTIME_ENVIRONMENT", RuntimeEnvironment.DEVELOPMENT.value)
+                cls._get(
+                    values, "RUNTIME_ENVIRONMENT", RuntimeEnvironment.DEVELOPMENT.value
+                )
             ),
             default_model=default_model,
             default_timeout_seconds=default_timeout,
             execution=RuntimeExecutionSettings(
                 max_retries=cls._int(values, "RUNTIME_MAX_RETRIES", 2),
                 max_parallel_runs=cls._int(values, "RUNTIME_MAX_PARALLEL_RUNS", 4),
-                max_parallel_subagents=cls._int(values, "RUNTIME_MAX_PARALLEL_SUBAGENTS", 4),
+                max_parallel_subagents=cls._int(
+                    values, "RUNTIME_MAX_PARALLEL_SUBAGENTS", 4
+                ),
                 worker_poll_interval_seconds=cls._float(
                     values,
                     "RUNTIME_WORKER_POLL_INTERVAL_SECONDS",
@@ -153,11 +167,15 @@ class RuntimeSettings(RuntimeContract):
                 ),
             ),
             skills=RuntimeSkillSettings(
-                backend_registry_url=cls._optional(values, "SKILLS_BACKEND_REGISTRY_URL"),
+                backend_registry_url=cls._optional(
+                    values, "SKILLS_BACKEND_REGISTRY_URL"
+                ),
                 cache_ttl_seconds=cls._int(values, "SKILLS_CACHE_TTL_SECONDS", 60),
             ),
             openai=ProviderSettings(api_key=cls._optional(values, "OPENAI_API_KEY")),
-            anthropic=ProviderSettings(api_key=cls._optional(values, "ANTHROPIC_API_KEY")),
+            anthropic=ProviderSettings(
+                api_key=cls._optional(values, "ANTHROPIC_API_KEY")
+            ),
             gemini=ProviderSettings(api_key=cls._optional(values, "GOOGLE_API_KEY")),
         )
 
@@ -189,7 +207,11 @@ class RuntimeSettings(RuntimeContract):
             from dotenv import dotenv_values
 
             raw_values = dotenv_values(path)
-            return {key: str(value) for key, value in raw_values.items() if value is not None}
+            return {
+                key: str(value)
+                for key, value in raw_values.items()
+                if value is not None
+            }
         except Exception:
             return cls._parse_env_file(path)
 

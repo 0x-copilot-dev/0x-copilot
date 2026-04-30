@@ -4,12 +4,19 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp import McpAuthState, McpServerCard
-from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool, McpAuthSession
+from agent_runtime.capabilities.mcp.middleware.auth_mcp import (
+    AuthMcpTool,
+    McpAuthSession,
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +62,9 @@ def test_auth_mcp_tool_returns_safe_auth_card_payload(
         runtime_context=runtime_context_admin,
     )
 
-    result = asyncio.run(tool.ainvoke({"server_name": "drive_mcp", "server_id": "server_123"}))
+    result = asyncio.run(
+        tool.ainvoke({"server_name": "drive_mcp", "server_id": "server_123"})
+    )
 
     assert result["api_event_type"] == "mcp_auth_required"
     assert result["server_id"] == "server_123"

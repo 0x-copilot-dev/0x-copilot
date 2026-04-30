@@ -8,6 +8,6 @@ export async function getSessionIdentity(): Promise<RequestIdentity> {
   const payload = (await response.json()) as SessionResponse;
   return {
     orgId: payload.identity.org_id,
-    userId: payload.identity.user_id
+    userId: payload.identity.user_id,
   };
 }

@@ -90,4 +90,3 @@ runtime material.
 - Backend skill provider is unavailable.
 - Backend returns a malformed virtual skill card or bundle.
 - Virtual skill path resembles a filesystem path but must not be opened.
-

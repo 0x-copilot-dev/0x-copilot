@@ -16,4 +16,3 @@ alwaysApply: true
 - Do not add sibling services/apps to `PYTHONPATH`, use relative imports across deployable boundaries, or run one Python service with another service's `.venv`.
 - Python services use their own service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
 - Frontend apps use their own npm workspace dependency environment, app `package.json`, Vite/build config, and `Dockerfile`; they must not depend on Python service venvs.
-

@@ -60,7 +60,9 @@ class DynamicMcpRegistry:
                     retryable=False,
                 )
 
-    def list_server_cards(self, context: AgentRuntimeContext) -> tuple[McpServerCard, ...]:
+    def list_server_cards(
+        self, context: AgentRuntimeContext
+    ) -> tuple[McpServerCard, ...]:
         """Return compact MCP cards visible to the request context."""
 
         runtime_context = self._coerce_context(context)
@@ -151,7 +153,9 @@ class DynamicMcpRegistry:
         return tuple(entries)
 
     @classmethod
-    def _first_duplicate_name(cls, entries: Sequence[RegisteredMcpServer]) -> str | None:
+    def _first_duplicate_name(
+        cls, entries: Sequence[RegisteredMcpServer]
+    ) -> str | None:
         counts = Counter(entry.card.name for entry in entries)
         duplicate_names = sorted(name for name, count in counts.items() if count > 1)
         if not duplicate_names:

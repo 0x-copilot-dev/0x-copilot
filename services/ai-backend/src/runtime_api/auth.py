@@ -30,14 +30,18 @@ class RuntimeServiceAuthenticator:
     """Class-scoped trusted service identity parsing for runtime API requests."""
 
     @classmethod
-    def trusted_identity_from_request(cls, request: Request) -> TrustedRequestIdentity | None:
+    def trusted_identity_from_request(
+        cls, request: Request
+    ) -> TrustedRequestIdentity | None:
         """Return upstream-authenticated identity when service headers are present."""
 
         expected = cls._service_token()
         supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
         if expected:
             if supplied != expected:
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid service token")
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "Invalid service token"
+                )
         elif cls._environment() == "production":
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -53,7 +57,9 @@ class RuntimeServiceAuthenticator:
             user_id=user_id,
             roles=cls._csv_header(request, ROLES_HEADER) or ("employee",),
             permission_scopes=cls._csv_header(request, PERMISSION_SCOPES_HEADER),
-            connector_scopes=cls._connector_scopes(request.headers.get(CONNECTOR_SCOPES_HEADER, "{}")),
+            connector_scopes=cls._connector_scopes(
+                request.headers.get(CONNECTOR_SCOPES_HEADER, "{}")
+            ),
         )
 
     @staticmethod
@@ -81,12 +87,18 @@ class RuntimeServiceAuthenticator:
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header") from exc
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header"
+            ) from exc
         if not isinstance(decoded, dict):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header"
+            )
         normalized: dict[str, tuple[str, ...]] = {}
         for connector, scopes in decoded.items():
             if not isinstance(scopes, list | tuple):
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header")
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "Invalid connector scope header"
+                )
             normalized[str(connector)] = tuple(str(scope) for scope in scopes)
         return normalized

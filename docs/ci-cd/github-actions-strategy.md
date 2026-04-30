@@ -61,4 +61,3 @@ Begin with:
 - `.github/workflows/deploy-prod.yml`
 
 Add component-specific workflows only when path-filtered jobs become hard to maintain.
-

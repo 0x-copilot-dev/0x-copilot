@@ -1,4 +1,7 @@
-import type { ApprovalDecision, RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type {
+  ApprovalDecision,
+  RuntimeEventEnvelope,
+} from "@enterprise-search/api-types";
 import {
   Button,
   ChatBubble,
@@ -7,23 +10,38 @@ import {
   ChatThread,
   DropdownMenu,
   IconButton,
-  Textarea
+  Textarea,
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
-import { cancelRun, createConversation, createRun, decideApproval, listMessages, streamRunEvents } from "../../api/agentApi";
+import {
+  cancelRun,
+  createConversation,
+  createRun,
+  decideApproval,
+  listMessages,
+  streamRunEvents,
+} from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
-import { ConnectorConsentCard, ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
+import {
+  ConnectorConsentCard,
+  ConnectorSuggestionCard,
+} from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
-import { applyRuntimeEvent, messagesToChatItems, optimisticUserMessage, type ChatItem } from "./chatModel";
+import {
+  applyRuntimeEvent,
+  messagesToChatItems,
+  optimisticUserMessage,
+  type ChatItem,
+} from "./chatModel";
 import { RunActivityPanel } from "./RunActivityPanel";
 
 export function ChatScreen({
   connectors,
   onOpenSettings,
   identity,
-  oauthStatus
+  oauthStatus,
 }: {
   connectors: ConnectorState;
   onOpenSettings: () => void;
@@ -34,7 +52,8 @@ export function ChatScreen({
   const [items, setItems] = useState<ChatItem[]>([]);
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [showConnectorSuggestions, setShowConnectorSuggestions] = useState(false);
+  const [showConnectorSuggestions, setShowConnectorSuggestions] =
+    useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [status, setStatus] = useState("Ready");
   const streamRef = useRef<EventSource | null>(null);
@@ -46,7 +65,7 @@ export function ChatScreen({
       connectors.servers.filter((server) => {
         return server.enabled && server.auth_state !== "authenticated";
       }),
-    [connectors.servers]
+    [connectors.servers],
   );
 
   useEffect(() => {
@@ -59,7 +78,10 @@ export function ChatScreen({
           return;
         }
         setConversationId(conversation.conversation_id);
-        const history = await listMessages(conversation.conversation_id, identity);
+        const history = await listMessages(
+          conversation.conversation_id,
+          identity,
+        );
         if (!cancelled) {
           setItems(messagesToChatItems(history.messages));
           setStatus("Ready");
@@ -83,7 +105,10 @@ export function ChatScreen({
   }, [identity]);
 
   const handleEvent = useCallback((event: RuntimeEventEnvelope) => {
-    latestSequenceRef.current = Math.max(latestSequenceRef.current, event.sequence_no);
+    latestSequenceRef.current = Math.max(
+      latestSequenceRef.current,
+      event.sequence_no,
+    );
     setItems((current) => applyRuntimeEvent(current, event));
     const liveStatus = statusForRuntimeEvent(event);
     if (liveStatus) {
@@ -105,30 +130,33 @@ export function ChatScreen({
     }
   }, []);
 
-  const startEventStream = useCallback((runId: string, afterSequence: number) => {
-    if (reconnectTimeoutRef.current !== null) {
-      window.clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    streamRef.current?.close();
-    streamRef.current = streamRunEvents({
-      runId,
-      afterSequence,
-      identity,
-      onEvent: handleEvent,
-      onError: () => {
-        streamRef.current?.close();
-        streamRef.current = null;
-        setStatus("Stream paused. Reconnecting...");
-        reconnectTimeoutRef.current = window.setTimeout(() => {
-          startEventStream(runId, latestSequenceRef.current);
-        }, 750);
-      },
-      onProtocolError: (error) => {
-        setStatus(error.message);
+  const startEventStream = useCallback(
+    (runId: string, afterSequence: number) => {
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
-    });
-  }, [handleEvent, identity]);
+      streamRef.current?.close();
+      streamRef.current = streamRunEvents({
+        runId,
+        afterSequence,
+        identity,
+        onEvent: handleEvent,
+        onError: () => {
+          streamRef.current?.close();
+          streamRef.current = null;
+          setStatus("Stream paused. Reconnecting...");
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            startEventStream(runId, latestSequenceRef.current);
+          }, 750);
+        },
+        onProtocolError: (error) => {
+          setStatus(error.message);
+        },
+      });
+    },
+    [handleEvent, identity],
+  );
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -151,8 +179,8 @@ export function ChatScreen({
           id: `error-${Date.now()}`,
           kind: "status",
           title: "Message failed",
-          text: errorMessage(err, "Could not send message")
-        }
+          text: errorMessage(err, "Could not send message"),
+        },
       ]);
       setStatus("Ready");
     }
@@ -173,7 +201,10 @@ export function ChatScreen({
     setStatus("Cancelling...");
   }
 
-  async function onApprovalDecision(approvalId: string, decision: ApprovalDecision): Promise<void> {
+  async function onApprovalDecision(
+    approvalId: string,
+    decision: ApprovalDecision,
+  ): Promise<void> {
     try {
       await decideApproval(approvalId, decision, identity);
       setItems((current) =>
@@ -183,10 +214,10 @@ export function ChatScreen({
                 id: `approval-${approvalId}-${decision}`,
                 kind: "status",
                 title: "Approval resolved",
-                text: decision === "approved" ? "Approved." : "Rejected."
+                text: decision === "approved" ? "Approved." : "Rejected.",
               }
-            : item
-        )
+            : item,
+        ),
       );
     } catch (err) {
       setItems((current) => [
@@ -195,19 +226,23 @@ export function ChatScreen({
           id: `approval-error-${Date.now()}`,
           kind: "status",
           title: "Approval failed",
-          text: errorMessage(err, "Could not submit approval decision")
-        }
+          text: errorMessage(err, "Could not submit approval decision"),
+        },
       ]);
     }
   }
 
   function renderItem(item: ChatItem): ReactElement {
     if (item.kind === "message") {
-      const isStreamingAssistant = item.role === "assistant" && item.id === `assistant-${activeRunId}`;
+      const isStreamingAssistant =
+        item.role === "assistant" && item.id === `assistant-${activeRunId}`;
       return (
         <ChatBubble key={item.id} role={item.role}>
           {item.role === "assistant" ? (
-            <Streamdown className="assistant-markdown" mode={isStreamingAssistant ? "streaming" : "static"}>
+            <Streamdown
+              className="assistant-markdown"
+              mode={isStreamingAssistant ? "streaming" : "static"}
+            >
               {item.text}
             </Streamdown>
           ) : (
@@ -231,12 +266,27 @@ export function ChatScreen({
     if (item.kind === "approval") {
       return (
         <ChatBubble key={item.id} role="system">
-          Approval requested: {item.payload.message ?? item.payload.reason ?? item.payload.approval_id}
+          Approval requested:{" "}
+          {item.payload.message ??
+            item.payload.reason ??
+            item.payload.approval_id}
           <div className="approval-actions">
-            <Button type="button" variant="secondary" onClick={() => void onApprovalDecision(item.payload.approval_id, "approved")}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() =>
+                void onApprovalDecision(item.payload.approval_id, "approved")
+              }
+            >
               Approve
             </Button>
-            <Button type="button" variant="danger" onClick={() => void onApprovalDecision(item.payload.approval_id, "rejected")}>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() =>
+                void onApprovalDecision(item.payload.approval_id, "rejected")
+              }
+            >
               Reject
             </Button>
           </div>
@@ -265,17 +315,15 @@ export function ChatScreen({
         </header>
 
         {oauthStatus ? (
-          <ChatBubble role="system">
-            {oauthStatus}
-          </ChatBubble>
+          <ChatBubble role="system">{oauthStatus}</ChatBubble>
         ) : null}
 
         {items.length === 0 ? (
           <section className="chat-empty">
             <h2>Can you check my current tasks?</h2>
             <p>
-              Ask the agent to search, reason, or use connectors. If a connector needs auth,
-              you will see a consent card before leaving chat.
+              Ask the agent to search, reason, or use connectors. If a connector
+              needs auth, you will see a consent card before leaving chat.
             </p>
           </section>
         ) : (
@@ -296,15 +344,31 @@ export function ChatScreen({
         <DropdownMenu
           open={menuOpen}
           trigger={
-            <IconButton label="Open composer actions" type="button" onClick={() => setMenuOpen((open) => !open)}>
+            <IconButton
+              label="Open composer actions"
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+            >
               +
             </IconButton>
           }
         >
-          <button type="button" onClick={() => { setShowConnectorSuggestions(true); setMenuOpen(false); }}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowConnectorSuggestions(true);
+              setMenuOpen(false);
+            }}
+          >
             Choose connectors
           </button>
-          <button type="button" onClick={() => { onOpenSettings(); setMenuOpen(false); }}>
+          <button
+            type="button"
+            onClick={() => {
+              onOpenSettings();
+              setMenuOpen(false);
+            }}
+          >
             Open settings
           </button>
         </DropdownMenu>
@@ -316,11 +380,18 @@ export function ChatScreen({
           rows={1}
         />
         {activeRunId ? (
-          <Button type="button" variant="secondary" onClick={() => void onCancel()}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void onCancel()}
+          >
             Stop
           </Button>
         ) : (
-          <Button type="submit" disabled={!draft.trim() || conversationId === null}>
+          <Button
+            type="submit"
+            disabled={!draft.trim() || conversationId === null}
+          >
             Send
           </Button>
         )}
@@ -341,8 +412,13 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
   if (event.event_type === "model_delta") {
     return "Writing answer...";
   }
-  if (event.event_type === "reasoning_summary" || event.event_type === "reasoning_summary_delta") {
-    return event.parent_task_id || event.subagent_id ? "Subagent thinking..." : "Thinking...";
+  if (
+    event.event_type === "reasoning_summary" ||
+    event.event_type === "reasoning_summary_delta"
+  ) {
+    return event.parent_task_id || event.subagent_id
+      ? "Subagent thinking..."
+      : "Thinking...";
   }
   if (
     event.event_type === "tool_call" ||
@@ -352,7 +428,10 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
     const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
     return `Using ${toolName}...`;
   }
-  if (event.event_type === "tool_result" || event.event_type === "tool_call_completed") {
+  if (
+    event.event_type === "tool_result" ||
+    event.event_type === "tool_call_completed"
+  ) {
     const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
     return `${toolName} finished`;
   }
@@ -361,13 +440,19 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
     event.event_type === "subagent_progress" ||
     event.event_type === "subagent_update"
   ) {
-    const subagentName = event.subagent_id ?? stringPayload(event.payload, "subagent_name") ?? "Subagent";
+    const subagentName =
+      event.subagent_id ??
+      stringPayload(event.payload, "subagent_name") ??
+      "Subagent";
     return `${subagentName} working...`;
   }
   return null;
 }
 
-function stringPayload(payload: Record<string, unknown>, key: string): string | null {
+function stringPayload(
+  payload: Record<string, unknown>,
+  key: string,
+): string | null {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value : null;
 }

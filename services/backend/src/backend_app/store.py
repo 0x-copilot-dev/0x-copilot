@@ -126,7 +126,9 @@ class InMemorySkillStore:
             and (record.user_id == user_id or record.scope == "org")
             and (include_disabled or record.enabled)
         )
-        return tuple(sorted(records, key=lambda record: (record.created_at, record.name)))
+        return tuple(
+            sorted(records, key=lambda record: (record.created_at, record.name))
+        )
 
     def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
         record = self.get_skill(org_id=org_id, skill_id=skill_id)
@@ -135,7 +137,9 @@ class InMemorySkillStore:
         self.skills.pop(skill_id, None)
         return True
 
-    def append_skill_audit(self, record: SkillAuditEventRecord) -> SkillAuditEventRecord:
+    def append_skill_audit(
+        self, record: SkillAuditEventRecord
+    ) -> SkillAuditEventRecord:
         self.audit_events.append(record)
         return record
 
@@ -250,7 +254,9 @@ class PostgresSkillStore:
                 )
                 return cur.rowcount > 0
 
-    def append_skill_audit(self, record: SkillAuditEventRecord) -> SkillAuditEventRecord:
+    def append_skill_audit(
+        self, record: SkillAuditEventRecord
+    ) -> SkillAuditEventRecord:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -278,7 +284,9 @@ class PostgresSkillStore:
         rows = self._fetch_many(query, params)
         return rows[0] if rows else None
 
-    def _fetch_many(self, query: str, params: dict[str, object]) -> tuple[SkillRecord, ...]:
+    def _fetch_many(
+        self, query: str, params: dict[str, object]
+    ) -> tuple[SkillRecord, ...]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)

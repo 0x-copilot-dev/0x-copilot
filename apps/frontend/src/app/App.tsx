@@ -39,7 +39,11 @@ function EnterpriseSearchApp(): ReactElement {
         }
       } catch (err) {
         if (!cancelled) {
-          setSessionError(err instanceof Error ? err.message : "Could not load session identity.");
+          setSessionError(
+            err instanceof Error
+              ? err.message
+              : "Could not load session identity.",
+          );
         }
       }
     }
@@ -58,7 +62,9 @@ function EnterpriseSearchApp(): ReactElement {
     const state = params.get("state");
     const code = params.get("code");
     if (!state || !code) {
-      setOauthStatus("Connector authentication callback was missing state or code.");
+      setOauthStatus(
+        "Connector authentication callback was missing state or code.",
+      );
       window.history.replaceState({}, "", "/");
       return;
     }
@@ -76,7 +82,11 @@ function EnterpriseSearchApp(): ReactElement {
         }
       } catch (err) {
         if (!cancelled) {
-          setOauthStatus(err instanceof Error ? err.message : "Connector authentication failed.");
+          setOauthStatus(
+            err instanceof Error
+              ? err.message
+              : "Connector authentication failed.",
+          );
         }
       } finally {
         window.history.replaceState({}, "", "/");
@@ -106,7 +116,12 @@ function EnterpriseSearchApp(): ReactElement {
   }
 
   if (screen === "settings") {
-    return <SettingsScreen connectors={connectors} onBackToChat={() => setScreen("chat")} />;
+    return (
+      <SettingsScreen
+        connectors={connectors}
+        onBackToChat={() => setScreen("chat")}
+      />
+    );
   }
 
   return (

@@ -106,5 +106,6 @@ class RuntimeEventProducer:
         """Append normalized runtime events in order for a worker batch."""
 
         return tuple(
-            self.append_stream_event(run=run, stream_event=event) for event in stream_events
+            self.append_stream_event(run=run, stream_event=event)
+            for event in stream_events
         )

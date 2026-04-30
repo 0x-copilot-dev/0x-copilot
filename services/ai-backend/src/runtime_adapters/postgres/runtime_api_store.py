@@ -10,7 +10,11 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from starlette import status
 
-from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeErrorEnvelope, StreamEventSource
+from agent_runtime.execution.contracts import (
+    RuntimeErrorCode,
+    RuntimeErrorEnvelope,
+    StreamEventSource,
+)
 from agent_runtime.api.constants import Messages
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -22,7 +26,6 @@ from runtime_api.schemas import (
     HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
-    MessageStatus,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeApiEventType,
@@ -36,7 +39,9 @@ from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.persistence.records import OutboxStatus
-from agent_runtime.persistence.schema.postgres import POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
+from agent_runtime.persistence.schema.postgres import (
+    POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
+)
 
 
 class PostgresRuntimeApiStore:
@@ -52,7 +57,9 @@ class PostgresRuntimeApiStore:
             conn.execute(POSTGRES_AGENT_RUNTIME_MIGRATION_SQL)
             conn.commit()
 
-    def create_conversation(self, request: CreateConversationRequest) -> ConversationRecord:
+    def create_conversation(
+        self, request: CreateConversationRequest
+    ) -> ConversationRecord:
         """Create or idempotently return a scoped conversation."""
 
         with self._connect() as conn:
@@ -243,12 +250,18 @@ class PostgresRuntimeApiStore:
         """Update mutable run status and return the new record."""
 
         with self._connect() as conn:
-            existing = conn.execute("SELECT * FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
+            existing = conn.execute(
+                "SELECT * FROM agent_runs WHERE id = %s", (run_id,)
+            ).fetchone()
             updates: dict[str, object] = {"status": status.value}
             now = datetime.now(UTC)
             if status == AgentRunStatus.RUNNING and existing["started_at"] is None:
                 updates["started_at"] = now
-            if status in {AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.TIMED_OUT}:
+            if status in {
+                AgentRunStatus.COMPLETED,
+                AgentRunStatus.FAILED,
+                AgentRunStatus.TIMED_OUT,
+            }:
                 updates["completed_at"] = now
             if status == AgentRunStatus.CANCELLED:
                 updates["cancelled_at"] = now
@@ -260,7 +273,9 @@ class PostgresRuntimeApiStore:
             conn.commit()
         return self._run_record(row)
 
-    def set_run_latest_sequence(self, *, run_id: str, latest_sequence_no: int) -> RunRecord:
+    def set_run_latest_sequence(
+        self, *, run_id: str, latest_sequence_no: int
+    ) -> RunRecord:
         """Persist latest event sequence for run inspection."""
 
         with self._connect() as conn:
@@ -336,7 +351,9 @@ class PostgresRuntimeApiStore:
 
         data = record if isinstance(record, dict) else {"record": str(record)}
         now = datetime.now(UTC)
-        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        metadata = (
+            data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        )
         audit_id = str(data.get("audit_event_id") or f"audit_{now.timestamp_ns()}")
         with self._connect() as conn:
             conn.execute(
@@ -350,13 +367,17 @@ class PostgresRuntimeApiStore:
                 (
                     audit_id,
                     str(data.get("org_id", "unknown")),
-                    data.get("user_id") if isinstance(data.get("user_id"), str) else None,
+                    data.get("user_id")
+                    if isinstance(data.get("user_id"), str)
+                    else None,
                     str(data.get("actor_type", "system")),
                     event_type,
                     str(data.get("resource_type", "runtime")),
                     str(data.get("resource_id", "unknown")),
                     data.get("run_id") if isinstance(data.get("run_id"), str) else None,
-                    data.get("trace_id") if isinstance(data.get("trace_id"), str) else None,
+                    data.get("trace_id")
+                    if isinstance(data.get("trace_id"), str)
+                    else None,
                     str(data.get("outcome", "success")),
                     Jsonb(metadata),
                     now,
@@ -587,7 +608,9 @@ class PostgresRuntimeApiStore:
             conn.commit()
             return envelope
 
-    def append_events(self, events: Sequence[RuntimeEventDraft]) -> Sequence[RuntimeEventEnvelope]:
+    def append_events(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
         """Append multiple events in input order."""
 
         return tuple(self.append_event(event) for event in events)
@@ -644,7 +667,9 @@ class PostgresRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
-    def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
+    def enqueue_approval_resolved(
+        self, command: RuntimeApprovalResolvedCommand
+    ) -> None:
         """Enqueue an approval resolution command for workers."""
 
         self._enqueue_command(
@@ -698,8 +723,12 @@ class PostgresRuntimeApiStore:
             command_id=row["id"],
             command_type=row["event_type"],
             org_id=row["org_id"],
-            run_id=payload.get("run_id") if isinstance(payload.get("run_id"), str) else row["aggregate_id"],
-            approval_id=payload.get("approval_id") if isinstance(payload.get("approval_id"), str) else None,
+            run_id=payload.get("run_id")
+            if isinstance(payload.get("run_id"), str)
+            else row["aggregate_id"],
+            approval_id=payload.get("approval_id")
+            if isinstance(payload.get("approval_id"), str)
+            else None,
             locked_by=row["locked_by"],
             lock_expires_at=row["lock_expires_at"],
             attempts=row["attempts"],
@@ -757,7 +786,9 @@ class PostgresRuntimeApiStore:
             )
             conn.commit()
 
-    def _mark_outbox(self, *, result: RuntimeWorkerResult, status_value: OutboxStatus) -> None:
+    def _mark_outbox(
+        self, *, result: RuntimeWorkerResult, status_value: OutboxStatus
+    ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """

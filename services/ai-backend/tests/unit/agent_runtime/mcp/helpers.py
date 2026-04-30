@@ -91,12 +91,16 @@ class DynamicMcpLoadingMixin:
                 raise self.connect_error
             return self.metadata
 
-        async def list_tools(self) -> Sequence[McpToolDescriptor | Mapping[str, object]]:
+        async def list_tools(
+            self,
+        ) -> Sequence[McpToolDescriptor | Mapping[str, object]]:
             if self.list_tools_error is not None:
                 raise self.list_tools_error
             return self.tools
 
-        async def list_resources(self) -> Sequence[McpResourceDescriptor | Mapping[str, object]]:
+        async def list_resources(
+            self,
+        ) -> Sequence[McpResourceDescriptor | Mapping[str, object]]:
             return self.resources
 
     @dataclass
@@ -108,7 +112,9 @@ class DynamicMcpLoadingMixin:
         def list_server_cards(self) -> Sequence[McpServerCard | Mapping[str, object]]:
             return self.cards
 
-        def create_client(self, card: McpServerCard) -> "DynamicMcpLoadingMixin.FakeMcpClient":
+        def create_client(
+            self, card: McpServerCard
+        ) -> "DynamicMcpLoadingMixin.FakeMcpClient":
             self.created_clients.append(card.name)
             return self.clients[card.name]
 
@@ -211,7 +217,9 @@ class DynamicMcpLoadingMixin:
         return {
             Keys.Schema.TYPE: Values.SchemaType.OBJECT,
             Keys.Schema.PROPERTIES: {
-                self.TestValues.Names.ANSWER: {Keys.Schema.TYPE: Values.SchemaType.STRING}
+                self.TestValues.Names.ANSWER: {
+                    Keys.Schema.TYPE: Values.SchemaType.STRING
+                }
             },
         }
 

@@ -96,7 +96,9 @@ class Patterns:
     MEMORY_PATH = re.compile(r"^/[A-Za-z0-9._:/-]+$")
     NAMESPACE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     PATH_PREFIX = re.compile(r"^/[A-Za-z0-9._-]+/$")
-    SENSITIVE_KEY = re.compile(r"(api[_-]?key|authorization|password|secret|token)", re.I)
+    SENSITIVE_KEY = re.compile(
+        r"(api[_-]?key|authorization|password|secret|token)", re.I
+    )
     SENSITIVE_VALUE = re.compile(
         r"(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*\S+",
         re.I,
@@ -107,7 +109,9 @@ class Messages:
     """Centralized validation and public messages for memory management."""
 
     class Errors:
-        CONCURRENT_WRITE = "Memory was updated concurrently. Reload and retry the write."
+        CONCURRENT_WRITE = (
+            "Memory was updated concurrently. Reload and retry the write."
+        )
         INVALID_CONTEXT_SUMMARY = "Context summary was empty or invalid."
         MEMORY_POLICY_DENIED = "Memory access was denied by policy."
         PROMPT_INJECTION_REJECTED = "Memory write was rejected by policy."

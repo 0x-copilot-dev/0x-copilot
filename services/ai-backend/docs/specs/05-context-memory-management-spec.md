@@ -54,4 +54,3 @@ Required models:
 - Prompt injection stored in user memory.
 - Summarization produces invalid or empty summary.
 - Store backend unavailable.
-

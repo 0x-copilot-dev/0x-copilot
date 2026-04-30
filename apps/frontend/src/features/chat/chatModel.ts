@@ -2,7 +2,7 @@ import type {
   ApprovalRequestedPayload,
   McpAuthRequiredEventPayload,
   Message,
-  RuntimeEventEnvelope
+  RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import {
   isApprovalRequestedPayload,
@@ -13,10 +13,17 @@ import {
   isSubagentActivityPayload,
   isToolCallDeltaPayload,
   isToolCallPayload,
-  isToolResultPayload
+  isToolResultPayload,
 } from "@enterprise-search/api-types";
 
-export type ActivityStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "waiting" | "unknown";
+export type ActivityStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "waiting"
+  | "unknown";
 
 export interface ActivityText {
   id: string;
@@ -97,8 +104,11 @@ export function messagesToChatItems(messages: Message[]): ChatItem[] {
     .map((message) => ({
       id: message.message_id,
       kind: "message",
-      role: message.role === "assistant" || message.role === "user" ? message.role : "system",
-      text: message.content_text
+      role:
+        message.role === "assistant" || message.role === "user"
+          ? message.role
+          : "system",
+      text: message.content_text,
     }));
 }
 
@@ -107,38 +117,55 @@ export function optimisticUserMessage(text: string): ChatItem {
     id: `local-${Date.now()}`,
     kind: "message",
     role: "user",
-    text
+    text,
   };
 }
 
-export function applyRuntimeEvent(items: ChatItem[], event: RuntimeEventEnvelope): ChatItem[] {
+export function applyRuntimeEvent(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
   if (event.activity_kind === "heartbeat") {
     return items;
   }
-  if (event.activity_kind === "mcp_auth" && isMcpAuthRequiredPayload(event.payload)) {
+  if (
+    event.activity_kind === "mcp_auth" &&
+    isMcpAuthRequiredPayload(event.payload)
+  ) {
     return upsertById(items, {
       id: event.event_id,
       kind: "mcp-auth",
-      payload: event.payload
+      payload: event.payload,
     });
   }
-  if (event.event_type === "approval_requested" && isApprovalRequestedPayload(event.payload)) {
+  if (
+    event.event_type === "approval_requested" &&
+    isApprovalRequestedPayload(event.payload)
+  ) {
     return upsertById(items, {
       id: event.event_id,
       kind: "approval",
-      payload: event.payload
+      payload: event.payload,
     });
   }
-  if (event.event_type === "model_delta" && isRuntimeTextPayload(event.payload)) {
+  if (
+    event.event_type === "model_delta" &&
+    isRuntimeTextPayload(event.payload)
+  ) {
     const delta = textFromPayload(event.payload, "delta");
     if (!delta) {
       return items;
     }
     return appendAssistantDelta(items, event.run_id, delta);
   }
-  if (event.event_type === "final_response" && isRuntimeTextPayload(event.payload)) {
+  if (
+    event.event_type === "final_response" &&
+    isRuntimeTextPayload(event.payload)
+  ) {
     const withActivity = upsertRunActivity(items, event);
-    const text = textFromPayload(event.payload, "message") ?? textFromPayload(event.payload, "summary");
+    const text =
+      textFromPayload(event.payload, "message") ??
+      textFromPayload(event.payload, "summary");
     if (!text) {
       return withActivity;
     }
@@ -149,31 +176,46 @@ export function applyRuntimeEvent(items: ChatItem[], event: RuntimeEventEnvelope
   }
   if (isRuntimeTextPayload(event.payload)) {
     const title = event.display_title ?? titleForEvent(event.event_type);
-    const text = textFromPayload(event.payload, "message") ?? event.summary ?? undefined;
+    const text =
+      textFromPayload(event.payload, "message") ?? event.summary ?? undefined;
     return upsertById(items, {
       id: event.event_id,
       kind: "status",
       title,
-      text
+      text,
     });
   }
   return items;
 }
 
 function isActivityEvent(event: RuntimeEventEnvelope): boolean {
-  return ["run", "tool", "subagent", "reasoning", "approval", "event"].includes(event.activity_kind);
+  return ["run", "tool", "subagent", "reasoning", "approval", "event"].includes(
+    event.activity_kind,
+  );
 }
 
-function upsertRunActivity(items: ChatItem[], event: RuntimeEventEnvelope): ChatItem[] {
+function upsertRunActivity(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
   const id = `activity-${event.run_id}`;
-  const existing = items.find((item): item is Extract<ChatItem, { kind: "run-activity" }> => {
-    return item.kind === "run-activity" && item.id === id;
-  });
-  const activity = applyActivityEvent(existing?.activity ?? createRunActivity(event), event);
+  const existing = items.find(
+    (item): item is Extract<ChatItem, { kind: "run-activity" }> => {
+      return item.kind === "run-activity" && item.id === id;
+    },
+  );
+  const activity = applyActivityEvent(
+    existing?.activity ?? createRunActivity(event),
+    event,
+  );
   if (!existing) {
     return [...items, { id, kind: "run-activity", activity }];
   }
-  return items.map((item) => (item.id === id && item.kind === "run-activity" ? { ...item, activity } : item));
+  return items.map((item) =>
+    item.id === id && item.kind === "run-activity"
+      ? { ...item, activity }
+      : item,
+  );
 }
 
 function createRunActivity(event: RuntimeEventEnvelope): RunActivity {
@@ -185,11 +227,14 @@ function createRunActivity(event: RuntimeEventEnvelope): RunActivity {
     reasoning: [],
     events: [],
     tools: [],
-    subagents: []
+    subagents: [],
   };
 }
 
-function applyActivityEvent(activity: RunActivity, event: RuntimeEventEnvelope): RunActivity {
+function applyActivityEvent(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): RunActivity {
   let next: RunActivity = {
     ...activity,
     status: statusFromEvent(event, activity.status),
@@ -202,8 +247,11 @@ function applyActivityEvent(activity: RunActivity, event: RuntimeEventEnvelope):
       ...subagent,
       reasoning: [...subagent.reasoning],
       events: [...subagent.events],
-      tools: subagent.tools.map((tool) => ({ ...tool, deltas: [...tool.deltas] }))
-    }))
+      tools: subagent.tools.map((tool) => ({
+        ...tool,
+        deltas: [...tool.deltas],
+      })),
+    })),
   };
 
   if (event.activity_kind === "reasoning") {
@@ -221,7 +269,10 @@ function applyActivityEvent(activity: RunActivity, event: RuntimeEventEnvelope):
   return next;
 }
 
-function appendReasoning(activity: RunActivity, event: RuntimeEventEnvelope): RunActivity {
+function appendReasoning(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): RunActivity {
   const text = reasoningText(event);
   if (!text) {
     return activity;
@@ -233,15 +284,24 @@ function appendReasoning(activity: RunActivity, event: RuntimeEventEnvelope): Ru
       ...withSubagent,
       subagents: withSubagent.subagents.map((subagent) =>
         subagent.id === subagentKey
-          ? { ...subagent, reasoning: upsertText(subagent.reasoning, event.event_id, text) }
-          : subagent
-      )
+          ? {
+              ...subagent,
+              reasoning: upsertText(subagent.reasoning, event.event_id, text),
+            }
+          : subagent,
+      ),
     };
   }
-  return { ...activity, reasoning: upsertText(activity.reasoning, event.event_id, text) };
+  return {
+    ...activity,
+    reasoning: upsertText(activity.reasoning, event.event_id, text),
+  };
 }
 
-function upsertTool(activity: RunActivity, event: RuntimeEventEnvelope): RunActivity {
+function upsertTool(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): RunActivity {
   const tool = toolFromEvent(event);
   const subagentKey = subagentKeyForEvent(event);
   if (subagentKey) {
@@ -249,14 +309,22 @@ function upsertTool(activity: RunActivity, event: RuntimeEventEnvelope): RunActi
     return {
       ...withSubagent,
       subagents: withSubagent.subagents.map((subagent) =>
-        subagent.id === subagentKey ? { ...subagent, tools: upsertToolInList(subagent.tools, tool, event) } : subagent
-      )
+        subagent.id === subagentKey
+          ? {
+              ...subagent,
+              tools: upsertToolInList(subagent.tools, tool, event),
+            }
+          : subagent,
+      ),
     };
   }
   return { ...activity, tools: upsertToolInList(activity.tools, tool, event) };
 }
 
-function upsertSubagent(activity: RunActivity, event: RuntimeEventEnvelope): RunActivity {
+function upsertSubagent(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): RunActivity {
   const key = subagentKeyForEvent(event) ?? event.event_id;
   const withSubagent = ensureSubagent(activity, event, key);
   return {
@@ -268,33 +336,45 @@ function upsertSubagent(activity: RunActivity, event: RuntimeEventEnvelope): Run
       return {
         ...subagent,
         status: statusFromEvent(event, subagent.status),
-        summary: event.summary ?? payloadString(event.payload, "summary") ?? subagent.summary,
-        events: upsertEvent(subagent.events, event)
+        summary:
+          event.summary ??
+          payloadString(event.payload, "summary") ??
+          subagent.summary,
+        events: upsertEvent(subagent.events, event),
       };
-    })
+    }),
   };
 }
 
-function appendActivityRow(activity: RunActivity, event: RuntimeEventEnvelope): RunActivity {
+function appendActivityRow(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): RunActivity {
   const subagentKey = subagentKeyForEvent(event);
   if (subagentKey) {
     const withSubagent = ensureSubagent(activity, event, subagentKey);
     return {
       ...withSubagent,
       subagents: withSubagent.subagents.map((subagent) =>
-        subagent.id === subagentKey ? { ...subagent, events: upsertEvent(subagent.events, event) } : subagent
-      )
+        subagent.id === subagentKey
+          ? { ...subagent, events: upsertEvent(subagent.events, event) }
+          : subagent,
+      ),
     };
   }
   return { ...activity, events: upsertEvent(activity.events, event) };
 }
 
-function ensureSubagent(activity: RunActivity, event: RuntimeEventEnvelope, key: string): RunActivity {
+function ensureSubagent(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+  key: string,
+): RunActivity {
   if (activity.subagents.some((subagent) => subagent.id === key)) {
     return activity;
   }
   const payloadName = isSubagentActivityPayload(event.payload)
-    ? event.payload.subagent_name ?? event.payload.subagent_id
+    ? (event.payload.subagent_name ?? event.payload.subagent_id)
     : undefined;
   const name = event.subagent_id ?? payloadName ?? "subagent";
   return {
@@ -303,19 +383,28 @@ function ensureSubagent(activity: RunActivity, event: RuntimeEventEnvelope, key:
       ...activity.subagents,
       {
         id: key,
-        taskId: event.task_id ?? (isSubagentActivityPayload(event.payload) ? event.payload.task_id : key),
+        taskId:
+          event.task_id ??
+          (isSubagentActivityPayload(event.payload)
+            ? event.payload.task_id
+            : key),
         name,
         status: statusFromEvent(event),
-        summary: event.summary ?? payloadString(event.payload, "summary") ?? undefined,
+        summary:
+          event.summary ?? payloadString(event.payload, "summary") ?? undefined,
         reasoning: [],
         events: [],
-        tools: []
-      }
-    ]
+        tools: [],
+      },
+    ],
   };
 }
 
-function upsertToolInList(tools: ToolCallActivity[], tool: ToolCallActivity, event: RuntimeEventEnvelope): ToolCallActivity[] {
+function upsertToolInList(
+  tools: ToolCallActivity[],
+  tool: ToolCallActivity,
+  event: RuntimeEventEnvelope,
+): ToolCallActivity[] {
   const existing = tools.find((item) => item.id === tool.id);
   if (!existing) {
     return [...tools, tool];
@@ -330,7 +419,7 @@ function upsertToolInList(tools: ToolCallActivity[], tool: ToolCallActivity, eve
       status: tool.status,
       summary: tool.summary ?? item.summary,
       result: tool.result ?? item.result,
-      deltas: mergeText(item.deltas, tool.deltas)
+      deltas: mergeText(item.deltas, tool.deltas),
     };
   });
 }
@@ -349,7 +438,7 @@ function toolFromEvent(event: RuntimeEventEnvelope): ToolCallActivity {
     status: statusFromEvent(event),
     summary: event.summary ?? payloadString(payload, "summary") ?? undefined,
     result: toolResultText(payload),
-    deltas
+    deltas,
   };
 }
 
@@ -362,7 +451,11 @@ function toolName(payload: Record<string, unknown>): string | null {
 }
 
 function toolCallId(payload: Record<string, unknown>): string | null {
-  if (isToolCallPayload(payload) || isToolCallDeltaPayload(payload) || isToolResultPayload(payload)) {
+  if (
+    isToolCallPayload(payload) ||
+    isToolCallDeltaPayload(payload) ||
+    isToolResultPayload(payload)
+  ) {
     return payload.call_id;
   }
   const value = payload.call_id;
@@ -373,7 +466,9 @@ function toolResultText(payload: Record<string, unknown>): string | undefined {
   if (!isToolResultPayload(payload)) {
     return payloadString(payload, "summary") ?? undefined;
   }
-  return payload.summary ?? payload.safe_message ?? objectSummary(payload.output);
+  return (
+    payload.summary ?? payload.safe_message ?? objectSummary(payload.output)
+  );
 }
 
 function reasoningText(event: RuntimeEventEnvelope): string | null {
@@ -390,32 +485,56 @@ function subagentKeyForEvent(event: RuntimeEventEnvelope): string | null {
   return event.task_id ?? event.parent_task_id ?? event.subagent_id ?? null;
 }
 
-function upsertEvent(events: ActivityEvent[], event: RuntimeEventEnvelope): ActivityEvent[] {
+function upsertEvent(
+  events: ActivityEvent[],
+  event: RuntimeEventEnvelope,
+): ActivityEvent[] {
   return upsertByKey(events, event.event_id, {
     id: event.event_id,
     eventType: event.event_type,
     title: event.display_title ?? titleForEvent(event.event_type),
-    summary: event.summary ?? payloadString(event.payload, "message") ?? payloadString(event.payload, "summary") ?? undefined,
-    status: statusFromEvent(event)
+    summary:
+      event.summary ??
+      payloadString(event.payload, "message") ??
+      payloadString(event.payload, "summary") ??
+      undefined,
+    status: statusFromEvent(event),
   });
 }
 
-function upsertText(items: ActivityText[], id: string, text: string): ActivityText[] {
+function upsertText(
+  items: ActivityText[],
+  id: string,
+  text: string,
+): ActivityText[] {
   return upsertByKey(items, id, { id, text });
 }
 
-function mergeText(current: ActivityText[], next: ActivityText[]): ActivityText[] {
-  return next.reduce((items, item) => upsertText(items, item.id, item.text), current);
+function mergeText(
+  current: ActivityText[],
+  next: ActivityText[],
+): ActivityText[] {
+  return next.reduce(
+    (items, item) => upsertText(items, item.id, item.text),
+    current,
+  );
 }
 
-function upsertByKey<T extends { id: string }>(items: T[], id: string, next: T): T[] {
+function upsertByKey<T extends { id: string }>(
+  items: T[],
+  id: string,
+  next: T,
+): T[] {
   if (!items.some((item) => item.id === id)) {
     return [...items, next];
   }
   return items.map((item) => (item.id === id ? next : item));
 }
 
-function runTitleForEvent(event: RuntimeEventEnvelope, activity: RunActivity): string {
+function runTitleForEvent(
+  event: RuntimeEventEnvelope,
+  activity: RunActivity,
+): string {
   if (event.event_type === "run_completed") {
     return "Run completed";
   }
@@ -425,24 +544,47 @@ function runTitleForEvent(event: RuntimeEventEnvelope, activity: RunActivity): s
   if (event.event_type === "run_cancelled") {
     return "Run cancelled";
   }
-  return activity.title === "Agent activity" ? event.display_title ?? "Agent activity" : activity.title;
+  return activity.title === "Agent activity"
+    ? (event.display_title ?? "Agent activity")
+    : activity.title;
 }
 
-function statusFromEvent(event: RuntimeEventEnvelope, fallback: ActivityStatus = "unknown"): ActivityStatus {
-  const value = (event.status ?? payloadString(event.payload, "status") ?? "").toLowerCase();
+function statusFromEvent(
+  event: RuntimeEventEnvelope,
+  fallback: ActivityStatus = "unknown",
+): ActivityStatus {
+  const value = (
+    event.status ??
+    payloadString(event.payload, "status") ??
+    ""
+  ).toLowerCase();
   if (value === "queued") {
     return "queued";
   }
   if (value === "cancelled" || event.event_type === "run_cancelled") {
     return "cancelled";
   }
-  if (value === "failed" || value === "error" || event.event_type === "run_failed" || event.event_type === "error") {
+  if (
+    value === "failed" ||
+    value === "error" ||
+    event.event_type === "run_failed" ||
+    event.event_type === "error"
+  ) {
     return "failed";
   }
-  if (value === "completed" || value === "succeeded" || value === "success" || event.event_type === "run_completed") {
+  if (
+    value === "completed" ||
+    value === "succeeded" ||
+    value === "success" ||
+    event.event_type === "run_completed"
+  ) {
     return "completed";
   }
-  if (value === "waiting" || value === "waiting_for_approval" || event.activity_kind === "approval") {
+  if (
+    value === "waiting" ||
+    value === "waiting_for_approval" ||
+    event.activity_kind === "approval"
+  ) {
     return "waiting";
   }
   if (value === "running" || value === "started" || value === "progress") {
@@ -451,24 +593,40 @@ function statusFromEvent(event: RuntimeEventEnvelope, fallback: ActivityStatus =
   return fallback;
 }
 
-function appendAssistantDelta(items: ChatItem[], runId: string, delta: string): ChatItem[] {
+function appendAssistantDelta(
+  items: ChatItem[],
+  runId: string,
+  delta: string,
+): ChatItem[] {
   const id = `assistant-${runId}`;
-  const existing = items.find((item): item is Extract<ChatItem, { kind: "message" }> => {
-    return item.kind === "message" && item.id === id;
-  });
+  const existing = items.find(
+    (item): item is Extract<ChatItem, { kind: "message" }> => {
+      return item.kind === "message" && item.id === id;
+    },
+  );
   if (!existing) {
     return [...items, { id, kind: "message", role: "assistant", text: delta }];
   }
-  return items.map((item) => (item.id === id && item.kind === "message" ? { ...item, text: item.text + delta } : item));
+  return items.map((item) =>
+    item.id === id && item.kind === "message"
+      ? { ...item, text: item.text + delta }
+      : item,
+  );
 }
 
-function finalizeAssistantMessage(items: ChatItem[], runId: string, text: string): ChatItem[] {
+function finalizeAssistantMessage(
+  items: ChatItem[],
+  runId: string,
+  text: string,
+): ChatItem[] {
   const id = `assistant-${runId}`;
   const existing = items.some((item) => item.id === id);
   if (!existing) {
     return [...items, { id, kind: "message", role: "assistant", text }];
   }
-  return items.map((item) => (item.id === id && item.kind === "message" ? { ...item, text } : item));
+  return items.map((item) =>
+    item.id === id && item.kind === "message" ? { ...item, text } : item,
+  );
 }
 
 function upsertById(items: ChatItem[], next: ChatItem): ChatItem[] {
@@ -478,20 +636,31 @@ function upsertById(items: ChatItem[], next: ChatItem): ChatItem[] {
   return items.map((item) => (item.id === next.id ? next : item));
 }
 
-function textFromPayload(payload: Record<string, unknown>, key: "message" | "delta" | "summary"): string | null {
+function textFromPayload(
+  payload: Record<string, unknown>,
+  key: "message" | "delta" | "summary",
+): string | null {
   return payloadString(payload, key);
 }
 
-function payloadString(payload: Record<string, unknown>, key: string): string | null {
+function payloadString(
+  payload: Record<string, unknown>,
+  key: string,
+): string | null {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function objectSummary(value: Record<string, unknown> | undefined): string | undefined {
+function objectSummary(
+  value: Record<string, unknown> | undefined,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const message = payloadString(value, "message") ?? payloadString(value, "content") ?? payloadString(value, "summary");
+  const message =
+    payloadString(value, "message") ??
+    payloadString(value, "content") ??
+    payloadString(value, "summary");
   if (message) {
     return message;
   }

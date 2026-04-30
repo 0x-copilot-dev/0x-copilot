@@ -26,4 +26,3 @@ Tests must assert typed errors and safe messages. A test that only asserts an ex
 ## Regression Tests
 
 Any bug fix in dynamic loading, permissions, context compression, memory routing, subagent lifecycle, or streaming must add a regression test.
-

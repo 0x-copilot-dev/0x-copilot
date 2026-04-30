@@ -29,7 +29,10 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
-from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry, McpServerProvider
+from agent_runtime.capabilities.mcp.registry import (
+    DynamicMcpRegistry,
+    McpServerProvider,
+)
 
 __all__ = [
     "AuthMcpTool",

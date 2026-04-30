@@ -28,7 +28,9 @@ class DynamicToolLoadingTestMixin:
         def load_tool_spec(self, name: str) -> LoadedToolSpec | Mapping[str, object]:
             self.loaded_names.append(name)
             if self.fail_on_load:
-                raise RuntimeError(DynamicToolLoadingTestMixin.Values.CONNECTOR_SECRET_ERROR)
+                raise RuntimeError(
+                    DynamicToolLoadingTestMixin.Values.CONNECTOR_SECRET_ERROR
+                )
             return self.specs[name]
 
     class Values:
@@ -153,7 +155,9 @@ class DynamicToolLoadingTestMixin:
         return {
             self.Values.FIELD_TYPE: self.Values.JSON_OBJECT_TYPE,
             self.Values.FIELD_PROPERTIES: {
-                self.Values.QUERY_PROPERTY: {self.Values.FIELD_TYPE: self.Values.JSON_STRING_TYPE}
+                self.Values.QUERY_PROPERTY: {
+                    self.Values.FIELD_TYPE: self.Values.JSON_STRING_TYPE
+                }
             },
             self.Values.FIELD_REQUIRED: [self.Values.QUERY_PROPERTY],
         }
@@ -162,7 +166,9 @@ class DynamicToolLoadingTestMixin:
         return {
             self.Values.FIELD_TYPE: self.Values.JSON_OBJECT_TYPE,
             self.Values.FIELD_PROPERTIES: {
-                self.Values.ANSWER_PROPERTY: {self.Values.FIELD_TYPE: self.Values.JSON_STRING_TYPE}
+                self.Values.ANSWER_PROPERTY: {
+                    self.Values.FIELD_TYPE: self.Values.JSON_STRING_TYPE
+                }
             },
         }
 
@@ -185,7 +191,9 @@ class DynamicToolLoadingTestMixin:
     def make_loader(self, provider: FakeSpecProvider) -> ToolLoader:
         return ToolLoader(DynamicToolRegistry(providers=(provider,)))
 
-    def make_lost_permission_context(self, model_config: ModelConfig) -> AgentRuntimeContext:
+    def make_lost_permission_context(
+        self, model_config: ModelConfig
+    ) -> AgentRuntimeContext:
         return AgentRuntimeContext(
             user_id=self.Values.USER_ID,
             org_id=self.Values.ORG_ID,

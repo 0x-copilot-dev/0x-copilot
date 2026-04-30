@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 from backend_app.contracts import OAuthTokenRequest
 from backend_app.app import create_app
 from backend_app.service import McpRegistryService
@@ -19,7 +23,9 @@ class FakeOAuthTokenExchanger:
 
 def test_public_and_internal_mcp_auth_flow() -> None:
     store = InMemoryMcpStore()
-    app = create_app(McpRegistryService(store=store, token_exchanger=FakeOAuthTokenExchanger()))
+    app = create_app(
+        McpRegistryService(store=store, token_exchanger=FakeOAuthTokenExchanger())
+    )
     client = TestClient(app)
 
     created = client.post(
@@ -104,7 +110,9 @@ def test_mcp_update_disable_remove_flow() -> None:
     assert deleted.status_code == 204
 
 
-def test_internal_mcp_routes_use_service_header_scope_when_token_is_configured(monkeypatch) -> None:
+def test_internal_mcp_routes_use_service_header_scope_when_token_is_configured(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
     store = InMemoryMcpStore()
     app = create_app(McpRegistryService(store=store))

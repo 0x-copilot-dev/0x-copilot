@@ -77,7 +77,9 @@ def test_postgres_adapter_processes_run_and_persists_final_response() -> None:
             skill_directories=(),
         )
 
-    async def fake_invoker(_harness: RuntimeHarness, _messages: Sequence[object]) -> object:
+    async def fake_invoker(
+        _harness: RuntimeHarness, _messages: Sequence[object]
+    ) -> object:
         return {"messages": [{"role": "assistant", "content": "hi there"}]}
 
     worker = RuntimeWorker(

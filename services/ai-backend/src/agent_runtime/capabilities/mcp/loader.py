@@ -36,10 +36,15 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
-from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry, RegisteredMcpServer
+from agent_runtime.capabilities.mcp.registry import (
+    DynamicMcpRegistry,
+    RegisteredMcpServer,
+)
 
 _T = TypeVar("_T")
-SUPPORTED_TRANSPORTS = frozenset({McpTransport.STDIO, McpTransport.SSE, McpTransport.HTTP})
+SUPPORTED_TRANSPORTS = frozenset(
+    {McpTransport.STDIO, McpTransport.SSE, McpTransport.HTTP}
+)
 
 
 @dataclass(frozen=True)
@@ -57,7 +62,9 @@ class McpLoader:
         runtime_context = request.runtime_context
         resolution = self.registry.resolve_server(request.server_name)
         if isinstance(resolution, McpLoadError):
-            return McpLoaderHelpers.result_from_error(resolution, runtime_context.trace_id)
+            return McpLoaderHelpers.result_from_error(
+                resolution, runtime_context.trace_id
+            )
 
         card = resolution.card
         if card.transport not in SUPPORTED_TRANSPORTS:
@@ -325,13 +332,17 @@ class McpLoaderHelpers:
         tools: Sequence[McpToolDescriptor],
         local_tool_names: frozenset[str],
     ) -> str | None:
-        collisions = sorted({tool.name for tool in tools}.intersection(local_tool_names))
+        collisions = sorted(
+            {tool.name for tool in tools}.intersection(local_tool_names)
+        )
         if not collisions:
             return None
         return collisions[0]
 
     @classmethod
-    def result_from_error(cls, error: McpLoadError, correlation_id: str) -> McpLoadResult:
+    def result_from_error(
+        cls, error: McpLoadError, correlation_id: str
+    ) -> McpLoadResult:
         return McpLoadResult.fail(
             error.code,
             error.safe_message,
@@ -349,6 +360,8 @@ class McpLoaderHelpers:
     @classmethod
     def safe_server_name(cls, server_name: str) -> str | None:
         try:
-            return McpValueNormalizer.normalize_slug(server_name, Keys.Field.SERVER_NAME)
+            return McpValueNormalizer.normalize_slug(
+                server_name, Keys.Field.SERVER_NAME
+            )
         except ValueError:
             return None

@@ -9,7 +9,9 @@ from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.settings import RuntimeSettings
 
 
-def test_runtime_settings_loads_template_env_and_process_overrides(tmp_path: Path) -> None:
+def test_runtime_settings_loads_template_env_and_process_overrides(
+    tmp_path: Path,
+) -> None:
     template = tmp_path / "env_example"
     env_file = tmp_path / ".env"
     template.write_text(
@@ -65,8 +67,12 @@ def test_model_resolver_validates_provider_keys_and_applies_defaults() -> None:
     resolver = ModelConfigResolver(settings)
 
     openai = resolver.resolve(ModelSelection(model_name="gpt-4.1-mini"))
-    anthropic = resolver.resolve(ModelSelection(provider="anthropic", model_name="claude-sonnet-4"))
-    gemini = resolver.resolve(ModelSelection(provider="google", model_name="gemini-2.5-pro"))
+    anthropic = resolver.resolve(
+        ModelSelection(provider="anthropic", model_name="claude-sonnet-4")
+    )
+    gemini = resolver.resolve(
+        ModelSelection(provider="google", model_name="gemini-2.5-pro")
+    )
 
     assert openai.provider == "openai"
     assert anthropic.provider == "anthropic"
@@ -78,7 +84,9 @@ def test_model_resolver_rejects_missing_provider_key() -> None:
     resolver = ModelConfigResolver(settings)
 
     with pytest.raises(AgentRuntimeError) as exc_info:
-        resolver.resolve(ModelSelection(provider="anthropic", model_name="claude-sonnet-4"))
+        resolver.resolve(
+            ModelSelection(provider="anthropic", model_name="claude-sonnet-4")
+        )
 
     assert exc_info.value.code == "configuration_error"
     assert "Missing API key" in exc_info.value.safe_message

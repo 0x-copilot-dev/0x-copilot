@@ -39,7 +39,10 @@ def test_skill_registry_create_update_internal_cards_and_audit() -> None:
     assert created.virtual_path.endswith("/launch_risk_review/SKILL.md")
     assert updated.enabled is False
     assert cards.skills == ()
-    assert [event.action for event in store.audit_events] == ["skill_created", "skill_updated"]
+    assert [event.action for event in store.audit_events] == [
+        "skill_created",
+        "skill_updated",
+    ]
 
 
 def test_skill_registry_rejects_duplicate_and_malformed_skills() -> None:
@@ -83,7 +86,9 @@ def test_skill_registry_enforces_scope_visibility() -> None:
     )
 
     try:
-        service.get_skill(org_id="org_123", user_id="other_user", skill_id=created.skill_id)
+        service.get_skill(
+            org_id="org_123", user_id="other_user", skill_id=created.skill_id
+        )
     except ValueError as exc:
         assert "not found" in str(exc)
     else:

@@ -8,7 +8,7 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   MessageListResponse,
-  RuntimeEventEnvelope
+  RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
@@ -17,14 +17,20 @@ import { assertOk, jsonHeaders } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
-export type RuntimeStreamProtocolErrorReason = "malformed_json" | "invalid_envelope";
+export type RuntimeStreamProtocolErrorReason =
+  | "malformed_json"
+  | "invalid_envelope";
 
 export class RuntimeStreamProtocolError extends Error {
   readonly reason: RuntimeStreamProtocolErrorReason;
   readonly data: string;
 
   constructor(reason: RuntimeStreamProtocolErrorReason, data: string) {
-    super(reason === "malformed_json" ? "Runtime stream emitted malformed JSON." : "Runtime stream emitted an invalid event envelope.");
+    super(
+      reason === "malformed_json"
+        ? "Runtime stream emitted malformed JSON."
+        : "Runtime stream emitted an invalid event envelope.",
+    );
     this.name = "RuntimeStreamProtocolError";
     this.reason = reason;
     this.data = data;
@@ -32,18 +38,18 @@ export class RuntimeStreamProtocolError extends Error {
 }
 
 export async function createConversation(
-  identity: RequestIdentity
+  identity: RequestIdentity,
 ): Promise<Conversation> {
   const payload: CreateConversationRequest = {
     org_id: identity.orgId,
     user_id: identity.userId,
     title: "Current task review",
-    idempotency_key: `web-${identity.orgId}-${identity.userId}`
+    idempotency_key: `web-${identity.orgId}-${identity.userId}`,
   };
   const response = await fetch("/v1/agent/conversations", {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   await assertOk(response);
   return (await response.json()) as Conversation;
@@ -51,11 +57,13 @@ export async function createConversation(
 
 export async function listMessages(
   conversationId: string,
-  identity: RequestIdentity
+  identity: RequestIdentity,
 ): Promise<MessageListResponse> {
   const params = identityParams(identity);
   params.set("limit", "100");
-  const response = await fetch(`/v1/agent/conversations/${conversationId}/messages?${params}`);
+  const response = await fetch(
+    `/v1/agent/conversations/${conversationId}/messages?${params}`,
+  );
   await assertOk(response);
   return (await response.json()) as MessageListResponse;
 }
@@ -63,18 +71,18 @@ export async function listMessages(
 export async function createRun(
   conversationId: string,
   userInput: string,
-  identity: RequestIdentity
+  identity: RequestIdentity,
 ): Promise<CreateRunResponse> {
   const payload: CreateRunRequest = {
     conversation_id: conversationId,
     org_id: identity.orgId,
     user_id: identity.userId,
-    user_input: userInput
+    user_input: userInput,
   };
   const response = await fetch("/v1/agent/runs", {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   await assertOk(response);
   return (await response.json()) as CreateRunResponse;
@@ -82,17 +90,20 @@ export async function createRun(
 
 export async function cancelRun(
   runId: string,
-  identity: RequestIdentity
+  identity: RequestIdentity,
 ): Promise<CancelRunResponse> {
   const payload: CancelRunRequest = {
     requested_by_user_id: identity.userId,
-    reason: "Cancelled from web chat"
+    reason: "Cancelled from web chat",
   };
-  const response = await fetch(`/v1/agent/runs/${runId}/cancel?${identityParams(identity)}`, {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload)
-  });
+  const response = await fetch(
+    `/v1/agent/runs/${runId}/cancel?${identityParams(identity)}`,
+    {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(payload),
+    },
+  );
   await assertOk(response);
   return (await response.json()) as CancelRunResponse;
 }
@@ -100,18 +111,21 @@ export async function cancelRun(
 export async function decideApproval(
   approvalId: string,
   decision: ApprovalDecisionRequest["decision"],
-  identity: RequestIdentity
+  identity: RequestIdentity,
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
-    decided_by_user_id: identity.userId
+    decided_by_user_id: identity.userId,
   };
   const params = new URLSearchParams({ org_id: identity.orgId });
-  const response = await fetch(`/v1/agent/approvals/${approvalId}/decision?${params}`, {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload)
-  });
+  const response = await fetch(
+    `/v1/agent/approvals/${approvalId}/decision?${params}`,
+    {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(payload),
+    },
+  );
   await assertOk(response);
   return (await response.json()) as ApprovalDecisionResponse;
 }
@@ -123,7 +137,7 @@ export function streamRunEvents({
   onEvent,
   onError,
   onProtocolError,
-  onOpen
+  onOpen,
 }: {
   runId: string;
   afterSequence?: number;
@@ -135,7 +149,9 @@ export function streamRunEvents({
 }): EventSource {
   const params = identityParams(identity);
   params.set("after_sequence", String(afterSequence));
-  const eventSource = new EventSource(`/v1/agent/runs/${runId}/stream?${params}`);
+  const eventSource = new EventSource(
+    `/v1/agent/runs/${runId}/stream?${params}`,
+  );
   eventSource.addEventListener("open", () => onOpen?.());
   eventSource.addEventListener(SSE_EVENT_NAME, (message) => {
     const data = String((message as MessageEvent).data);

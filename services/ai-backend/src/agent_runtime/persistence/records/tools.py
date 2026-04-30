@@ -9,7 +9,11 @@ from pydantic import Field, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.persistence.constants import Keys
-from agent_runtime.persistence.records.common import PersistenceValueNormalizer, ToolInvocationStatus, ToolSideEffectClass
+from agent_runtime.persistence.records.common import (
+    PersistenceValueNormalizer,
+    ToolInvocationStatus,
+    ToolSideEffectClass,
+)
 
 
 class ToolInvocationRecord(RuntimeContract):

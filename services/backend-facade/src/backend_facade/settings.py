@@ -16,6 +16,10 @@ class FacadeSettings(BaseModel):
     @classmethod
     def load(cls) -> "FacadeSettings":
         return cls(
-            backend_url=os.environ.get("BACKEND_URL", "http://127.0.0.1:8100").rstrip("/"),
-            ai_backend_url=os.environ.get("AI_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/"),
+            backend_url=os.environ.get("BACKEND_URL", "http://127.0.0.1:8100").rstrip(
+                "/"
+            ),
+            ai_backend_url=os.environ.get(
+                "AI_BACKEND_URL", "http://127.0.0.1:8000"
+            ).rstrip("/"),
         )

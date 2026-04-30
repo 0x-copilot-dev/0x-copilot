@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from agent_runtime.execution.contracts import JsonObject, RuntimeContract, RuntimeErrorCode, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import (
+    JsonObject,
+    RuntimeContract,
+    RuntimeErrorCode,
+    RuntimeErrorEnvelope,
+)
 
 
 class ApiErrorResponse(RuntimeContract):

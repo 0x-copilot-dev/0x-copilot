@@ -87,4 +87,3 @@ flowchart TD
 - No external broker, deployed production worker service, or connector adapter implementation yet.
 - No custom replacement for Deep Agents' native context compression until production behavior is measured.
 - No side-effecting model action without typed parsing, permission checks, and connector-layer implementation.
-

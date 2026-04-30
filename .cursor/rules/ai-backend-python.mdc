@@ -11,4 +11,3 @@ alwaysApply: false
 - Use enums, literals, constrained strings, and positive integers for known domains.
 - Treat model output, connector payloads, MCP descriptors, and memory content as untrusted until validated.
 - Convert broad exceptions into typed domain errors with safe public messages.
-

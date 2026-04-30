@@ -86,7 +86,9 @@ class ToolCard(RuntimeContract):
     @field_validator(Keys.Fields.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
-        return ToolValueNormalizer.normalize_scope_set(value, Keys.Fields.REQUIRED_SCOPES)
+        return ToolValueNormalizer.normalize_scope_set(
+            value, Keys.Fields.REQUIRED_SCOPES
+        )
 
 
 class ToolPermissionPolicy(RuntimeContract):
@@ -105,7 +107,9 @@ class ToolPermissionPolicy(RuntimeContract):
     @field_validator(Keys.Fields.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
-        return ToolValueNormalizer.normalize_scope_set(value, Keys.Fields.REQUIRED_SCOPES)
+        return ToolValueNormalizer.normalize_scope_set(
+            value, Keys.Fields.REQUIRED_SCOPES
+        )
 
     @model_validator(mode="after")
     def _risky_tools_require_confirmation(self) -> "ToolPermissionPolicy":
@@ -120,7 +124,9 @@ class LoadedToolSpec(RuntimeContract):
     """Full validated tool contract loaded only after explicit selection."""
 
     name: str
-    description: str = Field(min_length=1, max_length=Limits.TOOL_DESCRIPTION_MAX_LENGTH)
+    description: str = Field(
+        min_length=1, max_length=Limits.TOOL_DESCRIPTION_MAX_LENGTH
+    )
     args_schema: JsonSchema
     return_schema: JsonSchema
     side_effects: frozenset[ToolSideEffect] = Field(
@@ -137,11 +143,15 @@ class LoadedToolSpec(RuntimeContract):
     @field_validator(Keys.Fields.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: str) -> str:
-        return ToolValueNormalizer.normalize_nonempty_string(value, Keys.Fields.DESCRIPTION)
+        return ToolValueNormalizer.normalize_nonempty_string(
+            value, Keys.Fields.DESCRIPTION
+        )
 
     @field_validator(Keys.Fields.ARGS_SCHEMA, Keys.Fields.RETURN_SCHEMA)
     @classmethod
-    def _validate_json_schema(cls, value: JsonSchema, info: ValidationInfo) -> JsonSchema:
+    def _validate_json_schema(
+        cls, value: JsonSchema, info: ValidationInfo
+    ) -> JsonSchema:
         return ToolSchemaValidator.validate_json_schema(value, info.field_name)
 
 
@@ -169,7 +179,9 @@ class ToolLoadError(RuntimeContract):
     @field_validator(Keys.Fields.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: str) -> str:
-        return ToolValueNormalizer.normalize_nonempty_string(value, Keys.Fields.SAFE_MESSAGE)
+        return ToolValueNormalizer.normalize_nonempty_string(
+            value, Keys.Fields.SAFE_MESSAGE
+        )
 
     @field_validator(Keys.Fields.TOOL_NAME)
     @classmethod

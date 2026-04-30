@@ -34,7 +34,9 @@ class TokenBudgetEvaluator:
         """Return threshold metrics for the current context size."""
 
         threshold_tokens = int(policy.max_input_tokens * policy.summary_threshold_ratio)
-        recent_context_tokens = int(policy.max_input_tokens * policy.recent_context_ratio)
+        recent_context_tokens = int(
+            policy.max_input_tokens * policy.recent_context_ratio
+        )
         remaining_tokens = max(policy.max_input_tokens - current_tokens, 0)
         return TokenBudgetSnapshot(
             current_tokens=current_tokens,
@@ -51,4 +53,8 @@ class TokenBudgetEvaluator:
 
         if not text:
             return 0
-        return max((len(text) + cls.CHARS_PER_TOKEN_ESTIMATE - 1) // cls.CHARS_PER_TOKEN_ESTIMATE, 1)
+        return max(
+            (len(text) + cls.CHARS_PER_TOKEN_ESTIMATE - 1)
+            // cls.CHARS_PER_TOKEN_ESTIMATE,
+            1,
+        )

@@ -8,7 +8,11 @@ from uuid import uuid4
 from pydantic import Field, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
-from agent_runtime.persistence.records.common import ApprovalRiskClass, PersistenceApprovalStatus, PersistenceValueNormalizer
+from agent_runtime.persistence.records.common import (
+    ApprovalRiskClass,
+    PersistenceApprovalStatus,
+    PersistenceValueNormalizer,
+)
 
 
 class PersistenceApprovalRequestRecord(RuntimeContract):

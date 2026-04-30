@@ -55,4 +55,3 @@ Tests should assert:
 - No secret values appear in serialized errors or stream events.
 - Unauthorized capabilities are absent before the model sees them.
 - Full conversation history is not sent to subagents by default.
-

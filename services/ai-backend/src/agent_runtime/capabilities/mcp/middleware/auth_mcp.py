@@ -48,8 +48,12 @@ class AuthMcpTool:
     name: str = Values.ToolName.AUTH_MCP
     description: str = Messages.Middleware.AUTH_MCP_TOOL_DESCRIPTION
 
-    async def ainvoke(self, raw_input: AuthMcpInput | Mapping[str, Any] | str) -> dict[str, Any]:
-        parsed_input = AuthMcpInputParser.parse(raw_input, self.runtime_context.trace_id)
+    async def ainvoke(
+        self, raw_input: AuthMcpInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
+        parsed_input = AuthMcpInputParser.parse(
+            raw_input, self.runtime_context.trace_id
+        )
         if isinstance(parsed_input, McpLoadResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
         session = self.auth_session_creator.create_auth_session(
@@ -67,7 +71,9 @@ class AuthMcpTool:
             "message": f"Authenticate {session.display_name} to continue using this MCP server.",
         }
 
-    async def __call__(self, raw_input: AuthMcpInput | Mapping[str, Any] | str) -> dict[str, Any]:
+    async def __call__(
+        self, raw_input: AuthMcpInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
         return await self.ainvoke(raw_input)
 
 

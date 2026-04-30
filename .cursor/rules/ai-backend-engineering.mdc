@@ -16,4 +16,3 @@ alwaysApply: false
 - Do not hard-code repeated keys, method names, or user-facing messages inline; use nested `Keys` classes and dedicated message/exception classes.
 - Keep production helper behavior inside classes rather than module-level helper functions.
 - For tests, put fake providers, builders, setup helpers, and repeated constants in mixins; concrete test classes should contain only `test_*` unit test methods.
-

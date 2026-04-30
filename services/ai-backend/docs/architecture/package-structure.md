@@ -62,15 +62,15 @@ Legacy compatibility modules under `agent_runtime.agent.*`, `agent_runtime.tools
 
 ## Canonical Import Paths
 
-| Concern | Canonical package |
-| --- | --- |
-| Execution contracts, graph, and factory | `agent_runtime.execution.*` |
-| Tool capabilities | `agent_runtime.capabilities.tools.*` |
-| MCP capabilities | `agent_runtime.capabilities.mcp.*` |
-| Skills middleware and registries | `agent_runtime.capabilities.skills.*` |
-| Context memory | `agent_runtime.context.memory.*` |
-| Subagent delegation | `agent_runtime.delegation.subagents.*` |
-| Runtime API service and producer ports | `agent_runtime.api.service`, `agent_runtime.api.ports`, `agent_runtime.api.events` |
+| Concern                                 | Canonical package                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| Execution contracts, graph, and factory | `agent_runtime.execution.*`                                                        |
+| Tool capabilities                       | `agent_runtime.capabilities.tools.*`                                               |
+| MCP capabilities                        | `agent_runtime.capabilities.mcp.*`                                                 |
+| Skills middleware and registries        | `agent_runtime.capabilities.skills.*`                                              |
+| Context memory                          | `agent_runtime.context.memory.*`                                                   |
+| Subagent delegation                     | `agent_runtime.delegation.subagents.*`                                             |
+| Runtime API service and producer ports  | `agent_runtime.api.service`, `agent_runtime.api.ports`, `agent_runtime.api.events` |
 
 Do not add compatibility aliases for old package paths. Move callers to the
 canonical owner instead.

@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.capabilities.skills.manifest import SkillErrorCode, SkillManifestError
+from agent_runtime.capabilities.skills.manifest import (
+    SkillErrorCode,
+    SkillManifestError,
+)
 from agent_runtime.capabilities.skills.sources import (
     SkillSource,
     SkillSourceConfig,
@@ -54,8 +57,12 @@ class TestSkillSources(SkillSourcesTestMixin):
 
         config = SkillSourceConfig(
             sources=(
-                SkillSource(path=second, precedence=20, scope={SkillSourceScope.SUBAGENT}),
-                SkillSource(path=first, precedence=10, scope={SkillSourceScope.MAIN_AGENT}),
+                SkillSource(
+                    path=second, precedence=20, scope={SkillSourceScope.SUBAGENT}
+                ),
+                SkillSource(
+                    path=first, precedence=10, scope={SkillSourceScope.MAIN_AGENT}
+                ),
             )
         )
 
@@ -69,9 +76,7 @@ class TestSkillSources(SkillSourcesTestMixin):
         tmp_path: Path,
     ) -> None:
         config = SkillSourceConfig(
-            sources=(
-                SkillSource(path=tmp_path / self.Paths.MISSING, precedence=10),
-            )
+            sources=(SkillSource(path=tmp_path / self.Paths.MISSING, precedence=10),)
         )
 
         with pytest.raises(SkillManifestError) as exc_info:

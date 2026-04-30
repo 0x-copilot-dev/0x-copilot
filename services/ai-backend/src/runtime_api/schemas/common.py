@@ -16,7 +16,6 @@ class ConversationStatus(StrEnum):
     ARCHIVED = "archived"
 
 
-
 class MessageRole(StrEnum):
     """Conversation message roles persisted by the API producer."""
 
@@ -26,13 +25,11 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
 
 
-
 class MessageStatus(StrEnum):
     """Message lifecycle states."""
 
     CREATED = "created"
     DELETED = "deleted"
-
 
 
 class AgentRunStatus(StrEnum):
@@ -48,14 +45,12 @@ class AgentRunStatus(StrEnum):
     TIMED_OUT = "timed_out"
 
 
-
 class RuntimeEventVisibility(StrEnum):
     """Client visibility class for timeline and audit events."""
 
     USER = "user"
     INTERNAL = "internal"
     AUDIT = "audit"
-
 
 
 class RuntimeEventRedactionState(StrEnum):
@@ -78,7 +73,6 @@ class RuntimeActivityKind(StrEnum):
     APPROVAL = "approval"
     HEARTBEAT = "heartbeat"
     EVENT = "event"
-
 
 
 class RuntimeApiEventType(StrEnum):
@@ -112,7 +106,9 @@ class RuntimeApiEventType(StrEnum):
     HEARTBEAT = "heartbeat"
 
     @classmethod
-    def from_stream_event_type(cls, event_type: StreamEventType) -> "RuntimeApiEventType":
+    def from_stream_event_type(
+        cls, event_type: StreamEventType
+    ) -> "RuntimeApiEventType":
         """Map normalized runtime stream events into API transport events."""
 
         return {
@@ -129,13 +125,11 @@ class RuntimeApiEventType(StrEnum):
         }[event_type]
 
 
-
 class ApprovalDecision(StrEnum):
     """Allowed user decisions for side-effecting approval requests."""
 
     APPROVED = "approved"
     REJECTED = "rejected"
-
 
 
 class ApprovalStatus(StrEnum):
@@ -144,7 +138,6 @@ class ApprovalStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
-
 
 
 class RuntimeApiValueNormalizer:

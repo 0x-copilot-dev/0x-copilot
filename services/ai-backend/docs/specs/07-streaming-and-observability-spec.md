@@ -76,4 +76,3 @@ Payloads must be redacted before serialization. Unknown event fields should be p
 - Subagent event arrives before task metadata.
 - Tool result exceeds stream size limit.
 - Summarization event leaks into user-facing output.
-

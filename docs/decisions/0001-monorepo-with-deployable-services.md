@@ -46,4 +46,3 @@ Tradeoffs:
 - A service becomes a standalone product.
 - Security boundaries require separate repositories.
 - Deployment ownership diverges enough that monorepo coordination hurts more than it helps.
-

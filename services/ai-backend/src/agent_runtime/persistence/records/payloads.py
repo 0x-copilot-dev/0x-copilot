@@ -9,7 +9,12 @@ from pydantic import Field, NonNegativeInt, field_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.persistence.constants import Keys
-from agent_runtime.persistence.records.common import PayloadKind, PayloadRedactionState, PayloadStorageBackend, PersistenceValueNormalizer
+from agent_runtime.persistence.records.common import (
+    PayloadKind,
+    PayloadRedactionState,
+    PayloadStorageBackend,
+    PersistenceValueNormalizer,
+)
 
 
 class ContextPayloadRecord(RuntimeContract):

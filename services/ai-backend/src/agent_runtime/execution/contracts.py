@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 import re
-from typing import Any, TypeAlias
+from typing import TypeAlias
 from uuid import uuid4
 
 from pydantic import (
@@ -25,7 +25,6 @@ from agent_runtime.execution.ports import (
     ToolRegistry,
 )
 from agent_runtime.observability.constants import Keys as ObservabilityKeys
-from agent_runtime.observability.constants import Messages as ObservabilityMessages
 from agent_runtime.observability.constants import Patterns as ObservabilityPatterns
 from agent_runtime.observability.constants import Values as ObservabilityValues
 from agent_runtime.observability.redaction import ObservabilityRedactor
@@ -389,7 +388,9 @@ class StreamEvent(RuntimeContract):
     def _normalize_parent_task_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.PARENT_TASK_ID)
+        return StreamValueNormalizer.normalize_id(
+            value, ObservabilityKeys.Field.PARENT_TASK_ID
+        )
 
     @field_validator(
         ObservabilityKeys.Field.PAYLOAD,

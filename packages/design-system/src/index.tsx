@@ -7,7 +7,7 @@ import type {
   ReactElement,
   ReactNode,
   SelectHTMLAttributes,
-  TextareaHTMLAttributes
+  TextareaHTMLAttributes,
 } from "react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
@@ -25,7 +25,7 @@ const DEFAULT_SCHEME: ThemeScheme = "dark";
 
 export function ThemeProvider({
   children,
-  defaultScheme = DEFAULT_SCHEME
+  defaultScheme = DEFAULT_SCHEME,
 }: {
   children: ReactNode;
   defaultScheme?: ThemeScheme;
@@ -46,12 +46,14 @@ export function ThemeProvider({
   const value = useMemo(
     () => ({
       scheme,
-      setScheme: setSchemeState
+      setScheme: setSchemeState,
     }),
-    [scheme]
+    [scheme],
   );
 
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  );
 }
 
 export function useTheme(): ThemeContextValue {
@@ -77,7 +79,12 @@ export function Button({
 }): ReactElement {
   return (
     <button
-      className={classNames("ui-button", `ui-button--${variant}`, `ui-button--${size}`, className)}
+      className={classNames(
+        "ui-button",
+        `ui-button--${variant}`,
+        `ui-button--${size}`,
+        className,
+      )}
       {...props}
     />
   );
@@ -92,7 +99,11 @@ export function IconButton({
   label: string;
 }): ReactElement {
   return (
-    <button className={classNames("ui-icon-button", className)} aria-label={label} {...props}>
+    <button
+      className={classNames("ui-icon-button", className)}
+      aria-label={label}
+      {...props}
+    >
       {children}
     </button>
   );
@@ -105,7 +116,12 @@ export function Card({
 }: HTMLAttributes<HTMLElement> & {
   tone?: "default" | "muted" | "accent" | "danger";
 }): ReactElement {
-  return <section className={classNames("ui-card", `ui-card--${tone}`, className)} {...props} />;
+  return (
+    <section
+      className={classNames("ui-card", `ui-card--${tone}`, className)}
+      {...props}
+    />
+  );
 }
 
 export function Badge({
@@ -115,18 +131,34 @@ export function Badge({
 }: HTMLAttributes<HTMLSpanElement> & {
   tone?: "neutral" | "success" | "warning" | "danger" | "accent";
 }): ReactElement {
-  return <span className={classNames("ui-badge", `ui-badge--${tone}`, className)} {...props} />;
+  return (
+    <span
+      className={classNames("ui-badge", `ui-badge--${tone}`, className)}
+      {...props}
+    />
+  );
 }
 
-export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>): ReactElement {
+export function TextInput({
+  className,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement>): ReactElement {
   return <input className={classNames("ui-input", className)} {...props} />;
 }
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>): ReactElement {
-  return <textarea className={classNames("ui-textarea", className)} {...props} />;
+export function Textarea({
+  className,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement>): ReactElement {
+  return (
+    <textarea className={classNames("ui-textarea", className)} {...props} />
+  );
 }
 
-export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>): ReactElement {
+export function Select({
+  className,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement>): ReactElement {
   return <select className={classNames("ui-select", className)} {...props} />;
 }
 
@@ -173,7 +205,7 @@ export function Dialog({
   title,
   children,
   footer,
-  onClose
+  onClose,
 }: {
   open: boolean;
   title: string;
@@ -186,7 +218,11 @@ export function Dialog({
   }
 
   return (
-    <div className="ui-dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="ui-dialog-backdrop"
+      role="presentation"
+      onMouseDown={onClose}
+    >
       <section
         className="ui-dialog"
         role="dialog"
@@ -211,7 +247,7 @@ export function Tabs<TValue extends string>({
   tabs,
   value,
   onChange,
-  className
+  className,
 }: {
   tabs: Array<{ value: TValue; label: string }>;
   value: TValue;
@@ -240,7 +276,7 @@ export function DropdownMenu({
   trigger,
   open,
   children,
-  className
+  className,
 }: {
   trigger: ReactNode;
   open: boolean;
@@ -260,7 +296,11 @@ export function Sidebar({
   className,
   ...props
 }: HTMLAttributes<HTMLElement>): ReactElement {
-  return <aside className={classNames("ui-sidebar", className)} {...props}>{children}</aside>;
+  return (
+    <aside className={classNames("ui-sidebar", className)} {...props}>
+      {children}
+    </aside>
+  );
 }
 
 export function LinkButton({
@@ -270,11 +310,17 @@ export function LinkButton({
   return <a className={classNames("ui-link-button", className)} {...props} />;
 }
 
-export function ChatShell({ className, ...props }: HTMLAttributes<HTMLElement>): ReactElement {
+export function ChatShell({
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement>): ReactElement {
   return <main className={classNames("ui-chat-shell", className)} {...props} />;
 }
 
-export function ChatThread({ className, ...props }: HTMLAttributes<HTMLDivElement>): ReactElement {
+export function ChatThread({
+  className,
+  ...props
+}: HTMLAttributes<HTMLDivElement>): ReactElement {
   return <div className={classNames("ui-chat-thread", className)} {...props} />;
 }
 
@@ -285,13 +331,29 @@ export function ChatBubble({
 }: HTMLAttributes<HTMLDivElement> & {
   role: "user" | "assistant" | "system";
 }): ReactElement {
-  return <div className={classNames("ui-chat-bubble", `ui-chat-bubble--${role}`, className)} {...props} />;
+  return (
+    <div
+      className={classNames(
+        "ui-chat-bubble",
+        `ui-chat-bubble--${role}`,
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
-export function ChatComposer({ className, ...props }: HTMLAttributes<HTMLFormElement>): ReactElement {
-  return <form className={classNames("ui-chat-composer", className)} {...props} />;
+export function ChatComposer({
+  className,
+  ...props
+}: HTMLAttributes<HTMLFormElement>): ReactElement {
+  return (
+    <form className={classNames("ui-chat-composer", className)} {...props} />
+  );
 }
 
-export function classNames(...values: Array<string | false | null | undefined>): string {
+export function classNames(
+  ...values: Array<string | false | null | undefined>
+): string {
   return values.filter(Boolean).join(" ");
 }

@@ -13,7 +13,11 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
-from runtime_api.schemas import RuntimeApprovalResolvedCommand, RuntimeCancelCommand, RuntimeRunCommand
+from runtime_api.schemas import (
+    RuntimeApprovalResolvedCommand,
+    RuntimeCancelCommand,
+    RuntimeRunCommand,
+)
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.run import RuntimeRunHandler
@@ -77,7 +81,9 @@ class RuntimeWorker:
             claims = self._claim_batch()
             if not claims:
                 return processed
-            await asyncio.gather(*(self._handle_claim_with_limit(claim) for claim in claims))
+            await asyncio.gather(
+                *(self._handle_claim_with_limit(claim) for claim in claims)
+            )
             processed += len(claims)
 
     def _claim_next(self) -> RuntimeWorkerClaim | None:
@@ -119,7 +125,7 @@ class RuntimeWorker:
             )
             self._mark_failure(claim=claim, error=exc)
             return
-        except Exception as exc:
+        except Exception:
             self.logger.exception(
                 "runtime worker command crashed command_id=%s command_type=%s run_id=%s",
                 claim.command_id,
@@ -157,12 +163,15 @@ class RuntimeWorker:
             retryable=False,
         )
 
-    def _mark_failure(self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError) -> None:
+    def _mark_failure(
+        self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError
+    ) -> None:
         result = RuntimeWorkerResult(
             command_id=claim.command_id,
             succeeded=False,
             safe_error=error.to_envelope(),
-            retry_available_at=datetime.now(UTC) + timedelta(seconds=self.retry_delay_seconds),
+            retry_available_at=datetime.now(UTC)
+            + timedelta(seconds=self.retry_delay_seconds),
         )
         if error.retryable and claim.attempts <= self.settings.execution.max_retries:
             self.queue.mark_retry(result=result)
@@ -179,7 +188,9 @@ class RuntimeWorker:
             retryable=False,
         )
 
-    def _runtime_cancel_command(self, claim: RuntimeWorkerClaim) -> RuntimeCancelCommand:
+    def _runtime_cancel_command(
+        self, claim: RuntimeWorkerClaim
+    ) -> RuntimeCancelCommand:
         payload = self._command_payload(claim)
         if payload:
             return RuntimeCancelCommand.model_validate(payload)

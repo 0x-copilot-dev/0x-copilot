@@ -36,7 +36,9 @@ class LoadMcpServerTool:
     ) -> dict[str, Any]:
         """Return JSON-serializable descriptors or a typed safe error."""
 
-        parsed_input = LoadMcpServerInputParser.parse(raw_input, self.runtime_context.trace_id)
+        parsed_input = LoadMcpServerInputParser.parse(
+            raw_input, self.runtime_context.trace_id
+        )
         if isinstance(parsed_input, McpLoadResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
 

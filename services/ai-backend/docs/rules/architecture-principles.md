@@ -28,4 +28,3 @@ Remove duplication when it protects a real invariant or repeated policy. Do not 
 - Shared organization memory is read-only unless application code writes it.
 - MCP and connector data is validated before use.
 - Stream payloads are redacted before emission.
-

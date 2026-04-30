@@ -1,10 +1,19 @@
-import type { McpAuthRequiredEventPayload, McpAuthState, McpServer } from "@enterprise-search/api-types";
-import { Badge, Button, Card, LinkButton } from "@enterprise-search/design-system";
+import type {
+  McpAuthRequiredEventPayload,
+  McpAuthState,
+  McpServer,
+} from "@enterprise-search/api-types";
+import {
+  Badge,
+  Button,
+  Card,
+  LinkButton,
+} from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 
 export function ConnectorConsentCard({
   payload,
-  onSkip
+  onSkip,
 }: {
   payload: McpAuthRequiredEventPayload;
   onSkip?: (serverId: string) => void;
@@ -15,12 +24,18 @@ export function ConnectorConsentCard({
         <span className="app-eyebrow">Connector access needed</span>
         <h3>Connect {payload.display_name}</h3>
         <p>{payload.message}</p>
-        <small>Link expires at {new Date(payload.expires_at).toLocaleString()}.</small>
+        <small>
+          Link expires at {new Date(payload.expires_at).toLocaleString()}.
+        </small>
       </div>
       <div className="connector-consent-card__actions">
         <LinkButton href={payload.auth_url}>Connect</LinkButton>
         {onSkip ? (
-          <Button type="button" variant="ghost" onClick={() => onSkip(payload.server_id)}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onSkip(payload.server_id)}
+          >
             Not now
           </Button>
         ) : null}
@@ -33,7 +48,7 @@ export function ConnectorSuggestionCard({
   servers,
   onConnect,
   onSkip,
-  onNone
+  onNone,
 }: {
   servers: McpServer[];
   onConnect: (serverId: string) => void;
@@ -45,16 +60,30 @@ export function ConnectorSuggestionCard({
       <span className="app-eyebrow">Connectors that could help</span>
       <div className="connector-suggestion-card__list">
         {servers.map((server) => (
-          <div className="connector-suggestion-card__row" key={server.server_id}>
+          <div
+            className="connector-suggestion-card__row"
+            key={server.server_id}
+          >
             <div>
               <strong>{server.display_name}</strong>
               <p>{connectorHelpText(server)}</p>
             </div>
-            <Badge tone={authTone(server.auth_state)}>{server.auth_state.replaceAll("_", " ")}</Badge>
-            <Button type="button" size="sm" onClick={() => onConnect(server.server_id)}>
+            <Badge tone={authTone(server.auth_state)}>
+              {server.auth_state.replaceAll("_", " ")}
+            </Badge>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => onConnect(server.server_id)}
+            >
               Connect
             </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => onSkip(server.server_id)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => onSkip(server.server_id)}
+            >
               Skip
             </Button>
           </div>
@@ -67,7 +96,9 @@ export function ConnectorSuggestionCard({
   );
 }
 
-export function authTone(authState: McpAuthState): "neutral" | "success" | "warning" | "danger" | "accent" {
+export function authTone(
+  authState: McpAuthState,
+): "neutral" | "success" | "warning" | "danger" | "accent" {
   if (authState === "authenticated") {
     return "success";
   }

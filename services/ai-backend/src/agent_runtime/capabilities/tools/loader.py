@@ -18,7 +18,10 @@ from agent_runtime.capabilities.tools.cards import (
 )
 from agent_runtime.capabilities.tools.constants import Keys, Messages
 from agent_runtime.capabilities.tools.permissions import ToolPermissionChecker
-from agent_runtime.capabilities.tools.registry import DynamicToolRegistry, RegisteredTool
+from agent_runtime.capabilities.tools.registry import (
+    DynamicToolRegistry,
+    RegisteredTool,
+)
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,9 @@ class ToolLoader:
                 correlation_id=runtime_context.trace_id,
             )
 
-        if not ToolPermissionChecker.is_card_authorized(runtime_context, resolution.card):
+        if not ToolPermissionChecker.is_card_authorized(
+            runtime_context, resolution.card
+        ):
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.PERMISSION_DENIED,
                 Messages.Errors.TOOL_PERMISSION_DENIED,

@@ -49,4 +49,3 @@ Names must be stable slugs. Descriptions must have configured length limits. `ar
 - User permission changes between list and load.
 - Tool schema too large.
 - Model requests a tool by display name instead of slug.
-

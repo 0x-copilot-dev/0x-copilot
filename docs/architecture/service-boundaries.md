@@ -99,4 +99,3 @@ Every service boundary needs:
 - Unit tests around serialization and validation.
 - A component-local dependency environment, Dockerfile, and deploy story.
 - Observability and safe error handling.
-

@@ -8,10 +8,27 @@ from enum import StrEnum
 from typing import Any, TypeAlias
 from uuid import uuid4
 
-from pydantic import Field, PositiveInt, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    Field,
+    PositiveInt,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, JsonScalar, RuntimeContract
-from agent_runtime.delegation.subagents.constants import Defaults, Keys, Limits, Messages, Patterns, Values
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    JsonScalar,
+    RuntimeContract,
+)
+from agent_runtime.delegation.subagents.constants import (
+    Defaults,
+    Keys,
+    Limits,
+    Messages,
+    Patterns,
+    Values,
+)
 
 OutputSchema: TypeAlias = Mapping[str, Any]
 ResultMetadata: TypeAlias = Mapping[str, JsonScalar]
@@ -65,7 +82,9 @@ class RuntimeContextReference(RuntimeContract):
     @field_validator(Keys.Field.PERMISSION_SCOPES, mode="before")
     @classmethod
     def _normalize_permission_scopes(cls, value: object) -> frozenset[str]:
-        return SubagentValueNormalizer.normalize_scope_set(value, Keys.Field.PERMISSION_SCOPES)
+        return SubagentValueNormalizer.normalize_scope_set(
+            value, Keys.Field.PERMISSION_SCOPES
+        )
 
     @classmethod
     def from_context(cls, context: AgentRuntimeContext) -> "RuntimeContextReference":
@@ -110,7 +129,9 @@ class SubagentDefinition(RuntimeContract):
     @field_validator(Keys.Field.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_nonempty_string(value, Keys.Field.DESCRIPTION)
+        return SubagentValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.DESCRIPTION
+        )
 
     @field_validator(Keys.Field.GRAPH_ID)
     @classmethod
@@ -129,7 +150,9 @@ class SubagentDefinition(RuntimeContract):
     @field_validator(Keys.Field.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
-        return SubagentValueNormalizer.normalize_scope_set(value, Keys.Field.REQUIRED_SCOPES)
+        return SubagentValueNormalizer.normalize_scope_set(
+            value, Keys.Field.REQUIRED_SCOPES
+        )
 
 
 class SubagentOutputContract(RuntimeContract):
@@ -155,7 +178,9 @@ class SubagentOutputContract(RuntimeContract):
     @field_validator(Keys.Field.REQUIRED_FIELDS, mode="before")
     @classmethod
     def _normalize_required_fields(cls, value: object) -> frozenset[str]:
-        return SubagentValueNormalizer.normalize_slug_set(value, Keys.Field.REQUIRED_FIELDS)
+        return SubagentValueNormalizer.normalize_slug_set(
+            value, Keys.Field.REQUIRED_FIELDS
+        )
 
     @field_validator(Keys.Field.JSON_SCHEMA)
     @classmethod
@@ -176,7 +201,9 @@ class SubagentTask(RuntimeContract):
     runtime_context_ref: RuntimeContextReference
     allowed_tools: frozenset[str] = Field(default_factory=frozenset)
     allowed_skills: frozenset[str] = Field(default_factory=frozenset)
-    output_contract: SubagentOutputContract = Field(default_factory=SubagentOutputContract)
+    output_contract: SubagentOutputContract = Field(
+        default_factory=SubagentOutputContract
+    )
 
     @field_validator(Keys.Field.OBJECTIVE, Keys.Field.RELEVANT_SUMMARY)
     @classmethod
@@ -187,13 +214,19 @@ class SubagentTask(RuntimeContract):
     @classmethod
     def _normalize_constraints(cls, value: object) -> tuple[str, ...]:
         return tuple(
-            SubagentValueNormalizer.normalize_nonempty_string(item, Keys.Field.CONSTRAINTS)
-            for item in SubagentValueNormalizer.coerce_iterable(value, Keys.Field.CONSTRAINTS)
+            SubagentValueNormalizer.normalize_nonempty_string(
+                item, Keys.Field.CONSTRAINTS
+            )
+            for item in SubagentValueNormalizer.coerce_iterable(
+                value, Keys.Field.CONSTRAINTS
+            )
         )
 
     @field_validator(Keys.Field.ALLOWED_TOOLS, Keys.Field.ALLOWED_SKILLS, mode="before")
     @classmethod
-    def _normalize_allowed_slugs(cls, value: object, info: ValidationInfo) -> frozenset[str]:
+    def _normalize_allowed_slugs(
+        cls, value: object, info: ValidationInfo
+    ) -> frozenset[str]:
         return SubagentValueNormalizer.normalize_slug_set(value, info.field_name)
 
 
@@ -212,7 +245,9 @@ class SubagentArtifact(RuntimeContract):
     @field_validator(Keys.Field.REFERENCE)
     @classmethod
     def _normalize_reference(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_nonempty_string(value, Keys.Field.REFERENCE)
+        return SubagentValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.REFERENCE
+        )
 
 
 class SubagentError(RuntimeContract):
@@ -227,7 +262,9 @@ class SubagentError(RuntimeContract):
     @field_validator(Keys.Field.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_nonempty_string(value, Keys.Field.SAFE_MESSAGE)
+        return SubagentValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.SAFE_MESSAGE
+        )
 
     @field_validator(Keys.Field.TASK_ID)
     @classmethod
@@ -245,8 +282,12 @@ class SubagentError(RuntimeContract):
 class SubagentResult(RuntimeContract):
     """Validated subagent output with both answer and execution summaries."""
 
-    response: str | None = Field(default=None, max_length=Limits.RESULT_RESPONSE_MAX_LENGTH)
-    execution_summary: str | None = Field(default=None, max_length=Limits.SUMMARY_MAX_LENGTH)
+    response: str | None = Field(
+        default=None, max_length=Limits.RESULT_RESPONSE_MAX_LENGTH
+    )
+    execution_summary: str | None = Field(
+        default=None, max_length=Limits.SUMMARY_MAX_LENGTH
+    )
     plan_summary: str | None = Field(default=None, max_length=Limits.SUMMARY_MAX_LENGTH)
     artifacts: tuple[SubagentArtifact, ...] = Field(default_factory=tuple)
     recent_messages: tuple[str, ...] = Field(default_factory=tuple)
@@ -295,7 +336,9 @@ class SubagentResult(RuntimeContract):
         has_error = self.error is not None
         if has_response == has_error:
             raise ValueError(Messages.Validation.EXACTLY_ONE_RESULT_OUTCOME)
-        if has_response and (self.execution_summary is None or self.plan_summary is None):
+        if has_response and (
+            self.execution_summary is None or self.plan_summary is None
+        ):
             raise ValueError(Messages.Validation.RESULT_SUMMARIES_REQUIRED)
         return self
 
@@ -423,7 +466,9 @@ class AsyncTaskLifecycleResult(RuntimeContract):
         return cls(state=state, result=result)
 
     @classmethod
-    def from_tasks(cls, tasks: tuple[AsyncTaskState, ...]) -> "AsyncTaskLifecycleResult":
+    def from_tasks(
+        cls, tasks: tuple[AsyncTaskState, ...]
+    ) -> "AsyncTaskLifecycleResult":
         """Create a task-list lifecycle response."""
 
         return cls(tasks=tasks)
@@ -457,8 +502,12 @@ class SubagentValueNormalizer:
     @classmethod
     def normalize_id(cls, value: object, field_name: str) -> str:
         normalized = cls.normalize_nonempty_string(value, field_name)
-        if len(normalized) > Limits.ID_MAX_LENGTH or not Patterns.ID.fullmatch(normalized):
-            raise ValueError(Messages.Validation.id_contains_unsupported_characters(field_name))
+        if len(normalized) > Limits.ID_MAX_LENGTH or not Patterns.ID.fullmatch(
+            normalized
+        ):
+            raise ValueError(
+                Messages.Validation.id_contains_unsupported_characters(field_name)
+            )
         return normalized
 
     @classmethod

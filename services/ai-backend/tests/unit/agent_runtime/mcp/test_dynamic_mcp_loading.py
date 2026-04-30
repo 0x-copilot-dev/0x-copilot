@@ -5,7 +5,11 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    ModelConfig,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
@@ -133,7 +137,9 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             clients={
                 self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
                     tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
-                    resources=(self.make_resource(name=self.TestValues.Names.DRIVE_ROOT),),
+                    resources=(
+                        self.make_resource(name=self.TestValues.Names.DRIVE_ROOT),
+                    ),
                 )
             },
         )
@@ -156,7 +162,10 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         assert tuple(resource.name for resource in result.loaded_server.resources) == (
             self.TestValues.Names.DRIVE_ROOT,
         )
-        assert result.loaded_server.connection_metadata.server_name == self.TestValues.Names.DRIVE_MCP
+        assert (
+            result.loaded_server.connection_metadata.server_name
+            == self.TestValues.Names.DRIVE_MCP
+        )
         assert provider.created_clients == [self.TestValues.Names.DRIVE_MCP]
 
     def test_loader_denies_when_permission_changes_before_load(
@@ -177,9 +186,9 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         loader = McpLoader(registry)
         lost_permission_context = self.lost_permission_context(model_config)
 
-        assert tuple(card.name for card in registry.list_server_cards(runtime_context_admin)) == (
-            self.TestValues.Names.DRIVE_MCP,
-        )
+        assert tuple(
+            card.name for card in registry.list_server_cards(runtime_context_admin)
+        ) == (self.TestValues.Names.DRIVE_MCP,)
         result = asyncio.run(
             loader.load_server(
                 McpLoadRequest(
@@ -234,8 +243,12 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
 
         auth_result = asyncio.run(self.load_default(auth_loader, runtime_context_admin))
-        timeout_result = asyncio.run(self.load_default(timeout_loader, runtime_context_admin))
-        unhealthy_result = asyncio.run(self.load_default(unhealthy_loader, runtime_context_admin))
+        timeout_result = asyncio.run(
+            self.load_default(timeout_loader, runtime_context_admin)
+        )
+        unhealthy_result = asyncio.run(
+            self.load_default(unhealthy_loader, runtime_context_admin)
+        )
 
         assert auth_result.error is not None
         assert auth_result.error.code == McpLoadErrorCode.AUTH_FAILURE
@@ -279,8 +292,12 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
                         clients={
                             self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
                                 tools=(
-                                    self.make_tool(name=self.TestValues.Names.FIRST_TOOL),
-                                    self.make_tool(name=self.TestValues.Names.SECOND_TOOL),
+                                    self.make_tool(
+                                        name=self.TestValues.Names.FIRST_TOOL
+                                    ),
+                                    self.make_tool(
+                                        name=self.TestValues.Names.SECOND_TOOL
+                                    ),
                                 ),
                                 resources=(),
                             )
@@ -291,8 +308,12 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             max_tool_descriptors=1,
         )
 
-        malformed_result = asyncio.run(self.load_default(malformed_loader, runtime_context_admin))
-        duplicate_result = asyncio.run(self.load_default(duplicate_loader, runtime_context_admin))
+        malformed_result = asyncio.run(
+            self.load_default(malformed_loader, runtime_context_admin)
+        )
+        duplicate_result = asyncio.run(
+            self.load_default(duplicate_loader, runtime_context_admin)
+        )
         collision_result = asyncio.run(
             collision_loader.load_server(
                 McpLoadRequest(
@@ -302,7 +323,9 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
                 )
             )
         )
-        budget_result = asyncio.run(self.load_default(budget_loader, runtime_context_admin))
+        budget_result = asyncio.run(
+            self.load_default(budget_loader, runtime_context_admin)
+        )
 
         assert malformed_result.error is not None
         assert malformed_result.error.code == McpLoadErrorCode.MALFORMED_DESCRIPTOR

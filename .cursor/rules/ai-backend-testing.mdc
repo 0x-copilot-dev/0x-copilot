@@ -11,4 +11,3 @@ alwaysApply: false
 - Cover permission denial, duplicate names, malformed schemas, external failures, and oversized context.
 - Assert typed errors and safe messages, not just that an exception occurred.
 - Never require network access, real credentials, or live LLM calls in unit tests.
-

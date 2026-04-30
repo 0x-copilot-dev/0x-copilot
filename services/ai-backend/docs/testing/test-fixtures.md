@@ -55,4 +55,3 @@ Fixtures should make unit tests deterministic and fast. They should model bounda
 - Do not use real API keys.
 - Do not hide validation in fixture constructors; tests should be explicit about valid versus invalid data.
 - Do not use one giant fixture for every test. Prefer narrow fixtures that describe the behavior under test.
-

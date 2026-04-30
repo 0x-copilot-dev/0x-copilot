@@ -38,4 +38,3 @@
 - Inline string literals for operational keys, safe error messages, or repeated validation text.
 - Free-floating production helper functions that should belong to a contract, parser, policy, or validator class.
 - Concrete test classes with helper methods, fake classes, setup utilities, or repeated constants mixed into the unit test methods.
-

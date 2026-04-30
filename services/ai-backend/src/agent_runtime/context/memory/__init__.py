@@ -26,7 +26,10 @@ from agent_runtime.context.memory.summarization import (
     ContextSummarizationManager,
     SummarizationResult,
 )
-from agent_runtime.context.memory.token_budget import TokenBudgetEvaluator, TokenBudgetSnapshot
+from agent_runtime.context.memory.token_budget import (
+    TokenBudgetEvaluator,
+    TokenBudgetSnapshot,
+)
 
 __all__ = [
     "ContextCompressionEvent",

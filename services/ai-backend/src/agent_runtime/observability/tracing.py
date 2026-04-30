@@ -65,11 +65,15 @@ class TraceContext:
         """Prefer runtime context trace IDs, then raw event IDs, then generate one."""
 
         context_trace_id = getattr(context, Keys.Field.TRACE_ID, None)
-        if isinstance(context_trace_id, str) and Patterns.ID.fullmatch(context_trace_id):
+        if isinstance(context_trace_id, str) and Patterns.ID.fullmatch(
+            context_trace_id
+        ):
             return context_trace_id
 
         raw_trace_id = raw_event.get(Keys.Raw.TRACE_ID)
-        if isinstance(raw_trace_id, str) and Patterns.ID.fullmatch(raw_trace_id.strip()):
+        if isinstance(raw_trace_id, str) and Patterns.ID.fullmatch(
+            raw_trace_id.strip()
+        ):
             return raw_trace_id.strip()
 
         metadata = raw_event.get(Keys.Raw.METADATA)
@@ -98,7 +102,9 @@ class TraceContext:
         return sha256(encoded).hexdigest()[:16]
 
     @classmethod
-    def langsmith_extra_for(cls, context: object, *, operation: str) -> dict[str, object]:
+    def langsmith_extra_for(
+        cls, context: object, *, operation: str
+    ) -> dict[str, object]:
         """Return safe dynamic metadata for optional LangSmith traces."""
 
         request_id = getattr(context, "request_id", None)
@@ -115,8 +121,12 @@ class TraceContext:
             "org_id_hash": cls.identity_hash(getattr(context, "org_id", "")),
         }
         return {
-            "tags": ("agent_runtime", f"run:{run_id}") if run_id else ("agent_runtime",),
-            "metadata": {key: value for key, value in metadata.items() if value is not None},
+            "tags": ("agent_runtime", f"run:{run_id}")
+            if run_id
+            else ("agent_runtime",),
+            "metadata": {
+                key: value for key, value in metadata.items() if value is not None
+            },
         }
 
 

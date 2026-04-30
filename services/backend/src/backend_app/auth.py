@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 from fastapi import HTTPException, Request, status
 
 
@@ -25,7 +29,9 @@ class BackendServiceAuthenticator:
         cls._verify_service_token(request)
 
     @classmethod
-    def internal_scoped_identity(cls, request: Request, *, org_id: str, user_id: str) -> ScopedIdentity:
+    def internal_scoped_identity(
+        cls, request: Request, *, org_id: str, user_id: str
+    ) -> ScopedIdentity:
         """Return header identity for authenticated service calls, dev query scope otherwise."""
 
         if cls._verify_service_token(request):
@@ -36,7 +42,9 @@ class BackendServiceAuthenticator:
         return ScopedIdentity(org_id=org_id, user_id=user_id)
 
     @classmethod
-    def scoped_identity(cls, request: Request, *, org_id: str, user_id: str) -> ScopedIdentity:
+    def scoped_identity(
+        cls, request: Request, *, org_id: str, user_id: str
+    ) -> ScopedIdentity:
         """Return trusted upstream identity, falling back to query identity only in dev."""
 
         if cls._verify_service_token(request, allow_missing_in_development=True):
@@ -55,7 +63,11 @@ class BackendServiceAuthenticator:
     ) -> bool:
         expected = cls._service_token()
         environment = cls._environment()
-        if not expected and environment != "production" and allow_missing_in_development:
+        if (
+            not expected
+            and environment != "production"
+            and allow_missing_in_development
+        ):
             return False
         if not expected:
             raise HTTPException(

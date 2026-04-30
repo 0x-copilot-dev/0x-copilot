@@ -27,7 +27,11 @@ class LocalTokenVault(TokenVault):
     """
 
     def __init__(self, secret: str | None = None) -> None:
-        raw_secret = secret or os.environ.get("MCP_TOKEN_VAULT_SECRET") or TokenVaultFactory.development_secret()
+        raw_secret = (
+            secret
+            or os.environ.get("MCP_TOKEN_VAULT_SECRET")
+            or TokenVaultFactory.development_secret()
+        )
         if len(raw_secret) < 32:
             raise RuntimeError("MCP_TOKEN_VAULT_SECRET must be at least 32 characters")
         self._key = hashlib.sha256(raw_secret.encode("utf-8")).digest()
@@ -36,7 +40,9 @@ class LocalTokenVault(TokenVault):
         nonce = token_bytes(16)
         data = plaintext.encode("utf-8")
         keystream = self._keystream(nonce, len(data))
-        encrypted = bytes(left ^ right for left, right in zip(data, keystream, strict=True))
+        encrypted = bytes(
+            left ^ right for left, right in zip(data, keystream, strict=True)
+        )
         signature = hmac.new(self._key, nonce + encrypted, hashlib.sha256).digest()
         return base64.urlsafe_b64encode(nonce + signature + encrypted).decode("ascii")
 
@@ -49,7 +55,9 @@ class LocalTokenVault(TokenVault):
         if not hmac.compare_digest(signature, expected):
             raise ValueError("token envelope signature is invalid")
         keystream = self._keystream(nonce, len(encrypted))
-        decrypted = bytes(left ^ right for left, right in zip(encrypted, keystream, strict=True))
+        decrypted = bytes(
+            left ^ right for left, right in zip(encrypted, keystream, strict=True)
+        )
         return decrypted.decode("utf-8")
 
     def _keystream(self, nonce: bytes, size: int) -> bytes:
@@ -57,7 +65,9 @@ class LocalTokenVault(TokenVault):
         counter = 0
         while sum(len(chunk) for chunk in chunks) < size:
             counter_bytes = counter.to_bytes(8, "big")
-            chunks.append(hmac.new(self._key, nonce + counter_bytes, hashlib.sha256).digest())
+            chunks.append(
+                hmac.new(self._key, nonce + counter_bytes, hashlib.sha256).digest()
+            )
             counter += 1
         return b"".join(chunks)[:size]
 

@@ -112,7 +112,9 @@ class ConfiguredRuntimeGraph:
         return cls._coerce_context(raw_context)
 
     @classmethod
-    def _coerce_context(cls, context: AgentRuntimeContext | dict[str, Any]) -> AgentRuntimeContext:
+    def _coerce_context(
+        cls, context: AgentRuntimeContext | dict[str, Any]
+    ) -> AgentRuntimeContext:
         if isinstance(context, AgentRuntimeContext):
             return context
         try:

@@ -55,4 +55,3 @@ Use strict mode where possible. IDs and names should be constrained strings, not
 - User has no connector scopes.
 - Trace ID is missing and must be generated.
 - Dependency object is present but does not satisfy the expected protocol.
-

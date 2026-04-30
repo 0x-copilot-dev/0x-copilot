@@ -283,4 +283,3 @@ sequenceDiagram
   Runtime-->>Worker: Safe error event data
   Worker-->>UI: RuntimeEventEnvelope(type=error, redacted payload)
 ```
-

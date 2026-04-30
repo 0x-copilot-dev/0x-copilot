@@ -3,8 +3,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
-from agent_runtime.execution.deep_agent_builder import DeepAgentBuildRequest, build_deep_agent
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    ModelConfig,
+    RuntimeErrorCode,
+)
+from agent_runtime.execution.deep_agent_builder import (
+    DeepAgentBuildRequest,
+    build_deep_agent,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.context.memory import (
     ContextCompressionEvent,
@@ -61,9 +68,14 @@ def test_memory_routes_isolate_user_memory_by_user_id(
 def test_memory_routes_policies_and_skills_to_expected_scopes(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
-    plan = MemoryRoutePlan.for_context(runtime_context_admin, assistant_id="assistant_1")
+    plan = MemoryRoutePlan.for_context(
+        runtime_context_admin, assistant_id="assistant_1"
+    )
 
-    assert plan.route_for_path("/memories/preferences.md").scope.scope_type == MemoryScopeType.USER
+    assert (
+        plan.route_for_path("/memories/preferences.md").scope.scope_type
+        == MemoryScopeType.USER
+    )
     assert (
         plan.route_for_path("/policies/security.md").scope.scope_type
         == MemoryScopeType.ORGANIZATION
@@ -231,7 +243,10 @@ def test_concurrent_memory_writes_raise_safe_retryable_error() -> None:
         )
 
     assert exc_info.value.code == RuntimeErrorCode.EXTERNAL_SERVICE_ERROR
-    assert exc_info.value.safe_message == "Memory was updated concurrently. Reload and retry the write."
+    assert (
+        exc_info.value.safe_message
+        == "Memory was updated concurrently. Reload and retry the write."
+    )
     assert exc_info.value.retryable is True
 
 
@@ -240,7 +255,9 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     model_config: ModelConfig,
 ) -> None:
     fake_deepagents = FakeDeepAgentsModule()
-    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
     memory_backend = FakeConcreteMemoryBackend()
 
     agent = build_deep_agent(
@@ -263,7 +280,9 @@ def test_deep_agent_builder_passes_explicit_runtime_inputs(
     model_config: ModelConfig,
 ) -> None:
     fake_deepagents = FakeDeepAgentsModule()
-    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
 
     agent = build_deep_agent(
         DeepAgentBuildRequest(
@@ -288,7 +307,9 @@ def test_deep_agent_builder_omits_memory_for_route_plan(
     model_config: ModelConfig,
 ) -> None:
     fake_deepagents = FakeDeepAgentsModule()
-    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
 
     agent = build_deep_agent(
         DeepAgentBuildRequest(

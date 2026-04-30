@@ -67,7 +67,10 @@ class TestSubagentsAndAsyncAgents(SubagentTestMixin):
 
         assert task.allowed_tools == frozenset({self.Values.DOC_SEARCH_TOOL})
         assert task.allowed_skills == frozenset({self.Values.RESEARCH_SKILL})
-        assert task.runtime_context_ref.permission_scopes == runtime_context_admin.permission_scopes
+        assert (
+            task.runtime_context_ref.permission_scopes
+            == runtime_context_admin.permission_scopes
+        )
         assert "full raw chat" not in str(task.model_dump())
 
     def test_catalog_filters_disabled_and_unauthorized_definitions(
@@ -246,7 +249,9 @@ class TestSubagentsAndAsyncAgents(SubagentTestMixin):
                 task=task,
             )
         )
-        malformed = asyncio.run(malformed_lifecycle.check(malformed_started.state.task_id))  # type: ignore[union-attr]
+        malformed = asyncio.run(
+            malformed_lifecycle.check(malformed_started.state.task_id)
+        )  # type: ignore[union-attr]
 
         assert malformed.result is not None
         assert malformed.result.error is not None
@@ -268,7 +273,9 @@ class TestSubagentsAndAsyncAgents(SubagentTestMixin):
                 task=task,
             )
         )
-        oversized = asyncio.run(oversized_lifecycle.check(oversized_started.state.task_id))  # type: ignore[union-attr]
+        oversized = asyncio.run(
+            oversized_lifecycle.check(oversized_started.state.task_id)
+        )  # type: ignore[union-attr]
 
         assert oversized.result is not None
         assert oversized.result.error is not None

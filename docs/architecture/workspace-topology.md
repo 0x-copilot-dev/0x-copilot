@@ -71,4 +71,3 @@ adding another deployable component's `src` directory to `PYTHONPATH`.
 - `ai-backend` must not own tenant auth, billing/admin workflows, or product persistence.
 - `backend-facade` must not absorb AI orchestration logic.
 - Shared packages must not become dumping grounds for business logic.
-

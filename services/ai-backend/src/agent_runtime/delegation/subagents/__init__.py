@@ -21,7 +21,10 @@ from agent_runtime.delegation.subagents.definitions import (
     SubagentDefinitionProvider,
     SubagentPermissionPolicy,
 )
-from agent_runtime.delegation.subagents.handoff import SubagentHandoffBuilder, SubagentHandoffPolicy
+from agent_runtime.delegation.subagents.handoff import (
+    SubagentHandoffBuilder,
+    SubagentHandoffPolicy,
+)
 from agent_runtime.delegation.subagents.runner import (
     AsyncSubagentLifecycle,
     InMemoryAsyncTaskStore,

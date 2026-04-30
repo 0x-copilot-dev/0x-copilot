@@ -63,4 +63,3 @@ Unit tests should assert both the typed error and the safe public message.
 ## External Boundary Rule
 
 Connector SDK objects, live MCP sessions, model provider objects, and persistence clients must stay behind ports. Runtime/domain contracts should contain normalized primitives and typed value objects only.
-

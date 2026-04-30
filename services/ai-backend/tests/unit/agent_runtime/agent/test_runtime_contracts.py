@@ -16,7 +16,9 @@ def test_runtime_context_normalizes_roles_permissions_and_connectors(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
     assert runtime_context_admin.roles == frozenset({"admin"})
-    assert runtime_context_admin.permission_scopes == frozenset({"search:read", "docs:read"})
+    assert runtime_context_admin.permission_scopes == frozenset(
+        {"search:read", "docs:read"}
+    )
     assert runtime_context_admin.connector_scopes == {
         "google-drive": frozenset({"docs:read"})
     }

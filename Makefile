@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 PYTHON ?= python3.13
-HOST ?= 127.0.0.1
+BIND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8100
 AI_BACKEND_PORT ?= 8000
 FACADE_PORT ?= 8200
@@ -12,12 +12,13 @@ FACADE_PYTHON := services/backend-facade/.venv/bin/python
 AI_BACKEND_PYTHON := services/ai-backend/.venv/bin/python
 SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
 
-.PHONY: help setup setup-node setup-python check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down test
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down test
 
 help:
 	@echo "Enterprise Search make targets"
 	@echo
 	@echo "  make setup            Install npm deps and Python service venvs"
+	@echo "  make setup-hooks      Install local pre-commit hooks"
 	@echo "  make dev              Run local end-to-end stack on 127.0.0.1"
 	@echo "  make docker-dev       Run Docker dev stack on http://127.0.0.1:8080"
 	@echo "  make docker-dev-down  Stop Docker dev stack"
@@ -44,6 +45,10 @@ setup-python:
 		.venv/bin/python -m pip install -r requirements.txt && \
 		[ -f .env ] || cp env_example .env
 
+setup-hooks:
+	$(PYTHON) -m pip install --user --upgrade pre-commit
+	$(PYTHON) -m pre_commit install
+
 check-local-env:
 	@test -x "$(BACKEND_PYTHON)" || (echo "Missing services/backend/.venv. Run: make setup" && exit 1)
 	@test -x "$(FACADE_PYTHON)" || (echo "Missing services/backend-facade/.venv. Run: make setup" && exit 1)
@@ -62,10 +67,10 @@ check-provider-key:
 
 dev: check-local-env check-provider-key
 	@echo "Starting Enterprise Search dev stack"
-	@echo "UI:      http://$(HOST):$(FRONTEND_PORT)"
-	@echo "Facade:  http://$(HOST):$(FACADE_PORT)"
-	@echo "Backend: http://$(HOST):$(BACKEND_PORT)"
-	@echo "AI API:  http://$(HOST):$(AI_BACKEND_PORT)"
+	@echo "UI:      http://$(BIND_HOST):$(FRONTEND_PORT)"
+	@echo "Facade:  http://$(BIND_HOST):$(FACADE_PORT)"
+	@echo "Backend: http://$(BIND_HOST):$(BACKEND_PORT)"
+	@echo "AI API:  http://$(BIND_HOST):$(AI_BACKEND_PORT)"
 	@pids=""; \
 	cleanup() { \
 		echo; echo "Stopping Enterprise Search dev stack"; \
@@ -77,25 +82,25 @@ dev: check-local-env check-provider-key
 		BACKEND_ENVIRONMENT=development \
 		MCP_TOKEN_VAULT_PROVIDER=local \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn backend_app.app:app --host $(HOST) --port $(BACKEND_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn backend_app.app:app --host $(BIND_HOST) --port $(BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/ai-backend && \
 		RUNTIME_ENVIRONMENT=development \
 		RUNTIME_STORE_BACKEND=in_memory \
 		RUNTIME_START_IN_PROCESS_WORKER=true \
-		MCP_BACKEND_REGISTRY_URL=http://$(HOST):$(BACKEND_PORT) \
-		SKILLS_BACKEND_REGISTRY_URL=http://$(HOST):$(BACKEND_PORT) \
+		MCP_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
+		SKILLS_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn runtime_api.app:app --host $(HOST) --port $(AI_BACKEND_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn runtime_api.app:app --host $(BIND_HOST) --port $(AI_BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/backend-facade && \
 		FACADE_ENVIRONMENT=development \
 		DEV_AUTH_BYPASS=true \
 		FACADE_DEV_ORG_ID=org_123 \
 		FACADE_DEV_USER_ID=user_123 \
-		BACKEND_URL=http://$(HOST):$(BACKEND_PORT) \
-		AI_BACKEND_URL=http://$(HOST):$(AI_BACKEND_PORT) \
+		BACKEND_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
+		AI_BACKEND_URL=http://$(BIND_HOST):$(AI_BACKEND_PORT) \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn backend_facade.app:app --host $(HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
-	(npm run dev --workspace @enterprise-search/frontend -- --host $(HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
+	(npm run dev --workspace @enterprise-search/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
 	wait $$pids
 
 docker-dev: check-provider-key

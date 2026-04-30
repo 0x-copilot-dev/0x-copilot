@@ -12,23 +12,34 @@ import backend_facade.app as facade_app
 from backend_facade.app import create_app
 from backend_facade.settings import FacadeSettings
 
+
 class FacadeAuthTestMixin:
     def auth_headers(self, monkeypatch) -> dict[str, str]:
         monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")
         monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
-        payload = base64.urlsafe_b64encode(
-            json.dumps(
-                {
-                    "org_id": "org_123",
-                    "user_id": "user_123",
-                    "roles": ["employee"],
-                    "permission_scopes": ["runtime:use"],
-                }
-            ).encode("utf-8")
-        ).decode("ascii").rstrip("=")
-        signature = base64.urlsafe_b64encode(
-            hmac.new(b"test-auth-secret", payload.encode("ascii"), hashlib.sha256).digest()
-        ).decode("ascii").rstrip("=")
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps(
+                    {
+                        "org_id": "org_123",
+                        "user_id": "user_123",
+                        "roles": ["employee"],
+                        "permission_scopes": ["runtime:use"],
+                    }
+                ).encode("utf-8")
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
+        signature = (
+            base64.urlsafe_b64encode(
+                hmac.new(
+                    b"test-auth-secret", payload.encode("ascii"), hashlib.sha256
+                ).digest()
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
         return {"authorization": f"Bearer {payload}.{signature}"}
 
 
@@ -74,7 +85,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
                 )
 
         monkeypatch.setattr(facade_app.httpx, "AsyncClient", FakeAsyncClient)
-        client = TestClient(create_app(FacadeSettings(backend_url="http://backend.local")))
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
 
         response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
 
@@ -102,7 +115,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_123"}
 
-    def test_facade_rejects_missing_bearer_token_when_dev_bypass_is_disabled(self, monkeypatch) -> None:
+    def test_facade_rejects_missing_bearer_token_when_dev_bypass_is_disabled(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
         monkeypatch.delenv("DEV_AUTH_BYPASS", raising=False)
@@ -116,7 +131,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
 
         assert response.status_code == 401
 
-    def test_facade_uses_default_development_identity_with_explicit_dev_bypass(self, monkeypatch) -> None:
+    def test_facade_uses_default_development_identity_with_explicit_dev_bypass(
+        self, monkeypatch
+    ) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
             assert args[2] == "/v1/agent/conversations"
@@ -140,13 +157,17 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_dev"}
 
-    def test_facade_uses_configured_development_identity_with_explicit_dev_bypass(self, monkeypatch) -> None:
+    def test_facade_uses_configured_development_identity_with_explicit_dev_bypass(
+        self, monkeypatch
+    ) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
             assert args[2] == "/v1/agent/runs"
             assert kwargs["json"]["org_id"] == "org_dev"
             assert kwargs["json"]["user_id"] == "user_dev"
-            assert kwargs["json"]["request_context"]["permission_scopes"] == ("runtime:use",)
+            assert kwargs["json"]["request_context"]["permission_scopes"] == (
+                "runtime:use",
+            )
             return {"run_id": "run_dev"}
 
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
@@ -171,7 +192,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"run_id": "run_dev"}
 
-    def test_facade_does_not_send_default_service_token_in_dev_bypass(self, monkeypatch) -> None:
+    def test_facade_does_not_send_default_service_token_in_dev_bypass(
+        self, monkeypatch
+    ) -> None:
         async def fake_forward_json(*args, **kwargs):
             assert kwargs["headers"]["x-enterprise-service-token"] == ""
             assert kwargs["headers"]["x-enterprise-org-id"] == "org_123"
@@ -189,7 +212,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
 
         assert response.status_code == 200
 
-    def test_facade_rejects_missing_bearer_token_outside_development(self, monkeypatch) -> None:
+    def test_facade_rejects_missing_bearer_token_outside_development(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.setenv("FACADE_ENVIRONMENT", "staging")
         monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
         client = TestClient(create_app(FacadeSettings()))
@@ -219,7 +244,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
             assert args[2] == "/v1/agent/runs/run_123/cancel"
             assert kwargs["params"] == {"org_id": "org_123", "user_id": "user_123"}
             assert kwargs["json"] == {"requested_by_user_id": "user_123"}
-            return {"run_id": "run_123", "status": "cancelling", "latest_sequence_no": 3}
+            return {
+                "run_id": "run_123",
+                "status": "cancelling",
+                "latest_sequence_no": 3,
+            }
 
         monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
         client = TestClient(create_app(FacadeSettings()))

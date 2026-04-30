@@ -29,12 +29,16 @@ class LoadToolSpecTool:
     name: str = Keys.Builtin.LOAD_TOOL_SPEC
     description: str = Messages.Builtin.LOAD_TOOL_SPEC_DESCRIPTION
 
-    def invoke(self, raw_input: LoadToolInput | Mapping[str, Any] | str) -> dict[str, Any]:
+    def invoke(
+        self, raw_input: LoadToolInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
         """Return a JSON-serializable loaded spec or typed safe error."""
 
         parsed_input = self._parse_input(raw_input, self.runtime_context.trace_id)
         if isinstance(parsed_input, ToolLoadResult):
-            return parsed_input.model_dump(mode=Keys.Serialization.JSON, exclude_none=True)
+            return parsed_input.model_dump(
+                mode=Keys.Serialization.JSON, exclude_none=True
+            )
 
         result = self.loader.load_tool_by_name(
             tool_name=parsed_input.tool_name,
@@ -42,7 +46,9 @@ class LoadToolSpecTool:
         )
         return result.model_dump(mode=Keys.Serialization.JSON, exclude_none=True)
 
-    def __call__(self, raw_input: LoadToolInput | Mapping[str, Any] | str) -> dict[str, Any]:
+    def __call__(
+        self, raw_input: LoadToolInput | Mapping[str, Any] | str
+    ) -> dict[str, Any]:
         return self.invoke(raw_input)
 
     @classmethod

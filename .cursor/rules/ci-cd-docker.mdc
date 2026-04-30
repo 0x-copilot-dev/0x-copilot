@@ -15,4 +15,3 @@ alwaysApply: false
 - Docker builds must be reproducible and scoped to the service being built.
 - Production deploys require GitHub Environments with manual approval.
 - Pull request CI should not require production secrets or live third-party services.
-

@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 
 from starlette import status
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode, StreamEventSource
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeErrorCode,
+    StreamEventSource,
+)
 from agent_runtime.api.constants import Keys, Messages, Values
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -69,7 +73,9 @@ class RuntimeApiService:
             event_store=event_store,
         )
 
-    def create_conversation(self, request: CreateConversationRequest) -> ConversationResponse:
+    def create_conversation(
+        self, request: CreateConversationRequest
+    ) -> ConversationResponse:
         """Create or idempotently return a conversation."""
 
         conversation = self.persistence.create_conversation(request)
@@ -179,7 +185,9 @@ class RuntimeApiService:
                     runtime_context=run.runtime_context,
                 )
             )
-        return self._create_run_response(run=run, user_message_id=user_message.message_id)
+        return self._create_run_response(
+            run=run, user_message_id=user_message.message_id
+        )
 
     def delete_user_history(
         self,
@@ -190,7 +198,9 @@ class RuntimeApiService:
     ) -> HistoryDeletionResponse:
         """Delete user-visible conversation history and persist deletion evidence."""
 
-        result = self.persistence.delete_user_history(org_id=org_id, user_id=user_id, reason=reason)
+        result = self.persistence.delete_user_history(
+            org_id=org_id, user_id=user_id, reason=reason
+        )
         self.persistence.write_audit_log(
             event_type="user_history_deleted",
             record={
@@ -213,7 +223,9 @@ class RuntimeApiService:
     def get_run(self, *, org_id: str, user_id: str, run_id: str) -> RunStatusResponse:
         """Return current run state."""
 
-        return self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id).to_response()
+        return self._run_for_scope(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        ).to_response()
 
     def replay_events(
         self,
@@ -323,7 +335,9 @@ class RuntimeApiService:
     ) -> ApprovalDecisionResponse:
         """Persist an approval decision and enqueue the worker resume command."""
 
-        approval = self.persistence.get_approval_request(org_id=org_id, approval_id=approval_id)
+        approval = self.persistence.get_approval_request(
+            org_id=org_id, approval_id=approval_id
+        )
         if approval is None:
             raise RuntimeApiError(
                 RuntimeErrorCode.CAPABILITY_NOT_FOUND,
@@ -398,7 +412,9 @@ class RuntimeApiService:
         )
 
     @classmethod
-    def _create_run_response(cls, *, run: RunRecord, user_message_id: str) -> CreateRunResponse:
+    def _create_run_response(
+        cls, *, run: RunRecord, user_message_id: str
+    ) -> CreateRunResponse:
         return CreateRunResponse(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
@@ -410,7 +426,9 @@ class RuntimeApiService:
             created_at=run.created_at,
         )
 
-    def _request_with_runtime_context(self, request: CreateRunRequest) -> CreateRunRequest:
+    def _request_with_runtime_context(
+        self, request: CreateRunRequest
+    ) -> CreateRunRequest:
         try:
             model = request.model
             model_config = self.model_resolver.resolve(
@@ -418,9 +436,15 @@ class RuntimeApiService:
                     provider=model.provider if model is not None else None,
                     model_name=model.model_name if model is not None else None,
                     temperature=model.temperature if model is not None else None,
-                    timeout_seconds=model.timeout_seconds if model is not None else None,
-                    max_input_tokens=model.max_input_tokens if model is not None else None,
-                    supports_streaming=model.supports_streaming if model is not None else None,
+                    timeout_seconds=model.timeout_seconds
+                    if model is not None
+                    else None,
+                    max_input_tokens=model.max_input_tokens
+                    if model is not None
+                    else None,
+                    supports_streaming=model.supports_streaming
+                    if model is not None
+                    else None,
                 )
             )
         except AgentRuntimeError as exc:

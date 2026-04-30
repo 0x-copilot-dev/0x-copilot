@@ -31,9 +31,13 @@ class SummarizationResult(RuntimeContract):
 class ContextSummarizationManager:
     """Wrap SDK summarization with deterministic fallback behavior."""
 
-    FALLBACK_DECISION = "Previous detailed context was compressed after summarization failed."
+    FALLBACK_DECISION = (
+        "Previous detailed context was compressed after summarization failed."
+    )
     FALLBACK_ARTIFACT = "Compressed conversation context"
-    FALLBACK_NEXT_STEP = "Continue from the preserved objective and recent user request."
+    FALLBACK_NEXT_STEP = (
+        "Continue from the preserved objective and recent user request."
+    )
 
     @classmethod
     def summarize_or_fallback(
@@ -82,7 +86,9 @@ class ContextSummarizationManager:
         )
 
     @classmethod
-    def _coerce_summary(cls, value: ContextSummary | Mapping[str, object] | str) -> ContextSummary:
+    def _coerce_summary(
+        cls, value: ContextSummary | Mapping[str, object] | str
+    ) -> ContextSummary:
         if isinstance(value, ContextSummary):
             return value
         if isinstance(value, Mapping):

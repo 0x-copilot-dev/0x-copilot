@@ -41,4 +41,3 @@ Build an enterprise AI work surface that can search, reason, delegate, and act a
 - Architecture and specs cover runtime, tools, skills, MCP, context/memory, subagents, and streaming.
 - Specs define Pydantic contracts and unit testing requirements.
 - Future implementation agents have rules for architecture, testing, and typed boundaries.
-

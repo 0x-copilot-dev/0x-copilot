@@ -15,22 +15,22 @@ effects, or internal service data stores.
 
 ## Upstream Settings
 
-| Setting | Default | Owner |
-| --- | --- | --- |
-| `BACKEND_URL` | `http://127.0.0.1:8100` | `services/backend` |
+| Setting          | Default                 | Owner                 |
+| ---------------- | ----------------------- | --------------------- |
+| `BACKEND_URL`    | `http://127.0.0.1:8100` | `services/backend`    |
 | `AI_BACKEND_URL` | `http://127.0.0.1:8000` | `services/ai-backend` |
 
 Trailing slashes are stripped when settings load.
 
 ## Forwarding Matrix
 
-| Facade route family | Upstream | Notes |
-| --- | --- | --- |
-| `/v1/mcp/*` | `BACKEND_URL` | MCP registry, auth start/skip, OAuth callback |
-| `/v1/skills*` | `BACKEND_URL` | Skill registry public API |
-| `/v1/agent/conversations*` | `AI_BACKEND_URL` | Conversation creation, metadata, messages |
-| `/v1/agent/runs*` | `AI_BACKEND_URL` | Run creation, state, events, cancel, stream |
-| `/v1/agent/approvals/*` | `AI_BACKEND_URL` | Approval decisions |
+| Facade route family        | Upstream         | Notes                                         |
+| -------------------------- | ---------------- | --------------------------------------------- |
+| `/v1/mcp/*`                | `BACKEND_URL`    | MCP registry, auth start/skip, OAuth callback |
+| `/v1/skills*`              | `BACKEND_URL`    | Skill registry public API                     |
+| `/v1/agent/conversations*` | `AI_BACKEND_URL` | Conversation creation, metadata, messages     |
+| `/v1/agent/runs*`          | `AI_BACKEND_URL` | Run creation, state, events, cancel, stream   |
+| `/v1/agent/approvals/*`    | `AI_BACKEND_URL` | Approval decisions                            |
 
 The facade intentionally does not expose backend `/internal/v1/*` routes.
 

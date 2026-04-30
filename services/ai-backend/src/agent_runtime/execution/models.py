@@ -37,7 +37,9 @@ class ModelConfigResolver:
 
         selected = selection or ModelSelection()
         provider = self._normalize_provider(
-            selected.provider or self._infer_provider(selected.model_name) or self.settings.default_model.provider
+            selected.provider
+            or self._infer_provider(selected.model_name)
+            or self.settings.default_model.provider
         )
         provider_settings = self.settings.provider_settings(provider)
         if require_credentials and not provider_settings.is_configured:
@@ -50,7 +52,8 @@ class ModelConfigResolver:
         return ModelConfig(
             provider=provider,
             model_name=selected.model_name or default_model.model_name,
-            max_input_tokens=selected.max_input_tokens or default_model.max_input_tokens,
+            max_input_tokens=selected.max_input_tokens
+            or default_model.max_input_tokens,
             timeout_seconds=selected.timeout_seconds or default_model.timeout_seconds,
             temperature=(
                 selected.temperature

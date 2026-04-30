@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_runtime.capabilities.skills.manifest import SkillManifest
-from agent_runtime.capabilities.skills.policy import SkillAccessEvaluator, SkillAccessPolicy
+from agent_runtime.capabilities.skills.policy import (
+    SkillAccessEvaluator,
+    SkillAccessPolicy,
+)
 from agent_runtime.capabilities.skills.sources import (
     ConfiguredSkill,
     SkillSource,
@@ -78,4 +81,6 @@ class TestSkillPolicy(SkillPolicyTestMixin):
         )
 
         assert SkillAccessEvaluator.is_skill_allowed(denied_policy, skill) is False
-        assert SkillAccessEvaluator.is_skill_allowed(missing_tool_policy, skill) is False
+        assert (
+            SkillAccessEvaluator.is_skill_allowed(missing_tool_policy, skill) is False
+        )

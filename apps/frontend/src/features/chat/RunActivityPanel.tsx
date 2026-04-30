@@ -7,20 +7,28 @@ import type {
   ActivityStatus,
   RunActivity,
   SubagentActivity,
-  ToolCallActivity
+  ToolCallActivity,
 } from "./chatModel";
 
 type ActivityTab = "overview" | string;
 
-export function RunActivityPanel({ activity }: { activity: RunActivity }): ReactElement {
+export function RunActivityPanel({
+  activity,
+}: {
+  activity: RunActivity;
+}): ReactElement {
   const [activeTab, setActiveTab] = useState<ActivityTab>("overview");
   const activeSubagent = useMemo(
-    () => activity.subagents.find((subagent) => subagent.id === activeTab) ?? null,
-    [activeTab, activity.subagents]
+    () =>
+      activity.subagents.find((subagent) => subagent.id === activeTab) ?? null,
+    [activeTab, activity.subagents],
   );
 
   useEffect(() => {
-    if (activeTab !== "overview" && !activity.subagents.some((subagent) => subagent.id === activeTab)) {
+    if (
+      activeTab !== "overview" &&
+      !activity.subagents.some((subagent) => subagent.id === activeTab)
+    ) {
       setActiveTab("overview");
     }
   }, [activeTab, activity.subagents]);
@@ -38,17 +46,29 @@ export function RunActivityPanel({ activity }: { activity: RunActivity }): React
       {activeSubagent ? (
         <SubagentActivityPanel subagent={activeSubagent} />
       ) : (
-        <section className="run-activity-panel__body" aria-label="Run activity overview">
-          <ReasoningSummaryStream items={activity.reasoning} emptyText="Waiting for reasoning updates..." />
+        <section
+          className="run-activity-panel__body"
+          aria-label="Run activity overview"
+        >
+          <ReasoningSummaryStream
+            items={activity.reasoning}
+            emptyText="Waiting for reasoning updates..."
+          />
           <ActivityRows events={activity.events} tools={activity.tools} />
         </section>
       )}
-      <footer className="run-activity-panel__footer">{footerSummary(activity)}</footer>
+      <footer className="run-activity-panel__footer">
+        {footerSummary(activity)}
+      </footer>
     </Card>
   );
 }
 
-export function RunStatusHeader({ activity }: { activity: RunActivity }): ReactElement {
+export function RunStatusHeader({
+  activity,
+}: {
+  activity: RunActivity;
+}): ReactElement {
   return (
     <header className="run-status-header">
       <div className="run-status-header__title">
@@ -58,7 +78,9 @@ export function RunStatusHeader({ activity }: { activity: RunActivity }): ReactE
           {activity.summary ? <p>{activity.summary}</p> : null}
         </div>
       </div>
-      <Badge tone={badgeTone(activity.status)}>{labelForStatus(activity.status)}</Badge>
+      <Badge tone={badgeTone(activity.status)}>
+        {labelForStatus(activity.status)}
+      </Badge>
     </header>
   );
 }
@@ -66,14 +88,18 @@ export function RunStatusHeader({ activity }: { activity: RunActivity }): ReactE
 export function SubagentTabStrip({
   subagents,
   activeTab,
-  onSelect
+  onSelect,
 }: {
   subagents: SubagentActivity[];
   activeTab: ActivityTab;
   onSelect: (value: ActivityTab) => void;
 }): ReactElement {
   return (
-    <div className="subagent-tab-strip" role="tablist" aria-label="Subagent activity">
+    <div
+      className="subagent-tab-strip"
+      role="tablist"
+      aria-label="Subagent activity"
+    >
       <button
         type="button"
         role="tab"
@@ -100,18 +126,30 @@ export function SubagentTabStrip({
   );
 }
 
-export function SubagentActivityPanel({ subagent }: { subagent: SubagentActivity }): ReactElement {
+export function SubagentActivityPanel({
+  subagent,
+}: {
+  subagent: SubagentActivity;
+}): ReactElement {
   return (
-    <section className="subagent-activity-panel" aria-label={`${subagent.name} subagent activity`}>
+    <section
+      className="subagent-activity-panel"
+      aria-label={`${subagent.name} subagent activity`}
+    >
       <header>
         <div>
           <span className="app-eyebrow">Subagent</span>
           <h3>{subagent.name}</h3>
           {subagent.summary ? <p>{subagent.summary}</p> : null}
         </div>
-        <Badge tone={badgeTone(subagent.status)}>{labelForStatus(subagent.status)}</Badge>
+        <Badge tone={badgeTone(subagent.status)}>
+          {labelForStatus(subagent.status)}
+        </Badge>
       </header>
-      <ReasoningSummaryStream items={subagent.reasoning} emptyText="No reasoning summaries yet." />
+      <ReasoningSummaryStream
+        items={subagent.reasoning}
+        emptyText="No reasoning summaries yet."
+      />
       <ActivityRows events={subagent.events} tools={subagent.tools} />
     </section>
   );
@@ -119,18 +157,25 @@ export function SubagentActivityPanel({ subagent }: { subagent: SubagentActivity
 
 export function ReasoningSummaryStream({
   items,
-  emptyText
+  emptyText,
 }: {
   items: Array<{ id: string; text: string }>;
   emptyText: string;
 }): ReactElement {
   return (
-    <section className="reasoning-summary-stream" aria-label="Reasoning summary">
+    <section
+      className="reasoning-summary-stream"
+      aria-label="Reasoning summary"
+    >
       <h3>Thinking</h3>
       {items.length > 0 ? (
         <div className="reasoning-summary-stream__items">
           {items.map((item) => (
-            <Streamdown key={item.id} className="reasoning-markdown" mode="streaming">
+            <Streamdown
+              key={item.id}
+              className="reasoning-markdown"
+              mode="streaming"
+            >
               {item.text}
             </Streamdown>
           ))}
@@ -142,7 +187,11 @@ export function ReasoningSummaryStream({
   );
 }
 
-export function ToolCallRow({ tool }: { tool: ToolCallActivity }): ReactElement {
+export function ToolCallRow({
+  tool,
+}: {
+  tool: ToolCallActivity;
+}): ReactElement {
   return (
     <div className="tool-call-row">
       <StatusDot status={tool.status} />
@@ -152,14 +201,20 @@ export function ToolCallRow({ tool }: { tool: ToolCallActivity }): ReactElement 
         {tool.deltas.map((delta) => (
           <p key={delta.id}>{delta.text}</p>
         ))}
-        {tool.result ? <p className="tool-call-row__result">{tool.result}</p> : null}
+        {tool.result ? (
+          <p className="tool-call-row__result">{tool.result}</p>
+        ) : null}
       </div>
       <Badge tone={badgeTone(tool.status)}>{labelForStatus(tool.status)}</Badge>
     </div>
   );
 }
 
-export function ActivityEventRow({ event }: { event: ActivityEvent }): ReactElement {
+export function ActivityEventRow({
+  event,
+}: {
+  event: ActivityEvent;
+}): ReactElement {
   return (
     <div className="activity-event-row">
       <StatusDot status={event.status} />
@@ -171,7 +226,13 @@ export function ActivityEventRow({ event }: { event: ActivityEvent }): ReactElem
   );
 }
 
-function ActivityRows({ events, tools }: { events: ActivityEvent[]; tools: ToolCallActivity[] }): ReactElement {
+function ActivityRows({
+  events,
+  tools,
+}: {
+  events: ActivityEvent[];
+  tools: ToolCallActivity[];
+}): ReactElement {
   if (events.length === 0 && tools.length === 0) {
     return (
       <div className="activity-event-row">
@@ -193,14 +254,25 @@ function ActivityRows({ events, tools }: { events: ActivityEvent[]; tools: ToolC
 }
 
 function StatusDot({ status }: { status: ActivityStatus }): ReactElement {
-  return <span className={`activity-status-dot activity-status-dot--${status}`} aria-hidden="true" />;
+  return (
+    <span
+      className={`activity-status-dot activity-status-dot--${status}`}
+      aria-hidden="true"
+    />
+  );
 }
 
 function footerSummary(activity: RunActivity): string {
-  const runningSubagents = activity.subagents.filter((subagent) => subagent.status === "running").length;
-  const completedSubagents = activity.subagents.filter((subagent) => subagent.status === "completed").length;
+  const runningSubagents = activity.subagents.filter(
+    (subagent) => subagent.status === "running",
+  ).length;
+  const completedSubagents = activity.subagents.filter(
+    (subagent) => subagent.status === "completed",
+  ).length;
   if (activity.subagents.length === 0) {
-    return activity.status === "running" ? "Agent is working" : labelForStatus(activity.status);
+    return activity.status === "running"
+      ? "Agent is working"
+      : labelForStatus(activity.status);
   }
   if (runningSubagents > 0) {
     return `${runningSubagents} subagent${runningSubagents === 1 ? "" : "s"} running`;
@@ -208,7 +280,9 @@ function footerSummary(activity: RunActivity): string {
   return `${completedSubagents}/${activity.subagents.length} subagents completed`;
 }
 
-function badgeTone(status: ActivityStatus): "neutral" | "success" | "warning" | "danger" | "accent" {
+function badgeTone(
+  status: ActivityStatus,
+): "neutral" | "success" | "warning" | "danger" | "accent" {
   if (status === "completed") {
     return "success";
   }

@@ -19,7 +19,13 @@ from pydantic import (
 )
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
-from agent_runtime.capabilities.mcp.constants import Keys, Limits, Messages, Patterns, Values
+from agent_runtime.capabilities.mcp.constants import (
+    Keys,
+    Limits,
+    Messages,
+    Patterns,
+    Values,
+)
 
 JsonSchema: TypeAlias = Mapping[str, Any]
 SUPPORTED_RESOURCE_URI_SCHEMES = frozenset(
@@ -156,16 +162,22 @@ class McpServerCard(RuntimeContract):
     def _normalize_enum_value(cls, value: object) -> str:
         if isinstance(value, StrEnum):
             return value.value
-        return McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.CODE).lower()
+        return McpValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.CODE
+        ).lower()
 
     @field_validator(Keys.Field.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
         return McpValueNormalizer.normalize_scope_set(value, Keys.Field.REQUIRED_SCOPES)
 
-    @field_validator(Keys.Field.ALLOWED_ORG_IDS, Keys.Field.ALLOWED_USER_IDS, mode="before")
+    @field_validator(
+        Keys.Field.ALLOWED_ORG_IDS, Keys.Field.ALLOWED_USER_IDS, mode="before"
+    )
     @classmethod
-    def _normalize_allowed_ids(cls, value: object, info: ValidationInfo) -> frozenset[str]:
+    def _normalize_allowed_ids(
+        cls, value: object, info: ValidationInfo
+    ) -> frozenset[str]:
         return McpValueNormalizer.normalize_id_set(value, info.field_name)
 
 
@@ -207,7 +219,9 @@ class McpToolDescriptor(RuntimeContract):
     @field_validator(Keys.Field.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
-        return McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.DESCRIPTION)
+        return McpValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.DESCRIPTION
+        )
 
     @field_validator(Keys.Field.INPUT_SCHEMA, Keys.Field.OUTPUT_SHAPE)
     @classmethod
@@ -285,7 +299,9 @@ class McpConnectionMetadata(RuntimeContract):
     def _normalize_enum_value(cls, value: object) -> str:
         if isinstance(value, StrEnum):
             return value.value
-        return McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.CODE).lower()
+        return McpValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.CODE
+        ).lower()
 
     @field_validator(Keys.Field.CONNECTION_ID)
     @classmethod
@@ -302,7 +318,9 @@ class McpLoadWarning(RuntimeContract):
     @field_validator(Keys.Field.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
-        return McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.SAFE_MESSAGE)
+        return McpValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.SAFE_MESSAGE
+        )
 
 
 class LoadedMcpServer(RuntimeContract):
@@ -327,7 +345,9 @@ class McpLoadError(RuntimeContract):
     @field_validator(Keys.Field.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
-        return McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.SAFE_MESSAGE)
+        return McpValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.SAFE_MESSAGE
+        )
 
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
@@ -428,7 +448,9 @@ class McpValueNormalizer:
     def normalize_id(cls, value: object, field_name: str) -> str:
         normalized = cls.normalize_nonempty_string(value, field_name)
         if not Patterns.ID.fullmatch(normalized):
-            raise ValueError(Messages.Validation.id_contains_unsupported_characters(field_name))
+            raise ValueError(
+                Messages.Validation.id_contains_unsupported_characters(field_name)
+            )
         return normalized
 
     @classmethod

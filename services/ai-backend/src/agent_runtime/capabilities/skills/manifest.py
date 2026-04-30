@@ -260,9 +260,8 @@ class SkillManifestParser:
 
         parsed_mapping: dict[str, JsonScalar] = {}
         for line in meaningful:
-            if (
-                Keys.Characters.COLON not in line
-                or line.startswith(Keys.Frontmatter.LIST_PREFIX)
+            if Keys.Characters.COLON not in line or line.startswith(
+                Keys.Frontmatter.LIST_PREFIX
             ):
                 raise SkillManifestError(
                     SkillErrorCode.MALFORMED_FRONTMATTER,

@@ -10,7 +10,11 @@ from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDepend
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.execution.graph import ConfiguredRuntimeGraph
-from agent_runtime.execution.runtime import invoke_runtime, runtime_config, runtime_run_handle
+from agent_runtime.execution.runtime import (
+    invoke_runtime,
+    runtime_config,
+    runtime_run_handle,
+)
 from agent_runtime.observability.tracing import TraceNames
 
 
@@ -24,7 +28,9 @@ class CapturingInvokeAgent:
         }
     )
 
-    def invoke(self, input_data: dict[str, object], *, config: dict[str, object]) -> object:
+    def invoke(
+        self, input_data: dict[str, object], *, config: dict[str, object]
+    ) -> object:
         self.calls.append({"input": input_data, "config": config})
         if self.fail:
             raise RuntimeError("provider token=super-secret")
@@ -105,7 +111,9 @@ def test_invoke_runtime_logs_success_and_passes_langgraph_config(
     result = invoke_runtime(harness, messages=({"role": "user", "content": "secret"},))
 
     payloads = runtime_payloads(caplog.records)
-    assert result == {"answer": "LLM says alice@example.com promised the roadmap update."}
+    assert result == {
+        "answer": "LLM says alice@example.com promised the roadmap update."
+    }
     assert agent.calls[0]["config"]["configurable"]["thread_id"] == "run_123"
     assert [payload["event"] for payload in payloads] == [
         "runtime.invoke.started",
@@ -168,6 +176,8 @@ def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(
     result = graph.invoke({"context": context, "messages": [{"role": "user"}]})
 
     assert handle.run_id == "run_123"
-    assert result == {"answer": "LLM says alice@example.com promised the roadmap update."}
+    assert result == {
+        "answer": "LLM says alice@example.com promised the roadmap update."
+    }
     assert seen_contexts == [context]
     assert agent.calls[0]["config"]["configurable"]["thread_id"] == "run_123"

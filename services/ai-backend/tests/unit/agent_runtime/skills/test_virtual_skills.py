@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 
 from agent_runtime.capabilities.skills.middleware import LoadSkillTool
 from agent_runtime.capabilities.skills.virtual import (

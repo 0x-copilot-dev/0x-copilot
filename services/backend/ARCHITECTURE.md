@@ -21,11 +21,11 @@ yet.
 
 Public routes are intended to be reached by apps through `backend-facade`.
 
-| Route family | Responsibility |
-| --- | --- |
-| `/v1/mcp/servers*` | Register, list, update, delete, and authenticate MCP servers |
-| `/v1/mcp/oauth/callback` | Complete MCP OAuth callback state |
-| `/v1/skills*` | Create, list, fetch, update, and delete user or org skills |
+| Route family             | Responsibility                                               |
+| ------------------------ | ------------------------------------------------------------ |
+| `/v1/mcp/servers*`       | Register, list, update, delete, and authenticate MCP servers |
+| `/v1/mcp/oauth/callback` | Complete MCP OAuth callback state                            |
+| `/v1/skills*`            | Create, list, fetch, update, and delete user or org skills   |
 
 These routes are typed with Pydantic models in `backend_app.contracts`.
 Frontend-facing TypeScript shapes should stay aligned through
@@ -36,15 +36,15 @@ Frontend-facing TypeScript shapes should stay aligned through
 Internal routes are not product-facing app routes. They are for trusted service
 callers that need model-ready MCP cards, client sessions, or skill bundles.
 
-| Route family | Responsibility |
-| --- | --- |
-| `/internal/v1/mcp/cards` | List enabled MCP server cards for runtime selection |
-| `/internal/v1/mcp/servers/{server_id}/auth/start` | Start auth for an internal caller |
-| `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session |
-| `/internal/v1/mcp/servers/{server_id}/test-token` | Install a test token for local/test flows |
-| `/internal/v1/skills/cards` | List enabled skill cards for runtime selection |
-| `/internal/v1/skills/{skill_id}` | Fetch a model-consumable skill bundle |
-| `/internal/v1/skills/by-name/{name}` | Fetch a model-consumable skill bundle by name |
+| Route family                                          | Responsibility                                      |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `/internal/v1/mcp/cards`                              | List enabled MCP server cards for runtime selection |
+| `/internal/v1/mcp/servers/{server_id}/auth/start`     | Start auth for an internal caller                   |
+| `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session            |
+| `/internal/v1/mcp/servers/{server_id}/test-token`     | Install a test token for local/test flows           |
+| `/internal/v1/skills/cards`                           | List enabled skill cards for runtime selection      |
+| `/internal/v1/skills/{skill_id}`                      | Fetch a model-consumable skill bundle               |
+| `/internal/v1/skills/by-name/{name}`                  | Fetch a model-consumable skill bundle by name       |
 
 See `docs/specs/internal-api.md` for the engineering contract and current
 security expectations.

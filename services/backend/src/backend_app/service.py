@@ -171,7 +171,9 @@ class McpRegistryService:
         )
 
     def delete_server(self, *, org_id: str, user_id: str, server_id: str) -> bool:
-        record = self._server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+        record = self._server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         if record is None:
             return False
         deleted = self.store.delete_server(org_id=org_id, server_id=server_id)
@@ -187,7 +189,9 @@ class McpRegistryService:
         server_id: str,
         request: UpdateMcpServerRequest,
     ) -> McpServerResponse:
-        record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         changes: dict[str, object] = {}
         if request.display_name is not None:
             changes["display_name"] = request.display_name
@@ -204,8 +208,12 @@ class McpRegistryService:
         self._audit(updated, "mcp_server_updated")
         return McpServerResponse.from_record(updated)
 
-    def skip_auth(self, *, org_id: str, user_id: str, server_id: str) -> McpServerResponse:
-        record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+    def skip_auth(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> McpServerResponse:
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         updated = self._update_record(record, auth_state=McpAuthState.AUTH_SKIPPED)
         self._audit(updated, "mcp_auth_skipped")
         return McpServerResponse.from_record(updated)
@@ -222,13 +230,17 @@ class McpRegistryService:
             server_id=server_id,
         )
         if record.auth_mode != McpAuthMode.OAUTH2:
-            updated = self._update_record(record, auth_state=McpAuthState.AUTH_UNSUPPORTED)
+            updated = self._update_record(
+                record, auth_state=McpAuthState.AUTH_UNSUPPORTED
+            )
             self._audit(updated, "mcp_auth_unsupported")
             raise ValueError("MCP server does not support OAuth authentication")
 
         verifier = token_urlsafe(64)
         expires_at = datetime.now(UTC) + self.auth_session_ttl
-        auth_url = self._oauth_authorization_url(record=record, redirect_uri=request.redirect_uri)
+        auth_url = self._oauth_authorization_url(
+            record=record, redirect_uri=request.redirect_uri
+        )
         session = McpAuthSessionRecord(
             server_id=record.server_id,
             org_id=record.org_id,
@@ -264,7 +276,9 @@ class McpRegistryService:
             user_id=session.user_id,
             server_id=session.server_id,
         )
-        tokens = self.token_exchanger.exchange_code(record=record, session=session, code=request.code)
+        tokens = self.token_exchanger.exchange_code(
+            record=record, session=session, code=request.code
+        )
         self.store.put_token(
             TokenEnvelope(
                 server_id=record.server_id,
@@ -283,7 +297,9 @@ class McpRegistryService:
         self._audit(updated, "mcp_auth_completed")
         return McpServerResponse.from_record(updated)
 
-    def list_internal_cards(self, *, org_id: str, user_id: str) -> InternalMcpServerListResponse:
+    def list_internal_cards(
+        self, *, org_id: str, user_id: str
+    ) -> InternalMcpServerListResponse:
         cards = []
         for record in self.store.list_servers(org_id=org_id, user_id=user_id):
             if not record.enabled:
@@ -311,7 +327,9 @@ class McpRegistryService:
         user_id: str,
         server_id: str,
     ) -> InternalMcpClientSession:
-        record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         token = self.store.get_token(server_id=server_id)
         credential_ref = token.connection_id if token is not None else None
         return InternalMcpClientSession(
@@ -330,7 +348,9 @@ class McpRegistryService:
         server_id: str,
         request: OAuthTokenRequest,
     ) -> McpServerResponse:
-        record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         self.store.put_token(
             TokenEnvelope(
                 server_id=record.server_id,
@@ -349,7 +369,9 @@ class McpRegistryService:
         self._audit(updated, "mcp_token_upserted")
         return McpServerResponse.from_record(updated)
 
-    def _update_record(self, record: McpServerRecord, **changes: object) -> McpServerRecord:
+    def _update_record(
+        self, record: McpServerRecord, **changes: object
+    ) -> McpServerRecord:
         updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         return self.store.update_server(updated)
 
@@ -359,13 +381,19 @@ class McpRegistryService:
             raise RuntimeError("Production requires a persistent MCP registry store")
         return InMemoryMcpStore()
 
-    def _require_server_for_user(self, *, org_id: str, user_id: str, server_id: str) -> McpServerRecord:
-        record = self._server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+    def _require_server_for_user(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> McpServerRecord:
+        record = self._server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         if record is None:
             raise ValueError("MCP server was not found for this scope")
         return record
 
-    def _server_for_user(self, *, org_id: str, user_id: str, server_id: str) -> McpServerRecord | None:
+    def _server_for_user(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> McpServerRecord | None:
         record = self.store.get_server(org_id=org_id, server_id=server_id)
         if record is None or record.user_id != user_id:
             return None
@@ -378,7 +406,10 @@ class McpRegistryService:
                 user_id=record.user_id,
                 server_id=record.server_id,
                 action=action,
-                metadata={"auth_state": record.auth_state.value, "health": record.health.value},
+                metadata={
+                    "auth_state": record.auth_state.value,
+                    "health": record.health.value,
+                },
             )
         )
 
@@ -390,7 +421,9 @@ class McpRegistryService:
     @classmethod
     def _stable_name(cls, display_name: str) -> str:
         normalized = display_name.lower().replace(" ", "_").replace("-", "_")
-        return "".join(char for char in normalized if char.isalnum() or char == "_").strip("_")
+        return "".join(
+            char for char in normalized if char.isalnum() or char == "_"
+        ).strip("_")
 
     @classmethod
     def _card_description(cls, record: McpServerRecord) -> str:
@@ -429,7 +462,9 @@ class McpRegistryService:
 class SkillRegistryService:
     """Owns user-created Skill markdown and runtime-visible Skill cards."""
 
-    def __init__(self, *, store: InMemorySkillStore | PostgresSkillStore | None = None) -> None:
+    def __init__(
+        self, *, store: InMemorySkillStore | PostgresSkillStore | None = None
+    ) -> None:
         self.store = store or self._default_store()
 
     def create_skill(self, request: CreateSkillRequest) -> SkillResponse:
@@ -444,7 +479,8 @@ class SkillRegistryService:
             org_id=request.org_id,
             user_id=request.user_id,
             name=manifest.name,
-            display_name=request.display_name or self._display_name_from_slug(manifest.name),
+            display_name=request.display_name
+            or self._display_name_from_slug(manifest.name),
             description=manifest.description,
             markdown=request.markdown,
             virtual_path=self._virtual_path(
@@ -472,7 +508,9 @@ class SkillRegistryService:
 
     def get_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillResponse:
         return SkillResponse.from_record(
-            self._require_visible_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+            self._require_visible_skill(
+                org_id=org_id, user_id=user_id, skill_id=skill_id
+            )
         )
 
     def update_skill(
@@ -483,7 +521,9 @@ class SkillRegistryService:
         skill_id: str,
         request: UpdateSkillRequest,
     ) -> SkillResponse:
-        record = self._require_owned_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        record = self._require_owned_skill(
+            org_id=org_id, user_id=user_id, skill_id=skill_id
+        )
         changes: dict[str, object] = {"updated_at": datetime.now(UTC)}
         if request.markdown is not None:
             manifest = SkillMarkdownParser.parse_manifest(request.markdown)
@@ -511,13 +551,19 @@ class SkillRegistryService:
         return SkillResponse.from_record(updated)
 
     def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
-        record = self._require_owned_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
-        deleted = self.store.delete_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        record = self._require_owned_skill(
+            org_id=org_id, user_id=user_id, skill_id=skill_id
+        )
+        deleted = self.store.delete_skill(
+            org_id=org_id, user_id=user_id, skill_id=skill_id
+        )
         if deleted:
             self._audit(record, "skill_deleted")
         return deleted
 
-    def list_internal_cards(self, *, org_id: str, user_id: str) -> InternalSkillListResponse:
+    def list_internal_cards(
+        self, *, org_id: str, user_id: str
+    ) -> InternalSkillListResponse:
         return InternalSkillListResponse(
             skills=tuple(
                 InternalSkillCard(
@@ -547,7 +593,9 @@ class SkillRegistryService:
         user_id: str,
         skill_id: str,
     ) -> InternalSkillBundle:
-        record = self._require_visible_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        record = self._require_visible_skill(
+            org_id=org_id, user_id=user_id, skill_id=skill_id
+        )
         if not record.enabled:
             raise ValueError("Skill is disabled")
         return InternalSkillBundle(
@@ -576,15 +624,21 @@ class SkillRegistryService:
         )
         if record is None or not record.enabled:
             raise ValueError("Skill was not found for this scope")
-        return self.get_internal_bundle(org_id=org_id, user_id=user_id, skill_id=record.skill_id)
+        return self.get_internal_bundle(
+            org_id=org_id, user_id=user_id, skill_id=record.skill_id
+        )
 
-    def _require_visible_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillRecord:
+    def _require_visible_skill(
+        self, *, org_id: str, user_id: str, skill_id: str
+    ) -> SkillRecord:
         record = self.store.get_skill(org_id=org_id, skill_id=skill_id)
         if record is None or (record.user_id != user_id and record.scope != "org"):
             raise ValueError("Skill was not found for this scope")
         return record
 
-    def _require_owned_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillRecord:
+    def _require_owned_skill(
+        self, *, org_id: str, user_id: str, skill_id: str
+    ) -> SkillRecord:
         record = self.store.get_skill(org_id=org_id, skill_id=skill_id)
         if record is None or record.user_id != user_id:
             raise ValueError("Skill was not found for this user")
@@ -626,7 +680,14 @@ class SkillMarkdownParser:
         raw = cls._parse_fields(frontmatter)
         metadata = dict(raw.get("metadata") or {})
         for key in tuple(raw):
-            if key not in {"name", "description", "license", "compatibility", "allowed_tools", "metadata"}:
+            if key not in {
+                "name",
+                "description",
+                "license",
+                "compatibility",
+                "allowed_tools",
+                "metadata",
+            }:
                 value = raw.pop(key)
                 if isinstance(value, str | int | float | bool) or value is None:
                     metadata[key] = value
@@ -634,9 +695,12 @@ class SkillMarkdownParser:
             name=str(raw.get("name", "")),
             description=str(raw.get("description", "")),
             license=raw.get("license") if isinstance(raw.get("license"), str) else None,
-            compatibility=tuple(str(item) for item in cls._list(raw.get("compatibility"))),
+            compatibility=tuple(
+                str(item) for item in cls._list(raw.get("compatibility"))
+            ),
             allowed_tools=tuple(
-                normalize_skill_slug(item) for item in cls._list(raw.get("allowed_tools"))
+                normalize_skill_slug(item)
+                for item in cls._list(raw.get("allowed_tools"))
             ),
             metadata=metadata,
         )
@@ -710,7 +774,11 @@ class SkillMarkdownParser:
     @classmethod
     def _scalar(cls, value: str) -> object:
         stripped = value.strip()
-        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        if (
+            len(stripped) >= 2
+            and stripped[0] == stripped[-1]
+            and stripped[0] in {"'", '"'}
+        ):
             return stripped[1:-1]
         lowered = stripped.lower()
         if lowered in {"null", "none", "~"}:

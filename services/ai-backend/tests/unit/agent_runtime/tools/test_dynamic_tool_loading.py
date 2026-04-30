@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    ModelConfig,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.tools import (
     DynamicToolRegistry,
@@ -108,7 +112,9 @@ class TestDynamicToolLoading(DynamicToolLoadingTestMixin):
             registry.list_tool_cards(runtime_context_admin)
 
         assert exc_info.value.code == RuntimeErrorCode.CONFIGURATION_ERROR
-        assert exc_info.value.safe_message == Messages.Errors.DUPLICATE_TOOL_REGISTRATION
+        assert (
+            exc_info.value.safe_message == Messages.Errors.DUPLICATE_TOOL_REGISTRATION
+        )
 
     def test_loader_returns_validated_spec_after_permission_recheck(
         self,
@@ -184,16 +190,18 @@ class TestDynamicToolLoading(DynamicToolLoadingTestMixin):
         provider = self.make_provider(
             cards=(self.make_card(name=self.Values.DOC_SEARCH_NAME),),
             specs={
-                self.Values.DOC_SEARCH_NAME: self.make_spec(name=self.Values.DOC_SEARCH_NAME)
+                self.Values.DOC_SEARCH_NAME: self.make_spec(
+                    name=self.Values.DOC_SEARCH_NAME
+                )
             },
         )
         registry = DynamicToolRegistry(providers=(provider,))
         loader = ToolLoader(registry)
         lost_permission_context = self.make_lost_permission_context(model_config)
 
-        assert tuple(card.name for card in registry.list_tool_cards(runtime_context_admin)) == (
-            self.Values.DOC_SEARCH_NAME,
-        )
+        assert tuple(
+            card.name for card in registry.list_tool_cards(runtime_context_admin)
+        ) == (self.Values.DOC_SEARCH_NAME,)
         result = loader.load_tool(
             ToolLoadRequest(
                 tool_name=self.Values.DOC_SEARCH_NAME,
@@ -212,7 +220,9 @@ class TestDynamicToolLoading(DynamicToolLoadingTestMixin):
     ) -> None:
         disabled_loader = self.make_loader(
             self.make_provider(
-                cards=(self.make_card(name=self.Values.TOOL_DISABLED_NAME, enabled=False),),
+                cards=(
+                    self.make_card(name=self.Values.TOOL_DISABLED_NAME, enabled=False),
+                ),
                 specs={},
             )
         )

@@ -22,7 +22,11 @@ class ObservabilityRedactor:
         if value is None:
             return {}
         if not isinstance(value, Mapping):
-            return {"value": cls.redact_json_value(value, max_string_length=max_string_length)}
+            return {
+                "value": cls.redact_json_value(
+                    value, max_string_length=max_string_length
+                )
+            }
         return {
             str(key): cls._redact_key_value(
                 str(key),

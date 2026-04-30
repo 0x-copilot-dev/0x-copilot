@@ -37,7 +37,9 @@ class RuntimeApiRoutes:
     ) -> ConversationResponse:
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
-            payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
+            payload = payload.model_copy(
+                update={"org_id": identity.org_id, "user_id": identity.user_id}
+            )
         return cls.service(request).create_conversation(payload)
 
     @classmethod
@@ -75,11 +77,15 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def create_run(cls, request: Request, payload: CreateRunRequest) -> CreateRunResponse:
+    def create_run(
+        cls, request: Request, payload: CreateRunRequest
+    ) -> CreateRunResponse:
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
             if payload.runtime_context is not None:
-                raise HTTPException(status.HTTP_403_FORBIDDEN, "runtime_context is server-owned")
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN, "runtime_context is server-owned"
+                )
             payload = payload.model_copy(
                 update={
                     "org_id": identity.org_id,
@@ -102,7 +108,9 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> RunStatusResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).get_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        return cls.service(request).get_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
 
     @classmethod
     def get_events(
@@ -174,7 +182,9 @@ class RuntimeApiRoutes:
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
             org_id = identity.org_id
-            payload = payload.model_copy(update={"decided_by_user_id": identity.user_id})
+            payload = payload.model_copy(
+                update={"decided_by_user_id": identity.user_id}
+            )
         if org_id is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id is required")
         return cls.service(request).record_approval_decision(
@@ -192,7 +202,9 @@ class RuntimeApiRoutes:
         reason: str | None = Query(None),
     ) -> HistoryDeletionResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).delete_user_history(org_id=org_id, user_id=user_id, reason=reason)
+        return cls.service(request).delete_user_history(
+            org_id=org_id, user_id=user_id, reason=reason
+        )
 
     @classmethod
     def service(cls, request: Request) -> RuntimeApiService:
@@ -212,7 +224,9 @@ class RuntimeApiRoutes:
         if identity is not None:
             return identity.org_id, identity.user_id
         if org_id is None or user_id is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id and user_id are required")
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "org_id and user_id are required"
+            )
         return org_id, user_id
 
 

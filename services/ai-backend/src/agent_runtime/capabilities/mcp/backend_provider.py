@@ -7,7 +7,11 @@ from datetime import datetime
 import os
 from typing import Any
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 import httpx
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
@@ -18,7 +22,11 @@ from agent_runtime.capabilities.mcp.cards import (
     McpServerCard,
     McpToolDescriptor,
 )
-from agent_runtime.capabilities.mcp.client import McpAuthError, McpClient, RawMcpConnectionMetadata
+from agent_runtime.capabilities.mcp.client import (
+    McpAuthError,
+    McpClient,
+    RawMcpConnectionMetadata,
+)
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 
 
@@ -34,13 +42,18 @@ class BackendMcpProvider:
     def list_server_cards(self) -> tuple[McpServerCard, ...]:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
-            params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            params={
+                "org_id": self.runtime_context.org_id,
+                "user_id": self.runtime_context.user_id,
+            },
             headers=BackendMcpServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
-        return tuple(McpServerCard.model_validate(card) for card in payload.get("servers", ()))
+        return tuple(
+            McpServerCard.model_validate(card) for card in payload.get("servers", ())
+        )
 
     def create_client(self, card: McpServerCard) -> McpClient:
         return BackendMcpClient(
@@ -105,13 +118,19 @@ class BackendMcpClient:
     server_url: str | None = None
 
     async def connect(self) -> RawMcpConnectionMetadata:
-        if self.card.auth_state not in {McpAuthState.AUTHENTICATED, McpAuthState.AUTH_SKIPPED}:
+        if self.card.auth_state not in {
+            McpAuthState.AUTHENTICATED,
+            McpAuthState.AUTH_SKIPPED,
+        }:
             raise McpAuthError("MCP server is not authenticated.")
         server_id = self.card.server_id or self.card.name
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(
                 f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
-                params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+                params={
+                    "org_id": self.runtime_context.org_id,
+                    "user_id": self.runtime_context.user_id,
+                },
                 headers=BackendMcpServiceAuth.headers(self.runtime_context),
             )
         response.raise_for_status()
@@ -128,7 +147,9 @@ class BackendMcpClient:
     async def list_tools(self) -> tuple[McpToolDescriptor | dict[str, Any], ...]:
         return await self._get_descriptor_list("/tools")
 
-    async def list_resources(self) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
+    async def list_resources(
+        self,
+    ) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
         return await self._get_descriptor_list("/resources")
 
     async def _get_descriptor_list(self, path: str) -> tuple[dict[str, Any], ...]:

@@ -64,14 +64,18 @@ def test_mcp_disable_hides_server_from_internal_cards_and_can_reenable() -> None
         server_id=created.server_id,
         request=UpdateMcpServerRequest(enabled=False),
     )
-    cards_while_disabled = service.list_internal_cards(org_id="org_123", user_id="user_123")
+    cards_while_disabled = service.list_internal_cards(
+        org_id="org_123", user_id="user_123"
+    )
     enabled = service.update_server(
         org_id="org_123",
         user_id="user_123",
         server_id=created.server_id,
         request=UpdateMcpServerRequest(enabled=True),
     )
-    cards_after_reenable = service.list_internal_cards(org_id="org_123", user_id="user_123")
+    cards_after_reenable = service.list_internal_cards(
+        org_id="org_123", user_id="user_123"
+    )
 
     assert disabled.enabled is False
     assert disabled.health == McpServerHealth.DISABLED
@@ -107,7 +111,9 @@ def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
         ),
     )
     state = next(iter(store.auth_sessions.keys()))
-    completed = service.complete_auth(McpAuthCallbackRequest(state=state, code="oauth_code"))
+    completed = service.complete_auth(
+        McpAuthCallbackRequest(state=state, code="oauth_code")
+    )
     token = store.get_token(server_id=created.server_id)
 
     assert "state=" in auth.auth_url
@@ -116,7 +122,9 @@ def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
     assert "oauth_code" not in token.encrypted_access_token
     assert vault.decrypt(token.encrypted_access_token) == "access-token-for-oauth_code"
     assert token.encrypted_refresh_token is not None
-    assert vault.decrypt(token.encrypted_refresh_token) == "refresh-token-for-oauth_code"
+    assert (
+        vault.decrypt(token.encrypted_refresh_token) == "refresh-token-for-oauth_code"
+    )
 
 
 def test_oauth_start_uses_random_pkce_verifiers() -> None:

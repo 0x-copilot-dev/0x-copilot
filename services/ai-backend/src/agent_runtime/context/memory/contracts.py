@@ -7,10 +7,27 @@ from enum import StrEnum
 from typing import TypeAlias
 from uuid import uuid4
 
-from pydantic import Field, PositiveInt, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    Field,
+    PositiveInt,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, JsonScalar, RuntimeContract
-from agent_runtime.context.memory.constants import Defaults, Keys, Limits, Messages, Patterns, Values
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    JsonScalar,
+    RuntimeContract,
+)
+from agent_runtime.context.memory.constants import (
+    Defaults,
+    Keys,
+    Limits,
+    Messages,
+    Patterns,
+    Values,
+)
 
 MemoryMetadata: TypeAlias = Mapping[str, JsonScalar]
 
@@ -65,7 +82,9 @@ class MemoryScope(RuntimeContract):
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, Keys.Field.ASSISTANT_ID)
     @classmethod
-    def _normalize_optional_id(cls, value: str | None, info: ValidationInfo) -> str | None:
+    def _normalize_optional_id(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
         if value is None:
             return None
         return MemoryValueNormalizer.normalize_id(value, info.field_name)
@@ -139,7 +158,9 @@ class MemoryPathPolicy(RuntimeContract):
     @field_validator(Keys.Field.PATH_PREFIX)
     @classmethod
     def _normalize_path_prefix(cls, value: object) -> str:
-        return MemoryValueNormalizer.normalize_path_prefix(value, Keys.Field.PATH_PREFIX)
+        return MemoryValueNormalizer.normalize_path_prefix(
+            value, Keys.Field.PATH_PREFIX
+        )
 
     @field_validator(Keys.Field.READ_ROLES, Keys.Field.WRITE_ROLES, mode="before")
     @classmethod
@@ -153,7 +174,9 @@ class MemoryPathPolicy(RuntimeContract):
     def matches(self, path: str) -> bool:
         """Return whether this policy governs the supplied memory path."""
 
-        normalized_path = MemoryValueNormalizer.normalize_memory_path(path, Keys.Field.PATH)
+        normalized_path = MemoryValueNormalizer.normalize_memory_path(
+            path, Keys.Field.PATH
+        )
         return normalized_path.startswith(self.path_prefix)
 
 
@@ -176,7 +199,9 @@ class TokenBudgetPolicy(RuntimeContract):
     @model_validator(mode="after")
     def _validate_ratios(self) -> "TokenBudgetPolicy":
         if self.recent_context_ratio >= self.summary_threshold_ratio:
-            raise ValueError("recent_context_ratio must be lower than summary_threshold_ratio")
+            raise ValueError(
+                "recent_context_ratio must be lower than summary_threshold_ratio"
+            )
         return self
 
 
@@ -195,7 +220,9 @@ class ContextCompressionEvent(RuntimeContract):
     def _normalize_files_written(cls, value: object) -> tuple[str, ...]:
         return tuple(
             MemoryValueNormalizer.normalize_memory_path(item, Keys.Field.FILES_WRITTEN)
-            for item in MemoryValueNormalizer.coerce_iterable(value, Keys.Field.FILES_WRITTEN)
+            for item in MemoryValueNormalizer.coerce_iterable(
+                value, Keys.Field.FILES_WRITTEN
+            )
         )
 
     @field_validator(Keys.Field.TRACE_ID)
@@ -233,7 +260,9 @@ class ContextSummary(RuntimeContract):
     @classmethod
     def _normalize_summary_field(cls, value: object, info: ValidationInfo) -> object:
         if info.field_name == Keys.Field.OBJECTIVE:
-            return MemoryValueNormalizer.normalize_nonempty_string(value, info.field_name)
+            return MemoryValueNormalizer.normalize_nonempty_string(
+                value, info.field_name
+            )
         return tuple(
             MemoryValueNormalizer.normalize_nonempty_string(item, info.field_name)
             for item in MemoryValueNormalizer.coerce_iterable(value, info.field_name)
@@ -264,13 +293,20 @@ class ManagedContextPayload(RuntimeContract):
 
     @model_validator(mode="after")
     def _validate_strategy_payload(self) -> "ManagedContextPayload":
-        if self.strategy is ContextCompressionStrategy.OFFLOAD and self.reference is None:
+        if (
+            self.strategy is ContextCompressionStrategy.OFFLOAD
+            and self.reference is None
+        ):
             raise ValueError("offloaded payloads require a reference")
-        if self.strategy in {
-            ContextCompressionStrategy.INLINE,
-            ContextCompressionStrategy.SUMMARIZE,
-            ContextCompressionStrategy.FALLBACK_SUMMARY,
-        } and self.content is None:
+        if (
+            self.strategy
+            in {
+                ContextCompressionStrategy.INLINE,
+                ContextCompressionStrategy.SUMMARIZE,
+                ContextCompressionStrategy.FALLBACK_SUMMARY,
+            }
+            and self.content is None
+        ):
             raise ValueError("inline and summarized payloads require content")
         return self
 
@@ -282,9 +318,13 @@ class MemoryValueNormalizer:
     def normalize_id(cls, value: object, field_name: str) -> str:
         normalized = cls.normalize_nonempty_string(value, field_name)
         if len(normalized) > Limits.TRACE_ID_MAX_LENGTH:
-            raise ValueError(Messages.Validation.id_contains_unsupported_characters(field_name))
+            raise ValueError(
+                Messages.Validation.id_contains_unsupported_characters(field_name)
+            )
         if not Patterns.ID.fullmatch(normalized):
-            raise ValueError(Messages.Validation.id_contains_unsupported_characters(field_name))
+            raise ValueError(
+                Messages.Validation.id_contains_unsupported_characters(field_name)
+            )
         return normalized
 
     @classmethod
@@ -299,7 +339,9 @@ class MemoryValueNormalizer:
     @classmethod
     def normalize_namespace(cls, value: object) -> tuple[str, ...]:
         values = cls.coerce_iterable(value, Keys.Field.NAMESPACE)
-        namespace = tuple(cls.normalize_id(item, Keys.Field.NAMESPACE) for item in values)
+        namespace = tuple(
+            cls.normalize_id(item, Keys.Field.NAMESPACE) for item in values
+        )
         if not namespace:
             raise ValueError(Messages.Validation.NAMESPACE_REQUIRED)
         return namespace
@@ -309,9 +351,10 @@ class MemoryValueNormalizer:
         normalized = cls.normalize_nonempty_string(value, field_name)
         if ".." in normalized.split("/"):
             raise ValueError(Messages.Validation.PATH_TRAVERSAL_UNSUPPORTED)
-        if (
-            len(normalized) > Limits.MEMORY_PATH_MAX_LENGTH
-            or not Patterns.MEMORY_PATH.fullmatch(normalized)
+        if len(
+            normalized
+        ) > Limits.MEMORY_PATH_MAX_LENGTH or not Patterns.MEMORY_PATH.fullmatch(
+            normalized
         ):
             raise ValueError(Messages.Validation.memory_path(field_name))
         return normalized

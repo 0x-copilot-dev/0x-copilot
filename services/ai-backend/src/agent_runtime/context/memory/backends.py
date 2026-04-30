@@ -6,7 +6,11 @@ from collections.abc import Callable
 
 from pydantic import Field, field_validator
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeContract,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.context.memory.constants import Defaults, Keys, Messages, Values
 from agent_runtime.context.memory.contracts import (
@@ -29,7 +33,9 @@ class MemoryBackendRoute(RuntimeContract):
     @field_validator(Keys.Field.PATH_PREFIX)
     @classmethod
     def _normalize_path_prefix(cls, value: object) -> str:
-        return MemoryValueNormalizer.normalize_path_prefix(value, Keys.Field.PATH_PREFIX)
+        return MemoryValueNormalizer.normalize_path_prefix(
+            value, Keys.Field.PATH_PREFIX
+        )
 
 
 class MemoryRoutePlan(RuntimeContract):
@@ -55,7 +61,10 @@ class MemoryRoutePlan(RuntimeContract):
     ) -> "MemoryRoutePlan":
         """Build default routes for user memory, org policies, and agent skills."""
 
-        policies = {policy.path_prefix: policy for policy in MemoryPolicyAuthorizer.default_policies()}
+        policies = {
+            policy.path_prefix: policy
+            for policy in MemoryPolicyAuthorizer.default_policies()
+        }
         return cls(
             routes=(
                 MemoryBackendRoute(
@@ -80,9 +89,13 @@ class MemoryRoutePlan(RuntimeContract):
     def route_for_path(self, path: str) -> MemoryBackendRoute:
         """Return the most specific route for a virtual memory path."""
 
-        normalized_path = MemoryValueNormalizer.normalize_memory_path(path, Keys.Field.PATH)
+        normalized_path = MemoryValueNormalizer.normalize_memory_path(
+            path, Keys.Field.PATH
+        )
         candidates = tuple(
-            route for route in self.routes if normalized_path.startswith(route.path_prefix)
+            route
+            for route in self.routes
+            if normalized_path.startswith(route.path_prefix)
         )
         if not candidates:
             raise AgentRuntimeError(
@@ -135,7 +148,9 @@ class MemoryFileSnapshot(RuntimeContract):
     @field_validator(Keys.Field.CONTENT)
     @classmethod
     def _normalize_content(cls, value: object) -> str:
-        return MemoryValueNormalizer.normalize_nonempty_string(value, Keys.Field.CONTENT)
+        return MemoryValueNormalizer.normalize_nonempty_string(
+            value, Keys.Field.CONTENT
+        )
 
 
 class VersionedMemoryStore:
@@ -145,7 +160,9 @@ class VersionedMemoryStore:
         self._files: dict[str, MemoryFileSnapshot] = {}
 
     def read(self, path: str) -> MemoryFileSnapshot | None:
-        normalized_path = MemoryValueNormalizer.normalize_memory_path(path, Keys.Field.PATH)
+        normalized_path = MemoryValueNormalizer.normalize_memory_path(
+            path, Keys.Field.PATH
+        )
         return self._files.get(normalized_path)
 
     def write(
@@ -155,7 +172,9 @@ class VersionedMemoryStore:
         content: str,
         expected_version: int | None = None,
     ) -> MemoryFileSnapshot:
-        normalized_path = MemoryValueNormalizer.normalize_memory_path(path, Keys.Field.PATH)
+        normalized_path = MemoryValueNormalizer.normalize_memory_path(
+            path, Keys.Field.PATH
+        )
         existing = self._files.get(normalized_path)
         current_version = existing.version if existing is not None else 0
         if expected_version is not None and expected_version != current_version:

@@ -22,7 +22,10 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
-from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerInput, LoadMcpServerTool
+from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
+    LoadMcpServerInput,
+    LoadMcpServerTool,
+)
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 
@@ -66,8 +69,12 @@ def create_agent_runtime(
     runtime_dependencies = _parse_dependencies(dependencies, runtime_context.trace_id)
     builder = agent_builder or build_deep_agent
 
-    tools = tuple(runtime_dependencies.tool_registry.list_available_tools(runtime_context))
-    mcp_servers = tuple(runtime_dependencies.mcp_registry.list_available_servers(runtime_context))
+    tools = tuple(
+        runtime_dependencies.tool_registry.list_available_tools(runtime_context)
+    )
+    mcp_servers = tuple(
+        runtime_dependencies.mcp_registry.list_available_servers(runtime_context)
+    )
     subagents = tuple(
         runtime_dependencies.subagent_catalog.list_available_subagents(runtime_context)
     )
@@ -101,7 +108,9 @@ def create_agent_runtime(
                 system_prompt=model_instructions,
                 subagents=subagents,
                 memory_backend=(
-                    memory_backend if isinstance(memory_backend, DeepAgentsBackend) else None
+                    memory_backend
+                    if isinstance(memory_backend, DeepAgentsBackend)
+                    else None
                 ),
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
@@ -140,7 +149,12 @@ def _model_visible_tools(
     model_tools = list(tools)
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
-        model_tools.append(_structured_tool(LoadMcpServerTool(loader=loader, runtime_context=runtime_context), LoadMcpServerInput))
+        model_tools.append(
+            _structured_tool(
+                LoadMcpServerTool(loader=loader, runtime_context=runtime_context),
+                LoadMcpServerInput,
+            )
+        )
     auth_session_creator = _auth_session_creator(mcp_registry)
     if auth_session_creator is not None:
         model_tools.append(
@@ -152,8 +166,12 @@ def _model_visible_tools(
                 AuthMcpInput,
             )
         )
-    if skill_registry is not None and callable(getattr(skill_registry, "load_skill_by_name", None)):
-        model_tools.append(_structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput))  # type: ignore[arg-type]
+    if skill_registry is not None and callable(
+        getattr(skill_registry, "load_skill_by_name", None)
+    ):
+        model_tools.append(
+            _structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput)
+        )  # type: ignore[arg-type]
     return tuple(model_tools)
 
 
@@ -177,7 +195,9 @@ def _auth_session_creator(mcp_registry: object) -> object | None:
     return None
 
 
-def _instructions_with_mcp_cards(*, instructions: str, mcp_servers: Sequence[object]) -> str:
+def _instructions_with_mcp_cards(
+    *, instructions: str, mcp_servers: Sequence[object]
+) -> str:
     if not mcp_servers:
         return instructions
     card_lines = []
@@ -202,7 +222,9 @@ def _instructions_with_mcp_cards(*, instructions: str, mcp_servers: Sequence[obj
     )
 
 
-def _skill_cards(*, skill_registry: object | None, runtime_context: AgentRuntimeContext) -> tuple[object, ...]:
+def _skill_cards(
+    *, skill_registry: object | None, runtime_context: AgentRuntimeContext
+) -> tuple[object, ...]:
     if skill_registry is None:
         return ()
     list_available = getattr(skill_registry, "list_available_skills", None)
@@ -211,7 +233,9 @@ def _skill_cards(*, skill_registry: object | None, runtime_context: AgentRuntime
     return tuple(list_available(runtime_context))
 
 
-def _instructions_with_skill_cards(*, instructions: str, skill_cards: Sequence[object]) -> str:
+def _instructions_with_skill_cards(
+    *, instructions: str, skill_cards: Sequence[object]
+) -> str:
     if not skill_cards:
         return instructions
     card_lines = []
@@ -222,7 +246,9 @@ def _instructions_with_skill_cards(*, instructions: str, skill_cards: Sequence[o
         display_name = getattr(skill, "display_name", None) or name
         allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
         allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
-        card_lines.append(f"- {name} ({display_name}, path={virtual_path}{allowed}): {description}")
+        card_lines.append(
+            f"- {name} ({display_name}, path={virtual_path}{allowed}): {description}"
+        )
     return "\n\n".join(
         (
             instructions,
@@ -242,7 +268,9 @@ def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
     return tuple(str(path) for path in memory_backend.memory_paths)
 
 
-def _parse_context(context: AgentRuntimeContext | dict[str, Any]) -> AgentRuntimeContext:
+def _parse_context(
+    context: AgentRuntimeContext | dict[str, Any],
+) -> AgentRuntimeContext:
     if isinstance(context, AgentRuntimeContext):
         return context
     try:

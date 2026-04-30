@@ -42,4 +42,3 @@ Do not merge implementation code if:
 - Tests require real credentials or live services.
 - A connector SDK object leaks into a runtime/domain contract.
 - Subagents receive full conversation history by default.
-

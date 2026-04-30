@@ -9,7 +9,11 @@ from pydantic import Field, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys
-from runtime_api.schemas.common import ApprovalDecision, ApprovalStatus, RuntimeApiValueNormalizer
+from runtime_api.schemas.common import (
+    ApprovalDecision,
+    ApprovalStatus,
+    RuntimeApiValueNormalizer,
+)
 
 
 class ApprovalDecisionRequest(RuntimeContract):
@@ -27,8 +31,9 @@ class ApprovalDecisionRequest(RuntimeContract):
     @field_validator(Keys.Field.REASON, mode="before")
     @classmethod
     def _normalize_reason(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, Keys.Field.REASON)
-
+        return RuntimeApiValueNormalizer.normalize_optional_text(
+            value, Keys.Field.REASON
+        )
 
 
 class ApprovalDecisionRecord(RuntimeContract):
@@ -45,7 +50,6 @@ class ApprovalDecisionRecord(RuntimeContract):
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-
 class ApprovalRequestRecord(RuntimeContract):
     """Persisted pending approval request created by a runtime worker."""
 
@@ -58,7 +62,6 @@ class ApprovalRequestRecord(RuntimeContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime | None = None
     metadata: JsonObject = Field(default_factory=dict)
-
 
 
 class ApprovalDecisionResponse(RuntimeContract):

@@ -165,13 +165,17 @@ class Messages:
 
     class Registry:
         CARDS_LOAD_FAILED = "MCP server cards could not be loaded."
-        DUPLICATE_SERVER_NAME = "Multiple MCP servers are registered with the same name."
+        DUPLICATE_SERVER_NAME = (
+            "Multiple MCP servers are registered with the same name."
+        )
         INVALID_CONTEXT = "Runtime context is invalid."
         INVALID_SERVER_CARD = "MCP server card metadata is invalid."
         MISSING_CREATE_CLIENT = "MCP provider is missing create_client()."
         MISSING_LIST_SERVER_CARDS = "MCP provider is missing list_server_cards()."
         REQUESTED_SERVER_DISABLED = "Requested MCP server is disabled."
-        REQUESTED_SERVER_DUPLICATE = "Requested MCP server name is registered more than once."
+        REQUESTED_SERVER_DUPLICATE = (
+            "Requested MCP server name is registered more than once."
+        )
         REQUESTED_SERVER_UNAVAILABLE = "Requested MCP server is unavailable."
         REQUESTED_SERVER_UNKNOWN = "Requested MCP server is not available."
 
@@ -179,15 +183,21 @@ class Messages:
         AUTH_FAILED = "MCP server authentication failed."
         CONNECTION_FAILED = "The MCP server could not be reached."
         DESCRIPTORS_INVALID = "The MCP server returned invalid descriptors."
-        DESCRIPTORS_LOAD_FAILED = "The MCP server descriptors could not be loaded safely."
+        DESCRIPTORS_LOAD_FAILED = (
+            "The MCP server descriptors could not be loaded safely."
+        )
         DUPLICATE_RESOURCE_NAMES = "The MCP server returned duplicate resource names."
         DUPLICATE_TOOL_NAMES = "The MCP server returned duplicate tool names."
-        INVALID_CONNECTION_METADATA = "The MCP server returned invalid connection metadata."
+        INVALID_CONNECTION_METADATA = (
+            "The MCP server returned invalid connection metadata."
+        )
         LOAD_FAILED = "The MCP server could not be loaded right now."
         LOCAL_TOOL_COLLISION = (
             "The MCP server returned a tool name that collides with a local tool."
         )
-        RESOURCE_BUDGET_EXCEEDED = "The MCP server returned too many resources to load safely."
+        RESOURCE_BUDGET_EXCEEDED = (
+            "The MCP server returned too many resources to load safely."
+        )
         SERVER_DEGRADED = "The MCP server is degraded and may be slower than usual."
         STABLE_SERVER_NAME_REQUIRED = "MCP servers must be requested by stable name."
         TIMEOUT = "The MCP server did not respond in time."

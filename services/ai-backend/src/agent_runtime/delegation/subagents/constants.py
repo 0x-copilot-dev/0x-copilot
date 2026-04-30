@@ -124,12 +124,18 @@ class Messages:
 
     class Catalog:
         DEFINITIONS_LOAD_FAILED = "Subagent definitions could not be loaded."
-        DUPLICATE_SUBAGENT_NAME = "Multiple subagents are registered with the same name."
+        DUPLICATE_SUBAGENT_NAME = (
+            "Multiple subagents are registered with the same name."
+        )
         INVALID_CONTEXT = "Runtime context is invalid."
         INVALID_DEFINITION = "Subagent definition metadata is invalid."
-        MISSING_LIST_DEFINITIONS = "Subagent provider is missing list_subagent_definitions()."
+        MISSING_LIST_DEFINITIONS = (
+            "Subagent provider is missing list_subagent_definitions()."
+        )
         REQUESTED_SUBAGENT_DISABLED = "Requested subagent is disabled."
-        REQUESTED_SUBAGENT_DUPLICATE = "Requested subagent name is registered more than once."
+        REQUESTED_SUBAGENT_DUPLICATE = (
+            "Requested subagent name is registered more than once."
+        )
         REQUESTED_SUBAGENT_UNKNOWN = "Requested subagent is not available."
 
     class Lifecycle:
@@ -143,8 +149,12 @@ class Messages:
 
     class Validation:
         EXACTLY_ONE_RESULT_OUTCOME = "subagent result must contain exactly one outcome"
-        EXACTLY_ONE_LIFECYCLE_OUTCOME = "lifecycle result must contain exactly one outcome"
-        RESULT_SUMMARIES_REQUIRED = "successful subagent results require execution and plan summaries"
+        EXACTLY_ONE_LIFECYCLE_OUTCOME = (
+            "lifecycle result must contain exactly one outcome"
+        )
+        RESULT_SUMMARIES_REQUIRED = (
+            "successful subagent results require execution and plan summaries"
+        )
 
         @classmethod
         def explicit_permission_scopes(cls, field_name: str) -> str:

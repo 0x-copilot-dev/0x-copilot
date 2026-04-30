@@ -22,4 +22,3 @@
 - Are permission checks applied before capabilities are visible to the model?
 - Are errors typed and safe to show?
 - Are unit tests focused and deterministic?
-

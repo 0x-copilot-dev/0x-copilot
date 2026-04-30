@@ -7,7 +7,13 @@ from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
 
-from agent_runtime.execution.contracts import JsonObject, RuntimeContract, StreamEvent, StreamEventSource, StreamEventType
+from agent_runtime.execution.contracts import (
+    JsonObject,
+    RuntimeContract,
+    StreamEvent,
+    StreamEventSource,
+    StreamEventType,
+)
 from agent_runtime.api.constants import Keys, Messages, Values
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -39,7 +45,9 @@ class RuntimeEventPresentationProjector:
     )
 
     @classmethod
-    def event_type_for_stream_event(cls, stream_event: StreamEvent) -> RuntimeApiEventType:
+    def event_type_for_stream_event(
+        cls, stream_event: StreamEvent
+    ) -> RuntimeApiEventType:
         """Return the most specific API event type for a normalized runtime event."""
 
         override = cls._event_type_override(stream_event.payload, stream_event.metadata)
@@ -54,10 +62,14 @@ class RuntimeEventPresentationProjector:
             StreamEventType.SUBAGENT_UPDATE,
         }:
             return cls._subagent_event_type(stream_event.payload)
-        if stream_event.source is StreamEventSource.SUBAGENT and stream_event.event_type in {
-            StreamEventType.CUSTOM,
-            StreamEventType.PROGRESS,
-        }:
+        if (
+            stream_event.source is StreamEventSource.SUBAGENT
+            and stream_event.event_type
+            in {
+                StreamEventType.CUSTOM,
+                StreamEventType.PROGRESS,
+            }
+        ):
             return RuntimeApiEventType.SUBAGENT_PROGRESS
         return RuntimeApiEventType.from_stream_event_type(stream_event.event_type)
 
@@ -74,7 +86,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.REASONING_SUMMARY,
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
         }:
-            return cls._reasoning_summary_payload(event_type=event_type, payload=payload)
+            return cls._reasoning_summary_payload(
+                event_type=event_type, payload=payload
+            )
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return cls._mcp_auth_required_payload(payload)
         return payload
@@ -95,7 +109,9 @@ class RuntimeEventPresentationProjector:
         subagent_id = cls._text(payload.get(Keys.Field.SUBAGENT_NAME)) or cls._text(
             payload.get(Keys.Field.SUBAGENT_ID)
         )
-        span_id = cls._span_id_for(event_type=event_type, task_id=task_id, payload=payload)
+        span_id = cls._span_id_for(
+            event_type=event_type, task_id=task_id, payload=payload
+        )
         return {
             Keys.Field.PARENT_EVENT_ID: cls._text(
                 payload.get(Keys.Field.PARENT_EVENT_ID),
@@ -115,7 +131,9 @@ class RuntimeEventPresentationProjector:
             ),
             Keys.Field.SUMMARY: cls._summary_for(payload=payload, metadata=metadata),
             Keys.Field.STATUS: cls._status_for(event_type=event_type, payload=payload),
-            "activity_kind": cls.activity_kind_for(event_type=event_type, source=source),
+            "activity_kind": cls.activity_kind_for(
+                event_type=event_type, source=source
+            ),
             Keys.Field.VISIBILITY: cls._visibility_for(source=source, payload=payload),
             Keys.Field.REDACTION_STATE: cls._redaction_state_for(
                 payload=payload,
@@ -134,7 +152,10 @@ class RuntimeEventPresentationProjector:
 
         if event_type is RuntimeApiEventType.HEARTBEAT:
             return RuntimeActivityKind.HEARTBEAT
-        if event_type in {RuntimeApiEventType.MODEL_DELTA, RuntimeApiEventType.FINAL_RESPONSE}:
+        if event_type in {
+            RuntimeApiEventType.MODEL_DELTA,
+            RuntimeApiEventType.FINAL_RESPONSE,
+        }:
             return RuntimeActivityKind.MESSAGE
         if event_type in {
             RuntimeApiEventType.REASONING_SUMMARY,
@@ -423,7 +444,6 @@ class RuntimeEventPresentationProjector:
         return normalized
 
 
-
 class RuntimeEventEnvelope(RuntimeContract):
     """Ordered transport event envelope shared by replay and streaming."""
 
@@ -482,7 +502,9 @@ class RuntimeEventEnvelope(RuntimeContract):
         mode="before",
     )
     @classmethod
-    def _normalize_optional_text(cls, value: object, info: ValidationInfo) -> str | None:
+    def _normalize_optional_text(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         return RuntimeApiValueNormalizer.normalize_optional_text(value, info.field_name)
 
     @field_validator(Keys.Field.PAYLOAD, Keys.Field.METADATA, mode="before")
@@ -501,7 +523,9 @@ class RuntimeEventEnvelope(RuntimeContract):
     ) -> "RuntimeEventEnvelope":
         """Wrap an existing normalized runtime event in the API envelope."""
 
-        event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(stream_event)
+        event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(
+            stream_event
+        )
         payload = RuntimeEventPresentationProjector.payload_for_event(
             event_type=event_type,
             payload=stream_event.payload,
@@ -529,7 +553,6 @@ class RuntimeEventEnvelope(RuntimeContract):
         )
 
 
-
 class RuntimeEventReplayResponse(RuntimeContract):
     """Replay response for persisted ordered events."""
 
@@ -538,7 +561,6 @@ class RuntimeEventReplayResponse(RuntimeContract):
     latest_sequence_no: NonNegativeInt
     run_status: AgentRunStatus
     has_more: bool = False
-
 
 
 class RuntimeEventDraft(RuntimeContract):
@@ -589,7 +611,9 @@ class RuntimeEventDraft(RuntimeContract):
         mode="before",
     )
     @classmethod
-    def _normalize_optional_text(cls, value: object, info: ValidationInfo) -> str | None:
+    def _normalize_optional_text(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         return RuntimeApiValueNormalizer.normalize_optional_text(value, info.field_name)
 
     @field_validator(Keys.Field.PAYLOAD, Keys.Field.METADATA, mode="before")
@@ -607,7 +631,9 @@ class RuntimeEventDraft(RuntimeContract):
     ) -> "RuntimeEventDraft":
         """Create an appendable API event draft from a normalized runtime event."""
 
-        event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(stream_event)
+        event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(
+            stream_event
+        )
         payload = RuntimeEventPresentationProjector.payload_for_event(
             event_type=event_type,
             payload=stream_event.payload,

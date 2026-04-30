@@ -169,6 +169,10 @@ This starts:
 Open `http://127.0.0.1:5173`. The Vite dev server proxies `/v1/*` to
 `backend-facade`.
 
+To bind to a different interface, use `BIND_HOST`, for example
+`BIND_HOST=0.0.0.0 make dev`. The Makefile intentionally avoids the generic
+`HOST` variable because some shells set it to non-network values.
+
 Manual process commands, if you want separate terminals:
 
 ```bash
@@ -343,4 +347,3 @@ Start there for architecture details:
 - Treat permissions, auth context, and tenant boundaries as cross-cutting product requirements.
 - Every implementation should include focused unit tests and edge-case coverage appropriate to its component.
 - Do not create shared packages just to avoid a small amount of duplication; share only stable contracts and truly cross-cutting primitives.
-

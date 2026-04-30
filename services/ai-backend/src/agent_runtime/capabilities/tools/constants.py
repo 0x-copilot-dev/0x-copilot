@@ -61,13 +61,13 @@ class Messages:
     """Centralized public and validation messages for dynamic tools."""
 
     class Builtin:
-        LOAD_TOOL_SPEC_DESCRIPTION = (
-            "Load the full schema and instructions for an authorized tool by stable name."
-        )
+        LOAD_TOOL_SPEC_DESCRIPTION = "Load the full schema and instructions for an authorized tool by stable name."
 
     class Errors:
         CONNECTOR_LOAD_FAILED = "The connector could not load this tool right now."
-        DUPLICATE_TOOL_REGISTRATION = "Multiple tools are registered with the same name."
+        DUPLICATE_TOOL_REGISTRATION = (
+            "Multiple tools are registered with the same name."
+        )
         PROVIDER_MISSING_LIST_TOOL_CARDS = "Tool provider is missing list_tool_cards()."
         PROVIDER_MISSING_LOAD_TOOL_SPEC = "Tool provider is missing load_tool_spec()."
         REQUESTED_TOOL_DISABLED = "Requested tool is disabled."

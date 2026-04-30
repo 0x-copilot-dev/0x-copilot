@@ -8,11 +8,19 @@ from dataclasses import dataclass, field
 import os
 from typing import Protocol
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 import httpx
 from pydantic import Field, ValidationError
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeContract,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 
 
@@ -63,18 +71,26 @@ class BackendSkillProvider:
     def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
-            params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            params={
+                "org_id": self.runtime_context.org_id,
+                "user_id": self.runtime_context.user_id,
+            },
             headers=BackendSkillServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
-        return tuple(VirtualSkillCard.model_validate(card) for card in payload.get("skills", ()))
+        return tuple(
+            VirtualSkillCard.model_validate(card) for card in payload.get("skills", ())
+        )
 
     def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
-            params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            params={
+                "org_id": self.runtime_context.org_id,
+                "user_id": self.runtime_context.user_id,
+            },
             headers=BackendSkillServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
@@ -88,7 +104,9 @@ class VirtualSkillRegistry:
 
     providers: Sequence[SkillProvider]
     _card_cache: tuple[VirtualSkillCard, ...] | None = field(default=None, init=False)
-    _bundle_cache: dict[str, VirtualSkillBundle] = field(default_factory=dict, init=False)
+    _bundle_cache: dict[str, VirtualSkillBundle] = field(
+        default_factory=dict, init=False
+    )
 
     def list_available_skills(self, context: object) -> tuple[VirtualSkillCard, ...]:
         runtime_context = self._coerce_context(context)
@@ -104,7 +122,9 @@ class VirtualSkillRegistry:
                 retryable=False,
                 correlation_id=runtime_context.trace_id,
             )
-        return tuple(sorted((card for card in cards if card.enabled), key=lambda card: card.name))
+        return tuple(
+            sorted((card for card in cards if card.enabled), key=lambda card: card.name)
+        )
 
     def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         if name in self._bundle_cache:
@@ -112,7 +132,11 @@ class VirtualSkillRegistry:
         matches: list[SkillProvider] = []
         for provider in self.providers:
             for card in provider.list_skill_cards():
-                parsed = card if isinstance(card, VirtualSkillCard) else VirtualSkillCard.model_validate(card)
+                parsed = (
+                    card
+                    if isinstance(card, VirtualSkillCard)
+                    else VirtualSkillCard.model_validate(card)
+                )
                 if parsed.name == name and parsed.enabled:
                     matches.append(provider)
         if not matches:
@@ -131,7 +155,9 @@ class VirtualSkillRegistry:
         self._bundle_cache[name] = bundle
         return bundle
 
-    def _collect_cards(self, context: AgentRuntimeContext) -> tuple[VirtualSkillCard, ...]:
+    def _collect_cards(
+        self, context: AgentRuntimeContext
+    ) -> tuple[VirtualSkillCard, ...]:
         cards: list[VirtualSkillCard] = []
         for provider in self.providers:
             try:

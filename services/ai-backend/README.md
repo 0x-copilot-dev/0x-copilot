@@ -255,4 +255,3 @@ events as provider chunks arrive, then `final_response` and `run_completed`.
 ## Intended Direction
 
 This backend hosts the AI orchestration layer for an enterprise work surface: one place connected through future Slack, Google Workspace, Atlassian, internal API, MCP, and enterprise knowledge adapters. The runtime currently provides the typed harness and fake-driven tests needed to add those adapters deliberately.
-

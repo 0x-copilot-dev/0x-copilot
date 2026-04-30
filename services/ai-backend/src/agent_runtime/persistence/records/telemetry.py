@@ -24,7 +24,6 @@ class CompressionEventRecord(RuntimeContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-
 class CapabilitySnapshotRecord(RuntimeContract):
     """Model-visible capability summary available during a run."""
 

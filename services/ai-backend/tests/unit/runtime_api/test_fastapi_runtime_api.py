@@ -85,7 +85,9 @@ class FastApiRuntimeApiTestMixin:
             "feature_flags": ["streaming_observability"],
         }
 
-    def run_payload(self, conversation_id: str, *, run_id: str | None = None) -> dict[str, Any]:
+    def run_payload(
+        self, conversation_id: str, *, run_id: str | None = None
+    ) -> dict[str, Any]:
         _ = run_id
         return {
             "conversation_id": conversation_id,
@@ -106,7 +108,9 @@ class FastApiRuntimeApiTestMixin:
         }
 
     def create_conversation(self, client: TestClient) -> dict[str, Any]:
-        response = client.post("/v1/agent/conversations", json=self.conversation_payload())
+        response = client.post(
+            "/v1/agent/conversations", json=self.conversation_payload()
+        )
         assert response.status_code == 200
         return response.json()
 
@@ -165,7 +169,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         first = self.create_run(client, conversation["conversation_id"])
         second_response = client.post(
             "/v1/agent/runs",
-            json=self.run_payload(conversation["conversation_id"], run_id="run_retry_123"),
+            json=self.run_payload(
+                conversation["conversation_id"], run_id="run_retry_123"
+            ),
         )
         messages = client.get(
             f"/v1/agent/conversations/{conversation['conversation_id']}/messages",
@@ -178,7 +184,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert len(store.events_by_run[first["run_id"]]) == 1
         assert messages.json()["messages"][0]["content_text"] == self.Values.USER_INPUT
 
-    def test_simple_run_request_builds_runtime_context_from_model_selection(self) -> None:
+    def test_simple_run_request_builds_runtime_context_from_model_selection(
+        self,
+    ) -> None:
         store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(
             environ={
@@ -195,7 +203,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         )
         app = RuntimeApiAppFactory.create_app(service)
         client = TestClient(app)
-        conversation = client.post("/v1/agent/conversations", json=self.conversation_payload()).json()
+        conversation = client.post(
+            "/v1/agent/conversations", json=self.conversation_payload()
+        ).json()
 
         response = client.post(
             "/v1/agent/runs",
@@ -331,7 +341,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert retry_claim.attempts == 2
 
         store.mark_dead_letter(
-            result=RuntimeWorkerResult(command_id=retry_claim.command_id, succeeded=False)
+            result=RuntimeWorkerResult(
+                command_id=retry_claim.command_id, succeeded=False
+            )
         )
         assert (
             store.claim_next(
@@ -376,7 +388,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             payload={"message": "Worker completed."},
         )
         store.mark_complete(
-            result=RuntimeWorkerResult(command_id=first_claim.command_id, succeeded=True)
+            result=RuntimeWorkerResult(
+                command_id=first_claim.command_id, succeeded=True
+            )
         )
 
         replay = client.get(
@@ -480,7 +494,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             f"/v1/agent/runs/{second_run['run_id']}/events",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
         )
-        assert [event["event_type"] for event in after_worker_replay.json()["events"]] == [
+        assert [
+            event["event_type"] for event in after_worker_replay.json()["events"]
+        ] == [
             "run_queued",
             "approval_resolved",
             "run_cancelling",

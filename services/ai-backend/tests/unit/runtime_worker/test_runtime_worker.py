@@ -3,13 +3,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeDependencies,
+    RuntimeErrorCode,
+)
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_api.schemas import CreateConversationRequest, CreateRunRequest, RuntimeRunCommand
+from runtime_api.schemas import (
+    CreateConversationRequest,
+    CreateRunRequest,
+    RuntimeRunCommand,
+)
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.loop import RuntimeWorker
 from runtime_worker.stream_events import StreamNamespace
@@ -45,7 +53,9 @@ def _runtime_context(run_id: str) -> AgentRuntimeContext:
     )
 
 
-def _create_queued_run(store: InMemoryRuntimeApiStore, settings: RuntimeSettings) -> str:
+def _create_queued_run(
+    store: InMemoryRuntimeApiStore, settings: RuntimeSettings
+) -> str:
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -106,9 +116,13 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
             skill_directories=(),
         )
 
-    async def fake_invoker(_harness: RuntimeHarness, messages: Sequence[object]) -> object:
+    async def fake_invoker(
+        _harness: RuntimeHarness, messages: Sequence[object]
+    ) -> object:
         seen_messages.append(messages)
-        return {"messages": [{"role": "assistant", "content": "Hello from the worker."}]}
+        return {
+            "messages": [{"role": "assistant", "content": "Hello from the worker."}]
+        }
 
     worker = RuntimeWorker(
         persistence=store,
@@ -169,9 +183,21 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         _harness: RuntimeHarness,
         _messages: Sequence[object],
     ):
-        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "Hello"}]), {})}
-        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "\n"}]), {})}
-        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": " there"}]), {})}
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk([{"type": "text", "text": "Hello"}]), {}),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk([{"type": "text", "text": "\n"}]), {}),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk([{"type": "text", "text": " there"}]), {}),
+        }
         yield {
             "type": "updates",
             "ns": (),
@@ -183,7 +209,11 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
                 }
             },
         }
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Hello\n there"}]}}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "assistant", "content": "Hello\n there"}]},
+        }
 
     worker = RuntimeWorker(
         persistence=store,
@@ -211,7 +241,9 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         "final_response",
         "run_completed",
     ]
-    model_delta_events = [event for event in events if event.event_type == "model_delta"]
+    model_delta_events = [
+        event for event in events if event.event_type == "model_delta"
+    ]
     assert [event.payload for event in model_delta_events] == [
         {"delta": "Hello", "message": "Hello"},
         {"delta": "\n", "message": "\n"},
@@ -263,7 +295,13 @@ def test_runtime_worker_persists_mcp_auth_required_event() -> None:
                 "message": "Authenticate Drive MCP to continue.",
             },
         }
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Please authenticate."}]}}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [{"role": "assistant", "content": "Please authenticate."}]
+            },
+        }
 
     worker = RuntimeWorker(
         persistence=store,
@@ -282,10 +320,14 @@ def test_runtime_worker_persists_mcp_auth_required_event() -> None:
 
     assert processed == 1
     auth_events = [
-        event for event in store.events_by_run[run_id] if event.event_type == "mcp_auth_required"
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "mcp_auth_required"
     ]
     assert auth_events[0].source == "mcp"
-    assert auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
+    assert (
+        auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
+    )
 
 
 def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
@@ -418,7 +460,13 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
                 {},
             ),
         }
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Two risks found."}]}}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [{"role": "assistant", "content": "Two risks found."}]
+            },
+        }
 
     worker = RuntimeWorker(
         persistence=store,
@@ -444,13 +492,17 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     assert "tool_call_started" in event_types
     assert "tool_result" in event_types
     assert "tool_call_completed" in event_types
-    reasoning_event = next(event for event in events if event.event_type == "reasoning_summary_delta")
+    reasoning_event = next(
+        event for event in events if event.event_type == "reasoning_summary_delta"
+    )
     assert reasoning_event.payload == {
         "summary": "Checking source coverage",
         "delta": "Checking source coverage",
     }
     assert "private hidden reasoning" not in reasoning_event.model_dump_json()
-    tool_event = next(event for event in events if event.event_type == "tool_call_started")
+    tool_event = next(
+        event for event in events if event.event_type == "tool_call_started"
+    )
     assert tool_event.payload["args"]["authorization"] == "[redacted]"
     assert tool_event.span_id == "call_123"
     subagent_event = next(
@@ -463,7 +515,8 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     subagent_reasoning_event = next(
         event
         for event in events
-        if event.event_type == "reasoning_summary_delta" and event.parent_task_id == "task_123"
+        if event.event_type == "reasoning_summary_delta"
+        and event.parent_task_id == "task_123"
     )
     assert subagent_reasoning_event.source == "subagent"
     task_started = next(

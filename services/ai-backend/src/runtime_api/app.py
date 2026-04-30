@@ -35,13 +35,19 @@ class RuntimeApiAppFactory:
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
         app.include_router(RuntimeApiRouter.create_router())
-        app.add_exception_handler(RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error)
-        app.add_exception_handler(ValidationError, RuntimeApiErrorMapper.handle_validation_error)
+        app.add_exception_handler(
+            RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
+        )
+        app.add_exception_handler(
+            ValidationError, RuntimeApiErrorMapper.handle_validation_error
+        )
         app.add_exception_handler(
             RequestValidationError,
             RuntimeApiErrorMapper.handle_request_validation_error,
         )
-        app.add_exception_handler(Exception, RuntimeApiErrorMapper.handle_unexpected_error)
+        app.add_exception_handler(
+            Exception, RuntimeApiErrorMapper.handle_unexpected_error
+        )
         return app
 
     @classmethod

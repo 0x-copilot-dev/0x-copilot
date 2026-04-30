@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from enterprise_service_contracts.headers import (
+    ORG_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 from backend_app.app import create_app
 from backend_app.service import SkillRegistryService
 from backend_app.store import InMemorySkillStore
@@ -59,7 +63,9 @@ def test_public_and_internal_skill_flow() -> None:
     assert disabled_cards["skills"] == []
 
 
-def test_internal_skill_routes_use_service_header_scope_when_token_is_configured(monkeypatch) -> None:
+def test_internal_skill_routes_use_service_header_scope_when_token_is_configured(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
     app = create_app(skill_service=SkillRegistryService(store=InMemorySkillStore()))
     client = TestClient(app)

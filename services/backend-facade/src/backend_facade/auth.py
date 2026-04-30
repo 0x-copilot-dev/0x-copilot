@@ -32,7 +32,9 @@ class AuthenticatedIdentity:
     permission_scopes: tuple[str, ...] = ()
     connector_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
-    def scoped_params(self, extra: dict[str, object] | None = None) -> dict[str, object]:
+    def scoped_params(
+        self, extra: dict[str, object] | None = None
+    ) -> dict[str, object]:
         params: dict[str, object] = {"org_id": self.org_id, "user_id": self.user_id}
         if extra:
             params.update(extra)
@@ -50,7 +52,11 @@ class AuthenticatedIdentity:
         scoped.pop("runtime_context", None)
         if include_request_context:
             scoped["request_context"] = {
-                **dict(scoped.get("request_context") if isinstance(scoped.get("request_context"), dict) else {}),
+                **dict(
+                    scoped.get("request_context")
+                    if isinstance(scoped.get("request_context"), dict)
+                    else {}
+                ),
                 "roles": self.roles,
                 "permission_scopes": self.permission_scopes,
                 "connector_scopes": self.connector_scopes,
@@ -83,7 +89,9 @@ class FacadeAuthenticator:
             USER_HEADER: identity.user_id,
             ROLES_HEADER: ",".join(identity.roles),
             PERMISSION_SCOPES_HEADER: ",".join(identity.permission_scopes),
-            CONNECTOR_SCOPES_HEADER: json.dumps(identity.connector_scopes, separators=(",", ":")),
+            CONNECTOR_SCOPES_HEADER: json.dumps(
+                identity.connector_scopes, separators=(",", ":")
+            ),
         }
 
     @classmethod
@@ -93,20 +101,26 @@ class FacadeAuthenticator:
         try:
             payload_part, signature_part = token.split(".", maxsplit=1)
         except ValueError as exc:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Malformed bearer token") from exc
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Malformed bearer token"
+            ) from exc
         expected = cls._sign(payload_part.encode("ascii"), secret)
         if not hmac.compare_digest(signature_part, expected):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token")
         try:
             payload = json.loads(cls._b64decode(payload_part).decode("utf-8"))
         except (ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token payload") from exc
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Invalid bearer token payload"
+            ) from exc
         return cls._identity_from_payload(payload)
 
     @classmethod
     def _identity_from_payload(cls, payload: object) -> AuthenticatedIdentity:
         if not isinstance(payload, dict):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token payload")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Invalid bearer token payload"
+            )
         org_id = cls._nonempty_str(payload.get("org_id"), "org_id")
         user_id = cls._nonempty_str(payload.get("user_id"), "user_id")
         roles = cls._string_tuple(payload.get("roles") or ("employee",))
@@ -131,13 +145,17 @@ class FacadeAuthenticator:
             return value
         if cls._environment() != "production":
             return ""
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENTERPRISE_SERVICE_TOKEN is not configured")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "ENTERPRISE_SERVICE_TOKEN is not configured",
+        )
 
     @classmethod
     def _development_identity(cls) -> AuthenticatedIdentity:
         return AuthenticatedIdentity(
             org_id=os.environ.get("FACADE_DEV_ORG_ID", "org_123").strip() or "org_123",
-            user_id=os.environ.get("FACADE_DEV_USER_ID", "user_123").strip() or "user_123",
+            user_id=os.environ.get("FACADE_DEV_USER_ID", "user_123").strip()
+            or "user_123",
             roles=("employee",),
             permission_scopes=("runtime:use",),
             connector_scopes={},
@@ -149,13 +167,18 @@ class FacadeAuthenticator:
 
     @classmethod
     def _is_dev_auth_bypass_enabled(cls) -> bool:
-        return cls._environment() == "development" and os.environ.get("DEV_AUTH_BYPASS", "").strip().lower() == "true"
+        return (
+            cls._environment() == "development"
+            and os.environ.get("DEV_AUTH_BYPASS", "").strip().lower() == "true"
+        )
 
     @classmethod
     def _required_secret(cls, name: str) -> str:
         value = os.environ.get(name, "").strip()
         if not value:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"{name} is not configured")
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, f"{name} is not configured"
+            )
         return value
 
     @classmethod
@@ -175,18 +198,27 @@ class FacadeAuthenticator:
     @staticmethod
     def _nonempty_str(value: Any, field_name: str) -> str:
         if not isinstance(value, str) or not value.strip():
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Missing {field_name} claim")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, f"Missing {field_name} claim"
+            )
         return value.strip()
 
     @staticmethod
     def _string_tuple(value: object) -> tuple[str, ...]:
         if not isinstance(value, list | tuple | set):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Identity claim must be a list")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Identity claim must be a list"
+            )
         normalized = tuple(str(item).strip() for item in value if str(item).strip())
         return normalized
 
     @classmethod
     def _connector_scopes(cls, value: object) -> dict[str, tuple[str, ...]]:
         if not isinstance(value, dict):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "connector_scopes must be an object")
-        return {str(connector): cls._string_tuple(scopes) for connector, scopes in value.items()}
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "connector_scopes must be an object"
+            )
+        return {
+            str(connector): cls._string_tuple(scopes)
+            for connector, scopes in value.items()
+        }

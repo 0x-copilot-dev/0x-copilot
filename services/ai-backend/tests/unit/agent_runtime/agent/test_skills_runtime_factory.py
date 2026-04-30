@@ -10,7 +10,9 @@ from tests.unit.agent_runtime.agent.helpers import SkillsRuntimeFactoryTestMixin
 
 @dataclass
 class FakeVirtualSkillRegistry:
-    def list_available_skills(self, _context: AgentRuntimeContext) -> tuple[VirtualSkillCard, ...]:
+    def list_available_skills(
+        self, _context: AgentRuntimeContext
+    ) -> tuple[VirtualSkillCard, ...]:
         return (
             VirtualSkillCard(
                 skill_id="skill_123",

@@ -19,10 +19,21 @@ from agent_runtime.persistence.records.common import (
     ToolSideEffectClass,
 )
 from agent_runtime.persistence.records.memory import MemoryItemRecord, MemoryScopeRecord
-from agent_runtime.persistence.records.outbox import ConsumerCursorRecord, OutboxEventRecord, RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records.outbox import (
+    ConsumerCursorRecord,
+    OutboxEventRecord,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+)
 from agent_runtime.persistence.records.payloads import ContextPayloadRecord
-from agent_runtime.persistence.records.subagents import AsyncTaskRecord, SubagentResultRecord
-from agent_runtime.persistence.records.telemetry import CapabilitySnapshotRecord, CompressionEventRecord
+from agent_runtime.persistence.records.subagents import (
+    AsyncTaskRecord,
+    SubagentResultRecord,
+)
+from agent_runtime.persistence.records.telemetry import (
+    CapabilitySnapshotRecord,
+    CompressionEventRecord,
+)
 from agent_runtime.persistence.records.tools import ToolInvocationRecord
 
 PERSISTENCE_TABLE_RECORDS = (

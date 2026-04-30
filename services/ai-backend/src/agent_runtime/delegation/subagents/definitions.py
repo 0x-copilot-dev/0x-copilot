@@ -45,7 +45,9 @@ class DynamicSubagentCatalog:
 
     def __post_init__(self) -> None:
         for provider in self.providers:
-            if not callable(getattr(provider, Keys.Method.LIST_SUBAGENT_DEFINITIONS, None)):
+            if not callable(
+                getattr(provider, Keys.Method.LIST_SUBAGENT_DEFINITIONS, None)
+            ):
                 raise AgentRuntimeError(
                     RuntimeErrorCode.DEPENDENCY_ERROR,
                     Messages.Catalog.MISSING_LIST_DEFINITIONS,
@@ -72,11 +74,15 @@ class DynamicSubagentCatalog:
         definitions = (
             entry.definition
             for entry in entries
-            if SubagentPermissionPolicy.is_definition_visible(runtime_context, entry.definition)
+            if SubagentPermissionPolicy.is_definition_visible(
+                runtime_context, entry.definition
+            )
         )
         return tuple(sorted(definitions, key=lambda definition: definition.name))
 
-    def list_available_subagents(self, context: object) -> tuple[SubagentDefinition, ...]:
+    def list_available_subagents(
+        self, context: object
+    ) -> tuple[SubagentDefinition, ...]:
         """Runtime port adapter returning model-visible compact subagent definitions."""
 
         return self.list_subagent_definitions(SubagentContextParser.coerce(context))
@@ -90,7 +96,9 @@ class DynamicSubagentCatalog:
 
         runtime_context = SubagentContextParser.coerce(context)
         try:
-            normalized_name = SubagentValueNormalizer.normalize_slug(name, Keys.Field.NAME)
+            normalized_name = SubagentValueNormalizer.normalize_slug(
+                name, Keys.Field.NAME
+            )
         except ValueError:
             return SubagentError(
                 code=SubagentErrorCode.SUBAGENT_UNAVAILABLE,
@@ -122,7 +130,9 @@ class DynamicSubagentCatalog:
                 safe_message=Messages.Catalog.REQUESTED_SUBAGENT_DISABLED,
                 correlation_id=runtime_context.trace_id,
             )
-        if not SubagentPermissionPolicy.is_definition_visible(runtime_context, entry.definition):
+        if not SubagentPermissionPolicy.is_definition_visible(
+            runtime_context, entry.definition
+        ):
             return SubagentError(
                 code=SubagentErrorCode.SUBAGENT_UNAVAILABLE,
                 safe_message=Messages.Catalog.REQUESTED_SUBAGENT_UNKNOWN,
@@ -157,7 +167,9 @@ class DynamicSubagentCatalog:
                         Messages.Catalog.INVALID_DEFINITION,
                         retryable=False,
                     ) from exc
-                entries.append(RegisteredSubagent(provider=provider, definition=definition))
+                entries.append(
+                    RegisteredSubagent(provider=provider, definition=definition)
+                )
         return tuple(entries)
 
 

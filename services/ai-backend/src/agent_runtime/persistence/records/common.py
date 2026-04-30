@@ -19,7 +19,6 @@ class OutboxStatus(StrEnum):
     DEAD_LETTER = "dead_letter"
 
 
-
 class AsyncTaskStatus(StrEnum):
     """Persisted async task lifecycle outside message history."""
 
@@ -29,7 +28,6 @@ class AsyncTaskStatus(StrEnum):
     CANCELLED = "cancelled"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
-
 
 
 class ToolInvocationStatus(StrEnum):
@@ -43,7 +41,6 @@ class ToolInvocationStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-
 class ToolSideEffectClass(StrEnum):
     """Stable side-effect classes for audit and approval policy."""
 
@@ -51,7 +48,6 @@ class ToolSideEffectClass(StrEnum):
     WRITE = "write"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
     DESTRUCTIVE = "destructive"
-
 
 
 class ApprovalRiskClass(StrEnum):
@@ -62,14 +58,12 @@ class ApprovalRiskClass(StrEnum):
     HIGH = "high"
 
 
-
 class PersistenceApprovalStatus(StrEnum):
     """Persisted approval request state."""
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
-
 
 
 class RuntimeMemoryScopeType(StrEnum):
@@ -81,7 +75,6 @@ class RuntimeMemoryScopeType(StrEnum):
     CONVERSATION = "conversation"
 
 
-
 class PayloadKind(StrEnum):
     """Classes of large payloads stored by reference."""
 
@@ -89,7 +82,6 @@ class PayloadKind(StrEnum):
     CONTEXT = "context"
     ARTIFACT = "artifact"
     CHECKPOINT = "checkpoint"
-
 
 
 class PayloadStorageBackend(StrEnum):
@@ -100,14 +92,12 @@ class PayloadStorageBackend(StrEnum):
     LOCAL_FILE = "local_file"
 
 
-
 class PayloadRedactionState(StrEnum):
     """How payload content was prepared before storage."""
 
     REDACTED = "redacted"
     TRUNCATED = "truncated"
     OFFLOADED = "offloaded"
-
 
 
 class AuditActorType(StrEnum):
@@ -119,14 +109,12 @@ class AuditActorType(StrEnum):
     SYSTEM = "system"
 
 
-
 class AuditOutcome(StrEnum):
     """Result class for audit records."""
 
     SUCCESS = "success"
     FAILURE = "failure"
     DENIED = "denied"
-
 
 
 class PersistenceValueNormalizer:

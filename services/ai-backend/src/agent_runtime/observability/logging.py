@@ -143,8 +143,10 @@ class LogValueNormalizer:
 
     @classmethod
     def is_allowed_metadata_item(cls, key: object, value: object) -> bool:
-        return isinstance(key, str) and key in _ALLOWED_METADATA_KEYS and (
-            value is None or isinstance(value, _ALLOWED_METADATA_VALUE_TYPES)
+        return (
+            isinstance(key, str)
+            and key in _ALLOWED_METADATA_KEYS
+            and (value is None or isinstance(value, _ALLOWED_METADATA_VALUE_TYPES))
         )
 
 

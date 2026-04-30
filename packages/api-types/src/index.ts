@@ -7,7 +7,11 @@ export type McpAuthState =
   | "authenticated"
   | "auth_failed"
   | "auth_unsupported";
-export type McpServerHealth = "healthy" | "degraded" | "unavailable" | "disabled";
+export type McpServerHealth =
+  | "healthy"
+  | "degraded"
+  | "unavailable"
+  | "disabled";
 
 export interface McpServer {
   server_id: string;
@@ -76,7 +80,7 @@ export const AGENT_RUN_STATUSES = [
   "cancelled",
   "completed",
   "failed",
-  "timed_out"
+  "timed_out",
 ] as const satisfies readonly AgentRunStatus[];
 
 export type RuntimeEventVisibility = "user" | "internal" | "audit";
@@ -136,7 +140,7 @@ export const RUNTIME_EVENT_SOURCES = [
   "mcp",
   "subagent",
   "summarization",
-  "system"
+  "system",
 ] as const satisfies readonly RuntimeEventSource[];
 
 export const RUNTIME_API_EVENT_TYPES = [
@@ -165,7 +169,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "error",
   "model_delta",
   "final_response",
-  "heartbeat"
+  "heartbeat",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -177,7 +181,7 @@ export const RUNTIME_ACTIVITY_KINDS = [
   "mcp_auth",
   "approval",
   "heartbeat",
-  "event"
+  "event",
 ] as const satisfies readonly RuntimeActivityKind[];
 
 export type ApprovalDecision = "approved" | "rejected";
@@ -463,7 +467,9 @@ export interface SkillListResponse {
   skills: Skill[];
 }
 
-export function isRuntimeEventEnvelope(value: unknown): value is RuntimeEventEnvelope {
+export function isRuntimeEventEnvelope(
+  value: unknown,
+): value is RuntimeEventEnvelope {
   if (!isPlainRecord(value)) {
     return false;
   }
@@ -476,7 +482,8 @@ export function isRuntimeEventEnvelope(value: unknown): value is RuntimeEventEnv
     Number.isInteger(candidate.sequence_no) &&
     candidate.sequence_no >= 0 &&
     isRuntimeApiEventType(candidate.event_type) &&
-    (candidate.source === undefined || isRuntimeEventSource(candidate.source)) &&
+    (candidate.source === undefined ||
+      isRuntimeEventSource(candidate.source)) &&
     isRuntimeActivityKind(candidate.activity_kind) &&
     isPlainRecord(candidate.payload) &&
     (candidate.metadata === undefined || isPlainRecord(candidate.metadata)) &&
@@ -484,7 +491,9 @@ export function isRuntimeEventEnvelope(value: unknown): value is RuntimeEventEnv
   );
 }
 
-export function isRuntimeTextPayload(payload: unknown): payload is RuntimeTextPayload {
+export function isRuntimeTextPayload(
+  payload: unknown,
+): payload is RuntimeTextPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
@@ -496,7 +505,9 @@ export function isRuntimeTextPayload(payload: unknown): payload is RuntimeTextPa
   );
 }
 
-export function isReasoningSummaryPayload(payload: unknown): payload is ReasoningSummaryPayload {
+export function isReasoningSummaryPayload(
+  payload: unknown,
+): payload is ReasoningSummaryPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
@@ -504,7 +515,7 @@ export function isReasoningSummaryPayload(payload: unknown): payload is Reasonin
 }
 
 export function isReasoningSummaryDeltaPayload(
-  payload: unknown
+  payload: unknown,
 ): payload is ReasoningSummaryDeltaPayload {
   if (!isPlainRecord(payload)) {
     return false;
@@ -512,42 +523,58 @@ export function isReasoningSummaryDeltaPayload(
   return typeof payload.delta === "string";
 }
 
-export function isToolCallPayload(payload: unknown): payload is ToolCallPayload {
+export function isToolCallPayload(
+  payload: unknown,
+): payload is ToolCallPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
-  return typeof payload.tool_name === "string" && typeof payload.call_id === "string";
+  return (
+    typeof payload.tool_name === "string" && typeof payload.call_id === "string"
+  );
 }
 
-export function isToolCallDeltaPayload(payload: unknown): payload is ToolCallDeltaPayload {
+export function isToolCallDeltaPayload(
+  payload: unknown,
+): payload is ToolCallDeltaPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
   return typeof payload.call_id === "string";
 }
 
-export function isToolResultPayload(payload: unknown): payload is ToolResultPayload {
+export function isToolResultPayload(
+  payload: unknown,
+): payload is ToolResultPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
-  return typeof payload.tool_name === "string" && typeof payload.call_id === "string";
+  return (
+    typeof payload.tool_name === "string" && typeof payload.call_id === "string"
+  );
 }
 
-export function isSubagentActivityPayload(payload: unknown): payload is SubagentActivityPayload {
+export function isSubagentActivityPayload(
+  payload: unknown,
+): payload is SubagentActivityPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
   return typeof payload.task_id === "string";
 }
 
-export function isApprovalRequestedPayload(payload: unknown): payload is ApprovalRequestedPayload {
+export function isApprovalRequestedPayload(
+  payload: unknown,
+): payload is ApprovalRequestedPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
   return typeof payload.approval_id === "string";
 }
 
-export function isMcpAuthRequiredPayload(payload: unknown): payload is McpAuthRequiredEventPayload {
+export function isMcpAuthRequiredPayload(
+  payload: unknown,
+): payload is McpAuthRequiredEventPayload {
   if (!isPlainRecord(payload)) {
     return false;
   }
@@ -559,16 +586,31 @@ export function isMcpAuthRequiredPayload(payload: unknown): payload is McpAuthRe
   );
 }
 
-export function isRuntimeApiEventType(value: unknown): value is RuntimeApiEventType {
-  return typeof value === "string" && (RUNTIME_API_EVENT_TYPES as readonly string[]).includes(value);
+export function isRuntimeApiEventType(
+  value: unknown,
+): value is RuntimeApiEventType {
+  return (
+    typeof value === "string" &&
+    (RUNTIME_API_EVENT_TYPES as readonly string[]).includes(value)
+  );
 }
 
-export function isRuntimeEventSource(value: unknown): value is RuntimeEventSource {
-  return typeof value === "string" && (RUNTIME_EVENT_SOURCES as readonly string[]).includes(value);
+export function isRuntimeEventSource(
+  value: unknown,
+): value is RuntimeEventSource {
+  return (
+    typeof value === "string" &&
+    (RUNTIME_EVENT_SOURCES as readonly string[]).includes(value)
+  );
 }
 
-export function isRuntimeActivityKind(value: unknown): value is RuntimeActivityKind {
-  return typeof value === "string" && (RUNTIME_ACTIVITY_KINDS as readonly string[]).includes(value);
+export function isRuntimeActivityKind(
+  value: unknown,
+): value is RuntimeActivityKind {
+  return (
+    typeof value === "string" &&
+    (RUNTIME_ACTIVITY_KINDS as readonly string[]).includes(value)
+  );
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

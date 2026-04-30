@@ -8,31 +8,37 @@ import {
   Switch,
   TextInput,
   useTheme,
-  type ThemeScheme
+  type ThemeScheme,
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useState } from "react";
 import { authTone } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 
-type SettingsSection = "general" | "account" | "capabilities" | "connectors" | "claude-code";
+type SettingsSection =
+  | "general"
+  | "account"
+  | "capabilities"
+  | "connectors"
+  | "claude-code";
 
 const sections: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
   { id: "account", label: "Account" },
   { id: "capabilities", label: "Capabilities" },
   { id: "connectors", label: "Connectors" },
-  { id: "claude-code", label: "Claude Code" }
+  { id: "claude-code", label: "Claude Code" },
 ];
 
 export function SettingsScreen({
   connectors,
-  onBackToChat
+  onBackToChat,
 }: {
   connectors: ConnectorState;
   onBackToChat: () => void;
 }): ReactElement {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("connectors");
+  const [activeSection, setActiveSection] =
+    useState<SettingsSection>("connectors");
 
   return (
     <main className="settings-shell">
@@ -56,14 +62,18 @@ export function SettingsScreen({
       </aside>
       <section className="settings-content">
         {activeSection === "general" ? <GeneralSettings /> : null}
-        {activeSection === "account" ? <PlaceholderSettings title="Account" /> : null}
+        {activeSection === "account" ? (
+          <PlaceholderSettings title="Account" />
+        ) : null}
         {activeSection === "capabilities" ? (
           <PlaceholderSettings
             title="Capabilities"
             body="Agent capabilities are driven by enabled connectors for this milestone."
           />
         ) : null}
-        {activeSection === "connectors" ? <ConnectorsSettings connectors={connectors} /> : null}
+        {activeSection === "connectors" ? (
+          <ConnectorsSettings connectors={connectors} />
+        ) : null}
         {activeSection === "claude-code" ? (
           <PlaceholderSettings
             title="Claude Code"
@@ -82,8 +92,14 @@ function GeneralSettings(): ReactElement {
     <div className="settings-section">
       <h2>General</h2>
       <Card>
-        <Field label="Color scheme" hint="Theme tokens update the whole UI kit.">
-          <Select value={scheme} onChange={(event) => setScheme(event.target.value as ThemeScheme)}>
+        <Field
+          label="Color scheme"
+          hint="Theme tokens update the whole UI kit."
+        >
+          <Select
+            value={scheme}
+            onChange={(event) => setScheme(event.target.value as ThemeScheme)}
+          >
             <option value="dark">Dark</option>
             <option value="light">Light</option>
             <option value="slate">Slate</option>
@@ -96,7 +112,7 @@ function GeneralSettings(): ReactElement {
 
 function PlaceholderSettings({
   title,
-  body = "This section is intentionally light for now. Privacy and billing are out of scope."
+  body = "This section is intentionally light for now. Privacy and billing are out of scope.",
 }: {
   title: string;
   body?: string;
@@ -111,7 +127,11 @@ function PlaceholderSettings({
   );
 }
 
-function ConnectorsSettings({ connectors }: { connectors: ConnectorState }): ReactElement {
+function ConnectorsSettings({
+  connectors,
+}: {
+  connectors: ConnectorState;
+}): ReactElement {
   const [url, setUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -134,15 +154,25 @@ function ConnectorsSettings({ connectors }: { connectors: ConnectorState }): Rea
       <div className="settings-section__header">
         <div>
           <h2>Connectors</h2>
-          <p>Allow the agent to reference other apps and services only after explicit consent.</p>
+          <p>
+            Allow the agent to reference other apps and services only after
+            explicit consent.
+          </p>
         </div>
-        <Button type="button" variant="secondary" onClick={() => void connectors.refresh()}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void connectors.refresh()}
+        >
           Refresh
         </Button>
       </div>
 
       <Card>
-        <form className="connector-add-form" onSubmit={(event) => void onSubmit(event)}>
+        <form
+          className="connector-add-form"
+          onSubmit={(event) => void onSubmit(event)}
+        >
           <Field label="Add custom connector">
             <TextInput
               value={url}
@@ -154,16 +184,28 @@ function ConnectorsSettings({ connectors }: { connectors: ConnectorState }): Rea
             Add connector
           </Button>
         </form>
-        {connectors.error ? <p className="app-error">{connectors.error}</p> : null}
+        {connectors.error ? (
+          <p className="app-error">{connectors.error}</p>
+        ) : null}
       </Card>
 
       <div className="connector-settings-list">
-        {connectors.loading ? <Card><p>Loading connectors...</p></Card> : null}
+        {connectors.loading ? (
+          <Card>
+            <p>Loading connectors...</p>
+          </Card>
+        ) : null}
         {!connectors.loading && connectors.servers.length === 0 ? (
-          <Card><p>No connectors configured yet.</p></Card>
+          <Card>
+            <p>No connectors configured yet.</p>
+          </Card>
         ) : null}
         {connectors.servers.map((server) => (
-          <ConnectorSettingsRow key={server.server_id} server={server} connectors={connectors} />
+          <ConnectorSettingsRow
+            key={server.server_id}
+            server={server}
+            connectors={connectors}
+          />
         ))}
       </div>
     </div>
@@ -172,7 +214,7 @@ function ConnectorsSettings({ connectors }: { connectors: ConnectorState }): Rea
 
 function ConnectorSettingsRow({
   server,
-  connectors
+  connectors,
 }: {
   server: McpServer;
   connectors: ConnectorState;
@@ -184,21 +226,37 @@ function ConnectorSettingsRow({
           <h3>{server.display_name}</h3>
           <p>{server.url}</p>
         </div>
-        <Badge tone={authTone(server.auth_state)}>{server.auth_state.replaceAll("_", " ")}</Badge>
+        <Badge tone={authTone(server.auth_state)}>
+          {server.auth_state.replaceAll("_", " ")}
+        </Badge>
       </div>
       <div className="connector-settings-row__controls">
         <Switch
           label={server.enabled ? "Enabled" : "Disabled"}
           checked={server.enabled}
-          onChange={(event) => void connectors.setEnabled(server.server_id, event.target.checked)}
+          onChange={(event) =>
+            void connectors.setEnabled(server.server_id, event.target.checked)
+          }
         />
-        <Button type="button" variant="secondary" onClick={() => void connectors.authenticate(server.server_id)}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void connectors.authenticate(server.server_id)}
+        >
           Authenticate
         </Button>
-        <Button type="button" variant="ghost" onClick={() => void connectors.skipAuth(server.server_id)}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => void connectors.skipAuth(server.server_id)}
+        >
           Skip auth
         </Button>
-        <Button type="button" variant="danger" onClick={() => void connectors.removeServer(server.server_id)}>
+        <Button
+          type="button"
+          variant="danger"
+          onClick={() => void connectors.removeServer(server.server_id)}
+        >
           Remove
         </Button>
       </div>
