@@ -13,9 +13,9 @@ Before changing runtime APIs, service contracts, streaming surfaces, or ownershi
 - `../../../docs/ci-cd/github-actions-strategy.md`
 - `../../../docs/decisions/0001-monorepo-with-deployable-services.md`
 
-The AI backend should expose contracts to `backend-facade`; frontend and native apps should not call it directly unless a future accepted spec creates a narrow exception.
+The AI backend exposes agent runtime contracts to `backend-facade`; frontend and native apps should not call it directly unless a future accepted spec creates a narrow exception.
 
-The FastAPI runtime API docs are that narrow exception for the first frontend-facing runtime surface. They allow `services/ai-backend` to expose conversation, run, event, streaming, cancellation, and approval endpoints while `backend-facade` does not exist. The exception must not expand into tenant auth, billing/admin state, or non-agent product persistence.
+The FastAPI runtime API remains limited to conversations, runs, event replay, streaming, cancellation, and approvals. Now that `backend-facade` exists, apps should reach those routes through the facade. The exception must not expand into tenant auth, billing/admin state, or non-agent product persistence.
 
 ## Read Order
 

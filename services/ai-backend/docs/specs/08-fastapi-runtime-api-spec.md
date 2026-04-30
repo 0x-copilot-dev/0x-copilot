@@ -4,7 +4,7 @@
 
 Document the implemented FastAPI runtime API surface for conversations, runs, event replay, streaming, cancellation, and approvals.
 
-`services/ai-backend` is still primarily an AI orchestration service. The FastAPI API is a narrow accepted exception while `backend-facade` does not exist; it must stay limited to agent runtime workflows and must not become the tenant auth, billing, admin, or product-state API.
+`services/ai-backend` is still primarily an AI orchestration service. The FastAPI API is an internal runtime surface consumed by `backend-facade`; it must stay limited to agent runtime workflows and must not become the tenant auth, billing, admin, or product-state API.
 
 ## Implemented Modules
 
@@ -41,26 +41,32 @@ Implemented endpoints under `/v1/agent`:
 ```mermaid
 sequenceDiagram
   participant Client
+  participant Facade as Backend Facade
   participant API as FastAPI Runtime API
   participant Store as PersistencePort
   participant Events as EventStorePort
   participant Queue as RuntimeQueuePort
   participant Worker as Runtime Worker
 
-  Client->>API: POST /v1/agent/conversations
+  Client->>Facade: POST /v1/agent/conversations
+  Facade->>API: POST /v1/agent/conversations
   API->>Store: Create conversation shell
-  Client->>API: POST /v1/agent/runs
+  Client->>Facade: POST /v1/agent/runs
+  Facade->>API: POST /v1/agent/runs
   API->>Store: Validate conversation scope
   API->>Store: Create user message and queued run
   API->>Events: Append run_queued
   API->>Queue: Enqueue RuntimeRunCommand
-  API-->>Client: run_id, events_url, stream_url
+  API-->>Facade: run_id, events_url, stream_url
+  Facade-->>Client: run_id, events_url, stream_url
   Worker->>Queue: Claim command
   Worker->>Events: Append run_started
   Worker->>Events: Append model_delta chunks as provider output streams
   Worker->>Events: Append final_response and run_completed
-  Client->>API: GET /events or /stream after_sequence=N
-  API-->>Client: Replayable RuntimeEventEnvelope records
+  Client->>Facade: GET /events or /stream after_sequence=N
+  Facade->>API: GET /events or /stream after_sequence=N
+  API-->>Facade: Replayable RuntimeEventEnvelope records
+  Facade-->>Client: Replayable RuntimeEventEnvelope records
 ```
 
 ## Multi-Turn Behavior

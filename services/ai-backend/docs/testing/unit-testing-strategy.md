@@ -14,7 +14,12 @@ Every backend feature must ship with focused unit tests before integration tests
 ## Test Structure
 
 - Mirror source subpackages under `tests/unit/agent_runtime/<subpackage>/`.
-  For example, `src/agent_runtime/agent` tests live under `tests/unit/agent_runtime/agent`.
+  For example, `src/agent_runtime/execution` tests live under
+  `tests/unit/agent_runtime/execution`.
+- For migrated capability code, prefer canonical test paths such as
+  `tests/unit/agent_runtime/capabilities/skills/`. Existing tests under legacy
+  folders may remain temporarily, but new tests should import
+  `agent_runtime.capabilities.*` modules rather than compatibility wrappers.
 - Run tests from `services/ai-backend` with the service-local virtual environment:
   `.venv/bin/python -m pytest`.
 - Use mixins for test helpers, fake providers, fixtures builders, constants, and setup utilities.
@@ -29,6 +34,9 @@ Every backend feature must ship with focused unit tests before integration tests
 3. Registry tests: list, lookup, duplicate handling, disabled entries, and load failures.
 4. Middleware tests: pre/post behavior, injected tools, and safe error handling.
 5. State transition tests: async subagent lifecycle, context compression events, and stream normalization.
+6. Backend-backed capability tests: virtual skills, internal MCP cards, and
+   other service-provided capability metadata using fake providers or fake HTTP
+   transports.
 
 ## Mock Boundaries
 

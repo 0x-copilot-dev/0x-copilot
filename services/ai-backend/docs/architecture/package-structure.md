@@ -15,10 +15,20 @@ services/ai-backend/
         tools/
         mcp/
         skills/
+      tools/
+        # compatibility path; new code prefers capabilities/tools
+      mcp/
+        # compatibility path; new code prefers capabilities/mcp
+      skills/
+        # compatibility path; new code prefers capabilities/skills
       context/
         memory/
+      memory/
+        # compatibility path; new code prefers context/memory
       delegation/
         subagents/
+      subagents/
+        # compatibility path; new code prefers delegation/subagents
       events/
         normalization/
         contracts/
@@ -56,7 +66,21 @@ services/ai-backend/
 - `runtime_adapters/`: concrete adapters for tests and local/production-style infrastructure, including deterministic in-memory persistence/event/queue behavior and the PostgreSQL runtime adapter.
 - `runtime_worker/`: async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
 
-Compatibility modules remain under older paths such as `agent_runtime.agent.*`, `agent_runtime.tools.*`, and `agent_runtime.api.contracts` so existing imports keep working during the migration. New code should prefer the canonical packages above.
+Compatibility modules remain under older paths such as `agent_runtime.agent.*`, `agent_runtime.tools.*`, `agent_runtime.mcp.*`, `agent_runtime.skills.*`, `agent_runtime.memory.*`, `agent_runtime.subagents.*`, and `agent_runtime.api.contracts` so existing imports keep working during the migration. New code should prefer the canonical packages above.
+
+## Canonical Import Paths
+
+| Concern | New code should use | Compatibility paths |
+| --- | --- | --- |
+| Tool capabilities | `agent_runtime.capabilities.tools.*` | `agent_runtime.tools.*` |
+| MCP capabilities | `agent_runtime.capabilities.mcp.*` | `agent_runtime.mcp.*` |
+| Skills middleware and registries | `agent_runtime.capabilities.skills.*` | `agent_runtime.skills.*` |
+| Context memory | `agent_runtime.context.memory.*` | `agent_runtime.memory.*` |
+| Subagent delegation | `agent_runtime.delegation.subagents.*` | `agent_runtime.subagents.*` |
+| Runtime API service and ports | `agent_runtime.api.*` | selected legacy contract re-exports |
+
+Do not add new behavior only to a compatibility path. If a compatibility module
+is still needed, keep it as a thin import wrapper over the canonical package.
 
 ## Dependency Direction
 
@@ -81,5 +105,9 @@ Unit tests mirror source ownership:
 - Runtime-domain behavior stays under `tests/unit/agent_runtime/`.
 - FastAPI route and schema behavior lives under `tests/unit/runtime_api/`.
 - Concrete adapter behavior lives under `tests/unit/runtime_adapters/`.
+- New capability tests should mirror the canonical package when practical, for
+  example `tests/unit/agent_runtime/capabilities/skills/`. Existing tests under
+  compatibility-oriented folders may remain until the migration is complete, but
+  they should import canonical modules when covering new behavior.
 
 Shared fakes and helpers should live in non-test helper modules, while concrete `test_*.py` files contain focused behavior tests.
