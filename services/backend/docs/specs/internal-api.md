@@ -32,6 +32,7 @@ routes must deny direct browser or internet access to this path prefix.
 | `GET`  | `/internal/v1/mcp/cards`                              | List enabled MCP server cards for an org/user scope      |
 | `POST` | `/internal/v1/mcp/servers/{server_id}/auth/start`     | Start OAuth for a server on behalf of an internal caller |
 | `POST` | `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session                 |
+| `POST` | `/internal/v1/mcp/servers/{server_id}/rpc`            | Proxy backend-authenticated MCP JSON-RPC                 |
 | `POST` | `/internal/v1/mcp/servers/{server_id}/test-token`     | Upsert a token for local/test flows                      |
 
 All MCP routes require scoped identity from trusted service headers in
@@ -39,7 +40,9 @@ production. Local development may still pass `org_id` and `user_id` query/body
 values when `ENTERPRISE_SERVICE_TOKEN` is unset.
 
 Internal MCP responses may include connection material that apps should not see.
-They must not be forwarded through the product facade.
+They must not be forwarded through the product facade. Remote MCP JSON-RPC calls
+flow through the backend proxy so raw OAuth access tokens remain owned by
+`services/backend` and are never returned to `services/ai-backend`.
 
 ## Skill Routes
 

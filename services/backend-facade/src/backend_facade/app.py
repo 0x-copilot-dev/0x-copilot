@@ -136,14 +136,23 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
     async def mcp_oauth_callback(
         request: Request,
         state: str = Query(..., min_length=1),
-        code: str = Query(..., min_length=1),
+        code: str | None = Query(None, min_length=1),
+        error: str | None = Query(None, min_length=1),
+        error_description: str | None = Query(None, min_length=1),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, str] = {"state": state}
+        if code is not None:
+            params["code"] = code
+        if error is not None:
+            params["error"] = error
+        if error_description is not None:
+            params["error_description"] = error_description
         return await forward_json(
             app,
             "GET",
             "/v1/mcp/oauth/callback",
-            params={"state": state, "code": code},
+            params=params,
             identity=identity,
         )
 

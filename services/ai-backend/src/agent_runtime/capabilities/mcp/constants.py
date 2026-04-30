@@ -32,7 +32,9 @@ class Keys:
         MIME_TYPE = "mime_type"
         NAME = "name"
         OUTPUT_SHAPE = "output_shape"
+        ORG_ID = "org_id"
         READ_ONLY = "read_only"
+        REDIRECT_URI = "redirect_uri"
         REQUIRED_SCOPES = "required_scopes"
         RESOURCES = "resources"
         RETRYABLE = "retryable"
@@ -45,7 +47,27 @@ class Keys:
         TOOLS = "tools"
         TRANSPORT = "transport"
         URI = "uri"
+        URL = "url"
+        USER_ID = "user_id"
+        VERSION = "version"
         WARNINGS = "warnings"
+
+    class JsonRpc:
+        CAPABILITIES = "capabilities"
+        CLIENT_INFO = "clientInfo"
+        ERROR = "error"
+        ID = "id"
+        JSONRPC = "jsonrpc"
+        METHOD = "method"
+        PARAMS = "params"
+        PAYLOAD = "payload"
+        PROTOCOL_VERSION = "protocolVersion"
+        RESULT = "result"
+
+    class NativeDescriptor:
+        INPUT_SCHEMA_CAMEL = "inputSchema"
+        MIME_TYPE_CAMEL = "mimeType"
+        OUTPUT_SCHEMA_CAMEL = "outputSchema"
 
     class Schema:
         PROPERTIES = "properties"
@@ -102,6 +124,30 @@ class Values:
     class SchemaType:
         OBJECT = "object"
         STRING = "string"
+
+    class JsonRpc:
+        VERSION = "2.0"
+
+    class JsonRpcMethod:
+        INITIALIZE = "initialize"
+        INITIALIZED = "notifications/initialized"
+        LIST_RESOURCES = "resources/list"
+        LIST_TOOLS = "tools/list"
+
+    class McpClientInfo:
+        NAME = "enterprise-search-ai-backend"
+        PROTOCOL_VERSION = "2025-06-18"
+        VERSION = "0.1.0"
+
+    class Placeholder:
+        RESOURCE_NAME = "mcp_resource"
+        TOOL_NAME = "mcp_tool"
+
+    class Mime:
+        OCTET_STREAM = "application/octet-stream"
+
+    class Route:
+        INTERNAL_MCP_RPC = "/internal/v1/mcp/servers/{server_id}/rpc"
 
     class Transport:
         HTTP = "http"

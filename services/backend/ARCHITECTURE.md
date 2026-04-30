@@ -41,6 +41,7 @@ callers that need model-ready MCP cards, client sessions, or skill bundles.
 | `/internal/v1/mcp/cards`                              | List enabled MCP server cards for runtime selection |
 | `/internal/v1/mcp/servers/{server_id}/auth/start`     | Start auth for an internal caller                   |
 | `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session            |
+| `/internal/v1/mcp/servers/{server_id}/rpc`            | Proxy authenticated MCP JSON-RPC to a remote server |
 | `/internal/v1/mcp/servers/{server_id}/test-token`     | Install a test token for local/test flows           |
 | `/internal/v1/skills/cards`                           | List enabled skill cards for runtime selection      |
 | `/internal/v1/skills/{skill_id}`                      | Fetch a model-consumable skill bundle               |
@@ -59,6 +60,12 @@ Token material is stored through `TokenVault`. The local implementation is only
 for development and tests. Production must provide a managed token-vault adapter
 and a persistent MCP registry store; the service fails closed rather than
 falling back to local crypto-shaped storage or in-memory registry state.
+
+Remote MCP OAuth is discovery-backed. The backend reads protected-resource and
+authorization-server metadata, performs dynamic client registration when the
+server advertises it, stores connector tokens in the vault, refreshes expiring
+tokens when possible, and attaches bearer credentials only inside backend-owned
+internal MCP JSON-RPC proxy calls.
 
 ## Request Flow
 

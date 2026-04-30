@@ -10,6 +10,8 @@ from backend_app.contracts import (
     CreateSkillRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
+    InternalMcpRpcRequest,
+    InternalMcpRpcResponse,
     InternalMcpServerListResponse,
     InternalSkillBundle,
     InternalSkillListResponse,
@@ -133,10 +135,20 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.get("/v1/mcp/oauth/callback", response_model=McpServerResponse)
-    def oauth_callback(state: str, code: str) -> McpServerResponse:
+    def oauth_callback(
+        state: str,
+        code: str | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> McpServerResponse:
         try:
             return mcp_service(app).complete_auth(
-                McpAuthCallbackRequest(state=state, code=code)
+                McpAuthCallbackRequest(
+                    state=state,
+                    code=code,
+                    error=error,
+                    error_description=error_description,
+                )
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -195,6 +207,37 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.post(
+        "/internal/v1/mcp/servers/{server_id}/rpc",
+        response_model=InternalMcpRpcResponse,
+    )
+    def internal_mcp_rpc(
+        request: Request,
+        server_id: str,
+        payload: InternalMcpRpcRequest,
+    ) -> InternalMcpRpcResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=payload.org_id, user_id=payload.user_id
+        )
+        payload = payload.model_copy(
+            update={"org_id": identity.org_id, "user_id": identity.user_id}
+        )
+        try:
+            return mcp_service(app).proxy_internal_rpc(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                server_id=server_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = (
+                status.HTTP_401_UNAUTHORIZED
+                if "authenticated" in detail or "OAuth token" in detail
+                else status.HTTP_400_BAD_REQUEST
+            )
+            raise HTTPException(status_code, detail) from exc
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/test-token",

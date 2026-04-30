@@ -63,3 +63,7 @@ models and update `packages/api-types` in the same change.
 - Expected JSON responses must be JSON objects; other JSON payloads become
   `502 Bad Gateway`.
 - SSE streams are passed through as `text/event-stream`.
+
+The MCP OAuth callback forwards standard OAuth success and error query
+parameters. Successful callbacks include `state` and `code`; denied or failed
+callbacks include `state`, `error`, and optionally `error_description`.

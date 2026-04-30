@@ -382,17 +382,27 @@ class McpAuthStartResponse(BackendContract):
 
 class McpAuthCallbackRequest(BackendContract):
     state: str
-    code: str
+    code: str | None = None
+    error: str | None = None
+    error_description: str | None = None
 
     @field_validator("state")
     @classmethod
     def _normalize_state(cls, value: object) -> str:
         return normalize_id(value)
 
-    @field_validator("code")
+    @field_validator("code", "error", "error_description")
     @classmethod
-    def _normalize_code(cls, value: object) -> str:
+    def _normalize_optional_text(cls, value: object) -> str | None:
+        if value is None:
+            return None
         return normalize_text(value)
+
+    @model_validator(mode="after")
+    def _require_code_or_error(self) -> "McpAuthCallbackRequest":
+        if self.code is None and self.error is None:
+            raise ValueError("OAuth callback must include code or error")
+        return self
 
 
 class InternalMcpServerCard(BackendContract):
@@ -432,6 +442,28 @@ class InternalMcpClientSession(BackendContract):
     credential_ref: str | None = None
 
 
+class InternalMcpRpcRequest(BackendContract):
+    org_id: str
+    user_id: str
+    payload: dict[str, Any]
+
+    @field_validator("org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return normalize_id(value)
+
+    @field_validator("payload")
+    @classmethod
+    def _validate_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("payload must not be empty")
+        return value
+
+
+class InternalMcpRpcResponse(BackendContract):
+    payload: dict[str, Any]
+
+
 class TokenEnvelope(BackendContract):
     connection_id: str = Field(default_factory=lambda: uuid4().hex)
     server_id: str
@@ -439,6 +471,7 @@ class TokenEnvelope(BackendContract):
     user_id: str
     encrypted_access_token: str
     encrypted_refresh_token: str | None = None
+    token_type: str = "Bearer"
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -467,7 +500,9 @@ class SkillAuditEventRecord(BackendContract):
 class OAuthTokenRequest(BackendContract):
     access_token: str
     refresh_token: str | None = None
+    token_type: str = "Bearer"
     expires_at: datetime | None = None
+    scope: str | None = None
 
     @model_validator(mode="after")
     def _require_access_token(self) -> "OAuthTokenRequest":

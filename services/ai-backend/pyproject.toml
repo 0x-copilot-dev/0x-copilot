@@ -21,12 +21,12 @@ dependencies = [
   "python-dotenv",
   "uvicorn",
   "gunicorn",
+  "httpx",
   "psycopg[binary]",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "httpx",
   "pytest",
 ]
 

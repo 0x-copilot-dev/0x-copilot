@@ -9,7 +9,8 @@ import json
 import os
 from secrets import token_urlsafe
 from typing import Protocol
-from urllib.parse import urlencode, urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from backend_app.contracts import (
@@ -18,6 +19,8 @@ from backend_app.contracts import (
     CreateSkillRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
+    InternalMcpRpcRequest,
+    InternalMcpRpcResponse,
     InternalMcpServerCard,
     InternalMcpServerListResponse,
     InternalSkillBundle,
@@ -44,8 +47,40 @@ from backend_app.contracts import (
     TokenEnvelope,
     normalize_skill_slug,
 )
+from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
 from backend_app.token_vault import TokenVault, TokenVaultFactory
+
+
+class Keys:
+    """Stable keys and wire values used by backend MCP service calls."""
+
+    class ContentType:
+        EVENT_STREAM = "text/event-stream"
+        JSON = "application/json"
+        JSON_OR_EVENT_STREAM = "application/json, text/event-stream"
+
+    class Encoding:
+        UTF_8 = "utf-8"
+
+    class Header:
+        ACCEPT = "accept"
+        AUTHORIZATION = "authorization"
+        CONTENT_TYPE = "content-type"
+
+    class HttpMethod:
+        POST = "POST"
+
+    class Sse:
+        DATA_PREFIX = "data:"
+        DONE = "[DONE]"
+
+
+class Values:
+    """Stable values used by backend MCP service calls."""
+
+    class Auth:
+        BEARER = "Bearer"
 
 
 class OAuthTokenExchanger(Protocol):
@@ -57,12 +92,37 @@ class OAuthTokenExchanger(Protocol):
         record: McpServerRecord,
         session: McpAuthSessionRecord,
         code: str,
+        token_vault: TokenVault,
     ) -> OAuthTokenRequest:
         """Return tokens for a verified OAuth callback."""
 
 
-class HttpOAuthTokenExchanger:
-    """HTTP form-post OAuth code exchanger for MCP servers."""
+class OAuthDiscoveryClient(Protocol):
+    """Prepare OAuth metadata and authorization URLs for a remote MCP server."""
+
+    def authorization(
+        self,
+        *,
+        record: McpServerRecord,
+        redirect_uri: str,
+        state: str,
+        code_challenge: str,
+        token_vault: TokenVault,
+    ):
+        """Return an authorization URL plus updated discovery metadata."""
+
+    def refresh_token(
+        self,
+        *,
+        record: McpServerRecord,
+        refresh_token: str,
+        token_vault: TokenVault,
+    ) -> OAuthTokenRequest:
+        """Refresh an expiring access token."""
+
+
+class HttpOAuthTokenExchanger(RemoteMcpOAuthClient):
+    """Backward-compatible name for the remote MCP OAuth client."""
 
     def exchange_code(
         self,
@@ -70,59 +130,14 @@ class HttpOAuthTokenExchanger:
         record: McpServerRecord,
         session: McpAuthSessionRecord,
         code: str,
+        token_vault: TokenVault,
     ) -> OAuthTokenRequest:
-        token_url = f"{record.url.rstrip('/')}/oauth/token"
-        body = urlencode(
-            {
-                "grant_type": "authorization_code",
-                "client_id": "enterprise-search",
-                "code": code,
-                "redirect_uri": session.redirect_uri,
-                "code_verifier": session.code_verifier,
-            }
-        ).encode("utf-8")
-        request = Request(
-            token_url,
-            data=body,
-            headers={
-                "accept": "application/json",
-                "content-type": "application/x-www-form-urlencoded",
-            },
-            method="POST",
+        return super().exchange_code(
+            record=record,
+            session=session,
+            code=code,
+            token_vault=token_vault,
         )
-        with urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("OAuth token endpoint returned an invalid response")
-        expires_at = self._expires_at(payload.get("expires_in"))
-        return OAuthTokenRequest(
-            access_token=self._required_text(payload, "access_token"),
-            refresh_token=self._optional_text(payload.get("refresh_token")),
-            expires_at=expires_at,
-        )
-
-    @staticmethod
-    def _required_text(payload: dict[str, object], key: str) -> str:
-        value = payload.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"OAuth token endpoint response missing {key}")
-        return value
-
-    @staticmethod
-    def _optional_text(value: object) -> str | None:
-        if value is None:
-            return None
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("OAuth token endpoint response has invalid refresh_token")
-        return value
-
-    @staticmethod
-    def _expires_at(value: object) -> datetime | None:
-        if value is None:
-            return None
-        if not isinstance(value, int) or value <= 0:
-            raise ValueError("OAuth token endpoint response has invalid expires_in")
-        return datetime.now(UTC) + timedelta(seconds=value)
 
 
 class McpRegistryService:
@@ -134,11 +149,13 @@ class McpRegistryService:
         store: InMemoryMcpStore | None = None,
         token_vault: TokenVault | None = None,
         token_exchanger: OAuthTokenExchanger | None = None,
+        oauth_client: OAuthDiscoveryClient | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or self._default_store()
         self.token_vault = token_vault or TokenVaultFactory.create()
-        self.token_exchanger = token_exchanger or HttpOAuthTokenExchanger()
+        self.oauth_client = oauth_client or HttpOAuthTokenExchanger()
+        self.token_exchanger = token_exchanger or self.oauth_client
         self.auth_session_ttl = auth_session_ttl
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
@@ -238,32 +255,34 @@ class McpRegistryService:
 
         verifier = token_urlsafe(64)
         expires_at = datetime.now(UTC) + self.auth_session_ttl
-        auth_url = self._oauth_authorization_url(
-            record=record, redirect_uri=request.redirect_uri
-        )
         session = McpAuthSessionRecord(
             server_id=record.server_id,
             org_id=record.org_id,
             user_id=record.user_id,
             code_verifier=verifier,
             redirect_uri=request.redirect_uri,
-            auth_url=auth_url,
+            auth_url=record.url,
             expires_at=expires_at,
         )
-        session = self.store.create_auth_session(session)
-        auth_url = self._oauth_authorization_url(
+        authorization = self.oauth_client.authorization(
             record=record,
             redirect_uri=request.redirect_uri,
             state=session.state,
             code_challenge=self._code_challenge(session.code_verifier),
+            token_vault=self.token_vault,
         )
-        session = session.model_copy(update={"auth_url": auth_url})
+        session = session.model_copy(update={"auth_url": authorization.auth_url})
         self.store.create_auth_session(session)
-        updated = self._update_record(record, auth_state=McpAuthState.AUTH_PENDING)
+        updated = self._update_record(
+            record,
+            auth_state=McpAuthState.AUTH_PENDING,
+            last_discovery=authorization.discovery,
+            required_scopes=authorization.required_scopes,
+        )
         self._audit(updated, "mcp_auth_started")
         return McpAuthStartResponse(
             server_id=record.server_id,
-            auth_url=auth_url,
+            auth_url=authorization.auth_url,
             expires_at=session.expires_at,
         )
 
@@ -276,8 +295,18 @@ class McpRegistryService:
             user_id=session.user_id,
             server_id=session.server_id,
         )
+        if request.error is not None:
+            updated = self._update_record(record, auth_state=McpAuthState.AUTH_FAILED)
+            self._audit(updated, "mcp_auth_failed")
+            detail = request.error_description or request.error
+            raise ValueError(f"MCP auth failed: {detail}")
+        if request.code is None:
+            raise ValueError("MCP auth callback did not include an authorization code")
         tokens = self.token_exchanger.exchange_code(
-            record=record, session=session, code=request.code
+            record=record,
+            session=session,
+            code=request.code,
+            token_vault=self.token_vault,
         )
         self.store.put_token(
             TokenEnvelope(
@@ -290,6 +319,7 @@ class McpRegistryService:
                     if tokens.refresh_token is not None
                     else None
                 ),
+                token_type=tokens.token_type,
                 expires_at=tokens.expires_at,
             )
         )
@@ -340,6 +370,22 @@ class McpRegistryService:
             credential_ref=credential_ref,
         )
 
+    def proxy_internal_rpc(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        request: InternalMcpRpcRequest,
+    ) -> InternalMcpRpcResponse:
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        token = self._require_valid_token(record)
+        access_token = self.token_vault.decrypt(token.encrypted_access_token)
+        payload = self._post_remote_mcp_rpc(record.url, request.payload, access_token)
+        return InternalMcpRpcResponse(payload=payload)
+
     def upsert_token_for_test(
         self,
         *,
@@ -362,6 +408,7 @@ class McpRegistryService:
                     if request.refresh_token is not None
                     else None
                 ),
+                token_type=request.token_type,
                 expires_at=request.expires_at,
             )
         )
@@ -374,6 +421,90 @@ class McpRegistryService:
     ) -> McpServerRecord:
         updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         return self.store.update_server(updated)
+
+    def _require_valid_token(self, record: McpServerRecord) -> TokenEnvelope:
+        token = self.store.get_token(server_id=record.server_id)
+        if token is None:
+            raise ValueError("MCP server is not authenticated")
+        if token.expires_at is None or token.expires_at > datetime.now(UTC) + timedelta(
+            seconds=60
+        ):
+            return token
+        if token.encrypted_refresh_token is None:
+            raise ValueError(
+                "MCP access token expired and no refresh token is available"
+            )
+        refresh_token = self.token_vault.decrypt(token.encrypted_refresh_token)
+        refresher = getattr(self.token_exchanger, "refresh_token", None)
+        if not callable(refresher):
+            raise ValueError("MCP access token refresh is not supported")
+        refreshed = refresher(
+            record=record,
+            refresh_token=refresh_token,
+            token_vault=self.token_vault,
+        )
+        updated = self.store.put_token(
+            TokenEnvelope(
+                connection_id=token.connection_id,
+                server_id=record.server_id,
+                org_id=record.org_id,
+                user_id=record.user_id,
+                encrypted_access_token=self.token_vault.encrypt(refreshed.access_token),
+                encrypted_refresh_token=(
+                    self.token_vault.encrypt(refreshed.refresh_token)
+                    if refreshed.refresh_token is not None
+                    else token.encrypted_refresh_token
+                ),
+                token_type=refreshed.token_type,
+                expires_at=refreshed.expires_at,
+                created_at=token.created_at,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        return updated
+
+    @staticmethod
+    def _post_remote_mcp_rpc(
+        server_url: str, payload: dict[str, object], access_token: str
+    ) -> dict[str, object]:
+        request = Request(
+            server_url,
+            data=json.dumps(payload).encode(Keys.Encoding.UTF_8),
+            headers={
+                Keys.Header.ACCEPT: Keys.ContentType.JSON_OR_EVENT_STREAM,
+                Keys.Header.AUTHORIZATION: f"{Values.Auth.BEARER} {access_token}",
+                Keys.Header.CONTENT_TYPE: Keys.ContentType.JSON,
+            },
+            method=Keys.HttpMethod.POST,
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                decoded = McpRegistryService._decode_remote_mcp_response(
+                    response.read().decode(Keys.Encoding.UTF_8),
+                    response.headers.get(Keys.Header.CONTENT_TYPE, ""),
+                )
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise ValueError("MCP server rejected the stored OAuth token") from exc
+            raise ValueError("MCP server request failed") from exc
+        except (URLError, TimeoutError) as exc:
+            raise ValueError("MCP server is unavailable") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("MCP server returned an invalid JSON-RPC response")
+        return decoded
+
+    @staticmethod
+    def _decode_remote_mcp_response(raw: str, content_type: str) -> object:
+        if content_type.lower().startswith(Keys.ContentType.EVENT_STREAM):
+            for line in raw.splitlines():
+                if not line.startswith(Keys.Sse.DATA_PREFIX):
+                    continue
+                data = line.removeprefix(Keys.Sse.DATA_PREFIX).strip()
+                if not data or data == Keys.Sse.DONE:
+                    continue
+                return json.loads(data)
+            return {}
+        return json.loads(raw or "{}")
 
     @classmethod
     def _default_store(cls) -> InMemoryMcpStore:
@@ -430,28 +561,6 @@ class McpRegistryService:
         if record.auth_state in {McpAuthState.AUTHENTICATED, McpAuthState.AUTH_SKIPPED}:
             return f"{record.display_name} MCP server."
         return f"{record.display_name} MCP server requires authentication before tools can load."
-
-    @classmethod
-    def _oauth_authorization_url(
-        cls,
-        *,
-        record: McpServerRecord,
-        redirect_uri: str,
-        state: str | None = None,
-        code_challenge: str | None = None,
-    ) -> str:
-        query = {
-            "client_id": "enterprise-search",
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": "mcp",
-        }
-        if state is not None:
-            query["state"] = state
-        if code_challenge is not None:
-            query["code_challenge"] = code_challenge
-            query["code_challenge_method"] = "S256"
-        return f"{record.url.rstrip('/')}/oauth/authorize?{urlencode(query)}"
 
     @classmethod
     def _code_challenge(cls, verifier: str) -> str:

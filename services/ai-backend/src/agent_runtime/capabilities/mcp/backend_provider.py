@@ -18,15 +18,20 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthState,
     McpConnectionMetadata,
+    McpResourceAccessPolicy,
     McpResourceDescriptor,
+    McpRiskLevel,
     McpServerCard,
     McpToolDescriptor,
 )
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClient,
+    McpConnectionError,
+    McpTimeoutError,
     RawMcpConnectionMetadata,
 )
+from agent_runtime.capabilities.mcp.constants import Keys, Values
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 
 
@@ -43,8 +48,8 @@ class BackendMcpProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
             params={
-                "org_id": self.runtime_context.org_id,
-                "user_id": self.runtime_context.user_id,
+                Keys.Field.ORG_ID: self.runtime_context.org_id,
+                Keys.Field.USER_ID: self.runtime_context.user_id,
             },
             headers=BackendMcpServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
@@ -72,9 +77,9 @@ class BackendMcpProvider:
         response = httpx.post(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/auth/start",
             json={
-                "org_id": runtime_context.org_id,
-                "user_id": runtime_context.user_id,
-                "redirect_uri": self.auth_redirect_uri,
+                Keys.Field.ORG_ID: runtime_context.org_id,
+                Keys.Field.USER_ID: runtime_context.user_id,
+                Keys.Field.REDIRECT_URI: self.auth_redirect_uri,
             },
             headers=BackendMcpServiceAuth.headers(runtime_context),
             timeout=self.timeout_seconds,
@@ -116,6 +121,8 @@ class BackendMcpClient:
     card: McpServerCard
     timeout_seconds: float = 10
     server_url: str | None = None
+    initialized: bool = False
+    request_id: int = 0
 
     async def connect(self) -> RawMcpConnectionMetadata:
         if self.card.auth_state not in {
@@ -128,16 +135,17 @@ class BackendMcpClient:
             response = await client.post(
                 f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
                 params={
-                    "org_id": self.runtime_context.org_id,
-                    "user_id": self.runtime_context.user_id,
+                    Keys.Field.ORG_ID: self.runtime_context.org_id,
+                    Keys.Field.USER_ID: self.runtime_context.user_id,
                 },
                 headers=BackendMcpServiceAuth.headers(self.runtime_context),
             )
         response.raise_for_status()
         payload = response.json()
-        if payload.get("auth_state") != McpAuthState.AUTHENTICATED.value:
+        if payload.get(Keys.Field.AUTH_STATE) != McpAuthState.AUTHENTICATED.value:
             raise McpAuthError("MCP server is not authenticated.")
-        self.server_url = str(payload["url"]).rstrip("/")
+        self.server_url = str(payload[Keys.Field.URL]).rstrip("/")
+        await self._initialize()
         return McpConnectionMetadata(
             server_name=self.card.name,
             transport=self.card.transport,
@@ -145,28 +153,162 @@ class BackendMcpClient:
         )
 
     async def list_tools(self) -> tuple[McpToolDescriptor | dict[str, Any], ...]:
-        return await self._get_descriptor_list("/tools")
+        result = await self._rpc_result(Values.JsonRpcMethod.LIST_TOOLS)
+        tools = result.get(Keys.Field.TOOLS, ())
+        if not isinstance(tools, list):
+            return ()
+        return tuple(
+            self._tool_descriptor(tool) for tool in tools if isinstance(tool, dict)
+        )
 
     async def list_resources(
         self,
     ) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
-        return await self._get_descriptor_list("/resources")
-
-    async def _get_descriptor_list(self, path: str) -> tuple[dict[str, Any], ...]:
-        if self.server_url is None:
-            await self.connect()
-        assert self.server_url is not None
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.get(f"{self.server_url}{path}")
-        response.raise_for_status()
-        payload = response.json()
-        if isinstance(payload, dict):
-            values = payload.get(path.strip("/"), ())
-        else:
-            values = payload
-        if not isinstance(values, list):
+        result = await self._rpc_result(Values.JsonRpcMethod.LIST_RESOURCES)
+        resources = result.get(Keys.Field.RESOURCES, ())
+        if not isinstance(resources, list):
             return ()
-        return tuple(item for item in values if isinstance(item, dict))
+        return tuple(
+            self._resource_descriptor(resource)
+            for resource in resources
+            if isinstance(resource, dict)
+        )
+
+    async def _initialize(self) -> None:
+        if self.initialized:
+            return
+        await self._rpc_result(
+            Values.JsonRpcMethod.INITIALIZE,
+            {
+                Keys.JsonRpc.PROTOCOL_VERSION: Values.McpClientInfo.PROTOCOL_VERSION,
+                Keys.JsonRpc.CAPABILITIES: {},
+                Keys.JsonRpc.CLIENT_INFO: {
+                    Keys.Field.NAME: Values.McpClientInfo.NAME,
+                    Keys.Field.VERSION: Values.McpClientInfo.VERSION,
+                },
+            },
+        )
+        await self._rpc(
+            {
+                Keys.JsonRpc.JSONRPC: Values.JsonRpc.VERSION,
+                Keys.JsonRpc.METHOD: Values.JsonRpcMethod.INITIALIZED,
+            }
+        )
+        self.initialized = True
+
+    async def _rpc_result(
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if self.server_url is None and method != Values.JsonRpcMethod.INITIALIZE:
+            await self.connect()
+        self.request_id += 1
+        payload: dict[str, Any] = {
+            Keys.JsonRpc.JSONRPC: Values.JsonRpc.VERSION,
+            Keys.JsonRpc.ID: self.request_id,
+            Keys.JsonRpc.METHOD: method,
+        }
+        if params is not None:
+            payload[Keys.JsonRpc.PARAMS] = params
+        response = await self._rpc(payload)
+        error = response.get(Keys.JsonRpc.ERROR)
+        if isinstance(error, dict):
+            raise McpConnectionError("MCP JSON-RPC request failed.")
+        result = response.get(Keys.JsonRpc.RESULT)
+        if not isinstance(result, dict):
+            return {}
+        return result
+
+    async def _rpc(self, payload: dict[str, Any]) -> dict[str, Any]:
+        server_id = self.card.server_id or self.card.name
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            try:
+                response = await client.post(
+                    f"{self.backend_url.rstrip('/')}"
+                    f"{Values.Route.INTERNAL_MCP_RPC.format(server_id=server_id)}",
+                    json={
+                        Keys.Field.ORG_ID: self.runtime_context.org_id,
+                        Keys.Field.USER_ID: self.runtime_context.user_id,
+                        Keys.JsonRpc.PAYLOAD: payload,
+                    },
+                    headers=BackendMcpServiceAuth.headers(self.runtime_context),
+                )
+            except httpx.TimeoutException as exc:
+                raise McpTimeoutError("MCP JSON-RPC request timed out.") from exc
+            except httpx.HTTPError as exc:
+                raise McpConnectionError("MCP JSON-RPC request failed.") from exc
+        if response.status_code in {401, 403}:
+            raise McpAuthError("MCP server is not authenticated.")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise McpConnectionError("MCP JSON-RPC request failed.") from exc
+        envelope = response.json()
+        rpc_payload = (
+            envelope.get(Keys.JsonRpc.PAYLOAD) if isinstance(envelope, dict) else None
+        )
+        if not isinstance(rpc_payload, dict):
+            raise McpConnectionError("MCP JSON-RPC proxy returned an invalid response.")
+        return rpc_payload
+
+    @classmethod
+    def _tool_descriptor(cls, tool: dict[str, Any]) -> McpToolDescriptor:
+        name = cls._required_string(tool, Keys.Field.NAME, Values.Placeholder.TOOL_NAME)
+        return McpToolDescriptor(
+            name=name,
+            description=cls._optional_string(tool.get("description"))
+            or f"{name} MCP tool.",
+            input_schema=cls._schema(
+                tool.get(Keys.NativeDescriptor.INPUT_SCHEMA_CAMEL)
+                or tool.get(Keys.Field.INPUT_SCHEMA)
+            ),
+            output_shape=cls._schema(
+                tool.get(Keys.NativeDescriptor.OUTPUT_SCHEMA_CAMEL)
+                or {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
+            ),
+            risk_level=McpRiskLevel.MEDIUM,
+        )
+
+    def _resource_descriptor(self, resource: dict[str, Any]) -> McpResourceDescriptor:
+        name = self._required_string(
+            resource, Keys.Field.NAME, Values.Placeholder.RESOURCE_NAME
+        )
+        uri = self._required_string(
+            resource, Keys.Field.URI, f"{Values.UriScheme.MCP}://{name}"
+        )
+        return McpResourceDescriptor(
+            uri=uri,
+            name=name,
+            mime_type=self._optional_string(
+                resource.get(Keys.NativeDescriptor.MIME_TYPE_CAMEL)
+            )
+            or self._optional_string(resource.get(Keys.Field.MIME_TYPE))
+            or Values.Mime.OCTET_STREAM,
+            description=self._optional_string(resource.get("description"))
+            or f"{name} MCP resource.",
+            access_policy=McpResourceAccessPolicy(
+                required_scopes=self.card.required_scopes,
+                read_only=True,
+            ),
+        )
+
+    @staticmethod
+    def _schema(value: object) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        return {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
+
+    @staticmethod
+    def _required_string(payload: dict[str, Any], key: str, fallback: str) -> str:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return fallback
+
+    @staticmethod
+    def _optional_string(value: object) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
 
 
 class BackendMcpServiceAuth:

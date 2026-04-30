@@ -61,20 +61,29 @@ function EnterpriseSearchApp(): ReactElement {
     const params = new URLSearchParams(window.location.search);
     const state = params.get("state");
     const code = params.get("code");
-    if (!state || !code) {
+    const oauthError = params.get("error");
+    const oauthErrorDescription = params.get("error_description");
+    if (!state || (!code && !oauthError)) {
       setOauthStatus(
-        "Connector authentication callback was missing state or code.",
+        "Connector authentication callback was missing state, code, or error.",
       );
       window.history.replaceState({}, "", "/");
       return;
     }
     const callbackState = state;
     const callbackCode = code;
+    const callbackError = oauthError;
+    const callbackErrorDescription = oauthErrorDescription;
 
     let cancelled = false;
     async function finishOAuth(): Promise<void> {
       try {
-        const server = await completeMcpOAuth(callbackState, callbackCode);
+        const server = await completeMcpOAuth(
+          callbackState,
+          callbackCode,
+          callbackError,
+          callbackErrorDescription,
+        );
         if (!cancelled) {
           setOauthStatus(`${server.display_name} is connected.`);
           setScreen("settings");

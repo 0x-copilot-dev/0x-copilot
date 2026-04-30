@@ -9,6 +9,7 @@ from backend_app.contracts import (
     OAuthTokenRequest,
     UpdateMcpServerRequest,
 )
+from backend_app.mcp_oauth import McpAuthorization
 from backend_app.service import McpRegistryService
 from backend_app.store import InMemoryMcpStore
 from backend_app.token_vault import LocalTokenVault, TokenVaultFactory
@@ -20,6 +21,25 @@ class FakeOAuthTokenExchanger:
             access_token=f"access-token-for-{kwargs['code']}",
             refresh_token=f"refresh-token-for-{kwargs['code']}",
         )
+
+
+class FakeOAuthClient:
+    def authorization(self, **kwargs) -> McpAuthorization:
+        return McpAuthorization(
+            auth_url=(
+                "https://auth.example.com/authorize?"
+                f"state={kwargs['state']}&code_challenge={kwargs['code_challenge']}"
+            ),
+            discovery={
+                "authorization_endpoint": "https://auth.example.com/authorize",
+                "token_endpoint": "https://auth.example.com/token",
+                "oauth_client": {"client_id": "client_123"},
+            },
+            required_scopes=("mcp",),
+        )
+
+    def refresh_token(self, **kwargs) -> OAuthTokenRequest:
+        return OAuthTokenRequest(access_token="refreshed-access-token")
 
 
 def test_mcp_registration_skip_and_internal_cards() -> None:
@@ -92,6 +112,7 @@ def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
         store=store,
         token_vault=vault,
         token_exchanger=FakeOAuthTokenExchanger(),
+        oauth_client=FakeOAuthClient(),
     )
     created = service.create_server(
         CreateMcpServerRequest(
@@ -129,7 +150,7 @@ def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
 
 def test_oauth_start_uses_random_pkce_verifiers() -> None:
     store = InMemoryMcpStore()
-    service = McpRegistryService(store=store)
+    service = McpRegistryService(store=store, oauth_client=FakeOAuthClient())
     created = service.create_server(
         CreateMcpServerRequest(
             org_id="org_123",
@@ -160,6 +181,36 @@ def test_oauth_start_uses_random_pkce_verifiers() -> None:
 
     assert len(verifiers) == 2
     assert first_verifier in verifiers
+
+
+def test_oauth_start_caches_discovery_and_required_scopes() -> None:
+    store = InMemoryMcpStore()
+    service = McpRegistryService(store=store, oauth_client=FakeOAuthClient())
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://mcp.example.com",
+            display_name="Drive MCP",
+        )
+    )
+
+    auth = service.start_auth(
+        server_id=created.server_id,
+        request=McpAuthStartRequest(
+            org_id="org_123",
+            user_id="user_123",
+            redirect_uri="http://localhost:5173/mcp/oauth/callback",
+        ),
+    )
+    record = store.get_server(org_id="org_123", server_id=created.server_id)
+
+    assert "code_challenge=" in auth.auth_url
+    assert record is not None
+    assert record.required_scopes == ("mcp",)
+    assert record.last_discovery["authorization_endpoint"] == (
+        "https://auth.example.com/authorize"
+    )
 
 
 def test_url_validation_rejects_localhost() -> None:

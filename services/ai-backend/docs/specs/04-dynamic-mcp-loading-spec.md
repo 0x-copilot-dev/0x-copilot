@@ -17,6 +17,12 @@ Implemented modules:
 
 MCP clients should be async-ready and replaceable with fakes.
 
+Backend-backed remote MCP servers use JSON-RPC through `services/backend`
+internal APIs. The AI backend calls the backend MCP RPC proxy for `initialize`,
+`notifications/initialized`, `tools/list`, and `resources/list`; backend owns
+OAuth discovery, dynamic client registration, token storage, refresh, and
+outbound bearer headers to the remote MCP server.
+
 ## Pydantic Contracts
 
 Required models:
@@ -28,6 +34,10 @@ Required models:
 - `McpLoadResult`: descriptors, connection metadata, and typed warnings.
 
 All server-provided schemas must be validated before they are shown to the agent.
+Native MCP descriptors are mapped into these contracts at the client boundary:
+`inputSchema` becomes `input_schema`, missing tool descriptions receive safe
+fallback text, and resources receive read-only access policies based on server
+card scopes.
 
 ## Design Rules
 
@@ -43,6 +53,8 @@ All server-provided schemas must be validated before they are shown to the agent
 - Reject malformed schemas, duplicate names, and unsupported transports.
 - Handle timeout, auth failure, and server unavailable errors.
 - Ensure collision with local tools is deterministic.
+- Verify backend-backed clients issue JSON-RPC through the internal proxy and map
+  native MCP descriptors into validated runtime descriptors.
 
 ## Edge Cases
 

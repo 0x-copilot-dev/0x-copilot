@@ -99,9 +99,20 @@ export async function skipMcpAuth(
 
 export async function completeMcpOAuth(
   state: string,
-  code: string,
+  code?: string | null,
+  error?: string | null,
+  errorDescription?: string | null,
 ): Promise<McpServer> {
-  const params = new URLSearchParams({ state, code });
+  const params = new URLSearchParams({ state });
+  if (code) {
+    params.set("code", code);
+  }
+  if (error) {
+    params.set("error", error);
+  }
+  if (errorDescription) {
+    params.set("error_description", errorDescription);
+  }
   const response = await fetch(`/v1/mcp/oauth/callback?${params}`);
   await assertOk(response);
   return (await response.json()) as McpServer;

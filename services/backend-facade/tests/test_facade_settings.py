@@ -281,7 +281,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         )
         callback_response = client.get(
             "/v1/mcp/oauth/callback",
-            params={"state": "state_123", "code": "code_123"},
+            params={
+                "state": "state_123",
+                "error": "access_denied",
+                "error_description": "Denied",
+            },
             headers=self.auth_headers(monkeypatch),
         )
 
@@ -291,3 +295,8 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert calls[0][0][2] == "/v1/mcp/servers/srv_123"
         assert calls[1][0][1] == "GET"
         assert calls[1][0][2] == "/v1/mcp/oauth/callback"
+        assert calls[1][1]["params"] == {
+            "state": "state_123",
+            "error": "access_denied",
+            "error_description": "Denied",
+        }
