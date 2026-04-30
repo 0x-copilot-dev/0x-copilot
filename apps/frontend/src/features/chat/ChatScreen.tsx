@@ -85,8 +85,9 @@ export function ChatScreen({
   const handleEvent = useCallback((event: RuntimeEventEnvelope) => {
     latestSequenceRef.current = Math.max(latestSequenceRef.current, event.sequence_no);
     setItems((current) => applyRuntimeEvent(current, event));
-    if (event.event_type === "run_started") {
-      setStatus("Working...");
+    const liveStatus = statusForRuntimeEvent(event);
+    if (liveStatus) {
+      setStatus(liveStatus);
     }
     if (
       event.event_type === "run_completed" ||
@@ -328,4 +329,42 @@ export function ChatScreen({
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
+  if (event.event_type === "run_started") {
+    return "Working...";
+  }
+  if (event.event_type === "model_delta") {
+    return "Writing answer...";
+  }
+  if (event.event_type === "reasoning_summary" || event.event_type === "reasoning_summary_delta") {
+    return event.parent_task_id || event.subagent_id ? "Subagent thinking..." : "Thinking...";
+  }
+  if (
+    event.event_type === "tool_call" ||
+    event.event_type === "tool_call_started" ||
+    event.event_type === "tool_call_delta"
+  ) {
+    const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
+    return `Using ${toolName}...`;
+  }
+  if (event.event_type === "tool_result" || event.event_type === "tool_call_completed") {
+    const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
+    return `${toolName} finished`;
+  }
+  if (
+    event.event_type === "subagent_started" ||
+    event.event_type === "subagent_progress" ||
+    event.event_type === "subagent_update"
+  ) {
+    const subagentName = event.subagent_id ?? stringPayload(event.payload, "subagent_name") ?? "Subagent";
+    return `${subagentName} working...`;
+  }
+  return null;
+}
+
+function stringPayload(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value : null;
 }

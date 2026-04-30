@@ -37,7 +37,7 @@ _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SCOPE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?::[a-z0-9][a-z0-9_.-]*)*$")
 
 JsonScalar: TypeAlias = str | int | float | bool | None
-JsonValue: TypeAlias = JsonScalar | dict[str, JsonScalar] | list[JsonScalar]
+JsonValue: TypeAlias = JsonScalar | dict[str, object] | list[object]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 

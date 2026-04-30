@@ -44,11 +44,24 @@ p {
   white-space: normal;
 }
 
+.reasoning-markdown {
+  color: var(--color-text);
+  white-space: normal;
+}
+
 .assistant-markdown :where(p, ul, ol, pre, blockquote, table) {
   margin: 0 0 var(--space-md);
 }
 
+.reasoning-markdown :where(p, ul, ol, pre, blockquote, table) {
+  margin: 0 0 var(--space-xs);
+}
+
 .assistant-markdown :where(p:last-child, ul:last-child, ol:last-child, pre:last-child, blockquote:last-child, table:last-child) {
+  margin-bottom: 0;
+}
+
+.reasoning-markdown :where(p:last-child, ul:last-child, ol:last-child, pre:last-child, blockquote:last-child, table:last-child) {
   margin-bottom: 0;
 }
 
@@ -56,11 +69,23 @@ p {
   color: var(--color-text);
 }
 
+.reasoning-markdown :where(p, li) {
+  color: var(--color-text);
+}
+
 .assistant-markdown :where(a) {
   color: var(--color-accent-strong);
 }
 
+.reasoning-markdown :where(a) {
+  color: var(--color-accent-strong);
+}
+
 .assistant-markdown :where(code, pre) {
+  font-family: var(--font-mono);
+}
+
+.reasoning-markdown :where(code, pre) {
   font-family: var(--font-mono);
 }
 

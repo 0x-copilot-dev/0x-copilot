@@ -1,6 +1,7 @@
 import { Badge, Card } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { Streamdown } from "streamdown";
 import type {
   ActivityEvent,
   ActivityStatus,
@@ -129,7 +130,9 @@ export function ReasoningSummaryStream({
       {items.length > 0 ? (
         <div className="reasoning-summary-stream__items">
           {items.map((item) => (
-            <p key={item.id}>{item.text}</p>
+            <Streamdown key={item.id} className="reasoning-markdown" mode="streaming">
+              {item.text}
+            </Streamdown>
           ))}
         </div>
       ) : (
