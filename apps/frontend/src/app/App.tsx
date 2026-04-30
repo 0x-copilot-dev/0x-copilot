@@ -1,0 +1,76 @@
+import { ThemeProvider } from "@enterprise-search/design-system";
+import type { ReactElement } from "react";
+import { useEffect, useState } from "react";
+import "@enterprise-search/design-system/styles.css";
+import "../styles.css";
+import { completeMcpOAuth } from "../api/mcpApi";
+import { ChatScreen } from "../features/chat/ChatScreen";
+import { useConnectors } from "../features/connectors/useConnectors";
+import { SettingsScreen } from "../features/settings/SettingsScreen";
+
+type Screen = "chat" | "settings";
+
+export default function App(): ReactElement {
+  return (
+    <ThemeProvider defaultScheme="dark">
+      <EnterpriseSearchApp />
+    </ThemeProvider>
+  );
+}
+
+function EnterpriseSearchApp(): ReactElement {
+  const connectors = useConnectors();
+  const [screen, setScreen] = useState<Screen>("chat");
+  const [oauthStatus, setOauthStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (window.location.pathname !== "/mcp/oauth/callback") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const state = params.get("state");
+    const code = params.get("code");
+    if (!state || !code) {
+      setOauthStatus("Connector authentication callback was missing state or code.");
+      window.history.replaceState({}, "", "/");
+      return;
+    }
+    const callbackState = state;
+    const callbackCode = code;
+
+    let cancelled = false;
+    async function finishOAuth(): Promise<void> {
+      try {
+        const server = await completeMcpOAuth(callbackState, callbackCode);
+        if (!cancelled) {
+          setOauthStatus(`${server.display_name} is connected.`);
+          setScreen("settings");
+          await connectors.refresh();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setOauthStatus(err instanceof Error ? err.message : "Connector authentication failed.");
+        }
+      } finally {
+        window.history.replaceState({}, "", "/");
+      }
+    }
+
+    void finishOAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectors.refresh]);
+
+  if (screen === "settings") {
+    return <SettingsScreen connectors={connectors} onBackToChat={() => setScreen("chat")} />;
+  }
+
+  return (
+    <ChatScreen
+      connectors={connectors}
+      onOpenSettings={() => setScreen("settings")}
+      oauthStatus={oauthStatus}
+    />
+  );
+}
