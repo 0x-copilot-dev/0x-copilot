@@ -156,6 +156,7 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         _messages: Sequence[object],
     ):
         yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "Hello"}]), {})}
+        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "\n"}]), {})}
         yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": " there"}]), {})}
         yield {
             "type": "updates",
@@ -168,7 +169,7 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
                 }
             },
         }
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Hello there"}]}}
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Hello\n there"}]}}
 
     worker = RuntimeWorker(
         persistence=store,
@@ -192,18 +193,22 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         "run_started",
         "model_delta",
         "model_delta",
+        "model_delta",
         "final_response",
         "run_completed",
     ]
-    assert [event.payload for event in events if event.event_type == "model_delta"] == [
+    model_delta_events = [event for event in events if event.event_type == "model_delta"]
+    assert [event.payload for event in model_delta_events] == [
         {"delta": "Hello", "message": "Hello"},
+        {"delta": "\n", "message": "\n"},
         {"delta": " there", "message": " there"},
     ]
+    assert [event.summary for event in model_delta_events] == ["Hello", None, "there"]
     assert "progress" not in [event.event_type for event in events]
     assistant_messages = [
         message for message in store.messages.values() if message.role == "assistant"
     ]
-    assert assistant_messages[0].content_text == "Hello there"
+    assert assistant_messages[0].content_text == "Hello\n there"
 
 
 def test_runtime_worker_persists_mcp_auth_required_event() -> None:

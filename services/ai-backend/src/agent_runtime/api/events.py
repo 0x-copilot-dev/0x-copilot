@@ -50,10 +50,10 @@ class RuntimeEventProducer:
             payload=safe_payload,
             metadata=safe_metadata,
         )
-        if summary is not None:
-            presentation["summary"] = summary
-        if status is not None:
-            presentation["status"] = status
+        if summary is not None and (safe_summary := summary.strip()):
+            presentation["summary"] = safe_summary
+        if status is not None and (safe_status := status.strip()):
+            presentation["status"] = safe_status
         envelope = self.event_store.append_event(
             RuntimeEventDraft(
                 run_id=run.run_id,
