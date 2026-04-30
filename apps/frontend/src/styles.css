@@ -1,0 +1,122 @@
+:root {
+  color: #172033;
+  background: #f6f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button,
+.auth-card a {
+  border: 0;
+  border-radius: 12px;
+  background: #1d4ed8;
+  color: white;
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  text-decoration: none;
+}
+
+button.secondary {
+  background: #e7ecf8;
+  color: #1f2a44;
+}
+
+.shell {
+  display: grid;
+  gap: 1rem;
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 3rem 1.5rem;
+}
+
+.hero,
+.panel,
+.server-card,
+.auth-card {
+  background: white;
+  border: 1px solid #e3e8f4;
+  border-radius: 24px;
+  box-shadow: 0 18px 60px rgba(42, 51, 75, 0.08);
+  padding: 1.25rem;
+}
+
+.hero {
+  padding: 2rem;
+}
+
+.eyebrow {
+  color: #5f6f95;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+.row,
+.actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+input {
+  border: 1px solid #cfd8ec;
+  border-radius: 12px;
+  flex: 1;
+  padding: 0.75rem 1rem;
+}
+
+.server-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.server-card {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr auto auto;
+}
+
+.server-card p,
+.muted {
+  color: #5f6f95;
+}
+
+.badge {
+  background: #edf2ff;
+  border-radius: 999px;
+  color: #1d4ed8;
+  padding: 0.35rem 0.7rem;
+}
+
+.authenticated {
+  background: #e8f8ef;
+  color: #047857;
+}
+
+.auth_failed,
+.error {
+  color: #b42318;
+}
+
+.auth-card {
+  border-color: #b7c7ff;
+  display: grid;
+  gap: 0.75rem;
+}

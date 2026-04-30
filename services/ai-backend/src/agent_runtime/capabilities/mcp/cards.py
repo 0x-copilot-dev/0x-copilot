@@ -44,6 +44,17 @@ class McpAuthMode(StrEnum):
     SERVICE_ACCOUNT = Values.AuthMode.SERVICE_ACCOUNT
 
 
+class McpAuthState(StrEnum):
+    """Authentication state disclosed without exposing credentials."""
+
+    UNAUTHENTICATED = Values.AuthState.UNAUTHENTICATED
+    AUTH_SKIPPED = Values.AuthState.AUTH_SKIPPED
+    AUTH_PENDING = Values.AuthState.AUTH_PENDING
+    AUTHENTICATED = Values.AuthState.AUTHENTICATED
+    AUTH_FAILED = Values.AuthState.AUTH_FAILED
+    AUTH_UNSUPPORTED = Values.AuthState.AUTH_UNSUPPORTED
+
+
 class McpServerHealth(StrEnum):
     """Health states used before a server card is visible or loadable."""
 
@@ -91,12 +102,15 @@ class McpServerCard(RuntimeContract):
     """Compact MCP server summary visible before explicit loading."""
 
     name: str
+    server_id: str | None = None
+    display_name: str | None = None
     short_description: str = Field(
         min_length=1,
         max_length=Limits.CARD_DESCRIPTION_MAX_LENGTH,
     )
     transport: McpTransport
     auth_mode: McpAuthMode
+    auth_state: McpAuthState = McpAuthState.AUTHENTICATED
     required_scopes: frozenset[str] = Field(default_factory=frozenset)
     health: McpServerHealth
     load_cost: PositiveInt = Field(le=Limits.LOAD_COST_MAX)
@@ -109,6 +123,20 @@ class McpServerCard(RuntimeContract):
     def _normalize_name(cls, value: object) -> str:
         return McpValueNormalizer.normalize_slug(value, Keys.Field.NAME)
 
+    @field_validator(Keys.Field.SERVER_ID)
+    @classmethod
+    def _normalize_optional_server_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return McpValueNormalizer.normalize_id(value, Keys.Field.SERVER_ID)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_optional_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return McpValueNormalizer.normalize_nonempty_string(value, "display_name")
+
     @field_validator(Keys.Field.SHORT_DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
@@ -120,6 +148,7 @@ class McpServerCard(RuntimeContract):
     @field_validator(
         Keys.Field.TRANSPORT,
         Keys.Field.AUTH_MODE,
+        Keys.Field.AUTH_STATE,
         Keys.Field.HEALTH,
         mode="before",
     )

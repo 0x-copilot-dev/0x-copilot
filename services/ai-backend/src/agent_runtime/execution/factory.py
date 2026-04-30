@@ -16,6 +16,9 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.capabilities.mcp.loader import McpLoader
+from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
+from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
 from agent_runtime.capabilities.skills.constants import Keys as SkillKeys
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 
@@ -69,10 +72,19 @@ def create_agent_runtime(
     )
 
     try:
-        agent = builder(
+        model_tools = _model_visible_tools(
             tools=tools,
-            model_config=runtime_context.model_profile,
+            mcp_registry=runtime_dependencies.mcp_registry,
+            runtime_context=runtime_context,
+        )
+        model_instructions = _instructions_with_mcp_cards(
             instructions=instructions,
+            mcp_servers=mcp_servers,
+        )
+        agent = builder(
+            tools=model_tools,
+            model_config=runtime_context.model_profile,
+            instructions=model_instructions,
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             subagents=subagents,
@@ -141,6 +153,60 @@ def _build_deep_agent(
         if memory_paths:
             create_kwargs["memory"] = list(memory_paths)
     return create_deep_agent(**create_kwargs)
+
+
+def _model_visible_tools(
+    *,
+    tools: Sequence[object],
+    mcp_registry: object,
+    runtime_context: AgentRuntimeContext,
+) -> tuple[object, ...]:
+    model_tools = list(tools)
+    if callable(getattr(mcp_registry, "resolve_server", None)):
+        loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
+        model_tools.append(LoadMcpServerTool(loader=loader, runtime_context=runtime_context))
+    auth_session_creator = _auth_session_creator(mcp_registry)
+    if auth_session_creator is not None:
+        model_tools.append(
+            AuthMcpTool(
+                auth_session_creator=auth_session_creator,
+                runtime_context=runtime_context,
+            )
+        )
+    return tuple(model_tools)
+
+
+def _auth_session_creator(mcp_registry: object) -> object | None:
+    providers = getattr(mcp_registry, "providers", ())
+    for provider in providers:
+        if callable(getattr(provider, "create_auth_session", None)):
+            return provider
+    return None
+
+
+def _instructions_with_mcp_cards(*, instructions: str, mcp_servers: Sequence[object]) -> str:
+    if not mcp_servers:
+        return instructions
+    card_lines = []
+    for server in mcp_servers:
+        name = getattr(server, "name", str(server))
+        description = getattr(server, "short_description", "")
+        auth_state = getattr(server, "auth_state", None)
+        auth_value = getattr(auth_state, "value", auth_state) or "unknown"
+        server_id = getattr(server, "server_id", None) or name
+        display_name = getattr(server, "display_name", None) or name
+        card_lines.append(
+            f"- {name} ({display_name}, id={server_id}, auth_state={auth_value}): {description}"
+        )
+    return "\n\n".join(
+        (
+            instructions,
+            "Available MCP servers are compact cards. If a needed MCP server is not "
+            "authenticated, call auth_mcp before trying to load its tools. If it is "
+            "authenticated, call load_mcp_server by stable server name before using its tools.",
+            "\n".join(card_lines),
+        )
+    )
 
 
 def _is_deepagents_backend(memory_backend: object | None) -> bool:

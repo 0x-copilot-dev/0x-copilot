@@ -52,6 +52,22 @@ Owns stable design tokens and shared UI primitives. Do not force native and web 
 
 Use shared packages for stable contracts and cross-cutting primitives. Do not create a shared package merely to avoid a small amount of duplication. Premature sharing hides ownership and slows future changes.
 
+## Cross-Component Dependency Rule
+
+Deployable apps and services must not import one another's implementation code.
+Allowed integration mechanisms are:
+
+- HTTP APIs exposed by the owning service.
+- Queues, jobs, or events with documented payload contracts.
+- Generated clients and stable contract types from `packages/api-types`.
+- Shared configuration packages that contain no business logic.
+
+Examples:
+
+- `apps/frontend` may import generated API types, but must call `backend-facade` over HTTP/SSE.
+- `services/backend-facade` may call `services/backend` and `services/ai-backend` APIs, but must not import their Python modules.
+- `services/ai-backend` may call backend-owned MCP registry APIs through typed clients, but must not import backend store or auth code.
+
 ## Contract Rule
 
 Every service boundary needs:
@@ -59,6 +75,6 @@ Every service boundary needs:
 - A typed API contract.
 - A versioning or migration story.
 - Unit tests around serialization and validation.
-- A Docker/deploy story for backend services.
+- A component-local dependency environment, Dockerfile, and deploy story.
 - Observability and safe error handling.
 

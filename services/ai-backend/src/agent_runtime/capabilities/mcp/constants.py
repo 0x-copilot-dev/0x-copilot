@@ -16,6 +16,7 @@ class Keys:
         ALLOWED_ORG_IDS = "allowed_org_ids"
         ALLOWED_USER_IDS = "allowed_user_ids"
         AUTH_MODE = "auth_mode"
+        AUTH_STATE = "auth_state"
         CODE = "code"
         CONNECTED_AT = "connected_at"
         CONNECTION_ID = "connection_id"
@@ -37,6 +38,7 @@ class Keys:
         RETRYABLE = "retryable"
         RISK_LEVEL = "risk_level"
         SAFE_MESSAGE = "safe_message"
+        SERVER_ID = "server_id"
         SERVER_CARD = "server_card"
         SERVER_NAME = "server_name"
         SHORT_DESCRIPTION = "short_description"
@@ -60,6 +62,14 @@ class Values:
         NONE = "none"
         OAUTH2 = "oauth2"
         SERVICE_ACCOUNT = "service_account"
+
+    class AuthState:
+        AUTH_FAILED = "auth_failed"
+        AUTH_PENDING = "auth_pending"
+        AUTH_SKIPPED = "auth_skipped"
+        AUTH_UNSUPPORTED = "auth_unsupported"
+        AUTHENTICATED = "authenticated"
+        UNAUTHENTICATED = "unauthenticated"
 
     class ErrorCode:
         AUTH_FAILURE = "auth_failure"
@@ -99,6 +109,7 @@ class Values:
         STDIO = "stdio"
 
     class ToolName:
+        AUTH_MCP = "auth_mcp"
         LOAD_MCP_SERVER = "load_mcp_server"
 
     class UriScheme:
@@ -143,6 +154,10 @@ class Messages:
     """Centralized safe validation and public error messages."""
 
     class Middleware:
+        AUTH_MCP_TOOL_DESCRIPTION = (
+            "Request an authorization URL for an MCP server when the user has not "
+            "authenticated it yet. Use this only when the server is needed."
+        )
         LOAD_MCP_SERVER_TOOL_DESCRIPTION = (
             "Load an authorized MCP server by stable name and return validated "
             "tool and resource descriptors."

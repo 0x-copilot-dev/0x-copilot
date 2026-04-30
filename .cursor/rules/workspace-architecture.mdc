@@ -6,9 +6,11 @@ alwaysApply: true
 # Enterprise Search Workspace Architecture
 
 - Treat `enterprise-search` as one GitHub monorepo with multiple independently deployable components.
-- Runtime architecture can be microservice-style: each service owns its API, Docker image, tests, and deploy path.
+- Runtime architecture can be microservice-style: each service owns its API, Docker image, dependency environment, tests, and deploy path.
 - Apps call `backend-facade`; apps must not call internal services directly without an accepted spec.
 - `backend` owns tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
 - `services/ai-backend` is the canonical AI backend service path.
 - Shared packages are for stable contracts and cross-cutting primitives, not hidden business logic.
+- Deployable apps and services must not import implementation code from sibling apps/services; use APIs, queues/events, or generated contracts.
+- Python services use service-local `.venv`, `requirements.txt`, and `Dockerfile`; frontend apps use their own npm workspace environment and `Dockerfile`.
 

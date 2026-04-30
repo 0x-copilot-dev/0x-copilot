@@ -46,6 +46,7 @@ class RuntimeWorker:
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=persistence,
             event_store=event_store,
+            settings=self.settings,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=persistence,

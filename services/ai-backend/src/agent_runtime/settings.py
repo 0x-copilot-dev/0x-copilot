@@ -50,6 +50,13 @@ class RuntimeStoreSettings(RuntimeContract):
     database_url: str | None = Field(default=None, repr=False, exclude=True)
 
 
+class RuntimeMcpSettings(RuntimeContract):
+    """Internal backend integration settings for dynamic MCP registry access."""
+
+    backend_registry_url: str | None = None
+    auth_redirect_uri: str = "http://127.0.0.1:5173/mcp/oauth/callback"
+
+
 class RuntimeSettings(RuntimeContract):
     """Application-level settings consumed by API and worker components."""
 
@@ -58,6 +65,7 @@ class RuntimeSettings(RuntimeContract):
     default_timeout_seconds: float = Field(default=60, gt=0, le=600)
     execution: RuntimeExecutionSettings = Field(default_factory=RuntimeExecutionSettings)
     store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
+    mcp: RuntimeMcpSettings = Field(default_factory=RuntimeMcpSettings)
     openai: ProviderSettings = Field(default_factory=ProviderSettings)
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
@@ -121,6 +129,14 @@ class RuntimeSettings(RuntimeContract):
             store=RuntimeStoreSettings(
                 backend=cls._get(values, "RUNTIME_STORE_BACKEND", "in_memory").lower(),
                 database_url=cls._optional(values, "DATABASE_URL"),
+            ),
+            mcp=RuntimeMcpSettings(
+                backend_registry_url=cls._optional(values, "MCP_BACKEND_REGISTRY_URL"),
+                auth_redirect_uri=cls._get(
+                    values,
+                    "MCP_AUTH_REDIRECT_URI",
+                    "http://127.0.0.1:5173/mcp/oauth/callback",
+                ),
             ),
             openai=ProviderSettings(api_key=cls._optional(values, "OPENAI_API_KEY")),
             anthropic=ProviderSettings(api_key=cls._optional(values, "ANTHROPIC_API_KEY")),

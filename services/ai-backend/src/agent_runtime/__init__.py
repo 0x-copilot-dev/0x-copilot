@@ -1,6 +1,6 @@
 """Agent runtime foundation for the enterprise work surface."""
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     FeatureFlag,
     ModelConfig,
@@ -20,8 +20,8 @@ from agent_runtime.agent.contracts import (
     ToolCallEvent,
     ToolResultEvent,
 )
-from agent_runtime.agent.graph import ConfiguredRuntimeGraph, UnconfiguredRuntimeGraph
-from agent_runtime.agent.streaming import LangGraphStreamNormalizer
+from agent_runtime.events.normalization.langgraph import LangGraphStreamNormalizer
+from agent_runtime.execution.graph import ConfiguredRuntimeGraph, UnconfiguredRuntimeGraph
 from agent_runtime.memory import (
     ContextCompressionEvent,
     ContextCompressionStrategy,

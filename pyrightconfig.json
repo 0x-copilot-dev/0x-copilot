@@ -1,0 +1,25 @@
+{
+  "include": [
+    "services/ai-backend/src",
+    "services/ai-backend/tests",
+    "services/backend/src",
+    "services/backend/tests",
+    "services/backend-facade/src",
+    "services/backend-facade/tests"
+  ],
+  "pythonVersion": "3.11",
+  "executionEnvironments": [
+    {
+      "root": "services/ai-backend",
+      "extraPaths": ["src"]
+    },
+    {
+      "root": "services/backend",
+      "extraPaths": ["src"]
+    },
+    {
+      "root": "services/backend-facade",
+      "extraPaths": ["src"]
+    }
+  ]
+}

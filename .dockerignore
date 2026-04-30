@@ -1,0 +1,10 @@
+.git
+node_modules
+**/node_modules
+**/dist
+**/.vite
+**/.venv
+**/.pytest_cache
+**/__pycache__
+**/.env
+agent-transcripts

@@ -10,6 +10,7 @@ from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
+from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
     MessageRecord,
@@ -35,13 +36,17 @@ class RuntimeRunHandler:
         persistence: PersistencePort,
         event_store: EventStorePort,
         dependencies_factory: RuntimeDependenciesFactory | None = None,
+        settings: RuntimeSettings | None = None,
         agent_factory: AgentFactory = create_agent_runtime,
         runtime_invoker: RuntimeInvoker = ainvoke_runtime,
         runtime_streamer: RuntimeStreamer = astream_runtime,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
-        self.dependencies_factory = dependencies_factory or DefaultRuntimeDependenciesFactory()
+        self.settings = settings or RuntimeSettings.load()
+        self.dependencies_factory = dependencies_factory or DefaultRuntimeDependenciesFactory(
+            self.settings
+        )
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
         self.runtime_streamer = runtime_streamer
@@ -145,6 +150,7 @@ class RuntimeRunHandler:
                 candidate = self._stream_result_candidate(chunk)
                 if candidate is not None:
                     final_result = candidate
+                self._append_non_model_events(command, chunk)
                 delta = self._stream_delta(chunk)
                 if delta is None:
                     continue
@@ -161,6 +167,51 @@ class RuntimeRunHandler:
         if deltas:
             return {"content": "".join(deltas)}
         return None
+
+    def _append_non_model_events(self, command: RuntimeRunCommand, chunk: object) -> None:
+        for payload in self._mcp_auth_payloads(chunk):
+            self._append_lifecycle(
+                command,
+                RuntimeApiEventType.MCP_AUTH_REQUIRED,
+                "MCP authentication required",
+                source=StreamEventSource.MCP,
+                payload=payload,
+            )
+
+    @classmethod
+    def _mcp_auth_payloads(cls, value: object) -> tuple[dict[str, object], ...]:
+        payloads: list[dict[str, object]] = []
+        cls._collect_mcp_auth_payloads(value, payloads)
+        return tuple(payloads)
+
+    @classmethod
+    def _collect_mcp_auth_payloads(cls, value: object, payloads: list[dict[str, object]]) -> None:
+        if isinstance(value, dict):
+            event_type = value.get("api_event_type") or value.get("event_type")
+            if event_type == RuntimeApiEventType.MCP_AUTH_REQUIRED.value:
+                payloads.append(
+                    {
+                        key: item
+                        for key, item in value.items()
+                        if key
+                        in {
+                            "server_id",
+                            "server_name",
+                            "display_name",
+                            "auth_url",
+                            "expires_at",
+                            "message",
+                            "api_event_type",
+                        }
+                    }
+                )
+                return
+            for item in value.values():
+                cls._collect_mcp_auth_payloads(item, payloads)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for item in value:
+                cls._collect_mcp_auth_payloads(item, payloads)
 
     def _append_lifecycle(
         self,

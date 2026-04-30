@@ -74,6 +74,8 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
         }:
             return cls._reasoning_summary_payload(event_type=event_type, payload=payload)
+        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return cls._mcp_auth_required_payload(payload)
         return payload
 
     @classmethod
@@ -231,6 +233,8 @@ class RuntimeEventPresentationProjector:
             return Messages.Event.MODEL_DELTA
         if event_type is RuntimeApiEventType.FINAL_RESPONSE:
             return Messages.Event.FINAL_RESPONSE
+        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return Messages.Event.MCP_AUTH_REQUIRED
         return None
 
     @classmethod
@@ -261,6 +265,7 @@ class RuntimeEventPresentationProjector:
             return Values.Status.STARTED
         if event_type in {
             RuntimeApiEventType.PROGRESS,
+            RuntimeApiEventType.MCP_AUTH_REQUIRED,
             RuntimeApiEventType.MODEL_DELTA,
             RuntimeApiEventType.REASONING_SUMMARY,
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
@@ -279,6 +284,22 @@ class RuntimeEventPresentationProjector:
         if event_type is RuntimeApiEventType.RUN_CANCELLED:
             return Values.Status.CANCELLED
         return None
+
+    @classmethod
+    def _mcp_auth_required_payload(cls, payload: JsonObject) -> JsonObject:
+        safe_payload: JsonObject = {}
+        for key in (
+            Keys.Field.SERVER_ID,
+            Keys.Field.SERVER_NAME,
+            "display_name",
+            Keys.Field.AUTH_URL,
+            Keys.Field.EXPIRES_AT,
+            Keys.Payload.MESSAGE,
+        ):
+            value = cls._text(payload.get(key))
+            if value is not None:
+                safe_payload[key] = value
+        return safe_payload
 
     @classmethod
     def _visibility_for(

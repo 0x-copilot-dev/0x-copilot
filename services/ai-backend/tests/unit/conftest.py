@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.capabilities.skills.sources import SkillSourceConfig
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     ModelConfig,
     RuntimeDependencies,
-    SkillSourceConfig,
 )
 from tests.unit.fakes import (
     FakeMcpRegistry,

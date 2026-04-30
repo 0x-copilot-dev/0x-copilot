@@ -47,6 +47,10 @@ class Keys:
         VISIBILITY = "visibility"
         USER_ID = "user_id"
         USER_INPUT = "user_input"
+        SERVER_ID = "server_id"
+        SERVER_NAME = "server_name"
+        AUTH_URL = "auth_url"
+        EXPIRES_AT = "expires_at"
 
     class Payload:
         DELTA = "delta"
@@ -116,6 +120,7 @@ class Messages:
         APPROVAL_RESOLVED = "Approval decision was recorded."
         FINAL_RESPONSE = "Final response"
         HEARTBEAT = "Runtime stream heartbeat."
+        MCP_AUTH_REQUIRED = "MCP authentication required"
         MODEL_DELTA = "Model response"
         REASONING = "Thinking"
         RUN_CANCELLING = "Run cancellation was requested."

@@ -7,8 +7,11 @@ alwaysApply: false
 # Service Boundaries
 
 - Keep deployable service boundaries explicit even though code lives in one repo.
-- Do not import across services directly; use typed contracts, generated clients, queues, or documented APIs.
+- Do not import across apps or services directly. This is a hard rule for `apps/*` and `services/*`.
+- Cross-component integration must use HTTP APIs, generated clients/contracts, queues, or documented events.
 - `backend-facade` is the product API surface for web, Mac, and Windows apps.
+- Apps call `backend-facade`; apps must not call or import `backend` or `ai-backend` directly.
+- `backend-facade` may call `backend` and `ai-backend` APIs, but must not import their Python modules.
 - Do not put AI orchestration logic in `backend-facade`.
 - Do not put tenant auth ownership, billing/admin state, or product persistence in `services/ai-backend`.
 - Add or update a service-boundary doc before creating a new service or shared package.

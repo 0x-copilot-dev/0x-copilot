@@ -84,6 +84,7 @@ class RuntimeApiEventType(StrEnum):
     TOOL_CALL_DELTA = "tool_call_delta"
     TOOL_RESULT = "tool_result"
     TOOL_CALL_COMPLETED = "tool_call_completed"
+    MCP_AUTH_REQUIRED = "mcp_auth_required"
     SUBAGENT_UPDATE = "subagent_update"
     SUBAGENT_STARTED = "subagent_started"
     SUBAGENT_PROGRESS = "subagent_progress"

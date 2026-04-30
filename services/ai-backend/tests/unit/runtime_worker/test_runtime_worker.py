@@ -194,6 +194,65 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     assert assistant_messages[0].content_text == "Hello there"
 
 
+def test_runtime_worker_persists_mcp_auth_required_event() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "api_event_type": "mcp_auth_required",
+            "server_id": "server_123",
+            "server_name": "drive_mcp",
+            "display_name": "Drive MCP",
+            "auth_url": "https://mcp.example.com/oauth/authorize",
+            "expires_at": "2026-04-30T18:30:00+00:00",
+            "message": "Authenticate Drive MCP to continue.",
+        }
+        yield ("values", {"messages": [{"role": "assistant", "content": "Please authenticate."}]})
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    auth_events = [
+        event for event in store.events_by_run[run_id] if event.event_type == "mcp_auth_required"
+    ]
+    assert auth_events[0].source == "mcp"
+    assert auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
+
+
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings(max_retries=1)

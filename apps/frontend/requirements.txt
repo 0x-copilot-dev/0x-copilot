@@ -1,0 +1,2 @@
+# Frontend is a Node/Vite workspace.
+# Python requirements are intentionally empty; use package.json/package-lock.json.
