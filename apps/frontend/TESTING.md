@@ -1,7 +1,7 @@
 # Frontend Testing
 
-The current frontend has typecheck and build coverage, but no dedicated test
-runner yet.
+The frontend has focused Vitest coverage for pure view-model logic and API
+stream parsing, plus typecheck and build coverage.
 
 ## Current Checks
 
@@ -9,11 +9,12 @@ Run from the repository root:
 
 ```bash
 npm run typecheck --workspace @enterprise-search/frontend
+npm run test --workspace @enterprise-search/frontend
 npm run build --workspace @enterprise-search/frontend
 ```
 
-The root `npm run test` command uses `--if-present`; this app contributes no
-tests until a `test` script is added to `apps/frontend/package.json`.
+The root `npm run test` command uses `--if-present`; this app contributes its
+Vitest suite through `apps/frontend/package.json`.
 
 ## Expected Test Shape
 
@@ -22,9 +23,10 @@ this order:
 
 - Unit tests for pure view-model logic such as chat message projection and API
   payload shaping.
+- Contract-oriented tests for streaming API clients, including malformed SSE
+  JSON and invalid runtime event envelopes.
 - Component tests for screens with branching states, loading behavior, error
   messages, and disabled actions.
-- Contract-oriented tests for API clients when request or response shapes change.
 - End-to-end tests for OAuth callback and streaming chat flows once the local
   multi-service stack is reliable.
 

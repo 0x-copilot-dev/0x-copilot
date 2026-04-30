@@ -21,7 +21,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
-from runtime_worker.stream_events import RuntimeStreamEventMapper
+from runtime_worker.stream_events import RuntimeStreamPartAdapter
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 AgentFactory = Callable[..., RuntimeHarness]
@@ -56,7 +56,7 @@ class RuntimeRunHandler:
             persistence=self.persistence,
             event_store=self.event_store,
         )
-        self.stream_event_mapper = RuntimeStreamEventMapper(self.event_producer)
+        self.stream_event_mapper = RuntimeStreamPartAdapter(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
 
     async def handle(self, command: RuntimeRunCommand) -> None:

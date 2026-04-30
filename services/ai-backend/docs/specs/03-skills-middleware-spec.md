@@ -15,7 +15,10 @@ Implemented modules:
   skill markdown.
 - `capabilities/skills/virtual.py`: backend-backed virtual skill cards and
   bundles for user-created Markdown skills.
-- `agent/factory.py`: passes skill directories to `create_deep_agent`.
+- `agent_runtime/execution/factory.py`: resolves authorized skill cards and
+  directories.
+- `agent_runtime/execution/deep_agent_builder.py`: passes skill directories to
+  `create_deep_agent`.
 
 Do not invent a custom skill runtime. `SKILL.md`-compatible Markdown remains the
 source of truth, whether it is read from a filesystem bundle or loaded through a

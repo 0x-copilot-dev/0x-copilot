@@ -11,6 +11,8 @@ services/ai-backend/
   src/
     agent_runtime/
       execution/
+        deep_agent_builder.py
+        factory.py
       capabilities/
         tools/
         mcp/
@@ -51,7 +53,7 @@ services/ai-backend/
 
 ## Module Ownership
 
-- `agent_runtime/`: reusable runtime domain and orchestration core. It owns execution contracts, Deep Agents/LangGraph wiring, capability discovery, context/memory policy, subagent delegation, event normalization, observability helpers, persistence records, and abstract ports.
+- `agent_runtime/`: reusable runtime domain and orchestration core. It owns execution contracts, Deep Agents/LangGraph wiring, capability discovery, context/memory policy, subagent delegation, event normalization, observability helpers, persistence records, and abstract ports. `execution/factory.py` resolves authorized runtime inputs; `execution/deep_agent_builder.py` owns the direct `deepagents.create_deep_agent` call.
 - `runtime_api/`: deployable FastAPI surface for conversations, runs, event replay, SSE, cancellation, approvals, safe HTTP errors, and API request/response schemas.
 - `runtime_adapters/`: concrete adapters for tests and local/production-style infrastructure, including deterministic in-memory persistence/event/queue behavior and the PostgreSQL runtime adapter.
 - `runtime_worker/`: async runtime command consumer process, handlers for run/cancel/approval-resolution commands, and stream-event mapping before events enter the API producer.

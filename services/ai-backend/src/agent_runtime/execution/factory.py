@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from importlib import import_module
-import inspect
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -17,14 +15,18 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.deep_agent_builder import (
+    DeepAgentBuildRequest,
+    DeepAgentsBackend,
+    build_deep_agent,
+)
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerInput, LoadMcpServerTool
-from agent_runtime.capabilities.skills.constants import Keys as SkillKeys
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 
-AgentBuilder = Callable[..., object]
+AgentBuilder = Callable[[DeepAgentBuildRequest], object]
 
 DEFAULT_INSTRUCTIONS = (
     "You are the agent runtime. Respect the provided runtime "
@@ -62,7 +64,7 @@ def create_agent_runtime(
 
     runtime_context = _parse_context(context)
     runtime_dependencies = _parse_dependencies(dependencies, runtime_context.trace_id)
-    builder = agent_builder or _build_deep_agent
+    builder = agent_builder or build_deep_agent
 
     tools = tuple(runtime_dependencies.tool_registry.list_available_tools(runtime_context))
     mcp_servers = tuple(runtime_dependencies.mcp_registry.list_available_servers(runtime_context))
@@ -93,14 +95,17 @@ def create_agent_runtime(
             skill_cards=skill_cards,
         )
         agent = builder(
-            tools=model_tools,
-            model_config=runtime_context.model_profile,
-            instructions=model_instructions,
-            runtime_context=runtime_context,
-            mcp_servers=mcp_servers,
-            subagents=subagents,
-            memory_backend=memory_backend,
-            **{SkillKeys.DeepAgents.SKILLS: skill_directories},
+            DeepAgentBuildRequest(
+                tools=model_tools,
+                model_name=runtime_context.model_profile.model_name,
+                system_prompt=model_instructions,
+                subagents=subagents,
+                memory_backend=(
+                    memory_backend if isinstance(memory_backend, DeepAgentsBackend) else None
+                ),
+                memory_paths=_deepagents_memory_paths(memory_backend),
+                skill_directories=skill_directories,
+            )
         )
     except AgentRuntimeError:
         raise
@@ -123,50 +128,6 @@ def create_agent_runtime(
         skill_directories=skill_directories,
         skill_cards=skill_cards,
     )
-
-
-def _build_deep_agent(
-    *,
-    tools: Sequence[object],
-    model_config: object,
-    instructions: str,
-    memory_backend: object | None = None,
-    skills: Sequence[str] = (),
-    **_: object,
-) -> object:
-    """Build the concrete Deep Agents graph without importing it at module load."""
-
-    try:
-        deepagents = import_module("deepagents")
-        create_deep_agent = getattr(deepagents, "create_deep_agent")
-    except Exception as exc:
-        raise AgentRuntimeError(
-            RuntimeErrorCode.CONFIGURATION_ERROR,
-            "Deep Agents is not installed or is not importable.",
-            retryable=False,
-        ) from exc
-
-    model_name = getattr(model_config, "model_name")
-    create_kwargs: dict[str, object] = {
-        "tools": list(tools),
-        "model": model_name,
-    }
-    create_kwargs[_deepagents_prompt_key(create_deep_agent)] = instructions
-    if skills:
-        create_kwargs[SkillKeys.DeepAgents.SKILLS] = list(skills)
-    if _is_deepagents_backend(memory_backend):
-        create_kwargs["backend"] = memory_backend
-        memory_paths = tuple(getattr(memory_backend, "memory_paths", ()))
-        if memory_paths:
-            create_kwargs["memory"] = list(memory_paths)
-    return create_deep_agent(**create_kwargs)
-
-
-def _deepagents_prompt_key(create_deep_agent: Callable[..., object]) -> str:
-    signature = inspect.signature(create_deep_agent)
-    if "system_prompt" in signature.parameters:
-        return "system_prompt"
-    return "instructions"
 
 
 def _model_visible_tools(
@@ -273,15 +234,12 @@ def _instructions_with_skill_cards(*, instructions: str, skill_cards: Sequence[o
     )
 
 
-def _is_deepagents_backend(memory_backend: object | None) -> bool:
-    """Return whether the object implements the DeepAgents backend protocol."""
+def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
+    """Return configured Deep Agents memory paths for compatible backends."""
 
-    if memory_backend is None:
-        return False
-    return all(
-        hasattr(memory_backend, method)
-        for method in ("download_files", "upload_files", "adownload_files", "aupload_files")
-    )
+    if not isinstance(memory_backend, DeepAgentsBackend):
+        return ()
+    return tuple(str(path) for path in memory_backend.memory_paths)
 
 
 def _parse_context(context: AgentRuntimeContext | dict[str, Any]) -> AgentRuntimeContext:

@@ -290,7 +290,8 @@ Use this only when source-backed research is needed.
     )
 
     assert harness.agent == {"agent": "fake"}
-    assert builder.calls[0]["runtime_context"] is context
+    assert builder.calls[0].model_name == context.model_profile.model_name
+    assert builder.calls[0].skill_directories == (str(skill_root.resolve(strict=False)),)
     assert tuple(card.name for card in harness.tools) == ("doc_search",)
     assert "args_schema" not in harness.tools[0].model_dump()
     assert tuple(card.name for card in harness.mcp_servers) == ("drive_mcp",)

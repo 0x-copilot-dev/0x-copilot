@@ -4,7 +4,6 @@ from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     FeatureFlag,
     ModelConfig,
-    ObservationEvent,
     RuntimeDependencies,
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
@@ -16,9 +15,6 @@ from agent_runtime.execution.contracts import (
     StreamEvent,
     StreamEventSource,
     StreamEventType,
-    SubagentLifecycleEvent,
-    ToolCallEvent,
-    ToolResultEvent,
 )
 from agent_runtime.execution.graph import ConfiguredRuntimeGraph, UnconfiguredRuntimeGraph
 from agent_runtime.context.memory import (
@@ -66,7 +62,6 @@ __all__ = [
     "MemoryScopeRecord",
     "MemoryScopeType",
     "ModelConfig",
-    "ObservationEvent",
     "OutboxEventRecord",
     "RuntimeDependencies",
     "RuntimeErrorCode",
@@ -83,12 +78,9 @@ __all__ = [
     "StreamEvent",
     "StreamEventSource",
     "StreamEventType",
-    "SubagentLifecycleEvent",
     "SubagentDefinition",
     "SubagentResult",
     "SubagentTask",
-    "ToolCallEvent",
-    "ToolResultEvent",
     "TokenBudgetPolicy",
     "UnconfiguredRuntimeGraph",
 ]

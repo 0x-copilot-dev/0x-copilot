@@ -17,6 +17,20 @@ import { assertOk, jsonHeaders } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
+export type RuntimeStreamProtocolErrorReason = "malformed_json" | "invalid_envelope";
+
+export class RuntimeStreamProtocolError extends Error {
+  readonly reason: RuntimeStreamProtocolErrorReason;
+  readonly data: string;
+
+  constructor(reason: RuntimeStreamProtocolErrorReason, data: string) {
+    super(reason === "malformed_json" ? "Runtime stream emitted malformed JSON." : "Runtime stream emitted an invalid event envelope.");
+    this.name = "RuntimeStreamProtocolError";
+    this.reason = reason;
+    this.data = data;
+  }
+}
+
 export async function createConversation(
   identity: RequestIdentity
 ): Promise<Conversation> {
@@ -108,6 +122,7 @@ export function streamRunEvents({
   identity,
   onEvent,
   onError,
+  onProtocolError,
   onOpen
 }: {
   runId: string;
@@ -115,6 +130,7 @@ export function streamRunEvents({
   identity: RequestIdentity;
   onEvent: (event: RuntimeEventEnvelope) => void;
   onError: (error: Event) => void;
+  onProtocolError?: (error: RuntimeStreamProtocolError) => void;
   onOpen?: () => void;
 }): EventSource {
   const params = identityParams(identity);
@@ -122,10 +138,19 @@ export function streamRunEvents({
   const eventSource = new EventSource(`/v1/agent/runs/${runId}/stream?${params}`);
   eventSource.addEventListener("open", () => onOpen?.());
   eventSource.addEventListener(SSE_EVENT_NAME, (message) => {
-    const parsed = JSON.parse((message as MessageEvent).data) as unknown;
+    const data = String((message as MessageEvent).data);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data) as unknown;
+    } catch {
+      onProtocolError?.(new RuntimeStreamProtocolError("malformed_json", data));
+      return;
+    }
     if (isRuntimeEventEnvelope(parsed)) {
       onEvent(parsed);
+      return;
     }
+    onProtocolError?.(new RuntimeStreamProtocolError("invalid_envelope", data));
   });
   eventSource.addEventListener("error", onError);
   return eventSource;

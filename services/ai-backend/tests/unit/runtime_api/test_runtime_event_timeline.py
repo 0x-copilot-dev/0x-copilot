@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from agent_runtime.execution.contracts import (
-    AgentRuntimeContext,
-    StreamEvent,
-    StreamEventSource,
-    StreamEventType,
-)
+from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
@@ -15,6 +10,7 @@ from runtime_api.schemas import (
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
+from runtime_worker.stream_events import RuntimeStreamPartAdapter
 
 
 class RuntimeEventTimelineTestMixin:
@@ -79,23 +75,31 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         store, service, run = self.create_store_and_run(runtime_context_admin)
 
-        envelope = service.event_producer.append_stream_event(
+        RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
             run=run,
-            stream_event=StreamEvent(
-                source=StreamEventSource.TOOL,
-                event_type=StreamEventType.TOOL_CALL,
-                trace_id=runtime_context_admin.trace_id,
-                payload={
-                    "tool_name": "doc_search",
-                    "call_id": self.Values.CALL_ID,
-                    "summary": "Searching launch docs",
-                    "args": {
-                        "query": "launch risks",
-                        "authorization": "bearer secret-token",
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "tool_call_chunks": (
+                            {
+                                "name": "doc_search",
+                                "id": self.Values.CALL_ID,
+                                "summary": "Searching launch docs",
+                                "args": {
+                                    "query": "launch risks",
+                                    "authorization": "bearer secret-token",
+                                },
+                            },
+                        ),
                     },
-                },
-            ),
+                    {},
+                ),
+            },
+            delta=None,
         )
+        envelope = store.events_by_run[run.run_id][-1]
 
         assert envelope.sequence_no == 2
         assert envelope.event_type is RuntimeApiEventType.TOOL_CALL_STARTED
@@ -115,33 +119,40 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = self.create_store_and_run(runtime_context_admin)
 
-        delta_envelope = service.event_producer.append_stream_event(
+        RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
             run=run,
-            stream_event=StreamEvent(
-                source=StreamEventSource.TOOL,
-                event_type=StreamEventType.CUSTOM,
-                trace_id=runtime_context_admin.trace_id,
-                payload={
+            chunk={
+                "type": "custom",
+                "ns": (),
+                "data": {
                     "api_event_type": "tool_call_delta",
                     "tool_name": "doc_search",
                     "call_id": self.Values.CALL_ID,
                     "delta": "Searching",
                 },
-            ),
+            },
+            delta=None,
         )
-        result_envelope = service.event_producer.append_stream_event(
+        delta_envelope = _store.events_by_run[run.run_id][-1]
+        RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
             run=run,
-            stream_event=StreamEvent(
-                source=StreamEventSource.TOOL,
-                event_type=StreamEventType.TOOL_RESULT,
-                trace_id=runtime_context_admin.trace_id,
-                payload={
-                    "tool_name": "doc_search",
-                    "call_id": self.Values.CALL_ID,
-                    "status": "completed",
-                    "output": {"message": "Found launch risks"},
-                },
-            ),
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "doc_search",
+                        "tool_call_id": self.Values.CALL_ID,
+                        "content": "Found launch risks",
+                    },
+                    {},
+                ),
+            },
+            delta=None,
+        )
+        result_envelope = next(
+            event for event in _store.events_by_run[run.run_id] if event.event_type == "tool_result"
         )
 
         assert delta_envelope.event_type is RuntimeApiEventType.TOOL_CALL_DELTA
@@ -157,19 +168,20 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = self.create_store_and_run(runtime_context_admin)
 
-        envelope = service.event_producer.append_stream_event(
+        RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
             run=run,
-            stream_event=StreamEvent(
-                source=StreamEventSource.MAIN_AGENT,
-                event_type=StreamEventType.CUSTOM,
-                trace_id=runtime_context_admin.trace_id,
-                payload={
+            chunk={
+                "type": "custom",
+                "ns": (),
+                "data": {
                     "api_event_type": "reasoning_summary",
                     "summary": "Checking source coverage",
                     "raw_thought": self.Values.RAW_THOUGHT,
                 },
-            ),
+            },
+            delta=None,
         )
+        envelope = _store.events_by_run[run.run_id][-1]
 
         assert envelope.event_type is RuntimeApiEventType.REASONING_SUMMARY
         assert envelope.display_title == "Thinking"
@@ -183,21 +195,22 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = self.create_store_and_run(runtime_context_admin)
 
-        envelope = service.event_producer.append_stream_event(
+        RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
             run=run,
-            stream_event=StreamEvent(
-                source=StreamEventSource.SUBAGENT,
-                event_type=StreamEventType.LIFECYCLE,
-                trace_id=runtime_context_admin.trace_id,
-                parent_task_id="parent_task_123",
-                payload={
+            chunk={
+                "type": "custom",
+                "ns": ("tools:parent_task_123",),
+                "data": {
+                    "api_event_type": "subagent_completed",
                     "task_id": self.Values.TASK_ID,
                     "subagent_name": self.Values.SUBAGENT_NAME,
                     "status": "completed",
                     "summary": "Researcher finished source review",
                 },
-            ),
+            },
+            delta=None,
         )
+        envelope = _store.events_by_run[run.run_id][-1]
 
         assert envelope.event_type is RuntimeApiEventType.SUBAGENT_COMPLETED
         assert envelope.span_id == self.Values.TASK_ID

@@ -46,7 +46,7 @@ flowchart TD
   ContextManagers --> MemoryRoutes
 
   DeepAgent --> RawEvents[LangGraph v2 StreamPart events]
-  RawEvents --> StreamMapper[RuntimeStreamEventMapper]
+  RawEvents --> StreamMapper[RuntimeStreamPartAdapter]
   StreamMapper --> StreamEvents[model_delta and runtime event records]
   StreamEvents --> EventEnvelope[RuntimeEventEnvelope]
   EventEnvelope --> Persistence
@@ -55,7 +55,7 @@ flowchart TD
 
 ## Implementation Boundaries
 
-- `agent_runtime/execution/` owns runtime construction, runtime context parsing, LangGraph export shape, invocation helpers, state, and typed runtime errors.
+- `agent_runtime/execution/` owns runtime construction, direct Deep Agents builder wiring, runtime context parsing, LangGraph export shape, invocation helpers, state, and typed runtime errors.
 - `agent_runtime/capabilities/` owns dynamic tools, MCP server loading, and Agent Skills discovery/policy.
 - `agent_runtime/context/` owns scoped memory routes, read/write policy, token budgets, offloading, summarization fallback, and compression events.
 - `agent_runtime/delegation/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
@@ -69,12 +69,12 @@ flowchart TD
 ## What Works Today
 
 - A request can be converted into an `AgentRuntimeContext` with normalized identity, roles, scopes, model profile, feature flags, and trace ID.
-- `create_agent_runtime` wires injected registries, stores, and catalogs into a Deep Agents runtime without importing connector SDKs.
+- `create_agent_runtime` resolves authorized registries, stores, and catalogs, then hands an explicit build request to the concrete Deep Agents builder without importing connector SDKs.
 - MCP listings expose compact, permission-filtered cards when `MCP_BACKEND_REGISTRY_URL` is configured. Local/test mode uses empty registries by default; production must configure MCP or skill backends or explicitly set `RUNTIME_ALLOW_EMPTY_CAPABILITIES=true`.
 - Skills are discovered from configured Agent Skills directories and passed to Deep Agents in deterministic precedence order.
 - Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
 - Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
-- The worker consumes documented LangGraph v2 `StreamPart` chunks through `RuntimeStreamEventMapper`, projects tool/subagent/progress activity into runtime envelopes, and surfaces provider text chunks as `model_delta` runtime envelopes with text in `payload.delta`.
+- The worker consumes documented LangGraph v2 `StreamPart` chunks through `RuntimeStreamPartAdapter`, parses Deep Agents namespaces such as `tools:<id>`, projects tool/subagent/progress activity into runtime envelopes, and surfaces provider text chunks as `model_delta` runtime envelopes with text in `payload.delta`.
 - FastAPI endpoints create conversations, enqueue runs, replay events, stream live/replayed SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
 - Runtime event envelopes provide ordered per-run sequence numbers, UI timeline fields, redacted payloads, and replay cursors.
 - Persistence contracts, the PostgreSQL adapter, and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.

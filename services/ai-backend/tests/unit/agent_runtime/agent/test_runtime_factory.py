@@ -52,9 +52,10 @@ def test_factory_propagates_permissions_to_runtime_ports(
     assert memory_factory.seen_contexts == [runtime_context_admin]
 
     call = builder.calls[0]
-    assert call["runtime_context"] is runtime_context_admin
-    assert call["model_config"] is runtime_context_admin.model_profile
-    assert call["tools"] == ("doc_search",)
+    assert call.model_name == runtime_context_admin.model_profile.model_name
+    assert call.tools == ("doc_search",)
+    assert call.subagents == ("researcher",)
+    assert call.memory_backend is None
 
 
 class FakeMcpProvider:
@@ -92,7 +93,7 @@ def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
         agent_builder=builder,
     )
 
-    tool_names = {getattr(tool, "name", "") for tool in builder.calls[0]["tools"]}
+    tool_names = {getattr(tool, "name", "") for tool in builder.calls[0].tools}
     assert "load_mcp_server" in tool_names
 
 

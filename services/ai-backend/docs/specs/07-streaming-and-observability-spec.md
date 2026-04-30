@@ -30,17 +30,24 @@ full answer is emitted as `final_response`.
 
 Required models:
 
-- `StreamEvent`: event ID, source, event type, timestamp, trace ID, parent task ID, payload.
-- `StreamSource`: main agent, subagent, tool, MCP, summarization, system.
-- `ToolCallEvent`: tool name, call ID, redacted args, status.
-- `SubagentLifecycleEvent`: task ID, subagent name, status, summary.
-- `ObservationEvent`: metric name, value, tags, trace ID.
+- LangGraph v2 `StreamPart`: external stream input with `type`, `ns`, and
+  `data` keys. This is an adapter input, not a persisted product contract.
+- `RuntimeEventEnvelope`: persisted and streamed product event with source,
+  event type, task/span correlation, UI presentation fields, redacted payload,
+  metadata, and per-run sequence number.
+- `RuntimeEventDraft`: pre-persistence envelope data produced by API-authored
+  lifecycle events and by the `StreamPart` adapter.
+- `StreamSource`: main agent, subagent, tool, MCP, summarization, system,
+  runtime, and model.
 
 Payloads must be redacted before serialization. Unknown event fields should be preserved only in an explicitly typed `metadata` object.
 
 ## Design Rules
 
 - UI consumers should not parse raw LangGraph stream parts.
+- The worker should parse Deep Agents namespaces explicitly: `()` is the main
+  agent, and namespace segments like `tools:<id>` identify subagent execution.
+  Undocumented string guesses must not become subagent routing rules.
 - Stream events should be additive and backwards-compatible.
 - Redaction happens before event emission.
 - Internal summarization tokens should be filterable from user-facing streams.

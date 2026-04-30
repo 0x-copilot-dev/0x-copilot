@@ -12,6 +12,7 @@ from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import CreateConversationRequest, CreateRunRequest, RuntimeRunCommand
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.stream_events import StreamNamespace
 
 
 def _settings(*, max_retries: int = 1, max_parallel_runs: int = 2) -> RuntimeSettings:
@@ -68,6 +69,19 @@ def _create_queued_run(store: InMemoryRuntimeApiStore, settings: RuntimeSettings
         )
     )
     return response.run_id
+
+
+def test_stream_namespace_parses_documented_deep_agents_subagent_segments() -> None:
+    main = StreamNamespace.from_value(())
+    subagent = StreamNamespace.from_value(("tools:task_123", "model_request:req_456"))
+    unsupported = StreamNamespace.from_value(("research_subagent",))
+
+    assert main.is_subagent is False
+    assert main.subagent_task_id is None
+    assert subagent.is_subagent is True
+    assert subagent.subagent_task_id == "task_123"
+    assert unsupported.is_subagent is False
+    assert unsupported.subagent_task_id is None
 
 
 def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
@@ -300,6 +314,49 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
         _messages: Sequence[object],
     ):
         yield {
+            "type": "updates",
+            "ns": (),
+            "data": {
+                "model_request": {
+                    "messages": [
+                        {
+                            "tool_calls": [
+                                {
+                                    "name": "task",
+                                    "id": "task_abc",
+                                    "args": {
+                                        "subagent_type": "researcher",
+                                        "description": "Research launch risks.",
+                                    },
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+        }
+        yield {
+            "type": "updates",
+            "ns": ("tools:task_abc", "model_request:req_456"),
+            "data": {"model_request": {"messages": [{"content": "Reading sources."}]}},
+        }
+        yield {
+            "type": "updates",
+            "ns": (),
+            "data": {
+                "tools": {
+                    "messages": [
+                        {
+                            "type": "tool",
+                            "name": "task",
+                            "tool_call_id": "task_abc",
+                            "content": "Research complete.",
+                        }
+                    ]
+                }
+            },
+        }
+        yield {
             "type": "custom",
             "ns": (),
             "data": {
@@ -383,6 +440,7 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     event_types = [event.event_type for event in events]
     assert "reasoning_summary_delta" in event_types
     assert "subagent_started" in event_types
+    assert "subagent_completed" in event_types
     assert "tool_call_started" in event_types
     assert "tool_result" in event_types
     assert "tool_call_completed" in event_types
@@ -395,7 +453,11 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     tool_event = next(event for event in events if event.event_type == "tool_call_started")
     assert tool_event.payload["args"]["authorization"] == "[redacted]"
     assert tool_event.span_id == "call_123"
-    subagent_event = next(event for event in events if event.event_type == "subagent_started")
+    subagent_event = next(
+        event
+        for event in events
+        if event.event_type == "subagent_started" and event.task_id == "task_123"
+    )
     assert subagent_event.task_id == "task_123"
     assert subagent_event.subagent_id == "researcher"
     subagent_reasoning_event = next(
@@ -404,6 +466,24 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
         if event.event_type == "reasoning_summary_delta" and event.parent_task_id == "task_123"
     )
     assert subagent_reasoning_event.source == "subagent"
+    task_started = next(
+        event
+        for event in events
+        if event.event_type == "subagent_started" and event.task_id == "task_abc"
+    )
+    assert task_started.subagent_id == "researcher"
+    task_progress = next(
+        event
+        for event in events
+        if event.event_type == "subagent_progress" and event.task_id == "task_abc"
+    )
+    assert task_progress.parent_task_id == "task_abc"
+    task_completed = next(
+        event
+        for event in events
+        if event.event_type == "subagent_completed" and event.task_id == "task_abc"
+    )
+    assert task_completed.summary == "Research complete."
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

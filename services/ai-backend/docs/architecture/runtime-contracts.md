@@ -23,13 +23,14 @@ The implemented contracts live under `src/agent_runtime/`:
 - `SubagentTask`: compact objective, relevant summary, constraints, runtime context reference, allowed tools, allowed skills, and output contract.
 - `SubagentResult`: response, execution summary, plan summary, artifacts, recent messages, or typed error.
 - `AsyncTaskState` and `AsyncTaskLifecycleResult`: task IDs and lifecycle status stored outside message history.
-- `StreamEvent`: product event ID, source, event type, trace ID, parent task ID, payload, metadata, and timestamp for non-API runtime event projection.
+- LangGraph v2 `StreamPart`: external Deep Agents stream input consumed by
+  `runtime_worker`. It has `type`, `ns`, and `data` keys and is adapted before
+  persistence.
 - `RuntimeEventEnvelope`: API transport envelope with ordered sequence numbers, span correlation, task/subagent IDs, UI display titles, one-phrase summaries, visibility, redaction state, redacted payloads, and protocol versioning for replayable client timelines. Provider streaming chunks are represented as `model_delta` envelopes with exact text in `payload.delta`.
 - `ConversationRecord`, `MessageRecord`, and `RunRecord`: API-facing persistence records for conversation shells, ordered messages, and queued/runtime execution state.
 - `RuntimeRunCommand`, `RuntimeCancelCommand`, and `RuntimeApprovalResolvedCommand`: durable commands exchanged through the runtime queue port.
 - `OutboxEventRecord`, `RuntimeWorkerClaim`, and `RuntimeWorkerResult`: persistence-layer queue records for claim, retry, completion, and dead-letter semantics.
 - `MemoryScopeRecord`, `MemoryItemRecord`, `ContextPayloadRecord`, `CompressionEventRecord`, `CapabilitySnapshotRecord`, `AuditLogRecord`, and `CheckpointRecord`: durable metadata records for runtime memory, offloaded payloads, compression telemetry, capability snapshots, audit, and checkpoint references.
-- `ToolCallEvent`, `ToolResultEvent`, `SubagentLifecycleEvent`, and `ObservationEvent`: product-safe payloads emitted through runtime event projection.
 
 ## Validation Rules
 

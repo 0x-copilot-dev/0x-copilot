@@ -8,11 +8,14 @@ Define the Deep Agents runtime foundation for the `agent_runtime` package. This 
 
 Implemented modules:
 
-- `agent/factory.py`: builds the `create_deep_agent` runtime.
-- `agent/graph.py`: exports graph objects for `langgraph.json`.
-- `agent/runtime.py`: request-level invocation helpers.
-- `settings.py`: typed environment and model configuration.
-- `agent/state.py`: typed state aliases and runtime metadata.
+- `agent_runtime/execution/factory.py`: resolves authorized runtime inputs and
+  creates request-scoped runtime harnesses.
+- `agent_runtime/execution/deep_agent_builder.py`: directly calls
+  `deepagents.create_deep_agent` with explicit arguments.
+- `agent_runtime/execution/graph.py`: exports graph objects for `langgraph.json`.
+- `agent_runtime/execution/runtime.py`: request-level invocation and streaming helpers.
+- `agent_runtime/settings.py`: typed environment and model configuration.
+- `agent_runtime/execution/state.py`: typed state aliases and runtime metadata.
 
 The runtime must depend on abstract ports for registries, stores, MCP clients, and subagent runners. Concrete connectors must not be imported by the runtime factory.
 
@@ -34,6 +37,8 @@ Use strict mode where possible. IDs and names should be constrained strings, not
 - Liskov substitution: fake and real dependencies must satisfy the same contracts.
 - Explicit invariants: reject runtime contexts without user/org identity.
 - Do not use untyped dictionaries for agent state beyond LangGraph adapter edges.
+- Do not dynamically import or signature-probe Deep Agents in the runtime
+  factory. Keep the installed Deep Agents API call explicit and version-pinned.
 
 ## Unit Tests
 

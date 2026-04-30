@@ -123,6 +123,9 @@ export function ChatScreen({
         reconnectTimeoutRef.current = window.setTimeout(() => {
           startEventStream(runId, latestSequenceRef.current);
         }, 750);
+      },
+      onProtocolError: (error) => {
+        setStatus(error.message);
       }
     });
   }, [handleEvent, identity]);

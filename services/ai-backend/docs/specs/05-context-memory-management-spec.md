@@ -8,11 +8,18 @@ Use Deep Agents built-in context compression and filesystem offloading while def
 
 Implemented modules:
 
-- `memory/backends.py`: constructs `CompositeBackend` routes.
-- `memory/policy.py`: read/write policy for memory paths.
-- `memory/token_budget.py`: metrics and threshold metadata.
-- `memory/summarization.py`: hooks and observability around SDK summarization.
-- `agent/factory.py`: passes memory and backend configuration to `create_deep_agent`.
+- `agent_runtime/context/memory/backends.py`: constructs scoped memory route plans
+  and request-scoped Deep Agents backends.
+- `agent_runtime/context/memory/policy.py`: read/write policy for memory paths.
+- `agent_runtime/context/memory/contracts.py`: memory scopes, managed payloads,
+  and compression contracts.
+- `agent_runtime/context/memory/token_budget.py`: metrics and threshold metadata.
+- `agent_runtime/context/memory/summarization.py`: payload preparation and
+  summarization fallback around SDK summarization.
+- `agent_runtime/execution/factory.py`: resolves memory backends for runtime
+  construction.
+- `agent_runtime/execution/deep_agent_builder.py`: passes compatible backend and
+  memory path configuration to `create_deep_agent`.
 
 The implementation should start with SDK compression/offloading. Custom code should wrap, observe, and policy-check rather than replace it.
 

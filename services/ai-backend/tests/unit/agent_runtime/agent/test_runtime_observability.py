@@ -158,7 +158,7 @@ def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(
 
     graph = ConfiguredRuntimeGraph(
         dependencies_factory=dependencies_factory,
-        agent_builder=lambda **_: agent,
+        agent_builder=lambda _: agent,
     )
     context = runtime_context_admin.model_copy(
         update={"request_id": "request_123", "run_id": "run_123"}

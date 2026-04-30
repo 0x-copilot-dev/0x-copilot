@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.execution import factory as factory_module
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.deep_agent_builder import DeepAgentBuildRequest, build_deep_agent
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.context.memory import (
     ContextCompressionEvent,
@@ -21,7 +21,8 @@ from agent_runtime.context.memory import (
     VersionedMemoryStore,
 )
 from agent_runtime.context.memory.policy import MemoryPolicyAuthorizer
-from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule, FakeSystemPromptDeepAgentsModule
+from agent_runtime.execution import deep_agent_builder as builder_module
+from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
 
 class FakeConcreteMemoryBackend:
@@ -239,14 +240,17 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     model_config: ModelConfig,
 ) -> None:
     fake_deepagents = FakeDeepAgentsModule()
-    monkeypatch.setattr(factory_module, "import_module", lambda _: fake_deepagents)
+    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
     memory_backend = FakeConcreteMemoryBackend()
 
-    agent = factory_module._build_deep_agent(
-        tools=("doc_search",),
-        model_config=model_config,
-        instructions="Follow policy.",
-        memory_backend=memory_backend,
+    agent = build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_name=model_config.model_name,
+            system_prompt="Follow policy.",
+            memory_backend=memory_backend,
+            memory_paths=memory_backend.memory_paths,
+        )
     )
 
     assert agent == {"agent": "fake"}
@@ -254,40 +258,47 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     assert fake_deepagents.calls[0]["memory"] == ["/memories/"]
 
 
-def test_deep_agent_builder_uses_supported_prompt_keyword(
+def test_deep_agent_builder_passes_explicit_runtime_inputs(
     monkeypatch: pytest.MonkeyPatch,
-    model_config: ModelConfig,
-) -> None:
-    fake_deepagents = FakeSystemPromptDeepAgentsModule()
-    monkeypatch.setattr(factory_module, "import_module", lambda _: fake_deepagents)
-
-    agent = factory_module._build_deep_agent(
-        tools=("doc_search",),
-        model_config=model_config,
-        instructions="Follow policy.",
-    )
-
-    assert agent == {"agent": "fake"}
-    assert fake_deepagents.calls[0]["system_prompt"] == "Follow policy."
-    assert "instructions" not in fake_deepagents.calls[0]
-
-
-def test_deep_agent_builder_does_not_treat_route_plan_as_backend(
-    monkeypatch: pytest.MonkeyPatch,
-    runtime_context_admin: AgentRuntimeContext,
     model_config: ModelConfig,
 ) -> None:
     fake_deepagents = FakeDeepAgentsModule()
-    monkeypatch.setattr(factory_module, "import_module", lambda _: fake_deepagents)
-    route_plan = MemoryRoutePlan.for_context(runtime_context_admin)
+    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
 
-    agent = factory_module._build_deep_agent(
-        tools=("doc_search",),
-        model_config=model_config,
-        instructions="Follow policy.",
-        memory_backend=route_plan,
+    agent = build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_name=model_config.model_name,
+            system_prompt="Follow policy.",
+            subagents=("researcher",),
+            skill_directories=("/skills/",),
+        )
     )
 
     assert agent == {"agent": "fake"}
-    assert "backend" not in fake_deepagents.calls[0]
-    assert "memory" not in fake_deepagents.calls[0]
+    assert fake_deepagents.calls[0]["model"] == model_config.model_name
+    assert fake_deepagents.calls[0]["tools"] == ["doc_search"]
+    assert fake_deepagents.calls[0]["system_prompt"] == "Follow policy."
+    assert fake_deepagents.calls[0]["subagents"] == ["researcher"]
+    assert fake_deepagents.calls[0]["skills"] == ["/skills/"]
+
+
+def test_deep_agent_builder_omits_memory_for_route_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    model_config: ModelConfig,
+) -> None:
+    fake_deepagents = FakeDeepAgentsModule()
+    monkeypatch.setattr(builder_module, "create_deep_agent", fake_deepagents.create_deep_agent)
+
+    agent = build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_name=model_config.model_name,
+            system_prompt="Follow policy.",
+            memory_backend=None,
+        )
+    )
+
+    assert agent == {"agent": "fake"}
+    assert fake_deepagents.calls[0]["backend"] is None
+    assert fake_deepagents.calls[0]["memory"] is None

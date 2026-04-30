@@ -8,11 +8,11 @@ Define sync and async subagent delegation so the supervisor can isolate context-
 
 Implemented modules:
 
-- `subagents/definitions.py`: subagent catalog and descriptions.
-- `subagents/handoff.py`: task creation and summary policy.
-- `subagents/runner.py`: protocol for sync and async execution.
-- `subagents/handoff.py`: supervisor handoff rules.
-- `agent/graph.py`: graph exports for supervisor and co-deployed subagents.
+- `agent_runtime/delegation/subagents/definitions.py`: subagent catalog and descriptions.
+- `agent_runtime/delegation/subagents/handoff.py`: task creation, runtime context references, and supervisor handoff rules.
+- `agent_runtime/delegation/subagents/contracts.py`: sync and async task/result contracts.
+- `agent_runtime/delegation/subagents/runner.py`: protocol for sync and async execution plus async lifecycle operations.
+- `agent_runtime/execution/graph.py`: graph exports for supervisor and co-deployed subagents.
 
 Start with co-deployed ASGI async subagents registered in `langgraph.json`. Add remote HTTP transport when scaling or ownership requires it.
 

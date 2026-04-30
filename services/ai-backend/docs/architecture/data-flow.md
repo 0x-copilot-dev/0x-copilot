@@ -31,9 +31,9 @@ sequenceDiagram
   Factory->>Registries: List authorized compact cards and definitions
   Registries-->>Factory: ToolCard, McpServerCard, skill directories, SubagentDefinition
   Factory->>Memory: Create scoped memory backend
-  Factory-->>Runtime: Deep Agents graph with typed dependencies
+  Factory-->>Runtime: Deep Agents graph from explicit build request
   Runtime-->>Worker: LangGraph v2 StreamPart events
-  Worker->>Mapper: Normalize stream chunks
+  Worker->>Mapper: Adapt StreamPart chunks
   Mapper->>Producer: Append model_delta, tool, subagent, and progress events
   Producer->>Store: Persist envelope and latest run sequence
   Worker->>Store: Append final_response/run_completed or typed failure
@@ -51,12 +51,13 @@ expiration, limits active run handling with `RUNTIME_MAX_PARALLEL_RUNS`, applies
 dependencies, and calls `astream_runtime()` for streaming-capable model profiles
 rather than running the model inline inside FastAPI. The worker consumes
 documented LangGraph v2 `StreamPart` dictionaries (`type`, `ns`, `data`) through
-`RuntimeStreamEventMapper`. Provider text chunks are persisted as `model_delta`
+`RuntimeStreamPartAdapter`. Provider text chunks are persisted as `model_delta`
 events with the exact text in `payload.delta`; tool, subagent, custom, and
-progress parts become replayable runtime event envelopes. Lifecycle, cancel,
-approval, and stream events are appended through `RuntimeEventProducer` so the
-run latest sequence cursor is updated consistently. The same run still ends with
-`final_response` and `run_completed`.
+progress parts become replayable runtime event envelopes. Deep Agents namespaces
+are parsed explicitly: `()` is main-agent output and `tools:<id>` identifies
+subagent execution. Lifecycle, cancel, approval, and stream events are appended
+through `RuntimeEventProducer` so the run latest sequence cursor is updated
+consistently. The same run still ends with `final_response` and `run_completed`.
 
 ## Dynamic Capability Loading
 
@@ -197,7 +198,7 @@ sequenceDiagram
   Runtime->>Memory: Offload or summarize oversized notes
   Runtime->>ToolLoader: Load slack_send_message
   ToolLoader-->>Runtime: Validated write spec requiring confirmation
-  Runtime-->>UI: StreamEvent requesting user-visible confirmation
+  Runtime-->>UI: RuntimeEventEnvelope requesting user-visible confirmation
   UI-->>Runtime: User confirms send
   Runtime->>Slack: Send update requests to relevant people
   Runtime-->>User: Meeting promises, Jira links, sent-message summary

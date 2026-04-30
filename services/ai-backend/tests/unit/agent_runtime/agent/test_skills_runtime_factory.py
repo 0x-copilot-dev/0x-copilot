@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.capabilities.skills.virtual import VirtualSkillCard
-from agent_runtime.capabilities.skills.constants import Keys
 from tests.unit.agent_runtime.agent.helpers import SkillsRuntimeFactoryTestMixin
 
 
@@ -45,9 +44,7 @@ class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):
 
         assert isinstance(harness, RuntimeHarness)
         assert harness.skill_directories == self.expected_skill_directories()
-        assert builder.calls[0][Keys.DeepAgents.SKILLS] == (
-            self.expected_skill_directories()
-        )
+        assert builder.calls[0].skill_directories == self.expected_skill_directories()
 
     def test_factory_injects_virtual_skill_cards_and_loader_tool(
         self,
@@ -65,8 +62,8 @@ class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):
             agent_builder=builder,
         )
 
-        tool_names = {getattr(tool, "name", "") for tool in builder.calls[0]["tools"]}
+        tool_names = {getattr(tool, "name", "") for tool in builder.calls[0].tools}
         assert "load_skill" in tool_names
-        assert "launch_risk_review" in builder.calls[0]["instructions"]
-        assert "virtual registry" in builder.calls[0]["instructions"]
+        assert "launch_risk_review" in builder.calls[0].system_prompt
+        assert "virtual registry" in builder.calls[0].system_prompt
         assert len(harness.skill_cards) == 1

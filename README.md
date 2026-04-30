@@ -263,6 +263,14 @@ PY
 
 You can also send `Hi` from the UI composer.
 
+## Streaming Runtime Events
+
+The local chat UI opens `/v1/agent/runs/{run_id}/stream` through
+`backend-facade`. The AI backend persists ordered `RuntimeEventEnvelope` records
+before replaying or streaming them as `runtime_event` SSE frames. Browser clients
+track the highest `sequence_no` per run and reconnect with `after_sequence` so a
+paused stream can resume without replaying already-rendered events.
+
 ## Docker Development
 
 Build and run the full local stack through Docker:

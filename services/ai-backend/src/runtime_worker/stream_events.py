@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
@@ -10,8 +11,40 @@ from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 
 
-class RuntimeStreamEventMapper:
-    """Project LangGraph-style stream parts into stable runtime API events."""
+@dataclass(frozen=True)
+class StreamNamespace:
+    """Parsed LangGraph v2 namespace metadata."""
+
+    parts: tuple[str, ...]
+
+    @classmethod
+    def from_value(cls, value: object) -> "StreamNamespace":
+        if isinstance(value, str):
+            return cls((value,))
+        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+            return cls(tuple(str(item) for item in value))
+        return cls(())
+
+    @property
+    def subagent_task_id(self) -> str | None:
+        for part in self.parts:
+            if part.startswith("tools:"):
+                return part.split(":", maxsplit=1)[1] or None
+        return None
+
+    @property
+    def is_subagent(self) -> bool:
+        return self.subagent_task_id is not None
+
+    def metadata(self, stream_type: str) -> JsonObject:
+        metadata: JsonObject = {"stream_type": stream_type}
+        if self.parts:
+            metadata["namespace"] = list(self.parts)
+        return metadata
+
+
+class RuntimeStreamPartAdapter:
+    """Project LangGraph v2 StreamPart chunks into stable runtime API events."""
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
@@ -30,8 +63,8 @@ class RuntimeStreamEventMapper:
         stream_type = self.stream_type(part)
         namespace = self.namespace_for(part)
         data = part["data"]
-        metadata = self.stream_metadata(stream_type, namespace)
-        parent_task_id = self.task_id_from_namespace(namespace)
+        metadata = namespace.metadata(stream_type)
+        parent_task_id = namespace.subagent_task_id
 
         for payload in self.explicit_api_payloads(data):
             event_type = self.api_event_type(payload)
@@ -41,7 +74,7 @@ class RuntimeStreamEventMapper:
                 run=run,
                 source=self.source_for_event(event_type, namespace),
                 event_type=event_type,
-                payload=self.payload_for_api_event(event_type, payload),
+                payload=payload,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
             )
@@ -59,14 +92,21 @@ class RuntimeStreamEventMapper:
         if stream_type not in {"updates", "custom"} or self.contains_explicit_api_event(data):
             return
 
+        if stream_type == "updates" and self.append_subagent_lifecycle_events(
+            run=run,
+            namespace=namespace,
+            data=data,
+            metadata=metadata,
+        ):
+            return
+
         payload = self.safe_activity_payload(data)
         if not payload:
             return
-        is_subagent = self.is_subagent_namespace(namespace)
         self.event_producer.append_api_event(
             run=run,
-            source=StreamEventSource.SUBAGENT if is_subagent else StreamEventSource.MAIN_AGENT,
-            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS if is_subagent else RuntimeApiEventType.PROGRESS,
+            source=StreamEventSource.SUBAGENT if namespace.is_subagent else StreamEventSource.MAIN_AGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS if namespace.is_subagent else RuntimeApiEventType.PROGRESS,
             payload=payload,
             metadata=metadata,
             parent_task_id=parent_task_id,
@@ -76,12 +116,12 @@ class RuntimeStreamEventMapper:
         self,
         *,
         run: RunRecord,
-        namespace: tuple[str, ...],
+        namespace: StreamNamespace,
         message: object,
         delta: str | None,
     ) -> None:
-        metadata = self.stream_metadata("messages", namespace)
-        parent_task_id = self.task_id_from_namespace(namespace)
+        metadata = namespace.metadata("messages")
+        parent_task_id = namespace.subagent_task_id
 
         for tool_call in self.tool_call_chunks(message):
             payload = self.tool_call_payload(tool_call)
@@ -122,6 +162,51 @@ class RuntimeStreamEventMapper:
                 parent_task_id=parent_task_id,
             )
 
+    def append_subagent_lifecycle_events(
+        self,
+        *,
+        run: RunRecord,
+        namespace: StreamNamespace,
+        data: object,
+        metadata: JsonObject,
+    ) -> bool:
+        """Append lifecycle events derived from documented Deep Agents update chunks."""
+
+        emitted = False
+        for payload in self.task_tool_call_payloads(data):
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SUBAGENT,
+                event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+                payload=payload,
+                metadata=metadata,
+            )
+            emitted = True
+        for payload in self.task_tool_result_payloads(data):
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SUBAGENT,
+                event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                payload=payload,
+                metadata=metadata,
+            )
+            emitted = True
+        if emitted or not namespace.is_subagent:
+            return emitted
+
+        payload = self.safe_activity_payload(data)
+        payload.setdefault("task_id", namespace.subagent_task_id)
+        payload.setdefault("status", "running")
+        self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,
+            payload=payload,
+            metadata=metadata,
+            parent_task_id=namespace.subagent_task_id,
+        )
+        return True
+
     @classmethod
     def stream_delta(cls, chunk: object) -> str | None:
         part = cls.stream_part(chunk)
@@ -153,20 +238,8 @@ class RuntimeStreamEventMapper:
         return str(part["type"])
 
     @classmethod
-    def namespace_for(cls, part: Mapping[str, object]) -> tuple[str, ...]:
-        value = part.get("ns", ())
-        if isinstance(value, str):
-            return (value,)
-        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-            return tuple(str(item) for item in value)
-        return ()
-
-    @classmethod
-    def stream_metadata(cls, stream_type: str, namespace: tuple[str, ...]) -> JsonObject:
-        metadata: JsonObject = {"stream_type": stream_type}
-        if namespace:
-            metadata["namespace"] = list(namespace)
-        return metadata
+    def namespace_for(cls, part: Mapping[str, object]) -> StreamNamespace:
+        return StreamNamespace.from_value(part.get("ns", ()))
 
     @classmethod
     def explicit_api_payloads(cls, value: object) -> tuple[JsonObject, ...]:
@@ -221,42 +294,10 @@ class RuntimeStreamEventMapper:
             return None
 
     @classmethod
-    def payload_for_api_event(
-        cls,
-        event_type: RuntimeApiEventType,
-        payload: JsonObject,
-    ) -> JsonObject:
-        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
-            return {
-                key: value
-                for key, value in payload.items()
-                if key
-                in {
-                    "server_id",
-                    "server_name",
-                    "display_name",
-                    "auth_url",
-                    "expires_at",
-                    "message",
-                    "api_event_type",
-                }
-            }
-        if event_type in {
-            RuntimeApiEventType.REASONING_SUMMARY,
-            RuntimeApiEventType.REASONING_SUMMARY_DELTA,
-        }:
-            return {
-                key: value
-                for key, value in payload.items()
-                if key in {"summary", "delta", "message", "status"}
-            }
-        return payload
-
-    @classmethod
     def source_for_event(
         cls,
         event_type: RuntimeApiEventType,
-        namespace: tuple[str, ...],
+        namespace: StreamNamespace,
     ) -> StreamEventSource:
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return StreamEventSource.MCP
@@ -273,20 +314,9 @@ class RuntimeStreamEventMapper:
             RuntimeApiEventType.SUBAGENT_STARTED,
             RuntimeApiEventType.SUBAGENT_PROGRESS,
             RuntimeApiEventType.SUBAGENT_COMPLETED,
-        } or cls.is_subagent_namespace(namespace):
+        } or namespace.is_subagent:
             return StreamEventSource.SUBAGENT
         return StreamEventSource.MAIN_AGENT
-
-    @classmethod
-    def is_subagent_namespace(cls, namespace: tuple[str, ...]) -> bool:
-        return any(part.startswith("tools:") or "subagent" in part.lower() for part in namespace)
-
-    @classmethod
-    def task_id_from_namespace(cls, namespace: tuple[str, ...]) -> str | None:
-        for part in namespace:
-            if part.startswith("tools:"):
-                return part.split(":", maxsplit=1)[1] or None
-        return None
 
     @classmethod
     def tool_call_chunks(cls, message: object) -> tuple[object, ...]:
@@ -308,13 +338,17 @@ class RuntimeStreamEventMapper:
             or TraceContext.event_id()
         )
         args = payload.get("args", {})
-        return {
+        result: JsonObject = {
             "tool_name": tool_name,
             "call_id": call_id,
             "args": args if isinstance(args, Mapping) else {"delta": str(args)},
             "delta": str(args) if args and not isinstance(args, Mapping) else "",
-            "status": payload.get("status", "running"),
+            "status": payload.get("status", "started"),
         }
+        summary = cls.text(payload.get("summary"))
+        if summary is not None:
+            result["summary"] = summary
+        return result
 
     @classmethod
     def is_tool_result_message(cls, message: object) -> bool:
@@ -340,6 +374,90 @@ class RuntimeStreamEventMapper:
             "status": payload.get("status", "completed"),
             "output": output or payload,
         }
+
+    @classmethod
+    def task_tool_call_payloads(cls, value: object) -> tuple[JsonObject, ...]:
+        payloads: list[JsonObject] = []
+        for message in cls.update_messages(value):
+            for tool_call in cls.tool_call_chunks(message):
+                payload = cls.payload_mapping(tool_call)
+                tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name"))
+                if tool_name != "task":
+                    continue
+                call_id = cls.text(payload.get("id")) or cls.text(payload.get("call_id"))
+                if call_id is None:
+                    continue
+                args = payload.get("args")
+                args_payload = args if isinstance(args, Mapping) else {}
+                subagent_name = (
+                    cls.text(args_payload.get("subagent_type"))
+                    or cls.text(args_payload.get("subagent_name"))
+                    or "subagent"
+                )
+                summary = cls.text(args_payload.get("description")) or cls.text(
+                    args_payload.get("task")
+                )
+                event_payload: JsonObject = {
+                    "task_id": call_id,
+                    "subagent_name": subagent_name,
+                    "status": "queued",
+                }
+                if summary is not None:
+                    event_payload["summary"] = summary
+                payloads.append(event_payload)
+        return tuple(payloads)
+
+    @classmethod
+    def task_tool_result_payloads(cls, value: object) -> tuple[JsonObject, ...]:
+        payloads: list[JsonObject] = []
+        for message in cls.update_messages(value):
+            if not cls.is_tool_result_message(message):
+                continue
+            payload = cls.payload_mapping(message)
+            tool_name = cls.text(payload.get("name")) or cls.text(payload.get("tool_name"))
+            if tool_name != "task":
+                continue
+            call_id = (
+                cls.text(payload.get("tool_call_id"))
+                or cls.text(payload.get("id"))
+                or cls.text(payload.get("call_id"))
+            )
+            if call_id is None:
+                continue
+            summary = cls.content_delta_to_text(payload.get("content")) or cls.text(
+                payload.get("message")
+            )
+            event_payload: JsonObject = {
+                "task_id": call_id,
+                "subagent_name": "subagent",
+                "status": "completed",
+            }
+            if summary is not None:
+                event_payload["summary"] = summary
+            payloads.append(event_payload)
+        return tuple(payloads)
+
+    @classmethod
+    def update_messages(cls, value: object) -> tuple[object, ...]:
+        messages: list[object] = []
+        cls.collect_update_messages(value, messages)
+        return tuple(messages)
+
+    @classmethod
+    def collect_update_messages(cls, value: object, messages: list[object]) -> None:
+        if isinstance(value, Mapping):
+            raw_messages = value.get("messages")
+            if isinstance(raw_messages, Sequence) and not isinstance(
+                raw_messages,
+                (str, bytes, bytearray),
+            ):
+                messages.extend(raw_messages)
+            for item in value.values():
+                cls.collect_update_messages(item, messages)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for item in value:
+                cls.collect_update_messages(item, messages)
 
     @classmethod
     def payload_mapping(cls, value: object) -> JsonObject:

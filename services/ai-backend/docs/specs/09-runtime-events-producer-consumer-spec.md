@@ -55,7 +55,10 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Build no-op local runtime dependencies until production connector adapters exist.
 - Invoke `astream_runtime()` through `create_agent_runtime()` for streaming-capable model profiles, falling back to `ainvoke_runtime()` when streaming is disabled or unavailable.
 - Append ordered lifecycle events for queued, started, completed, cancelled, failed, and approval-resolution paths.
-- Consume LangGraph/DeepAgents v2 `StreamPart` chunks with `type`, `ns`, and `data`.
+- Consume LangGraph/Deep Agents v2 `StreamPart` chunks with `type`, `ns`, and `data` through `RuntimeStreamPartAdapter`.
+- Parse Deep Agents namespaces explicitly: `()` is main-agent output and segments
+  such as `tools:<id>` identify subagent execution. Other namespace strings do
+  not imply subagent routing.
 - Append `model_delta` events from `messages` token chunks while the model is running.
 - Project `messages`, `updates`, and `custom` parts into replayable reasoning, tool, observation, and subagent events through `RuntimeEventProducer`.
 - Persist the final assistant output as both an assistant message and a `final_response` event.
@@ -75,6 +78,9 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Reuse the same `RuntimeEventEnvelope` contract as replay.
 
 Clients should store the highest received `sequence_no` per `run_id` and reconnect with `after_sequence`.
+Clients should treat malformed SSE JSON or JSON that fails the
+`RuntimeEventEnvelope` contract as stream protocol errors. Those errors should
+not be confused with EventSource network errors or silently dropped.
 
 Provider message token chunks are exposed as `model_delta` events. The exact text
 chunk is in `payload.delta`; `summary` is display-oriented and may be normalized.

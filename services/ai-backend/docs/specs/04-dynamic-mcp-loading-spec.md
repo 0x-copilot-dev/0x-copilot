@@ -8,11 +8,12 @@ Allow the agent to discover MCP server cards and load selected MCP tools/resourc
 
 Implemented modules:
 
-- `mcp/cards.py`: server card contracts.
-- `mcp/registry.py`: list and lookup MCP server cards.
-- `mcp/client.py`: protocol for connecting, listing tools, and listing resources.
-- `mcp/loader.py`: validates discovered descriptors and exposes selected tools.
-- `agent/middleware/dynamic_mcp_loader.py`: agent-facing loader tool/middleware.
+- `agent_runtime/capabilities/mcp/cards.py`: server card contracts.
+- `agent_runtime/capabilities/mcp/registry.py`: list and lookup MCP server cards.
+- `agent_runtime/capabilities/mcp/client.py`: protocol for connecting, listing tools, and listing resources.
+- `agent_runtime/capabilities/mcp/loader.py`: validates discovered descriptors and exposes selected tools.
+- `agent_runtime/capabilities/mcp/middleware/dynamic_loader.py`: agent-facing loader tool/middleware.
+- `agent_runtime/capabilities/mcp/middleware/auth_mcp.py`: agent-facing MCP auth request tool.
 
 MCP clients should be async-ready and replaceable with fakes.
 

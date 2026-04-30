@@ -41,7 +41,10 @@ class RuntimeEventProducer:
     ) -> RuntimeEventEnvelope:
         """Append an API-authored event and update the run sequence cursor."""
 
-        safe_payload = payload or {}
+        safe_payload = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=event_type,
+            payload=payload or {},
+        )
         safe_metadata = metadata or {}
         presentation = RuntimeEventPresentationProjector.presentation_fields(
             event_type=event_type,

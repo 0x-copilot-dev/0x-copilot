@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.capabilities.skills.constants import Keys
+from agent_runtime.execution.deep_agent_builder import DeepAgentBuildRequest
 
 
 class MissingToolRegistryMethod:
@@ -13,24 +14,15 @@ class MissingToolRegistryMethod:
 
 @dataclass
 class CapturingAgentBuilder:
-    calls: list[dict[str, Any]] = field(default_factory=list)
+    calls: list[DeepAgentBuildRequest] = field(default_factory=list)
 
-    def __call__(self, **kwargs: Any) -> object:
-        self.calls.append(kwargs)
+    def __call__(self, request: DeepAgentBuildRequest) -> object:
+        self.calls.append(request)
         return {"agent": "fake"}
 
 
 @dataclass
 class FakeDeepAgentsModule:
-    calls: list[dict[str, Any]] = field(default_factory=list)
-
-    def create_deep_agent(self, **kwargs: Any) -> object:
-        self.calls.append(kwargs)
-        return {"agent": "fake"}
-
-
-@dataclass
-class FakeSystemPromptDeepAgentsModule:
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def create_deep_agent(self, *, system_prompt: str, **kwargs: Any) -> object:

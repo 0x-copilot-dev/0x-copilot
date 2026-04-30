@@ -40,6 +40,11 @@ Markdown and render through Streamdown so incomplete streamed Markdown remains
 stable while tokens arrive. User, system, status, approval, and activity text
 remain plain React text unless a feature explicitly opts into Markdown.
 
+The SSE client validates each `runtime_event` frame before it reaches chat
+state. Malformed JSON and JSON that does not match `RuntimeEventEnvelope` are
+reported as stream protocol errors, while EventSource network failures continue
+to use the reconnect path with the latest received `sequence_no`.
+
 ## Dev And Production Routing
 
 During local development, Vite proxies `/v1` to `http://127.0.0.1:8200`, the
