@@ -61,7 +61,7 @@ class FastApiRuntimeApiTestMixin:
             "assistant_id": self.Values.ASSISTANT_ID,
             "title": "Launch review",
             "metadata": {"token": self.Values.SECRET, "source": "unit-test"},
-            "idempotency_key": "conversation_idem_123",
+            "idempotency_key": self.Values.IDEMPOTENCY_KEY,
         }
 
     def runtime_context_payload(self, *, run_id: str | None = None) -> dict[str, Any]:
@@ -410,7 +410,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         follow_up_payload["user_input"] = (
             "Now focus only on launch risks without named owners."
         )
-        follow_up_payload["idempotency_key"] = "idem_followup_123"
+        follow_up_payload["idempotency_key"] = f"{self.Values.IDEMPOTENCY_KEY}_followup"
         follow_up_payload["request_context"]["trace_metadata"] = {
             "requested_run_id": "run_followup_123",
             "requested_trace_id": "trace_followup_123",
