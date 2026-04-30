@@ -13,8 +13,13 @@ Every backend feature must ship with focused unit tests before integration tests
 
 ## Test Structure
 
+- Mirror source subpackages under `tests/unit/agent_runtime/<subpackage>/`.
+  For example, `src/agent_runtime/agent` tests live under `tests/unit/agent_runtime/agent`.
+- Run tests from `services/ai-backend` with the service-local virtual environment:
+  `.venv/bin/python -m pytest`.
 - Use mixins for test helpers, fake providers, fixtures builders, constants, and setup utilities.
 - The concrete test class should contain only `test_*` unit test methods. Do not put helper methods, fake classes, or initialization logic on the concrete test class.
+- A `test_*.py` file should contain no more than one concrete test class.
 - Keep helper constants centralized in the mixin rather than scattering repeated strings through test bodies.
 
 ## Test Layers

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 import pytest
 
 from agent_runtime.agent.contracts import (
@@ -12,21 +9,13 @@ from agent_runtime.agent.contracts import (
 )
 from agent_runtime.agent.errors import AgentRuntimeError
 from agent_runtime.agent.factory import RuntimeHarness, create_agent_runtime
+from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
 from tests.unit.fakes import (
     FakeMcpRegistry,
     FakeMemoryBackendFactory,
     FakeSubagentCatalog,
     FakeToolRegistry,
 )
-
-
-@dataclass
-class CapturingAgentBuilder:
-    calls: list[dict[str, Any]] = field(default_factory=list)
-
-    def __call__(self, **kwargs: Any) -> object:
-        self.calls.append(kwargs)
-        return {"agent": "fake"}
 
 
 def test_factory_propagates_permissions_to_runtime_ports(

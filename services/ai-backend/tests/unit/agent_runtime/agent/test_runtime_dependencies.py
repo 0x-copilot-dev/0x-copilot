@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent_runtime.agent.contracts import RuntimeDependencies, SkillSourceConfig
-
+from tests.unit.agent_runtime.agent.helpers import MissingToolRegistryMethod
 from tests.unit.fakes import (
     FakeMcpRegistry,
     FakeMemoryBackendFactory,
@@ -12,10 +12,6 @@ from tests.unit.fakes import (
     FakeSubagentCatalog,
     FakeToolRegistry,
 )
-
-
-class MissingToolRegistryMethod:
-    pass
 
 
 def test_runtime_dependencies_accept_fake_ports(

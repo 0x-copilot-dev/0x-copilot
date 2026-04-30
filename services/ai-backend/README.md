@@ -84,17 +84,24 @@ Core rules:
 
 ## Local Setup
 
-The virtual environment lives inside this folder at `.venv`.
+The virtual environment lives inside this service folder at `services/ai-backend/.venv`.
+When your shell is already in `services/ai-backend`, use:
 
 ```bash
 source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-Install project dependencies as the backend takes shape:
+Install project dependencies into that local environment:
 
 ```bash
 python -m pip install -r requirements.txt
+```
+
+Run tests with the same service-local environment:
+
+```bash
+.venv/bin/python -m pytest
 ```
 
 ## Intended Direction

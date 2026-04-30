@@ -1,31 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-
 from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.agent.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.skills.constants import Keys
-
-
-class SkillsRuntimeFactoryTestMixin:
-    class Paths:
-        SKILLS = Keys.DeepAgents.SKILLS
-
-    @dataclass
-    class CapturingAgentBuilder:
-        calls: list[dict[str, Any]] = field(default_factory=list)
-
-        def __call__(self, **kwargs: Any) -> object:
-            self.calls.append(kwargs)
-            return {"agent": "fake"}
-
-    def create_builder(self) -> CapturingAgentBuilder:
-        return self.CapturingAgentBuilder()
-
-    def expected_skill_directories(self) -> tuple[str, ...]:
-        return (str(Path(self.Paths.SKILLS).resolve(strict=False)),)
+from tests.unit.agent_runtime.agent.helpers import SkillsRuntimeFactoryTestMixin
 
 
 class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):

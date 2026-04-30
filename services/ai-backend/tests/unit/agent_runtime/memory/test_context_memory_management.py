@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 import pytest
 from pydantic import ValidationError
 
@@ -24,6 +21,7 @@ from agent_runtime.memory import (
     VersionedMemoryStore,
 )
 from agent_runtime.memory.policy import MemoryPolicyAuthorizer
+from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
 
 def test_memory_routes_isolate_user_memory_by_user_id(
@@ -218,15 +216,6 @@ def test_concurrent_memory_writes_raise_safe_retryable_error() -> None:
     assert exc_info.value.code == RuntimeErrorCode.EXTERNAL_SERVICE_ERROR
     assert exc_info.value.safe_message == "Memory was updated concurrently. Reload and retry the write."
     assert exc_info.value.retryable is True
-
-
-@dataclass
-class FakeDeepAgentsModule:
-    calls: list[dict[str, Any]] = field(default_factory=list)
-
-    def create_deep_agent(self, **kwargs: Any) -> object:
-        self.calls.append(kwargs)
-        return {"agent": "fake"}
 
 
 def test_deep_agent_builder_receives_backend_and_memory_paths(

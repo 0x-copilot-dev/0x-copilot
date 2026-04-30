@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_runtime.skills.constants import Keys
 from agent_runtime.skills.manifest import SkillManifest
 from agent_runtime.skills.policy import SkillAccessEvaluator, SkillAccessPolicy
 from agent_runtime.skills.sources import (
@@ -10,45 +9,7 @@ from agent_runtime.skills.sources import (
     SkillSource,
     SkillSourceScope,
 )
-
-
-class SkillPolicyTestMixin:
-    class Names:
-        DOC_SEARCH = "doc_search"
-        RESEARCH_PLAN = "research-plan"
-
-    class Paths:
-        RESEARCH_PLAN = "research-plan"
-        SKILLS = Keys.DeepAgents.SKILLS
-
-    class Descriptions:
-        RESEARCH_PLAN = "Use when creating source-backed research plans."
-
-    def configured_skill(
-        self,
-        tmp_path: Path,
-        *,
-        allowed_tools: set[str] | None = None,
-    ) -> ConfiguredSkill:
-        source = SkillSource(
-            path=tmp_path / self.Paths.SKILLS,
-            scope={SkillSourceScope.SHARED},
-        )
-        return ConfiguredSkill(
-            manifest=SkillManifest(
-                name=self.Names.RESEARCH_PLAN,
-                description=self.Descriptions.RESEARCH_PLAN,
-                allowed_tools=allowed_tools or set(),
-            ),
-            source=source,
-            skill_directory=tmp_path / self.Paths.SKILLS / self.Paths.RESEARCH_PLAN,
-        )
-
-    def main_agent_policy(self, skill: ConfiguredSkill) -> SkillAccessPolicy:
-        return SkillAccessPolicy.for_main_agent(
-            allowed_sources={skill.source.path},
-            allowed_tools={self.Names.DOC_SEARCH},
-        )
+from tests.unit.agent_runtime.skills.helpers import SkillPolicyTestMixin
 
 
 class TestSkillPolicy(SkillPolicyTestMixin):

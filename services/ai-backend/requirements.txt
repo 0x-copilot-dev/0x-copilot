@@ -1,3 +1,6 @@
+# Install into the service-local virtualenv:
+# .venv/bin/python -m pip install -r requirements.txt
+
 langchain
 langgraph
 deepagents

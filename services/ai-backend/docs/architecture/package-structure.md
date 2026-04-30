@@ -21,6 +21,12 @@ services/ai-backend/
       subagents/
   tests/
     unit/
+      agent_runtime/
+        agent/
+        memory/
+        mcp/
+        skills/
+        tools/
 ```
 
 ## Module Ownership
@@ -51,4 +57,7 @@ flowchart TD
 ## Testing Implication
 
 The package structure must make it possible to unit test core behavior without Slack, Google Workspace, Atlassian, LangSmith, or live MCP servers. Fakes should satisfy the same interfaces as real implementations.
+
+Unit tests mirror source ownership under `tests/unit/agent_runtime/<subpackage>/`.
+Shared fakes and helpers should live in non-test helper modules, while concrete `test_*.py` files contain at most one test class.
 

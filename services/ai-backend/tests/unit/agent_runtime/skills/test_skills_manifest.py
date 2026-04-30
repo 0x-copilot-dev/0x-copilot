@@ -4,80 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skills.constants import Keys, Messages
 from agent_runtime.skills.manifest import (
     MAX_SKILL_DESCRIPTION_LENGTH,
     SkillErrorCode,
     SkillManifestError,
-    SkillManifestParser,
-    SkillManifestReader,
 )
-
-
-class SkillManifestTestMixin:
-    class Samples:
-        VALID = """---
-name: Research-Plan
-description: Use when creating source-backed executive research plans.
-license: MIT
-compatibility:
-  - deepagents
-allowed_tools: [doc_search]
-metadata:
-  owner: ai-platform
----
-# Research Plan
-"""
-        MISSING_DESCRIPTION = """---
-name: research-plan
----
-# Research Plan
-"""
-        MALFORMED = """---
-name research-plan
----
-# Research Plan
-"""
-        UNSAFE_ASSET = """---
-name: unsafe-skill
-description: Use when testing unsafe asset references.
----
-Read [outside](../secret.txt).
-"""
-        MISSING_ASSET = """---
-name: missing-asset-skill
-description: Use when testing missing asset references.
----
-Read [template](assets/template.md).
-"""
-
-    class Expected:
-        NAME = "research-plan"
-        DESCRIPTION = "Use when creating source-backed executive research plans."
-        LICENSE = "MIT"
-        COMPATIBILITY = frozenset({"deepagents"})
-        ALLOWED_TOOLS = frozenset({"doc_search"})
-        METADATA = {"owner": "ai-platform"}
-
-    def parse(self, markdown: str):
-        return SkillManifestParser.parse(markdown)
-
-    def read(self, skill_dir: Path):
-        return SkillManifestReader.read(skill_dir)
-
-    def write_skill(self, skill_dir: Path, markdown: str) -> None:
-        skill_dir.mkdir()
-        (skill_dir / Keys.Files.SKILL_MD).write_text(
-            markdown,
-            encoding=Keys.Encoding.UTF_8,
-        )
-
-    def assert_skill_error(
-        self,
-        exc_info: pytest.ExceptionInfo[SkillManifestError],
-        code: SkillErrorCode,
-    ) -> None:
-        assert exc_info.value.code == code
+from agent_runtime.skills.constants import Messages
+from tests.unit.agent_runtime.skills.helpers import SkillManifestTestMixin
 
 
 class TestSkillManifest(SkillManifestTestMixin):

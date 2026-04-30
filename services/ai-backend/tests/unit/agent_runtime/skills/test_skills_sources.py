@@ -4,49 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skills.constants import Keys
 from agent_runtime.skills.manifest import SkillErrorCode, SkillManifestError
 from agent_runtime.skills.sources import (
     SkillSource,
     SkillSourceConfig,
-    SkillSourceRegistry,
     SkillSourceScope,
 )
-
-
-class SkillSourcesTestMixin:
-    class Names:
-        RESEARCH_PLAN = "research-plan"
-
-    class Paths:
-        FIRST = "first"
-        HIGH = "high"
-        LOW = "low"
-        MISSING = "does-not-exist"
-        SECOND = "second"
-        SKILLS = Keys.DeepAgents.SKILLS
-
-    class Descriptions:
-        HIGH_PRECEDENCE = "Use when creating the high precedence research plan."
-        LOW_PRECEDENCE = "Use when creating the low precedence research plan."
-
-    def discover(self, config: SkillSourceConfig):
-        return SkillSourceRegistry.discover_configured_skills(config)
-
-    def directories_for_deep_agent(self, config: SkillSourceConfig) -> tuple[str, ...]:
-        return SkillSourceRegistry.skill_directories_for_deep_agent(config)
-
-    def write_skill(self, skill_dir: Path, *, name: str, description: str) -> None:
-        skill_dir.mkdir(parents=True)
-        (skill_dir / Keys.Files.SKILL_MD).write_text(
-            f"""---
-name: {name}
-description: {description}
----
-# {name}
-""",
-            encoding=Keys.Encoding.UTF_8,
-        )
+from tests.unit.agent_runtime.skills.helpers import SkillSourcesTestMixin
 
 
 class TestSkillSources(SkillSourcesTestMixin):
