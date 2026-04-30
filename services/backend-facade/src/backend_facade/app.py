@@ -46,6 +46,21 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.patch("/v1/mcp/servers/{server_id}")
+    async def update_mcp_server(
+        server_id: str,
+        payload: dict[str, object],
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json(
+            app,
+            "PATCH",
+            f"/v1/mcp/servers/{server_id}",
+            params={"org_id": org_id, "user_id": user_id},
+            json=payload,
+        )
+
     @app.post("/v1/mcp/servers/{server_id}/auth/start")
     async def start_mcp_auth(server_id: str, payload: dict[str, object]) -> dict[str, object]:
         return await forward_json(app, "POST", f"/v1/mcp/servers/{server_id}/auth/start", json=payload)
@@ -61,6 +76,55 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             "POST",
             f"/v1/mcp/servers/{server_id}/auth/skip",
             params={"org_id": org_id, "user_id": user_id},
+        )
+
+    @app.get("/v1/mcp/oauth/callback")
+    async def mcp_oauth_callback(
+        state: str = Query(..., min_length=1),
+        code: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/mcp/oauth/callback",
+            params={"state": state, "code": code},
+        )
+
+    @app.post("/v1/agent/conversations")
+    async def create_conversation(payload: dict[str, object]) -> dict[str, object]:
+        return await forward_json_to_ai(app, "POST", "/v1/agent/conversations", json=payload)
+
+    @app.get("/v1/agent/conversations/{conversation_id}")
+    async def get_conversation(
+        conversation_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}",
+            params={"org_id": org_id, "user_id": user_id},
+        )
+
+    @app.get("/v1/agent/conversations/{conversation_id}/messages")
+    async def get_messages(
+        conversation_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+        limit: int = Query(50, ge=1, le=200),
+        include_deleted: bool = False,
+    ) -> dict[str, object]:
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/messages",
+            params={
+                "org_id": org_id,
+                "user_id": user_id,
+                "limit": limit,
+                "include_deleted": include_deleted,
+            },
         )
 
     @app.post("/v1/agent/runs")
@@ -140,6 +204,19 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             params={"org_id": org_id, "user_id": user_id, "after_sequence": after_sequence},
         )
 
+    @app.get("/v1/agent/runs/{run_id}")
+    async def get_run(
+        run_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}",
+            params={"org_id": org_id, "user_id": user_id},
+        )
+
     @app.get("/v1/agent/runs/{run_id}/stream")
     async def stream_run(
         request: Request,
@@ -161,6 +238,35 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
                         yield chunk
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/v1/agent/runs/{run_id}/cancel")
+    async def cancel_run(
+        run_id: str,
+        payload: dict[str, object],
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            f"/v1/agent/runs/{run_id}/cancel",
+            params={"org_id": org_id, "user_id": user_id},
+            json=payload,
+        )
+
+    @app.post("/v1/agent/approvals/{approval_id}/decision")
+    async def approval_decision(
+        approval_id: str,
+        payload: dict[str, object],
+        org_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            f"/v1/agent/approvals/{approval_id}/decision",
+            params={"org_id": org_id},
+            json=payload,
+        )
 
     return app
 

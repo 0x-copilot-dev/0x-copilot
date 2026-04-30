@@ -294,6 +294,18 @@ class CreateMcpServerRequest(BackendContract):
         return validate_public_mcp_url(value)
 
 
+class UpdateMcpServerRequest(BackendContract):
+    display_name: str | None = None
+    enabled: bool | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return normalize_text(value)
+
+
 class McpServerResponse(BackendContract):
     server_id: str
     name: str

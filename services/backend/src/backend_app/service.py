@@ -35,6 +35,7 @@ from backend_app.contracts import (
     SkillManifestFields,
     SkillRecord,
     SkillResponse,
+    UpdateMcpServerRequest,
     UpdateSkillRequest,
     TokenEnvelope,
     normalize_skill_slug,
@@ -94,6 +95,31 @@ class McpRegistryService:
         if deleted:
             self._audit(record, "mcp_server_deleted")
         return deleted
+
+    def update_server(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        request: UpdateMcpServerRequest,
+    ) -> McpServerResponse:
+        record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)
+        changes: dict[str, object] = {}
+        if request.display_name is not None:
+            changes["display_name"] = request.display_name
+        if request.enabled is not None:
+            changes["enabled"] = request.enabled
+            if not request.enabled:
+                changes["health"] = McpServerHealth.DISABLED
+            elif record.health is McpServerHealth.DISABLED:
+                changes["health"] = McpServerHealth.HEALTHY
+        if not changes:
+            return McpServerResponse.from_record(record)
+
+        updated = self._update_record(record, **changes)
+        self._audit(updated, "mcp_server_updated")
+        return McpServerResponse.from_record(updated)
 
     def skip_auth(self, *, org_id: str, user_id: str, server_id: str) -> McpServerResponse:
         record = self._require_server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)

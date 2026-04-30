@@ -30,3 +30,73 @@ def test_facade_forwards_skill_list(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"skills": []}
+
+
+def test_facade_forwards_conversation_create_to_ai(monkeypatch) -> None:
+    async def fake_forward_json_to_ai(*args, **kwargs):
+        assert args[1] == "POST"
+        assert args[2] == "/v1/agent/conversations"
+        assert kwargs["json"]["org_id"] == "org_123"
+        return {"conversation_id": "conv_123"}
+
+    monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.post(
+        "/v1/agent/conversations",
+        json={"org_id": "org_123", "user_id": "user_123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"conversation_id": "conv_123"}
+
+
+def test_facade_forwards_run_cancel_to_ai(monkeypatch) -> None:
+    async def fake_forward_json_to_ai(*args, **kwargs):
+        assert args[1] == "POST"
+        assert args[2] == "/v1/agent/runs/run_123/cancel"
+        assert kwargs["params"] == {"org_id": "org_123", "user_id": "user_123"}
+        assert kwargs["json"] == {"requested_by_user_id": "user_123"}
+        return {"run_id": "run_123", "status": "cancelling", "latest_sequence_no": 3}
+
+    monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.post(
+        "/v1/agent/runs/run_123/cancel",
+        params={"org_id": "org_123", "user_id": "user_123"},
+        json={"requested_by_user_id": "user_123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelling"
+
+
+def test_facade_forwards_mcp_update_and_callback(monkeypatch) -> None:
+    calls = []
+
+    async def fake_forward_json(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[1] == "PATCH":
+            return {"server_id": "srv_123", "enabled": False}
+        return {"server_id": "srv_123", "auth_state": "authenticated"}
+
+    monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
+    client = TestClient(create_app(FacadeSettings()))
+
+    patch_response = client.patch(
+        "/v1/mcp/servers/srv_123",
+        params={"org_id": "org_123", "user_id": "user_123"},
+        json={"enabled": False},
+    )
+    callback_response = client.get(
+        "/v1/mcp/oauth/callback",
+        params={"state": "state_123", "code": "code_123"},
+    )
+
+    assert patch_response.status_code == 200
+    assert callback_response.status_code == 200
+    assert calls[0][0][1] == "PATCH"
+    assert calls[0][0][2] == "/v1/mcp/servers/srv_123"
+    assert calls[1][0][1] == "GET"
+    assert calls[1][0][2] == "/v1/mcp/oauth/callback"

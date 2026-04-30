@@ -20,6 +20,7 @@ from backend_app.contracts import (
     OAuthTokenRequest,
     SkillListResponse,
     SkillResponse,
+    UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
 from backend_app.service import McpRegistryService, SkillRegistryService
@@ -54,6 +55,23 @@ def create_app(
         if not deleted:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.patch("/v1/mcp/servers/{server_id}", response_model=McpServerResponse)
+    def update_server(
+        server_id: str,
+        payload: UpdateMcpServerRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> McpServerResponse:
+        try:
+            return mcp_service(app).update_server(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=server_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.post("/v1/mcp/servers/{server_id}/auth/start", response_model=McpAuthStartResponse)
     def start_auth(server_id: str, payload: McpAuthStartRequest) -> McpAuthStartResponse:
