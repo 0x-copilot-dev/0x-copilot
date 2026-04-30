@@ -10,6 +10,7 @@ from pydantic import Field, ValidationError
 
 from enterprise_search_ai.agent.contracts import AgentRuntimeContext, RuntimeContract
 from enterprise_search_ai.tools.cards import ToolLoadErrorCode, ToolLoadResult
+from enterprise_search_ai.tools.constants import Keys, Messages
 from enterprise_search_ai.tools.loader import ToolLoader
 
 
@@ -25,42 +26,41 @@ class LoadToolSpecTool:
 
     loader: ToolLoader
     runtime_context: AgentRuntimeContext
-    name: str = "load_tool_spec"
-    description: str = (
-        "Load the full schema and instructions for an authorized tool by stable name."
-    )
+    name: str = Keys.Builtin.LOAD_TOOL_SPEC
+    description: str = Messages.Builtin.LOAD_TOOL_SPEC_DESCRIPTION
 
     def invoke(self, raw_input: LoadToolInput | Mapping[str, Any] | str) -> dict[str, Any]:
         """Return a JSON-serializable loaded spec or typed safe error."""
 
-        parsed_input = _parse_input(raw_input, self.runtime_context.trace_id)
+        parsed_input = self._parse_input(raw_input, self.runtime_context.trace_id)
         if isinstance(parsed_input, ToolLoadResult):
-            return parsed_input.model_dump(mode="json", exclude_none=True)
+            return parsed_input.model_dump(mode=Keys.Serialization.JSON, exclude_none=True)
 
         result = self.loader.load_tool_by_name(
             tool_name=parsed_input.tool_name,
             runtime_context=self.runtime_context,
         )
-        return result.model_dump(mode="json", exclude_none=True)
+        return result.model_dump(mode=Keys.Serialization.JSON, exclude_none=True)
 
     def __call__(self, raw_input: LoadToolInput | Mapping[str, Any] | str) -> dict[str, Any]:
         return self.invoke(raw_input)
 
+    @classmethod
+    def _parse_input(
+        cls,
+        raw_input: LoadToolInput | Mapping[str, Any] | str,
+        correlation_id: str,
+    ) -> LoadToolInput | ToolLoadResult:
+        if isinstance(raw_input, LoadToolInput):
+            return raw_input
+        if isinstance(raw_input, str):
+            raw_input = {Keys.Fields.TOOL_NAME: raw_input}
 
-def _parse_input(
-    raw_input: LoadToolInput | Mapping[str, Any] | str,
-    correlation_id: str,
-) -> LoadToolInput | ToolLoadResult:
-    if isinstance(raw_input, LoadToolInput):
-        return raw_input
-    if isinstance(raw_input, str):
-        raw_input = {"tool_name": raw_input}
-
-    try:
-        return LoadToolInput.model_validate(raw_input)
-    except ValidationError:
-        return ToolLoadResult.fail(
-            ToolLoadErrorCode.INVALID_TOOL_NAME,
-            "Tools must be requested by stable name.",
-            correlation_id=correlation_id,
-        )
+        try:
+            return LoadToolInput.model_validate(raw_input)
+        except ValidationError:
+            return ToolLoadResult.fail(
+                ToolLoadErrorCode.INVALID_TOOL_NAME,
+                Messages.Errors.TOOL_NAME_REQUIRED,
+                correlation_id=correlation_id,
+            )

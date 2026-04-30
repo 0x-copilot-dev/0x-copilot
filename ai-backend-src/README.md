@@ -78,6 +78,9 @@ Core rules:
 - Least privilege: never expose unauthorized tools, MCP servers, memories, documents, or actions to the model.
 - Context discipline: do not pass full conversation history to subagents by default; use compact task summaries and return response plus execution/plan summaries.
 - Safe observability: stream useful progress and trace IDs, but redact secrets and oversized payloads before emission.
+- Centralized constants: avoid inline repeated keys, method names, and user-facing messages; use nested `Keys` classes and dedicated message or exception classes.
+- Class-scoped helpers: keep production helper behavior inside contract, parser, policy, validator, or loader classes instead of module-level helper functions.
+- Test mixins: put fake providers, builders, setup helpers, and repeated constants in mixins; concrete test classes should contain only `test_*` unit test methods.
 
 ## Local Setup
 

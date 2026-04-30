@@ -11,6 +11,12 @@ Every backend feature must ship with focused unit tests before integration tests
 - Fakes for registries, MCP clients, stores, subagent runners, and stream chunks.
 - Property tests where parsing or normalization has a large input surface.
 
+## Test Structure
+
+- Use mixins for test helpers, fake providers, fixtures builders, constants, and setup utilities.
+- The concrete test class should contain only `test_*` unit test methods. Do not put helper methods, fake classes, or initialization logic on the concrete test class.
+- Keep helper constants centralized in the mixin rather than scattering repeated strings through test bodies.
+
 ## Test Layers
 
 1. Contract tests: Pydantic accepts valid data and rejects malformed data.

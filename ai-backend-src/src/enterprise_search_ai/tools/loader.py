@@ -14,9 +14,10 @@ from enterprise_search_ai.tools.cards import (
     ToolLoadErrorCode,
     ToolLoadRequest,
     ToolLoadResult,
-    normalize_slug,
+    ToolValueNormalizer,
 )
-from enterprise_search_ai.tools.permissions import is_card_authorized, is_policy_authorized
+from enterprise_search_ai.tools.constants import Keys, Messages
+from enterprise_search_ai.tools.permissions import ToolPermissionChecker
 from enterprise_search_ai.tools.registry import DynamicToolRegistry, RegisteredTool
 
 
@@ -40,10 +41,10 @@ class ToolLoader:
                 correlation_id=runtime_context.trace_id,
             )
 
-        if not is_card_authorized(runtime_context, resolution.card):
+        if not ToolPermissionChecker.is_card_authorized(runtime_context, resolution.card):
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.PERMISSION_DENIED,
-                "You do not have access to this tool.",
+                Messages.Errors.TOOL_PERMISSION_DENIED,
                 tool_name=resolution.card.name,
                 correlation_id=runtime_context.trace_id,
             )
@@ -53,7 +54,7 @@ class ToolLoader:
         except AgentRuntimeError:
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.CONNECTOR_UNAVAILABLE,
-                "The connector could not load this tool right now.",
+                Messages.Errors.CONNECTOR_LOAD_FAILED,
                 retryable=True,
                 tool_name=resolution.card.name,
                 correlation_id=runtime_context.trace_id,
@@ -61,7 +62,7 @@ class ToolLoader:
         except Exception:
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.CONNECTOR_UNAVAILABLE,
-                "The connector could not load this tool right now.",
+                Messages.Errors.CONNECTOR_LOAD_FAILED,
                 retryable=True,
                 tool_name=resolution.card.name,
                 correlation_id=runtime_context.trace_id,
@@ -76,12 +77,12 @@ class ToolLoader:
         except ValidationError:
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.MALFORMED_TOOL_SPEC,
-                "The selected tool has an invalid specification.",
+                Messages.Errors.TOOL_SPEC_INVALID,
                 tool_name=resolution.card.name,
                 correlation_id=runtime_context.trace_id,
             )
 
-        spec_error = _validate_loaded_spec_matches_card(loaded_spec, resolution)
+        spec_error = self._validate_loaded_spec_matches_card(loaded_spec, resolution)
         if spec_error is not None:
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.MALFORMED_TOOL_SPEC,
@@ -90,10 +91,13 @@ class ToolLoader:
                 correlation_id=runtime_context.trace_id,
             )
 
-        if not is_policy_authorized(runtime_context, loaded_spec.permission_policy):
+        if not ToolPermissionChecker.is_policy_authorized(
+            runtime_context,
+            loaded_spec.permission_policy,
+        ):
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.PERMISSION_DENIED,
-                "You do not have access to this tool.",
+                Messages.Errors.TOOL_PERMISSION_DENIED,
                 tool_name=resolution.card.name,
                 correlation_id=runtime_context.trace_id,
             )
@@ -116,31 +120,32 @@ class ToolLoader:
         except ValidationError:
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.INVALID_TOOL_NAME,
-                "Tools must be requested by stable name.",
-                tool_name=_safe_tool_name(tool_name),
+                Messages.Errors.TOOL_NAME_REQUIRED,
+                tool_name=self._safe_tool_name(tool_name),
             )
         return self.load_tool(request)
 
-
-def _validate_loaded_spec_matches_card(
-    loaded_spec: LoadedToolSpec,
-    resolution: RegisteredTool,
-) -> str | None:
-    card: ToolCard = resolution.card
-    policy = loaded_spec.permission_policy
-    if loaded_spec.name != card.name:
-        return "The selected tool returned a mismatched specification."
-    if policy.connector != card.connector:
-        return "The selected tool returned mismatched connector metadata."
-    if policy.required_scopes != card.required_scopes:
-        return "The selected tool returned mismatched permission metadata."
-    if policy.risk_level != card.risk_level:
-        return "The selected tool returned mismatched risk metadata."
-    return None
-
-
-def _safe_tool_name(tool_name: str) -> str | None:
-    try:
-        return normalize_slug(tool_name, "tool_name")
-    except ValueError:
+    @classmethod
+    def _validate_loaded_spec_matches_card(
+        cls,
+        loaded_spec: LoadedToolSpec,
+        resolution: RegisteredTool,
+    ) -> str | None:
+        card: ToolCard = resolution.card
+        policy = loaded_spec.permission_policy
+        if loaded_spec.name != card.name:
+            return Messages.SpecMismatch.NAME
+        if policy.connector != card.connector:
+            return Messages.SpecMismatch.CONNECTOR
+        if policy.required_scopes != card.required_scopes:
+            return Messages.SpecMismatch.PERMISSIONS
+        if policy.risk_level != card.risk_level:
+            return Messages.SpecMismatch.RISK
         return None
+
+    @classmethod
+    def _safe_tool_name(cls, tool_name: str) -> str | None:
+        try:
+            return ToolValueNormalizer.normalize_slug(tool_name, Keys.Fields.TOOL_NAME)
+        except ValueError:
+            return None

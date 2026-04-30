@@ -17,7 +17,8 @@ from enterprise_search_ai.tools.cards import (
     ToolLoadError,
     ToolLoadErrorCode,
 )
-from enterprise_search_ai.tools.permissions import is_card_authorized
+from enterprise_search_ai.tools.constants import Keys, Messages
+from enterprise_search_ai.tools.permissions import ToolPermissionChecker
 
 RawToolCard = ToolCard | Mapping[str, object]
 RawLoadedToolSpec = LoadedToolSpec | Mapping[str, object]
@@ -49,42 +50,44 @@ class DynamicToolRegistry:
 
     def __post_init__(self) -> None:
         for provider in self.providers:
-            if not callable(getattr(provider, "list_tool_cards", None)):
+            if not callable(getattr(provider, Keys.Methods.LIST_TOOL_CARDS, None)):
                 raise AgentRuntimeError(
                     RuntimeErrorCode.DEPENDENCY_ERROR,
-                    "Tool provider is missing list_tool_cards().",
+                    Messages.Errors.PROVIDER_MISSING_LIST_TOOL_CARDS,
                     retryable=False,
                 )
-            if not callable(getattr(provider, "load_tool_spec", None)):
+            if not callable(getattr(provider, Keys.Methods.LOAD_TOOL_SPEC, None)):
                 raise AgentRuntimeError(
                     RuntimeErrorCode.DEPENDENCY_ERROR,
-                    "Tool provider is missing load_tool_spec().",
+                    Messages.Errors.PROVIDER_MISSING_LOAD_TOOL_SPEC,
                     retryable=False,
                 )
 
     def list_tool_cards(self, context: AgentRuntimeContext) -> tuple[ToolCard, ...]:
         """Return compact cards visible to the request context."""
 
-        runtime_context = _coerce_context(context)
+        runtime_context = ToolContextParser.coerce(context)
         entries = self._collect_entries()
-        duplicate_name = _first_duplicate_name(entries)
+        duplicate_name = ToolRegistryResolver.first_duplicate_name(entries)
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Multiple tools are registered with the same name.",
+                Messages.Errors.DUPLICATE_TOOL_REGISTRATION,
                 retryable=False,
                 correlation_id=runtime_context.trace_id,
             )
 
         cards = (
-            entry.card for entry in entries if is_card_authorized(runtime_context, entry.card)
+            entry.card
+            for entry in entries
+            if ToolPermissionChecker.is_card_authorized(runtime_context, entry.card)
         )
         return tuple(sorted(cards, key=lambda card: card.name))
 
     def list_available_tools(self, context: object) -> tuple[ToolCard, ...]:
         """Runtime port adapter returning model-visible compact cards."""
 
-        return self.list_tool_cards(_coerce_context(context))
+        return self.list_tool_cards(ToolContextParser.coerce(context))
 
     def resolve_tool(self, name: str) -> RegisteredTool | ToolLoadError:
         """Resolve a selected stable tool name to exactly one provider entry."""
@@ -94,13 +97,13 @@ class DynamicToolRegistry:
         if not matching_entries:
             return ToolLoadError(
                 code=ToolLoadErrorCode.UNKNOWN_TOOL,
-                safe_message="Requested tool is not available.",
+                safe_message=Messages.Errors.REQUESTED_TOOL_UNAVAILABLE,
                 tool_name=name,
             )
         if len(matching_entries) > 1:
             return ToolLoadError(
                 code=ToolLoadErrorCode.DUPLICATE_TOOL_NAME,
-                safe_message="Requested tool name is registered more than once.",
+                safe_message=Messages.Errors.REQUESTED_TOOL_DUPLICATE,
                 tool_name=name,
             )
 
@@ -108,7 +111,7 @@ class DynamicToolRegistry:
         if not entry.card.enabled:
             return ToolLoadError(
                 code=ToolLoadErrorCode.TOOL_DISABLED,
-                safe_message="Requested tool is disabled.",
+                safe_message=Messages.Errors.REQUESTED_TOOL_DISABLED,
                 tool_name=name,
             )
         return entry
@@ -123,39 +126,51 @@ class DynamicToolRegistry:
             except Exception as exc:
                 raise AgentRuntimeError(
                     RuntimeErrorCode.CAPABILITY_LOAD_ERROR,
-                    "Tool cards could not be loaded.",
+                    Messages.Errors.TOOL_CARDS_LOAD_FAILED,
                     retryable=True,
                 ) from exc
 
             for raw_card in raw_cards:
                 try:
-                    card = raw_card if isinstance(raw_card, ToolCard) else ToolCard.model_validate(raw_card)
+                    card = (
+                        raw_card
+                        if isinstance(raw_card, ToolCard)
+                        else ToolCard.model_validate(raw_card)
+                    )
                 except ValidationError as exc:
                     raise AgentRuntimeError(
                         RuntimeErrorCode.CONFIGURATION_ERROR,
-                        "Tool card metadata is invalid.",
+                        Messages.Errors.TOOL_CARD_METADATA_INVALID,
                         retryable=False,
                     ) from exc
                 entries.append(RegisteredTool(provider=provider, card=card))
         return tuple(entries)
 
 
-def _first_duplicate_name(entries: Sequence[RegisteredTool]) -> str | None:
-    counts = Counter(entry.card.name for entry in entries)
-    duplicate_names = sorted(name for name, count in counts.items() if count > 1)
-    if not duplicate_names:
-        return None
-    return duplicate_names[0]
+class ToolRegistryResolver:
+    """Deterministic lookup helpers for registered tool entries."""
+
+    @classmethod
+    def first_duplicate_name(cls, entries: Sequence[RegisteredTool]) -> str | None:
+        counts = Counter(entry.card.name for entry in entries)
+        duplicate_names = sorted(name for name, count in counts.items() if count > 1)
+        if not duplicate_names:
+            return None
+        return duplicate_names[0]
 
 
-def _coerce_context(context: object) -> AgentRuntimeContext:
-    if isinstance(context, AgentRuntimeContext):
-        return context
-    try:
-        return AgentRuntimeContext.model_validate(context)
-    except ValidationError as exc:
-        raise AgentRuntimeError(
-            RuntimeErrorCode.VALIDATION_ERROR,
-            "Runtime context is invalid.",
-            retryable=False,
-        ) from exc
+class ToolContextParser:
+    """Runtime context parser for registry boundaries."""
+
+    @classmethod
+    def coerce(cls, context: object) -> AgentRuntimeContext:
+        if isinstance(context, AgentRuntimeContext):
+            return context
+        try:
+            return AgentRuntimeContext.model_validate(context)
+        except ValidationError as exc:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Errors.RUNTIME_CONTEXT_INVALID,
+                retryable=False,
+            ) from exc

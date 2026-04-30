@@ -20,6 +20,14 @@
 - Prefer protocols or abstract base classes for replaceable dependencies.
 - Avoid broad exception catches unless converting to a typed domain error.
 - Keep async boundaries explicit.
+- Do not hard-code repeated field keys, schema keys, method names, or user-facing messages inline. Put stable keys under a `Keys` class with nested subclasses, and put public/error text under a dedicated messages or exceptions class.
+- Keep production helper behavior inside classes as class methods or static methods. Avoid module-level helper functions in runtime code.
+
+## Test Style
+
+- Use mixins for test-only helpers, fake providers, initializers, builders, and repeated constants.
+- Concrete test classes should contain only `test_*` unit test methods; keep helper methods and setup utilities on mixins.
+- Do not scatter repeated strings through test bodies. Put test constants on the mixin.
 
 ## Anti-Patterns
 
@@ -27,4 +35,7 @@
 - Connector SDK objects leaking into runtime contracts.
 - Validation hidden in random helper functions instead of model boundaries.
 - Stringly typed permissions, statuses, and risk levels.
+- Inline string literals for operational keys, safe error messages, or repeated validation text.
+- Free-floating production helper functions that should belong to a contract, parser, policy, or validator class.
+- Concrete test classes with helper methods, fake classes, setup utilities, or repeated constants mixed into the unit test methods.
 
