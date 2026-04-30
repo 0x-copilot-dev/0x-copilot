@@ -9,7 +9,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -81,6 +83,31 @@ input {
   padding: 0.75rem 1rem;
 }
 
+select,
+textarea {
+  border: 1px solid #cfd8ec;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+}
+
+textarea {
+  min-height: 260px;
+  resize: vertical;
+}
+
+.skill-editor {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.check {
+  align-items: center;
+  color: #5f6f95;
+  display: flex;
+  gap: 0.4rem;
+}
+
 .server-list {
   display: grid;
   gap: 0.75rem;
@@ -94,6 +121,7 @@ input {
 }
 
 .server-card p,
+.skill-card small,
 .muted {
   color: #5f6f95;
 }

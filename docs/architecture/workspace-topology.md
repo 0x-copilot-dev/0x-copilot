@@ -54,11 +54,14 @@ enterprise-search/
 
 Allowed call direction means runtime calls over APIs, queues, or documented events.
 It does not permit direct imports across app/service implementation packages.
+It also does not permit running a component with a sibling service's `.venv` or
+adding another deployable component's `src` directory to `PYTHONPATH`.
 
 ## Disallowed Shortcuts
 
 - Apps must not call `ai-backend` directly unless a future approved spec creates an exception for streaming.
 - Apps and services must not import code from sibling apps or services.
+- Apps and services must not share local virtual environments or dependency manifests.
 - `ai-backend` must not own tenant auth, billing/admin workflows, or product persistence.
 - `backend-facade` must not absorb AI orchestration logic.
 - Shared packages must not become dumping grounds for business logic.

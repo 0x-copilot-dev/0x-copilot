@@ -2,9 +2,9 @@
 
 Enterprise Search is the workspace for a broader enterprise work surface: one product that helps executives and employees search, understand, and act across company systems such as Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise knowledge stores.
 
-This should be one GitHub monorepo with multiple deployable components. The runtime architecture can still be microservice-style: each service owns its API, Docker image, local dependency environment, tests, and deployment path.
+This is one GitHub monorepo with multiple deployable components. The runtime architecture is microservice-style: each service owns its API, Docker image, local dependency environment, tests, and deployment path.
 
-Today only `services/ai-backend` exists. The other apps, services, packages, and infrastructure folders will arrive one at a time as their responsibilities become concrete.
+The workspace now includes initial deployable scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, and `packages/api-types`.
 
 ## Target Repository Layout
 
@@ -76,6 +76,15 @@ Each deployable component should have its own Docker image:
 - `ghcr.io/<org>/agent-runtime-backend`
 - `ghcr.io/<org>/enterprise-search-frontend`
 
+Each deployable component also owns its local dependency environment:
+
+- `services/backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
+- `services/backend-facade`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
+- `services/ai-backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
+- `apps/frontend`: npm workspace dependency environment with its own `package.json`, Vite config, and `Dockerfile`; it must not use a Python service venv.
+
+Do not run or test one service with another service's `.venv`. Create the target service's `.venv` from its own `requirements.txt` before running that component locally.
+
 Starting CI/CD model:
 
 - CI on every PR: lint, typecheck, unit tests, builds, and Docker build validation for changed components.
@@ -101,6 +110,7 @@ Start there:
 - Keep service boundaries clear. Do not put frontend, facade, core backend, or native app concerns into `services/ai-backend`.
 - Prefer stable APIs and generated clients between components over direct cross-service imports.
 - Do not import implementation code across `apps/*` or `services/*`. Cross-component integration must use HTTP APIs, queues/events, or generated contracts from `packages/api-types`.
+- Do not add a sibling service directory to `PYTHONPATH` or use relative imports to reach another deployable component.
 - Each deployable component owns its dependency environment and Dockerfile:
   - Python services use a service-local `.venv`, `requirements.txt`, and `Dockerfile`.
   - The web frontend uses its own npm workspace environment, `package.json`/`package-lock.json`, and `Dockerfile`.

@@ -20,6 +20,7 @@ from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
 from agent_runtime.capabilities.skills.constants import Keys as SkillKeys
+from agent_runtime.capabilities.skills.middleware import LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 
 AgentBuilder = Callable[..., object]
@@ -42,6 +43,7 @@ class RuntimeHarness:
     subagents: tuple[object, ...]
     memory_backend: object
     skill_directories: tuple[str, ...]
+    skill_cards: tuple[object, ...] = ()
 
 
 def create_agent_runtime(
@@ -70,16 +72,24 @@ def create_agent_runtime(
     skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
         runtime_dependencies.skill_source_config
     )
+    skill_cards = _skill_cards(
+        skill_registry=runtime_dependencies.skill_registry,
+        runtime_context=runtime_context,
+    )
 
     try:
         model_tools = _model_visible_tools(
             tools=tools,
             mcp_registry=runtime_dependencies.mcp_registry,
+            skill_registry=runtime_dependencies.skill_registry,
             runtime_context=runtime_context,
         )
-        model_instructions = _instructions_with_mcp_cards(
-            instructions=instructions,
-            mcp_servers=mcp_servers,
+        model_instructions = _instructions_with_skill_cards(
+            instructions=_instructions_with_mcp_cards(
+                instructions=instructions,
+                mcp_servers=mcp_servers,
+            ),
+            skill_cards=skill_cards,
         )
         agent = builder(
             tools=model_tools,
@@ -111,6 +121,7 @@ def create_agent_runtime(
         subagents=subagents,
         memory_backend=memory_backend,
         skill_directories=skill_directories,
+        skill_cards=skill_cards,
     )
 
 
@@ -159,6 +170,7 @@ def _model_visible_tools(
     *,
     tools: Sequence[object],
     mcp_registry: object,
+    skill_registry: object | None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -173,6 +185,8 @@ def _model_visible_tools(
                 runtime_context=runtime_context,
             )
         )
+    if skill_registry is not None and callable(getattr(skill_registry, "load_skill_by_name", None)):
+        model_tools.append(LoadSkillTool(registry=skill_registry))  # type: ignore[arg-type]
     return tuple(model_tools)
 
 
@@ -204,6 +218,38 @@ def _instructions_with_mcp_cards(*, instructions: str, mcp_servers: Sequence[obj
             "Available MCP servers are compact cards. If a needed MCP server is not "
             "authenticated, call auth_mcp before trying to load its tools. If it is "
             "authenticated, call load_mcp_server by stable server name before using its tools.",
+            "\n".join(card_lines),
+        )
+    )
+
+
+def _skill_cards(*, skill_registry: object | None, runtime_context: AgentRuntimeContext) -> tuple[object, ...]:
+    if skill_registry is None:
+        return ()
+    list_available = getattr(skill_registry, "list_available_skills", None)
+    if not callable(list_available):
+        return ()
+    return tuple(list_available(runtime_context))
+
+
+def _instructions_with_skill_cards(*, instructions: str, skill_cards: Sequence[object]) -> str:
+    if not skill_cards:
+        return instructions
+    card_lines = []
+    for skill in skill_cards:
+        name = getattr(skill, "name", str(skill))
+        description = getattr(skill, "description", "")
+        virtual_path = getattr(skill, "virtual_path", "")
+        display_name = getattr(skill, "display_name", None) or name
+        allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
+        allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
+        card_lines.append(f"- {name} ({display_name}, path={virtual_path}{allowed}): {description}")
+    return "\n\n".join(
+        (
+            instructions,
+            "Available user-created Skills are compact cards backed by a virtual registry. "
+            "When a Skill is relevant, call load_skill with the stable skill_name to read "
+            "its full Markdown instructions. Do not assume virtual paths are local files.",
             "\n".join(card_lines),
         )
     )

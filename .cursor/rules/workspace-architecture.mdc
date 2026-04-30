@@ -12,5 +12,7 @@ alwaysApply: true
 - `services/ai-backend` is the canonical AI backend service path.
 - Shared packages are for stable contracts and cross-cutting primitives, not hidden business logic.
 - Deployable apps and services must not import implementation code from sibling apps/services; use APIs, queues/events, or generated contracts.
-- Python services use service-local `.venv`, `requirements.txt`, and `Dockerfile`; frontend apps use their own npm workspace environment and `Dockerfile`.
+- Do not add sibling services/apps to `PYTHONPATH`, use relative imports across deployable boundaries, or run one Python service with another service's `.venv`.
+- Python services use their own service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
+- Frontend apps use their own npm workspace dependency environment, app `package.json`, Vite/build config, and `Dockerfile`; they must not depend on Python service venvs.
 

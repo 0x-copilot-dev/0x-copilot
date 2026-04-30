@@ -5,15 +5,20 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import base64
 import hashlib
+import os
 from urllib.parse import urlencode, urlsplit
 
 from backend_app.contracts import (
     AuditEventRecord,
     CreateMcpServerRequest,
+    CreateSkillRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpServerCard,
     InternalMcpServerListResponse,
+    InternalSkillBundle,
+    InternalSkillCard,
+    InternalSkillListResponse,
     McpAuthCallbackRequest,
     McpAuthMode,
     McpAuthSessionRecord,
@@ -25,9 +30,16 @@ from backend_app.contracts import (
     McpServerRecord,
     McpServerResponse,
     OAuthTokenRequest,
+    SkillAuditEventRecord,
+    SkillListResponse,
+    SkillManifestFields,
+    SkillRecord,
+    SkillResponse,
+    UpdateSkillRequest,
     TokenEnvelope,
+    normalize_skill_slug,
 )
-from backend_app.store import InMemoryMcpStore
+from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
 from backend_app.token_vault import LocalTokenVault, TokenVault
 
 
@@ -293,3 +305,317 @@ class McpRegistryService:
     def _code_challenge(cls, verifier: str) -> str:
         digest = hashlib.sha256(verifier.encode("ascii")).digest()
         return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+class SkillRegistryService:
+    """Owns user-created Skill markdown and runtime-visible Skill cards."""
+
+    def __init__(self, *, store: InMemorySkillStore | PostgresSkillStore | None = None) -> None:
+        self.store = store or self._default_store()
+
+    def create_skill(self, request: CreateSkillRequest) -> SkillResponse:
+        manifest = SkillMarkdownParser.parse_manifest(request.markdown)
+        if self.store.get_skill_by_name(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            name=manifest.name,
+        ):
+            raise ValueError("A skill with this name already exists for this scope")
+        record = SkillRecord(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            name=manifest.name,
+            display_name=request.display_name or self._display_name_from_slug(manifest.name),
+            description=manifest.description,
+            markdown=request.markdown,
+            virtual_path=self._virtual_path(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                name=manifest.name,
+            ),
+            enabled=request.enabled,
+            scope=request.scope,
+            allowed_tools=manifest.allowed_tools,
+            compatibility=manifest.compatibility,
+            metadata=manifest.metadata,
+        )
+        self.store.create_skill(record)
+        self._audit(record, "skill_created")
+        return SkillResponse.from_record(record)
+
+    def list_skills(self, *, org_id: str, user_id: str) -> SkillListResponse:
+        return SkillListResponse(
+            skills=tuple(
+                SkillResponse.from_record(record)
+                for record in self.store.list_skills(org_id=org_id, user_id=user_id)
+            )
+        )
+
+    def get_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillResponse:
+        return SkillResponse.from_record(
+            self._require_visible_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        )
+
+    def update_skill(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        skill_id: str,
+        request: UpdateSkillRequest,
+    ) -> SkillResponse:
+        record = self._require_owned_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        changes: dict[str, object] = {"updated_at": datetime.now(UTC)}
+        if request.markdown is not None:
+            manifest = SkillMarkdownParser.parse_manifest(request.markdown)
+            if manifest.name != record.name:
+                raise ValueError("Skill name cannot change after creation")
+            changes.update(
+                {
+                    "description": manifest.description,
+                    "markdown": request.markdown,
+                    "allowed_tools": manifest.allowed_tools,
+                    "compatibility": manifest.compatibility,
+                    "metadata": manifest.metadata,
+                    "version": record.version + 1,
+                }
+            )
+        if request.display_name is not None:
+            changes["display_name"] = request.display_name
+        if request.enabled is not None:
+            changes["enabled"] = request.enabled
+        if request.scope is not None:
+            changes["scope"] = request.scope
+        updated = record.model_copy(update=changes)
+        self.store.update_skill(updated)
+        self._audit(updated, "skill_updated")
+        return SkillResponse.from_record(updated)
+
+    def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
+        record = self._require_owned_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        deleted = self.store.delete_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        if deleted:
+            self._audit(record, "skill_deleted")
+        return deleted
+
+    def list_internal_cards(self, *, org_id: str, user_id: str) -> InternalSkillListResponse:
+        return InternalSkillListResponse(
+            skills=tuple(
+                InternalSkillCard(
+                    skill_id=record.skill_id,
+                    name=record.name,
+                    display_name=record.display_name,
+                    description=record.description,
+                    virtual_path=record.virtual_path,
+                    scope=record.scope,
+                    source_type=record.source_type,
+                    version=record.version,
+                    allowed_tools=record.allowed_tools,
+                    enabled=record.enabled,
+                )
+                for record in self.store.list_skills(
+                    org_id=org_id,
+                    user_id=user_id,
+                    include_disabled=False,
+                )
+            )
+        )
+
+    def get_internal_bundle(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        skill_id: str,
+    ) -> InternalSkillBundle:
+        record = self._require_visible_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        if not record.enabled:
+            raise ValueError("Skill is disabled")
+        return InternalSkillBundle(
+            skill_id=record.skill_id,
+            name=record.name,
+            display_name=record.display_name,
+            description=record.description,
+            markdown=record.markdown,
+            virtual_path=record.virtual_path,
+            version=record.version,
+            allowed_tools=record.allowed_tools,
+            metadata=record.metadata,
+        )
+
+    def get_internal_bundle_by_name(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        name: str,
+    ) -> InternalSkillBundle:
+        record = self.store.get_skill_by_name(
+            org_id=org_id,
+            user_id=user_id,
+            name=normalize_skill_slug(name),
+        )
+        if record is None or not record.enabled:
+            raise ValueError("Skill was not found for this scope")
+        return self.get_internal_bundle(org_id=org_id, user_id=user_id, skill_id=record.skill_id)
+
+    def _require_visible_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillRecord:
+        record = self.store.get_skill(org_id=org_id, skill_id=skill_id)
+        if record is None or (record.user_id != user_id and record.scope != "org"):
+            raise ValueError("Skill was not found for this scope")
+        return record
+
+    def _require_owned_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillRecord:
+        record = self.store.get_skill(org_id=org_id, skill_id=skill_id)
+        if record is None or record.user_id != user_id:
+            raise ValueError("Skill was not found for this user")
+        return record
+
+    def _audit(self, record: SkillRecord, action: str) -> None:
+        self.store.append_skill_audit(
+            SkillAuditEventRecord(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                skill_id=record.skill_id,
+                action=action,
+                metadata={"name": record.name, "version": record.version},
+            )
+        )
+
+    @classmethod
+    def _display_name_from_slug(cls, name: str) -> str:
+        return name.replace("_", " ").replace("-", " ").title()
+
+    @classmethod
+    def _virtual_path(cls, *, org_id: str, user_id: str, name: str) -> str:
+        return f"/skills/org/{org_id}/user/{user_id}/{name}/SKILL.md"
+
+    @classmethod
+    def _default_store(cls) -> InMemorySkillStore | PostgresSkillStore:
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        if database_url:
+            return PostgresSkillStore(database_url=database_url)
+        return InMemorySkillStore()
+
+
+class SkillMarkdownParser:
+    """Minimal SKILL.md frontmatter parser for backend validation."""
+
+    @classmethod
+    def parse_manifest(cls, markdown: str) -> SkillManifestFields:
+        frontmatter = cls._frontmatter(markdown)
+        raw = cls._parse_fields(frontmatter)
+        metadata = dict(raw.get("metadata") or {})
+        for key in tuple(raw):
+            if key not in {"name", "description", "license", "compatibility", "allowed_tools", "metadata"}:
+                value = raw.pop(key)
+                if isinstance(value, str | int | float | bool) or value is None:
+                    metadata[key] = value
+        return SkillManifestFields(
+            name=str(raw.get("name", "")),
+            description=str(raw.get("description", "")),
+            license=raw.get("license") if isinstance(raw.get("license"), str) else None,
+            compatibility=tuple(str(item) for item in cls._list(raw.get("compatibility"))),
+            allowed_tools=tuple(
+                normalize_skill_slug(item) for item in cls._list(raw.get("allowed_tools"))
+            ),
+            metadata=metadata,
+        )
+
+    @classmethod
+    def _frontmatter(cls, markdown: str) -> str:
+        lines = markdown.splitlines()
+        if not lines or lines[0].strip() != "---":
+            raise ValueError("Skill markdown must start with YAML frontmatter")
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                frontmatter = "\n".join(lines[1:index])
+                if not frontmatter.strip():
+                    raise ValueError("Skill frontmatter must not be empty")
+                return frontmatter
+        raise ValueError("Skill markdown must close its YAML frontmatter block")
+
+    @classmethod
+    def _parse_fields(cls, frontmatter: str) -> dict[str, object]:
+        parsed: dict[str, object] = {}
+        lines = frontmatter.splitlines()
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if not line.strip() or line.lstrip().startswith("#"):
+                index += 1
+                continue
+            if line.startswith((" ", "\t")) or ":" not in line:
+                raise ValueError("Skill frontmatter contains malformed YAML")
+            key, raw_value = line.split(":", maxsplit=1)
+            key = key.strip()
+            value = raw_value.strip()
+            if value:
+                parsed[key] = cls._scalar_or_list(value)
+                index += 1
+                continue
+            children: list[str] = []
+            index += 1
+            while index < len(lines) and (
+                not lines[index].strip() or lines[index].startswith((" ", "\t"))
+            ):
+                children.append(lines[index])
+                index += 1
+            parsed[key] = cls._block(children)
+        return parsed
+
+    @classmethod
+    def _block(cls, lines: list[str]) -> object:
+        meaningful = [line.strip() for line in lines if line.strip()]
+        if not meaningful:
+            return None
+        if all(line.startswith("- ") for line in meaningful):
+            return [cls._scalar(line[2:].strip()) for line in meaningful]
+        mapping: dict[str, object] = {}
+        for line in meaningful:
+            if ":" not in line:
+                raise ValueError("Skill frontmatter contains unsupported nested YAML")
+            key, value = line.split(":", maxsplit=1)
+            mapping[key.strip()] = cls._scalar(value.strip())
+        return mapping
+
+    @classmethod
+    def _scalar_or_list(cls, value: str) -> object:
+        if value.startswith("[") and value.endswith("]"):
+            inner = value[1:-1].strip()
+            if not inner:
+                return []
+            return [cls._scalar(part.strip()) for part in inner.split(",")]
+        return cls._scalar(value)
+
+    @classmethod
+    def _scalar(cls, value: str) -> object:
+        stripped = value.strip()
+        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+            return stripped[1:-1]
+        lowered = stripped.lower()
+        if lowered in {"null", "none", "~"}:
+            return None
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        try:
+            return int(stripped)
+        except ValueError:
+            pass
+        try:
+            return float(stripped)
+        except ValueError:
+            return stripped
+
+    @classmethod
+    def _list(cls, value: object) -> tuple[object, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            raise ValueError("Skill manifest list fields must not be strings")
+        try:
+            return tuple(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise ValueError("Skill manifest list fields must be iterable") from exc

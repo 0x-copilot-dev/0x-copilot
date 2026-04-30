@@ -67,6 +67,65 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
     async def create_run(payload: dict[str, object]) -> dict[str, object]:
         return await forward_json_to_ai(app, "POST", "/v1/agent/runs", json=payload)
 
+    @app.post("/v1/skills")
+    async def create_skill(payload: dict[str, object]) -> dict[str, object]:
+        return await forward_json(app, "POST", "/v1/skills", json=payload)
+
+    @app.get("/v1/skills")
+    async def list_skills(
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/skills",
+            params={"org_id": org_id, "user_id": user_id},
+        )
+
+    @app.get("/v1/skills/{skill_id}")
+    async def get_skill(
+        skill_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/skills/{skill_id}",
+            params={"org_id": org_id, "user_id": user_id},
+        )
+
+    @app.put("/v1/skills/{skill_id}")
+    async def update_skill(
+        skill_id: str,
+        payload: dict[str, object],
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        return await forward_json(
+            app,
+            "PUT",
+            f"/v1/skills/{skill_id}",
+            params={"org_id": org_id, "user_id": user_id},
+            json=payload,
+        )
+
+    @app.delete("/v1/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_skill(
+        skill_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> Response:
+        await forward_json(
+            app,
+            "DELETE",
+            f"/v1/skills/{skill_id}",
+            params={"org_id": org_id, "user_id": user_id},
+            expect_json=False,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.get("/v1/agent/runs/{run_id}/events")
     async def run_events(
         run_id: str,

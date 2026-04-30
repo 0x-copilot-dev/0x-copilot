@@ -8,6 +8,7 @@ from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependenci
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
+from agent_runtime.capabilities.skills.virtual import BackendSkillProvider, VirtualSkillRegistry
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
 from agent_runtime.events.normalization.langgraph import LangGraphStreamNormalizer
 from agent_runtime.settings import RuntimeSettings
@@ -46,6 +47,7 @@ class DefaultRuntimeDependenciesFactory:
             tool_registry=EmptyToolRegistry(),
             mcp_registry=mcp_registry,
             skill_source_config=SkillSourceConfig(),
+            skill_registry=self._skill_registry(_context),
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=EmptySubagentCatalog(),
             stream_normalizer=LangGraphStreamNormalizer(),
@@ -60,3 +62,12 @@ class DefaultRuntimeDependenciesFactory:
             auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
         )
         return DynamicMcpRegistry(providers=(provider,))
+
+    def _skill_registry(self, context: AgentRuntimeContext) -> object | None:
+        if self.settings.skills.backend_registry_url is None:
+            return None
+        provider = BackendSkillProvider(
+            backend_url=self.settings.skills.backend_registry_url,
+            runtime_context=context,
+        )
+        return VirtualSkillRegistry(providers=(provider,))

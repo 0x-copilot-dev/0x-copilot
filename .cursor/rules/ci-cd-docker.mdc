@@ -7,8 +7,10 @@ alwaysApply: false
 # CI/CD And Docker
 
 - CI should be path-filtered so unrelated apps and services do not rebuild unnecessarily.
-- Every deployable backend service should have its own `requirements.txt`, service-local `.venv` setup instructions, Dockerfile, Docker image, and deploy path.
+- Every deployable backend service should have its own `requirements.txt`, service-local Python 3.13 `.venv` setup instructions, Dockerfile, Docker image, and deploy path.
 - Every deployable frontend app should have its own package manifest, lockfile-managed dependency environment, Dockerfile, Docker image, and deploy path.
+- Do not reuse a sibling service's `.venv` in docs, scripts, tests, or CI. Install from the component's own dependency manifest instead.
+- Dockerfiles should install only the owning component's runtime dependencies plus explicitly allowed shared package build inputs.
 - Do not commit secrets, real `.env` files, tokens, certificates, or production credentials.
 - Docker builds must be reproducible and scoped to the service being built.
 - Production deploys require GitHub Environments with manual approval.

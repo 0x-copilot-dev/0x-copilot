@@ -5,21 +5,28 @@ proxies service calls, and owns client-compatible streaming surfaces.
 
 ## Local Environment
 
-Use a service-local virtual environment. Do not reuse another service venv.
+Use a service-local virtual environment. Do not reuse `backend`, `ai-backend`,
+or any other sibling service venv.
 
 ```bash
 cd services/backend-facade
-python -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+Use Python 3.11 or newer; the Docker image and local development target Python
+3.13.
 
 Run tests:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest
 ```
+
+If `.venv` is missing, create it from this service's own `requirements.txt`
+before running tests. Do not point `PYTHONPATH` at sibling services.
 
 Run the API:
 
@@ -40,3 +47,6 @@ docker build -t enterprise-search-backend-facade .
 This service must not import implementation code from `services/backend`,
 `services/ai-backend`, or `apps/frontend`. It should call backend services
 through APIs and depend only on shared generated contracts when needed.
+
+This service owns its own `requirements.txt`, `pyproject.toml`, `Dockerfile`,
+test environment, and deploy path.

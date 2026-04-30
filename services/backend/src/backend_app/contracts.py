@@ -50,6 +50,16 @@ class McpServerHealth(StrEnum):
     DISABLED = "disabled"
 
 
+class SkillScope(StrEnum):
+    USER = "user"
+    ORG = "org"
+
+
+class SkillSourceType(StrEnum):
+    USER = "user"
+    PRELOADED = "preloaded"
+
+
 class McpServerRecord(BackendContract):
     server_id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: str
@@ -75,11 +85,7 @@ class McpServerRecord(BackendContract):
     @field_validator("name")
     @classmethod
     def _normalize_name(cls, value: object) -> str:
-        text = normalize_text(value).lower().replace(" ", "_").replace("-", "_")
-        slug = re.sub(r"[^a-z0-9_]+", "_", text).strip("_")
-        if not slug or not _SLUG_PATTERN.fullmatch(slug):
-            raise ValueError("name must be a stable slug")
-        return slug
+        return normalize_skill_slug(value)
 
     @field_validator("display_name")
     @classmethod
@@ -90,6 +96,183 @@ class McpServerRecord(BackendContract):
     @classmethod
     def _validate_url(cls, value: object) -> str:
         return validate_public_mcp_url(value)
+
+
+class SkillManifestFields(BackendContract):
+    name: str
+    description: str
+    license: str | None = None
+    compatibility: tuple[str, ...] = ()
+    allowed_tools: tuple[str, ...] = ()
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        return normalize_skill_slug(value)
+
+    @field_validator("description")
+    @classmethod
+    def _normalize_description(cls, value: object) -> str:
+        return normalize_text(value)
+
+
+class SkillRecord(BackendContract):
+    skill_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str
+    user_id: str
+    name: str
+    display_name: str
+    description: str
+    markdown: str
+    virtual_path: str
+    enabled: bool = True
+    scope: SkillScope = SkillScope.USER
+    source_type: SkillSourceType = SkillSourceType.USER
+    version: int = Field(default=1, ge=1)
+    allowed_tools: tuple[str, ...] = ()
+    compatibility: tuple[str, ...] = ()
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("skill_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return normalize_id(value)
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        return normalize_skill_slug(value)
+
+    @field_validator("display_name", "description", "virtual_path")
+    @classmethod
+    def _normalize_text(cls, value: object) -> str:
+        return normalize_text(value)
+
+    @field_validator("markdown")
+    @classmethod
+    def _validate_markdown(cls, value: object) -> str:
+        return validate_markdown(value)
+
+
+class CreateSkillRequest(BackendContract):
+    org_id: str
+    user_id: str
+    markdown: str
+    display_name: str | None = None
+    enabled: bool = True
+    scope: SkillScope = SkillScope.USER
+
+    @field_validator("org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return normalize_id(value)
+
+    @field_validator("markdown")
+    @classmethod
+    def _normalize_markdown(cls, value: object) -> str:
+        return validate_markdown(value)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return normalize_text(value)
+
+
+class UpdateSkillRequest(BackendContract):
+    markdown: str | None = None
+    display_name: str | None = None
+    enabled: bool | None = None
+    scope: SkillScope | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_optional_text(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return normalize_text(value)
+
+    @field_validator("markdown")
+    @classmethod
+    def _validate_optional_markdown(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return validate_markdown(value)
+
+
+class SkillResponse(BackendContract):
+    skill_id: str
+    name: str
+    display_name: str
+    description: str
+    markdown: str
+    virtual_path: str
+    enabled: bool
+    scope: SkillScope
+    source_type: SkillSourceType
+    version: int
+    allowed_tools: tuple[str, ...]
+    compatibility: tuple[str, ...]
+    metadata: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: SkillRecord) -> "SkillResponse":
+        return cls(
+            skill_id=record.skill_id,
+            name=record.name,
+            display_name=record.display_name,
+            description=record.description,
+            markdown=record.markdown,
+            virtual_path=record.virtual_path,
+            enabled=record.enabled,
+            scope=record.scope,
+            source_type=record.source_type,
+            version=record.version,
+            allowed_tools=record.allowed_tools,
+            compatibility=record.compatibility,
+            metadata=record.metadata,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+
+class SkillListResponse(BackendContract):
+    skills: tuple[SkillResponse, ...]
+
+
+class InternalSkillCard(BackendContract):
+    skill_id: str
+    name: str
+    display_name: str
+    description: str
+    virtual_path: str
+    scope: SkillScope
+    source_type: SkillSourceType
+    version: int
+    allowed_tools: tuple[str, ...] = ()
+    enabled: bool = True
+
+
+class InternalSkillListResponse(BackendContract):
+    skills: tuple[InternalSkillCard, ...]
+
+
+class InternalSkillBundle(BackendContract):
+    skill_id: str
+    name: str
+    display_name: str
+    description: str
+    markdown: str
+    virtual_path: str
+    version: int
+    allowed_tools: tuple[str, ...] = ()
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateMcpServerRequest(BackendContract):
@@ -259,6 +442,16 @@ class AuditEventRecord(BackendContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class SkillAuditEventRecord(BackendContract):
+    audit_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str
+    user_id: str
+    skill_id: str
+    action: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class OAuthTokenRequest(BackendContract):
     access_token: str
     refresh_token: str | None = None
@@ -278,6 +471,14 @@ def normalize_id(value: object) -> str:
     return text
 
 
+def normalize_skill_slug(value: object) -> str:
+    text = normalize_text(value).lower().replace(" ", "_").replace("-", "_")
+    slug = re.sub(r"[^a-z0-9_]+", "_", text).strip("_")
+    if not slug or not _SLUG_PATTERN.fullmatch(slug):
+        raise ValueError("name must be a stable slug")
+    return slug
+
+
 def normalize_text(value: object) -> str:
     if not isinstance(value, str):
         raise ValueError("value must be a string")
@@ -285,6 +486,14 @@ def normalize_text(value: object) -> str:
     if not text:
         raise ValueError("value must not be empty")
     return text
+
+
+def validate_markdown(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("value must be a string")
+    if not value.strip():
+        raise ValueError("value must not be empty")
+    return value
 
 
 def validate_public_mcp_url(value: object, *, allow_localhost: bool = False) -> str:

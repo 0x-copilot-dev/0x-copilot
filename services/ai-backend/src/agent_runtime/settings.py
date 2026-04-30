@@ -57,6 +57,13 @@ class RuntimeMcpSettings(RuntimeContract):
     auth_redirect_uri: str = "http://127.0.0.1:5173/mcp/oauth/callback"
 
 
+class RuntimeSkillSettings(RuntimeContract):
+    """Internal backend integration settings for virtual Skill registry access."""
+
+    backend_registry_url: str | None = None
+    cache_ttl_seconds: int = Field(default=60, ge=0, le=3600)
+
+
 class RuntimeSettings(RuntimeContract):
     """Application-level settings consumed by API and worker components."""
 
@@ -66,6 +73,7 @@ class RuntimeSettings(RuntimeContract):
     execution: RuntimeExecutionSettings = Field(default_factory=RuntimeExecutionSettings)
     store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
     mcp: RuntimeMcpSettings = Field(default_factory=RuntimeMcpSettings)
+    skills: RuntimeSkillSettings = Field(default_factory=RuntimeSkillSettings)
     openai: ProviderSettings = Field(default_factory=ProviderSettings)
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
@@ -137,6 +145,10 @@ class RuntimeSettings(RuntimeContract):
                     "MCP_AUTH_REDIRECT_URI",
                     "http://127.0.0.1:5173/mcp/oauth/callback",
                 ),
+            ),
+            skills=RuntimeSkillSettings(
+                backend_registry_url=cls._optional(values, "SKILLS_BACKEND_REGISTRY_URL"),
+                cache_ttl_seconds=cls._int(values, "SKILLS_CACHE_TTL_SECONDS", 60),
             ),
             openai=ProviderSettings(api_key=cls._optional(values, "OPENAI_API_KEY")),
             anthropic=ProviderSettings(api_key=cls._optional(values, "ANTHROPIC_API_KEY")),

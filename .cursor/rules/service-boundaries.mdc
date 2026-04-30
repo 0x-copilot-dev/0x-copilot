@@ -9,6 +9,8 @@ alwaysApply: false
 - Keep deployable service boundaries explicit even though code lives in one repo.
 - Do not import across apps or services directly. This is a hard rule for `apps/*` and `services/*`.
 - Cross-component integration must use HTTP APIs, generated clients/contracts, queues, or documented events.
+- Never solve cross-service access by adding a sibling component to `PYTHONPATH`, using relative imports, or importing another service's `src` package.
+- Tests for a component should run inside that component's own dependency environment, not a sibling service's `.venv`.
 - `backend-facade` is the product API surface for web, Mac, and Windows apps.
 - Apps call `backend-facade`; apps must not call or import `backend` or `ai-backend` directly.
 - `backend-facade` may call `backend` and `ai-backend` APIs, but must not import their Python modules.

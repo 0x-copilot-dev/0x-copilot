@@ -6,22 +6,32 @@ from fastapi import FastAPI, HTTPException, Query, Response, status
 
 from backend_app.contracts import (
     CreateMcpServerRequest,
+    CreateSkillRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpServerListResponse,
+    InternalSkillBundle,
+    InternalSkillListResponse,
     McpAuthCallbackRequest,
     McpAuthStartRequest,
     McpAuthStartResponse,
     McpServerListResponse,
     McpServerResponse,
     OAuthTokenRequest,
+    SkillListResponse,
+    SkillResponse,
+    UpdateSkillRequest,
 )
-from backend_app.service import McpRegistryService
+from backend_app.service import McpRegistryService, SkillRegistryService
 
 
-def create_app(service: McpRegistryService | None = None) -> FastAPI:
+def create_app(
+    service: McpRegistryService | None = None,
+    skill_service: SkillRegistryService | None = None,
+) -> FastAPI:
     app = FastAPI(title="Enterprise Search Backend")
     app.state.mcp_service = service or McpRegistryService()
+    app.state.skill_service = skill_service or SkillRegistryService()
 
     @app.post("/v1/mcp/servers", response_model=McpServerResponse)
     def create_server(payload: CreateMcpServerRequest) -> McpServerResponse:
@@ -125,11 +135,112 @@ def create_app(service: McpRegistryService | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
+    @app.post("/v1/skills", response_model=SkillResponse)
+    def create_skill(payload: CreateSkillRequest) -> SkillResponse:
+        try:
+            return skills_service(app).create_skill(payload)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @app.get("/v1/skills", response_model=SkillListResponse)
+    def list_skills(
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> SkillListResponse:
+        return skills_service(app).list_skills(org_id=org_id, user_id=user_id)
+
+    @app.get("/v1/skills/{skill_id}", response_model=SkillResponse)
+    def get_skill(
+        skill_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> SkillResponse:
+        try:
+            return skills_service(app).get_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.put("/v1/skills/{skill_id}", response_model=SkillResponse)
+    def update_skill(
+        skill_id: str,
+        payload: UpdateSkillRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> SkillResponse:
+        try:
+            return skills_service(app).update_skill(
+                org_id=org_id,
+                user_id=user_id,
+                skill_id=skill_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @app.delete("/v1/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_skill(
+        skill_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> Response:
+        try:
+            deleted = skills_service(app).delete_skill(
+                org_id=org_id,
+                user_id=user_id,
+                skill_id=skill_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/internal/v1/skills/cards", response_model=InternalSkillListResponse)
+    def internal_skill_cards(
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> InternalSkillListResponse:
+        return skills_service(app).list_internal_cards(org_id=org_id, user_id=user_id)
+
+    @app.get("/internal/v1/skills/{skill_id}", response_model=InternalSkillBundle)
+    def internal_skill_bundle(
+        skill_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> InternalSkillBundle:
+        try:
+            return skills_service(app).get_internal_bundle(
+                org_id=org_id,
+                user_id=user_id,
+                skill_id=skill_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.get("/internal/v1/skills/by-name/{name}", response_model=InternalSkillBundle)
+    def internal_skill_bundle_by_name(
+        name: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> InternalSkillBundle:
+        try:
+            return skills_service(app).get_internal_bundle_by_name(
+                org_id=org_id,
+                user_id=user_id,
+                name=name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
     return app
 
 
 def mcp_service(app: FastAPI) -> McpRegistryService:
     return app.state.mcp_service
+
+
+def skills_service(app: FastAPI) -> SkillRegistryService:
+    return app.state.skill_service
 
 
 app = create_app()

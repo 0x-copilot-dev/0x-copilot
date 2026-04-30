@@ -6,7 +6,8 @@ not call `backend` or `ai-backend` directly.
 ## Local Environment
 
 The frontend has its own Node workspace environment. It does not use a Python
-venv; `requirements.txt` is intentionally empty to make that explicit.
+venv or any backend service venv; `requirements.txt` is intentionally empty to
+make that explicit.
 
 ```bash
 cd enterprise-search
@@ -33,3 +34,6 @@ docker build -f apps/frontend/Dockerfile -t enterprise-search-frontend .
 Do not import service implementation code into the frontend. Use
 `@enterprise-search/api-types` for stable contracts and call `backend-facade`
 over HTTP/SSE.
+
+This app owns its own `package.json`, Vite/build config, Dockerfile, local
+workspace dependency environment, and deploy path.

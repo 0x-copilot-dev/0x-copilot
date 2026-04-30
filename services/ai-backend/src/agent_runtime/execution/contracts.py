@@ -298,6 +298,7 @@ class RuntimeDependencies(RuntimeContract):
     tool_registry: ToolRegistry
     mcp_registry: McpRegistry
     skill_source_config: SkillSourceConfig
+    skill_registry: object | None = None
     memory_backend_factory: MemoryBackendFactory
     subagent_catalog: SubagentCatalog
     stream_normalizer: StreamNormalizer

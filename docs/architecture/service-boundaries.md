@@ -62,6 +62,10 @@ Allowed integration mechanisms are:
 - Generated clients and stable contract types from `packages/api-types`.
 - Shared configuration packages that contain no business logic.
 
+Do not add sibling components to `PYTHONPATH`, use relative imports across
+deployable boundaries, or reuse another service's virtual environment. Those are
+boundary violations even inside the monorepo.
+
 Examples:
 
 - `apps/frontend` may import generated API types, but must call `backend-facade` over HTTP/SSE.
