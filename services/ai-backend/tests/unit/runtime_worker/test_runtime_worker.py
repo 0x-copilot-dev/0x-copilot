@@ -257,6 +257,89 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     assert assistant_messages[0].content_text == "Hello\n there"
 
 
+def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    class FakeChunk:
+        def __init__(self, content: object) -> None:
+            self.content = content
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("Main answer "), {}),
+        }
+        yield {
+            "type": "messages",
+            "ns": ("tools:task_prime",),
+            "data": (FakeChunk("subagent-only text "), {}),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("done."), {}),
+        }
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [{"role": "assistant", "content": "Main answer done."}]
+            },
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    model_delta_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "model_delta"
+    ]
+    assert [event.payload["delta"] for event in model_delta_events] == [
+        "Main answer ",
+        "done.",
+    ]
+    assistant_messages = [
+        message for message in store.messages.values() if message.role == "assistant"
+    ]
+    assert assistant_messages[0].content_text == "Main answer done."
+
+
 def test_runtime_worker_persists_mcp_auth_required_event() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings()
