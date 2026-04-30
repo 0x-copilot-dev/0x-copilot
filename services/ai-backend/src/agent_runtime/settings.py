@@ -41,6 +41,7 @@ class RuntimeExecutionSettings(RuntimeContract):
     worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
+    allow_empty_capabilities: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -132,6 +133,11 @@ class RuntimeSettings(RuntimeContract):
                     values,
                     "RUNTIME_START_IN_PROCESS_WORKER",
                     True,
+                ),
+                allow_empty_capabilities=cls._bool(
+                    values,
+                    "RUNTIME_ALLOW_EMPTY_CAPABILITIES",
+                    False,
                 ),
             ),
             store=RuntimeStoreSettings(

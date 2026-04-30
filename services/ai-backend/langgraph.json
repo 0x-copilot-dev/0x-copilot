@@ -1,6 +1,6 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "agent_runtime": "./src/agent_runtime/agent/graph.py:create_graph"
+    "agent_runtime": "./src/agent_runtime/execution/graph.py:create_graph"
   }
 }

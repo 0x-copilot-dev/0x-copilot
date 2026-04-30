@@ -5,11 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 from fastapi import HTTPException, Request, status
-
-SERVICE_TOKEN_HEADER = "x-enterprise-service-token"
-ORG_HEADER = "x-enterprise-org-id"
-USER_HEADER = "x-enterprise-user-id"
 
 
 @dataclass(frozen=True)
@@ -25,10 +22,41 @@ class BackendServiceAuthenticator:
     def require_service_request(cls, request: Request) -> None:
         """Require the shared service token when configured or in production."""
 
+        cls._verify_service_token(request)
+
+    @classmethod
+    def internal_scoped_identity(cls, request: Request, *, org_id: str, user_id: str) -> ScopedIdentity:
+        """Return header identity for authenticated service calls, dev query scope otherwise."""
+
+        if cls._verify_service_token(request):
+            return ScopedIdentity(
+                org_id=cls._required_header(request, ORG_HEADER),
+                user_id=cls._required_header(request, USER_HEADER),
+            )
+        return ScopedIdentity(org_id=org_id, user_id=user_id)
+
+    @classmethod
+    def scoped_identity(cls, request: Request, *, org_id: str, user_id: str) -> ScopedIdentity:
+        """Return trusted upstream identity, falling back to query identity only in dev."""
+
+        if cls._verify_service_token(request, allow_missing_in_development=True):
+            return ScopedIdentity(
+                org_id=cls._required_header(request, ORG_HEADER),
+                user_id=cls._required_header(request, USER_HEADER),
+            )
+        return ScopedIdentity(org_id=org_id, user_id=user_id)
+
+    @classmethod
+    def _verify_service_token(
+        cls,
+        request: Request,
+        *,
+        allow_missing_in_development: bool = True,
+    ) -> bool:
         expected = cls._service_token()
         environment = cls._environment()
-        if not expected and environment != "production":
-            return
+        if not expected and environment != "production" and allow_missing_in_development:
+            return False
         if not expected:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -37,21 +65,7 @@ class BackendServiceAuthenticator:
         supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
         if supplied != expected:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid service token")
-
-    @classmethod
-    def scoped_identity(cls, request: Request, *, org_id: str, user_id: str) -> ScopedIdentity:
-        """Return trusted upstream identity, falling back to query identity only in dev."""
-
-        expected = cls._service_token()
-        supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
-        if expected and supplied == expected:
-            return ScopedIdentity(
-                org_id=cls._required_header(request, ORG_HEADER),
-                user_id=cls._required_header(request, USER_HEADER),
-            )
-        if cls._environment() == "production":
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing service identity")
-        return ScopedIdentity(org_id=org_id, user_id=user_id)
+        return True
 
     @staticmethod
     def _service_token() -> str:

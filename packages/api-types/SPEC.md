@@ -31,6 +31,8 @@ The current source of truth is dual-written:
 
 Until generation exists, every public contract change should update both sides
 in the same PR and include focused tests or typechecks for the changed surface.
+Focused drift tests currently compare runtime event, event source, activity, and
+run status enum constants between the Python server and this package.
 
 ## Alignment Matrix
 

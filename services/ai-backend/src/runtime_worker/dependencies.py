@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import BackendSkillProvider, VirtualSkillRegistry
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
-from agent_runtime.settings import RuntimeSettings
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 
 
 class EmptyToolRegistry:
@@ -41,6 +42,7 @@ class DefaultRuntimeDependenciesFactory:
         self.settings = settings or RuntimeSettings.load()
 
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
+        self._validate_capability_mode(_context)
         mcp_registry = self._mcp_registry(_context)
         return RuntimeDependencies(
             tool_registry=EmptyToolRegistry(),
@@ -49,6 +51,22 @@ class DefaultRuntimeDependenciesFactory:
             skill_registry=self._skill_registry(_context),
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=EmptySubagentCatalog(),
+        )
+
+    def _validate_capability_mode(self, context: AgentRuntimeContext) -> None:
+        if self.settings.environment is not RuntimeEnvironment.PRODUCTION:
+            return
+        if self.settings.execution.allow_empty_capabilities:
+            return
+        if self.settings.mcp.backend_registry_url is not None:
+            return
+        if self.settings.skills.backend_registry_url is not None:
+            return
+        raise AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            "Runtime capability sources are not configured for production.",
+            retryable=False,
+            correlation_id=context.trace_id,
         )
 
     def _mcp_registry(self, context: AgentRuntimeContext) -> object:

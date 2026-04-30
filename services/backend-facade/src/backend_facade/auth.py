@@ -10,15 +10,16 @@ import json
 import os
 from typing import Any
 
+from enterprise_service_contracts.headers import (
+    AUTH_HEADER,
+    CONNECTOR_SCOPES_HEADER,
+    ORG_HEADER,
+    PERMISSION_SCOPES_HEADER,
+    ROLES_HEADER,
+    SERVICE_TOKEN_HEADER,
+    USER_HEADER,
+)
 from fastapi import HTTPException, Request, status
-
-AUTH_HEADER = "authorization"
-SERVICE_TOKEN_HEADER = "x-enterprise-service-token"
-ORG_HEADER = "x-enterprise-org-id"
-USER_HEADER = "x-enterprise-user-id"
-ROLES_HEADER = "x-enterprise-roles"
-PERMISSION_SCOPES_HEADER = "x-enterprise-permission-scopes"
-CONNECTOR_SCOPES_HEADER = "x-enterprise-connector-scopes"
 
 
 @dataclass(frozen=True)

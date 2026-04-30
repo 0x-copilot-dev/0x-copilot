@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
@@ -15,9 +16,9 @@ from runtime_adapters.postgres import PostgresRuntimeApiStore
 class RuntimePorts:
     """Composed runtime persistence, event, and queue ports."""
 
-    persistence: object
-    event_store: object
-    queue: object
+    persistence: PersistencePort
+    event_store: EventStorePort
+    queue: RuntimeQueuePort
     backend: str
 
 
@@ -25,7 +26,7 @@ class RuntimeAdapterFactory:
     """Build runtime adapters for API and worker processes."""
 
     @classmethod
-    def from_settings(cls, settings: RuntimeSettings) -> RuntimePorts:
+    def from_settings(cls, settings: RuntimeSettings, *, migrate: bool = True) -> RuntimePorts:
         backend = settings.store.backend
         if backend == "in_memory":
             store = InMemoryRuntimeApiStore()
@@ -43,7 +44,8 @@ class RuntimeAdapterFactory:
                     retryable=False,
                 )
             store = PostgresRuntimeApiStore(settings.store.database_url)
-            store.migrate()
+            if migrate:
+                store.migrate()
             return RuntimePorts(
                 persistence=store,
                 event_store=store,

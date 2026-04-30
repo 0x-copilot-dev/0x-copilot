@@ -40,6 +40,7 @@ services/ai-backend/
       queue/
     runtime_worker/
       handlers/
+      stream_events.py
   tests/
     unit/
       agent_runtime/
@@ -53,7 +54,7 @@ services/ai-backend/
 - `agent_runtime/`: reusable runtime domain and orchestration core. It owns execution contracts, Deep Agents/LangGraph wiring, capability discovery, context/memory policy, subagent delegation, event normalization, observability helpers, persistence records, and abstract ports.
 - `runtime_api/`: deployable FastAPI surface for conversations, runs, event replay, SSE, cancellation, approvals, safe HTTP errors, and API request/response schemas.
 - `runtime_adapters/`: concrete adapters for tests and local/production-style infrastructure, including deterministic in-memory persistence/event/queue behavior and the PostgreSQL runtime adapter.
-- `runtime_worker/`: async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
+- `runtime_worker/`: async runtime command consumer process, handlers for run/cancel/approval-resolution commands, and stream-event mapping before events enter the API producer.
 
 Legacy compatibility modules under `agent_runtime.agent.*`, `agent_runtime.tools.*`, `agent_runtime.mcp.*`, `agent_runtime.skills.*`, `agent_runtime.memory.*`, `agent_runtime.subagents.*`, and broad `agent_runtime.api.*` re-export paths have been removed. Use the canonical packages below.
 

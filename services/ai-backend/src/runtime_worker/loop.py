@@ -170,11 +170,9 @@ class RuntimeWorker:
         self.queue.mark_dead_letter(result=result)
 
     def _runtime_run_command(self, claim: RuntimeWorkerClaim) -> RuntimeRunCommand:
-        if "runtime_context" in claim.payload:
-            return RuntimeRunCommand.model_validate(self._command_payload(claim))
-        command = self._command_from_store(claim, getattr(self.queue, "run_commands", ()))
-        if isinstance(command, RuntimeRunCommand):
-            return command
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeRunCommand.model_validate(payload)
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Run command payload is unavailable.",
@@ -182,11 +180,9 @@ class RuntimeWorker:
         )
 
     def _runtime_cancel_command(self, claim: RuntimeWorkerClaim) -> RuntimeCancelCommand:
-        if "requested_by_user_id" in claim.payload:
-            return RuntimeCancelCommand.model_validate(self._command_payload(claim))
-        command = self._command_from_store(claim, getattr(self.queue, "cancel_commands", ()))
-        if isinstance(command, RuntimeCancelCommand):
-            return command
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeCancelCommand.model_validate(payload)
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Cancel command payload is unavailable.",
@@ -197,23 +193,14 @@ class RuntimeWorker:
         self,
         claim: RuntimeWorkerClaim,
     ) -> RuntimeApprovalResolvedCommand:
-        if "decision" in claim.payload:
-            return RuntimeApprovalResolvedCommand.model_validate(self._command_payload(claim))
-        command = self._command_from_store(claim, getattr(self.queue, "approval_commands", ()))
-        if isinstance(command, RuntimeApprovalResolvedCommand):
-            return command
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeApprovalResolvedCommand.model_validate(payload)
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Approval command payload is unavailable.",
             retryable=False,
         )
-
-    @staticmethod
-    def _command_from_store(claim: RuntimeWorkerClaim, commands: object) -> object | None:
-        for command in commands:
-            if getattr(command, "command_id", None) == claim.command_id:
-                return command
-        return None
 
     @staticmethod
     def _command_payload(claim: RuntimeWorkerClaim) -> dict[str, object]:

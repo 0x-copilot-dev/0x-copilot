@@ -36,6 +36,8 @@ class RuntimeEventProducer:
         payload: JsonObject | None = None,
         metadata: JsonObject | None = None,
         parent_task_id: str | None = None,
+        summary: str | None = None,
+        status: str | None = None,
     ) -> RuntimeEventEnvelope:
         """Append an API-authored event and update the run sequence cursor."""
 
@@ -48,6 +50,10 @@ class RuntimeEventProducer:
             payload=safe_payload,
             metadata=safe_metadata,
         )
+        if summary is not None:
+            presentation["summary"] = summary
+        if status is not None:
+            presentation["status"] = status
         envelope = self.event_store.append_event(
             RuntimeEventDraft(
                 run_id=run.run_id,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 from backend_app.contracts import OAuthTokenRequest
 from backend_app.app import create_app
 from backend_app.service import McpRegistryService
@@ -101,3 +102,34 @@ def test_mcp_update_disable_remove_flow() -> None:
     assert enabled["enabled"] is True
     assert enabled["health"] == "healthy"
     assert deleted.status_code == 204
+
+
+def test_internal_mcp_routes_use_service_header_scope_when_token_is_configured(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
+    store = InMemoryMcpStore()
+    app = create_app(McpRegistryService(store=store))
+    client = TestClient(app)
+    headers = {
+        SERVICE_TOKEN_HEADER: "service-token",
+        ORG_HEADER: "org_123",
+        USER_HEADER: "user_123",
+    }
+
+    created = client.post(
+        "/v1/mcp/servers",
+        headers=headers,
+        json={
+            "org_id": "forged_org",
+            "user_id": "forged_user",
+            "url": "https://mcp.example.com",
+            "display_name": "Drive MCP",
+        },
+    ).json()
+    cards = client.get(
+        "/internal/v1/mcp/cards",
+        headers=headers,
+        params={"org_id": "forged_org", "user_id": "forged_user"},
+    ).json()
+
+    assert created["server_id"] == cards["servers"][0]["server_id"]
+    assert cards["servers"][0]["display_name"] == "Drive MCP"

@@ -18,11 +18,11 @@ flowchart TD
   RuntimeContext --> RuntimeFactory[create_agent_runtime]
   RuntimeFactory --> DeepAgent[Deep Agents Runtime]
 
-  RuntimeFactory --> ToolRegistry[DynamicToolRegistry]
-  RuntimeFactory --> McpRegistry[DynamicMcpRegistry]
-  RuntimeFactory --> SkillRegistry[SkillSourceRegistry]
+  RuntimeFactory --> ToolRegistry[EmptyToolRegistry local/test]
+  RuntimeFactory --> McpRegistry[DynamicMcpRegistry or EmptyMcpRegistry]
+  RuntimeFactory --> SkillRegistry[VirtualSkillRegistry when backend URL is configured]
   RuntimeFactory --> MemoryFactory[ScopedMemoryBackendFactory]
-  RuntimeFactory --> SubagentCatalog[DynamicSubagentCatalog]
+  RuntimeFactory --> SubagentCatalog[EmptySubagentCatalog local/test]
 
   ToolRegistry --> ToolCards[ToolCard summaries]
   McpRegistry --> McpCards[McpServerCard summaries]
@@ -46,8 +46,8 @@ flowchart TD
   ContextManagers --> MemoryRoutes
 
   DeepAgent --> RawEvents[LangGraph v2 StreamPart events]
-  RawEvents --> Worker
-  Worker --> StreamEvents[model_delta and runtime event records]
+  RawEvents --> StreamMapper[RuntimeStreamEventMapper]
+  StreamMapper --> StreamEvents[model_delta and runtime event records]
   StreamEvents --> EventEnvelope[RuntimeEventEnvelope]
   EventEnvelope --> Persistence
   Persistence --> WorkSurfaceUI[Product UI]
@@ -64,17 +64,17 @@ flowchart TD
 - `agent_runtime/persistence/` owns durable runtime records, abstract persistence ports, and PostgreSQL-compatible schema catalogs.
 - `runtime_api/` owns the narrow FastAPI runtime API, safe HTTP errors, request/response schemas, and replay/SSE transport.
 - `runtime_adapters/` owns concrete in-memory and PostgreSQL adapters for persistence, event storage, and queue semantics.
-- `runtime_worker/` owns the async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
+- `runtime_worker/` owns the async runtime command consumer process, run/cancel/approval handlers, and mapping of runtime stream chunks into API events.
 
 ## What Works Today
 
 - A request can be converted into an `AgentRuntimeContext` with normalized identity, roles, scopes, model profile, feature flags, and trace ID.
 - `create_agent_runtime` wires injected registries, stores, and catalogs into a Deep Agents runtime without importing connector SDKs.
-- Tool and MCP listings expose compact, permission-filtered cards first. Full schemas and descriptors load only after explicit selection and permission re-check.
+- MCP listings expose compact, permission-filtered cards when `MCP_BACKEND_REGISTRY_URL` is configured. Local/test mode uses empty registries by default; production must configure MCP or skill backends or explicitly set `RUNTIME_ALLOW_EMPTY_CAPABILITIES=true`.
 - Skills are discovered from configured Agent Skills directories and passed to Deep Agents in deterministic precedence order.
 - Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
 - Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
-- The worker consumes documented LangGraph v2 `StreamPart` chunks, projects tool/subagent/progress activity into runtime envelopes, and surfaces provider text chunks as `model_delta` runtime envelopes with text in `payload.delta`.
+- The worker consumes documented LangGraph v2 `StreamPart` chunks through `RuntimeStreamEventMapper`, projects tool/subagent/progress activity into runtime envelopes, and surfaces provider text chunks as `model_delta` runtime envelopes with text in `payload.delta`.
 - FastAPI endpoints create conversations, enqueue runs, replay events, stream live/replayed SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
 - Runtime event envelopes provide ordered per-run sequence numbers, UI timeline fields, redacted payloads, and replay cursors.
 - Persistence contracts, the PostgreSQL adapter, and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.

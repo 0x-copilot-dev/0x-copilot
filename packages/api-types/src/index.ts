@@ -68,6 +68,17 @@ export type AgentRunStatus =
   | "completed"
   | "failed"
   | "timed_out";
+export const AGENT_RUN_STATUSES = [
+  "queued",
+  "running",
+  "waiting_for_approval",
+  "cancelling",
+  "cancelled",
+  "completed",
+  "failed",
+  "timed_out"
+] as const satisfies readonly AgentRunStatus[];
+
 export type RuntimeEventVisibility = "user" | "internal" | "audit";
 export type RuntimeEventRedactionState = "redacted" | "truncated" | "offloaded";
 export type RuntimeActivityKind =

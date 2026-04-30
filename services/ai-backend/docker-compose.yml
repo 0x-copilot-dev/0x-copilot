@@ -16,7 +16,9 @@ services:
       retries: 10
 
   api:
-    build: .
+    build:
+      context: ../..
+      dockerfile: services/ai-backend/Dockerfile
     env_file:
       - .env
     environment:
@@ -30,7 +32,9 @@ services:
         condition: service_healthy
 
   worker:
-    build: .
+    build:
+      context: ../..
+      dockerfile: services/ai-backend/Dockerfile
     command: ["python", "-m", "runtime_worker"]
     env_file:
       - .env

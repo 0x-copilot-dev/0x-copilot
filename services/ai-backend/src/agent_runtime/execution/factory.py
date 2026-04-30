@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-import inspect
 from importlib import import_module
 from typing import Any
 
@@ -150,12 +149,8 @@ def _build_deep_agent(
     create_kwargs: dict[str, object] = {
         "tools": list(tools),
         "model": model_name,
+        "instructions": instructions,
     }
-    parameters = inspect.signature(create_deep_agent).parameters
-    if "instructions" in parameters:
-        create_kwargs["instructions"] = instructions
-    else:
-        create_kwargs["system_prompt"] = instructions
     if skills:
         create_kwargs[SkillKeys.DeepAgents.SKILLS] = list(skills)
     if _is_deepagents_backend(memory_backend):

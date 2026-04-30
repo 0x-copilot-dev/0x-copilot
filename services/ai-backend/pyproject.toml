@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Agent runtime foundation for the enterprise work surface"
 requires-python = ">=3.11"
 dependencies = [
-  "deepagents",
+  "deepagents==0.5.5",
   "fastapi",
   "langchain",
   "langchain-openai",
@@ -35,9 +35,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "../../packages/service-contracts/src"]
 
 [tool.basedpyright]
 include = ["src", "tests"]
-extraPaths = ["src"]
+extraPaths = ["src", "../../packages/service-contracts/src"]
 pythonVersion = "3.11"

@@ -47,10 +47,13 @@ jobs:
 
       - name: Run Python tests
         run: |
+          python -m pip install ./packages/service-contracts
           python -m pip install -r services/backend/requirements.txt
           python -m pip install -r services/backend-facade/requirements.txt
           python -m pip install -r services/ai-backend/requirements.txt
-          pytest services/backend/tests services/backend-facade/tests services/ai-backend/tests
+          (cd services/backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests)
+          (cd services/backend-facade && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests)
+          (cd services/ai-backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests)
 
       - name: Generate SBOMs
         run: |

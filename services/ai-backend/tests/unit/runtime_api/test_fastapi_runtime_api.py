@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,8 @@ from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records import RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
+from runtime_api.sse.adapter import RuntimeSseAdapter
+from runtime_worker.handlers.approval import RuntimeApprovalHandler
 
 
 class FastApiRuntimeApiTestMixin:
@@ -112,6 +115,26 @@ class FastApiRuntimeApiTestMixin:
         assert response.status_code == 200
         return response.json()
 
+    async def collect_sse_stream(
+        self,
+        client: TestClient,
+        run_id: str,
+        *,
+        after_sequence: int,
+        follow: bool = False,
+    ) -> str:
+        chunks: list[str] = []
+        async for chunk in RuntimeSseAdapter.stream(
+            service=client.app.state.runtime_api_service,
+            org_id=self.Values.ORG_ID,
+            user_id=self.Values.USER_ID,
+            run_id=run_id,
+            after_sequence=after_sequence,
+            follow=follow,
+        ):
+            chunks.append(chunk)
+        return "".join(chunks)
+
 
 class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
     def test_conversation_endpoints_return_scoped_redacted_contracts(self) -> None:
@@ -206,21 +229,20 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             f"/v1/agent/runs/{run['run_id']}/events",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
         )
-        stream = client.get(
-            f"/v1/agent/runs/{run['run_id']}/stream",
-            params={
-                "org_id": self.Values.ORG_ID,
-                "user_id": self.Values.USER_ID,
-                "after_sequence": 1,
-            },
+        stream_text = asyncio.run(
+            self.collect_sse_stream(
+                client,
+                run["run_id"],
+                after_sequence=1,
+                follow=False,
+            )
         )
 
         assert replay.status_code == 200
         assert replay.json()["events"][0]["sequence_no"] == 1
         assert replay.json()["events"][0]["event_type"] == "run_queued"
-        assert stream.status_code == 200
-        assert "event: runtime_event" in stream.text
-        assert '"event_type":"heartbeat"' in stream.text
+        assert "event: runtime_event" in stream_text
+        assert '"event_type":"heartbeat"' in stream_text
 
     def test_cancel_run_persists_cancelling_state_event_and_command(self) -> None:
         client, store = self.create_client()
@@ -363,15 +385,16 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
                 "org_id": self.Values.ORG_ID,
                 "user_id": self.Values.USER_ID,
                 "after_sequence": 1,
+                "follow": False,
             },
         )
-        stream = client.get(
-            f"/v1/agent/runs/{first_run['run_id']}/stream",
-            params={
-                "org_id": self.Values.ORG_ID,
-                "user_id": self.Values.USER_ID,
-                "after_sequence": 1,
-            },
+        stream_text = asyncio.run(
+            self.collect_sse_stream(
+                client,
+                first_run["run_id"],
+                after_sequence=1,
+                follow=False,
+            )
         )
 
         assert replay.status_code == 200
@@ -380,8 +403,8 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "run_completed",
         ]
         assert replay.json()["events"][0]["payload"]["authorization"] == "[redacted]"
-        assert "run_started" in stream.text
-        assert "heartbeat" not in stream.text
+        assert "run_started" in stream_text
+        assert "heartbeat" not in stream_text
 
         follow_up_payload = self.run_payload(conversation_id, run_id="run_followup_123")
         follow_up_payload["user_input"] = (
@@ -447,6 +470,17 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert len(store.approval_commands) == 1
         assert len(store.cancel_commands) == 1
         assert [event["event_type"] for event in second_replay.json()["events"]] == [
+            "run_queued",
+            "approval_resolved",
+            "run_cancelling",
+        ]
+        approval_handler = RuntimeApprovalHandler(persistence=store, event_store=store)
+        asyncio.run(approval_handler.handle(store.approval_commands[0]))
+        after_worker_replay = client.get(
+            f"/v1/agent/runs/{second_run['run_id']}/events",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+        assert [event["event_type"] for event in after_worker_replay.json()["events"]] == [
             "run_queued",
             "approval_resolved",
             "run_cancelling",

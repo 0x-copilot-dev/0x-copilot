@@ -47,6 +47,7 @@ def test_runtime_settings_loads_template_env_and_process_overrides(tmp_path: Pat
     assert settings.execution.max_retries == 2
     assert settings.execution.max_parallel_runs == 8
     assert settings.execution.max_parallel_subagents == 6
+    assert settings.execution.allow_empty_capabilities is False
     assert settings.openai.is_configured
     assert "sk-test" not in repr(settings)
     assert "api_key" not in settings.model_dump()["openai"]

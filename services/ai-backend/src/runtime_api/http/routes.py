@@ -112,6 +112,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
+        follow: bool = Query(True),
     ) -> RuntimeEventReplayResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).replay_events(
@@ -129,6 +130,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
+        follow: bool = Query(True),
     ) -> StreamingResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return StreamingResponse(
@@ -138,7 +140,7 @@ class RuntimeApiRoutes:
                 user_id=user_id,
                 run_id=run_id,
                 after_sequence=after_sequence,
-                follow=True,
+                follow=follow,
             ),
             media_type=RuntimeSseAdapter.MEDIA_TYPE,
         )

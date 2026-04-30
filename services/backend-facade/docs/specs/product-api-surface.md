@@ -33,6 +33,7 @@ service routes and implementation modules are not part of the app contract.
 | `GET /v1/agent/runs/{run_id}/stream` | `services/ai-backend` | Stream run events as SSE |
 | `POST /v1/agent/runs/{run_id}/cancel` | `services/ai-backend` | Request run cancellation |
 | `POST /v1/agent/approvals/{approval_id}/decision` | `services/ai-backend` | Resolve an approval |
+| `DELETE /v1/agent/history` | `services/ai-backend` | Tombstone user-visible agent history |
 
 ## Non-Surface Routes
 

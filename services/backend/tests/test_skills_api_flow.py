@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 from backend_app.app import create_app
 from backend_app.service import SkillRegistryService
 from backend_app.store import InMemorySkillStore
@@ -56,3 +57,31 @@ def test_public_and_internal_skill_flow() -> None:
     assert bundle["markdown"] == SKILL_MARKDOWN
     assert updated["enabled"] is False
     assert disabled_cards["skills"] == []
+
+
+def test_internal_skill_routes_use_service_header_scope_when_token_is_configured(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
+    app = create_app(skill_service=SkillRegistryService(store=InMemorySkillStore()))
+    client = TestClient(app)
+    headers = {
+        SERVICE_TOKEN_HEADER: "service-token",
+        ORG_HEADER: "org_123",
+        USER_HEADER: "user_123",
+    }
+
+    created = client.post(
+        "/v1/skills",
+        headers=headers,
+        json={
+            "org_id": "forged_org",
+            "user_id": "forged_user",
+            "markdown": SKILL_MARKDOWN,
+        },
+    ).json()
+    cards = client.get(
+        "/internal/v1/skills/cards",
+        headers=headers,
+        params={"org_id": "forged_org", "user_id": "forged_user"},
+    ).json()
+
+    assert created["skill_id"] == cards["skills"][0]["skill_id"]

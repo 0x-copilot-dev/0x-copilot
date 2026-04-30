@@ -1,4 +1,9 @@
-"""LangGraph export surface for local development and deployment."""
+"""LangGraph export surface for local development.
+
+The production execution path is `runtime_worker`, which has durable queue,
+persistence, and event sequencing ports. This module stays as the stable
+`langgraph.json` export target and as a configured local/test utility.
+"""
 
 from __future__ import annotations
 

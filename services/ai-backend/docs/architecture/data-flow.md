@@ -33,7 +33,9 @@ sequenceDiagram
   Factory->>Memory: Create scoped memory backend
   Factory-->>Runtime: Deep Agents graph with typed dependencies
   Runtime-->>Worker: LangGraph v2 StreamPart events
-  Worker->>Store: Append model_delta, tool, subagent, and progress events
+  Worker->>Mapper: Normalize stream chunks
+  Mapper->>Producer: Append model_delta, tool, subagent, and progress events
+  Producer->>Store: Persist envelope and latest run sequence
   Worker->>Store: Append final_response/run_completed or typed failure
   Store-->>UI: Replayable RuntimeEventEnvelope updates over /events or /stream
 ```
@@ -48,20 +50,22 @@ expiration, limits active run handling with `RUNTIME_MAX_PARALLEL_RUNS`, applies
 `RUNTIME_MAX_RETRIES`, loads conversation history, builds local runtime
 dependencies, and calls `astream_runtime()` for streaming-capable model profiles
 rather than running the model inline inside FastAPI. The worker consumes
-documented LangGraph v2 `StreamPart` dictionaries (`type`, `ns`, `data`).
-Provider text chunks are persisted as `model_delta` events with the exact text in
-`payload.delta`; tool, subagent, custom, and progress parts become replayable
-runtime event envelopes. The same run still ends with `final_response` and
-`run_completed`.
+documented LangGraph v2 `StreamPart` dictionaries (`type`, `ns`, `data`) through
+`RuntimeStreamEventMapper`. Provider text chunks are persisted as `model_delta`
+events with the exact text in `payload.delta`; tool, subagent, custom, and
+progress parts become replayable runtime event envelopes. Lifecycle, cancel,
+approval, and stream events are appended through `RuntimeEventProducer` so the
+run latest sequence cursor is updated consistently. The same run still ends with
+`final_response` and `run_completed`.
 
 ## Dynamic Capability Loading
 
 The runtime uses a two-step pattern for large or risky capabilities:
 
-- Tools: `DynamicToolRegistry` returns compact `ToolCard` objects. `ToolLoader` loads a validated `LoadedToolSpec` only after explicit selection and permission re-check.
-- MCP: `DynamicMcpRegistry` returns compact `McpServerCard` objects. `McpLoader` connects to the selected server and validates discovered tool/resource descriptors.
-- Skills: `SkillSourceRegistry` parses `SKILL.md` manifests and passes skill directories to Deep Agents in deterministic precedence order.
-- Subagents: `DynamicSubagentCatalog` returns compact `SubagentDefinition` objects. `SubagentHandoffBuilder` creates a compact `SubagentTask` without raw chat history.
+- Tools: local/test mode currently uses `EmptyToolRegistry` until a dynamic tool backend is added.
+- MCP: `DynamicMcpRegistry` returns compact `McpServerCard` objects when `MCP_BACKEND_REGISTRY_URL` is configured. `McpLoader` connects to the selected server and validates discovered tool/resource descriptors.
+- Skills: `VirtualSkillRegistry` can load backend-hosted skills when `SKILLS_BACKEND_REGISTRY_URL` is configured; file-system skill directories still pass through `SkillSourceRegistry`.
+- Subagents: local/test mode currently uses `EmptySubagentCatalog` until a dynamic subagent catalog is added.
 - Memory: `ScopedMemoryBackendFactory` creates a `MemoryRoutePlan` for user, agent, and organization policy scopes.
 
 ## Context And Memory Flow
@@ -146,7 +150,7 @@ The model first sees compact capability cards. It can choose Slack and Jira sear
 sequenceDiagram
   participant User
   participant Runtime
-  participant Tools as DynamicToolRegistry
+  participant Tools as Future DynamicToolRegistry
   participant Loader as ToolLoader
   participant Slack as Future Slack adapter
   participant Jira as Future Jira adapter
@@ -223,8 +227,8 @@ sequenceDiagram
   McpLoader-->>Runtime: Validated MCP tools/resources
   Runtime->>Docs: Search launch plans and source snippets
   Runtime->>DriveMcp: Discover linked resources
-  Runtime-->>Normalizer: Tool calls, results, observations
-  Normalizer-->>Runtime: StreamEvents with trace_id and redacted payloads
+  Runtime-->>Mapper: Tool calls, results, observations
+  Mapper-->>Runtime: Runtime API events with trace_id and redacted payloads
   Runtime-->>User: Risk summary with source references
 ```
 
@@ -236,7 +240,7 @@ Long, research-heavy requests can be delegated to a subagent. The supervisor pas
 sequenceDiagram
   participant User
   participant Supervisor as Supervisor runtime
-  participant Catalog as DynamicSubagentCatalog
+  participant Catalog as Future DynamicSubagentCatalog
   participant Handoff as SubagentHandoffBuilder
   participant Lifecycle as AsyncSubagentLifecycle
   participant Runner as SubagentRunner
@@ -268,7 +272,7 @@ sequenceDiagram
   participant Runtime
   participant Loader
   participant Adapter as Future external adapter
-  participant Normalizer
+  participant Redactor
   participant UI
 
   Runtime->>Loader: Load selected capability

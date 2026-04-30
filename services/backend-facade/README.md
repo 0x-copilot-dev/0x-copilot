@@ -43,14 +43,15 @@ PYTHONPATH=src .venv/bin/python -m uvicorn backend_facade.app:app --host 127.0.0
 Build the service image from this directory:
 
 ```bash
-docker build -t enterprise-search-backend-facade .
+docker build -f services/backend-facade/Dockerfile -t enterprise-search-backend-facade .
 ```
 
 ## Boundary Rule
 
 This service must not import implementation code from `services/backend`,
 `services/ai-backend`, or `apps/frontend`. It should call backend services
-through APIs and depend only on shared generated contracts when needed.
+through APIs and depend only on constants-only service contracts or shared
+generated contracts when needed.
 
 This service owns its own `requirements.txt`, `pyproject.toml`, `Dockerfile`,
 test environment, and deploy path.

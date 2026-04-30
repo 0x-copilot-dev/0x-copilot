@@ -6,6 +6,7 @@ import hmac
 import json
 
 from fastapi.testclient import TestClient
+import httpx
 
 import backend_facade.app as facade_app
 from backend_facade.app import create_app
@@ -54,6 +55,31 @@ class TestFacadeSettings(FacadeAuthTestMixin):
 
         assert response.status_code == 200
         assert response.json() == {"skills": []}
+
+    def test_facade_preserves_upstream_error_detail(self, monkeypatch) -> None:
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self) -> "FakeAsyncClient":
+                return self
+
+            async def __aexit__(self, *args, **kwargs) -> None:
+                return None
+
+            async def request(self, *args, **kwargs) -> httpx.Response:
+                return httpx.Response(
+                    409,
+                    json={"detail": "Skill name already exists"},
+                )
+
+        monkeypatch.setattr(facade_app.httpx, "AsyncClient", FakeAsyncClient)
+        client = TestClient(create_app(FacadeSettings(backend_url="http://backend.local")))
+
+        response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
+
+        assert response.status_code == 409
+        assert response.json() == {"detail": "Skill name already exists"}
 
     def test_facade_forwards_conversation_create_to_ai(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):

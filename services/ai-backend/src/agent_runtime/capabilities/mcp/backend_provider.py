@@ -7,6 +7,7 @@ from datetime import datetime
 import os
 from typing import Any
 
+from enterprise_service_contracts.headers import SERVICE_TOKEN_HEADER
 import httpx
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
@@ -153,4 +154,4 @@ class BackendMcpServiceAuth:
     @staticmethod
     def headers() -> dict[str, str]:
         token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
-        return {"x-enterprise-service-token": token} if token else {}
+        return {SERVICE_TOKEN_HEADER: token} if token else {}

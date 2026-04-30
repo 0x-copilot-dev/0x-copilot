@@ -117,15 +117,20 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalMcpServerListResponse:
-        BackendServiceAuthenticator.require_service_request(request)
-        return mcp_service(app).list_internal_cards(org_id=org_id, user_id=user_id)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
+        return mcp_service(app).list_internal_cards(org_id=identity.org_id, user_id=identity.user_id)
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/auth/start",
         response_model=McpAuthStartResponse,
     )
     def internal_start_auth(request: Request, server_id: str, payload: InternalMcpAuthRequest) -> McpAuthStartResponse:
-        BackendServiceAuthenticator.require_service_request(request)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request,
+            org_id=payload.org_id,
+            user_id=payload.user_id,
+        )
+        payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
         try:
             return mcp_service(app).start_auth(server_id=server_id, request=payload)
         except ValueError as exc:
@@ -141,11 +146,11 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalMcpClientSession:
-        BackendServiceAuthenticator.require_service_request(request)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return mcp_service(app).create_internal_client_session(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 server_id=server_id,
             )
         except ValueError as exc:
@@ -162,11 +167,11 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> McpServerResponse:
-        BackendServiceAuthenticator.require_service_request(request)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return mcp_service(app).upsert_token_for_test(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 server_id=server_id,
                 request=payload,
             )
@@ -249,8 +254,8 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillListResponse:
-        BackendServiceAuthenticator.require_service_request(request)
-        return skills_service(app).list_internal_cards(org_id=org_id, user_id=user_id)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
+        return skills_service(app).list_internal_cards(org_id=identity.org_id, user_id=identity.user_id)
 
     @app.get("/internal/v1/skills/{skill_id}", response_model=InternalSkillBundle)
     def internal_skill_bundle(
@@ -259,11 +264,11 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillBundle:
-        BackendServiceAuthenticator.require_service_request(request)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return skills_service(app).get_internal_bundle(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 skill_id=skill_id,
             )
         except ValueError as exc:
@@ -276,11 +281,11 @@ def create_app(
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillBundle:
-        BackendServiceAuthenticator.require_service_request(request)
+        identity = BackendServiceAuthenticator.internal_scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return skills_service(app).get_internal_bundle_by_name(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 name=name,
             )
         except ValueError as exc:

@@ -7,9 +7,30 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 import httpx
+from pydantic import BaseModel, Field
 
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
 from backend_facade.settings import FacadeSettings
+
+
+class FacadeConversationRequest(BaseModel):
+    org_id: str | None = None
+    user_id: str | None = None
+    assistant_id: str | None = None
+    title: str | None = None
+    idempotency_key: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class FacadeRunRequest(BaseModel):
+    conversation_id: str
+    org_id: str | None = None
+    user_id: str | None = None
+    user_input: str
+    assistant_id: str | None = None
+    model: dict[str, object] | None = None
+    idempotency_key: str | None = None
+    request_context: dict[str, object] = Field(default_factory=dict)
 
 
 def create_app(settings: FacadeSettings | None = None) -> FastAPI:
@@ -123,13 +144,13 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         )
 
     @app.post("/v1/agent/conversations")
-    async def create_conversation(request: Request, payload: dict[str, object]) -> dict[str, object]:
+    async def create_conversation(request: Request, payload: FacadeConversationRequest) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json_to_ai(
             app,
             "POST",
             "/v1/agent/conversations",
-            json=identity.scoped_payload(payload),
+            json=identity.scoped_payload(payload.model_dump(exclude_none=True)),
             identity=identity,
         )
 
@@ -164,13 +185,13 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
         )
 
     @app.post("/v1/agent/runs")
-    async def create_run(request: Request, payload: dict[str, object]) -> dict[str, object]:
+    async def create_run(request: Request, payload: FacadeRunRequest) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json_to_ai(
             app,
             "POST",
             "/v1/agent/runs",
-            json=identity.scoped_payload(payload, include_request_context=True),
+            json=identity.scoped_payload(payload.model_dump(exclude_none=True), include_request_context=True),
             identity=identity,
         )
 
@@ -402,13 +423,25 @@ async def _forward_json(
             headers=headers,
         )
     if response.status_code >= 400:
-        raise HTTPException(response.status_code, "Upstream request failed")
+        raise HTTPException(response.status_code, _upstream_error_detail(response))
     if not expect_json:
         return {}
     payload = response.json()
     if not isinstance(payload, dict):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object")
     return payload
+
+
+def _upstream_error_detail(response: httpx.Response) -> object:
+    """Preserve upstream error detail without exposing transport internals."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text or "Upstream request failed"
+    if isinstance(payload, dict) and "detail" in payload:
+        return payload["detail"]
+    return payload if payload else "Upstream request failed"
 
 
 def settings_for(app: FastAPI) -> FacadeSettings:

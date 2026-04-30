@@ -82,9 +82,9 @@ Each deployable component should have its own Docker image:
 
 Each deployable component also owns its local dependency environment:
 
-- `services/backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
-- `services/backend-facade`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
-- `services/ai-backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`.
+- `services/backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
+- `services/backend-facade`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
+- `services/ai-backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
 - `apps/frontend`: npm workspace dependency environment with its own `package.json`, Vite config, and `Dockerfile`; it must not use a Python service venv.
 
 Do not run or test one service with another service's `.venv`. Create the target service's `.venv` from its own `requirements.txt` before running that component locally.
@@ -115,7 +115,7 @@ Start there:
 
 - Keep service boundaries clear. Do not put frontend, facade, core backend, or native app concerns into `services/ai-backend`.
 - Prefer stable APIs and generated clients between components over direct cross-service imports.
-- Do not import implementation code across `apps/*` or `services/*`. Cross-component integration must use HTTP APIs, queues/events, or generated contracts from `packages/api-types`.
+- Do not import implementation code across `apps/*` or `services/*`. Cross-component integration must use HTTP APIs, queues/events, constants-only service contracts, or generated contracts from `packages/api-types`.
 - Do not add a sibling service directory to `PYTHONPATH` or use relative imports to reach another deployable component.
 - Each deployable component owns its dependency environment and Dockerfile:
   - Python services use a service-local `.venv`, `requirements.txt`, and `Dockerfile`.

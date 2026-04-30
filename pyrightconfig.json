@@ -2,6 +2,7 @@
   "include": [
     "services/ai-backend/src",
     "services/ai-backend/tests",
+    "packages/service-contracts/src",
     "services/backend/src",
     "services/backend/tests",
     "services/backend-facade/src",
@@ -11,15 +12,15 @@
   "executionEnvironments": [
     {
       "root": "services/ai-backend",
-      "extraPaths": ["src"]
+      "extraPaths": ["src", "../../packages/service-contracts/src"]
     },
     {
       "root": "services/backend",
-      "extraPaths": ["src"]
+      "extraPaths": ["src", "../../packages/service-contracts/src"]
     },
     {
       "root": "services/backend-facade",
-      "extraPaths": ["src"]
+      "extraPaths": ["src", "../../packages/service-contracts/src"]
     }
   ]
 }

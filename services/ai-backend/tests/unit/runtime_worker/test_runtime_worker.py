@@ -157,6 +157,17 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     ):
         yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "Hello"}]), {})}
         yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": " there"}]), {})}
+        yield {
+            "type": "updates",
+            "ns": (),
+            "data": {
+                "model": {
+                    "messages": [
+                        "content='Hello there' usage_metadata={'input_token_details': {'cache_read': 1}}"
+                    ]
+                }
+            },
+        }
         yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Hello there"}]}}
 
     worker = RuntimeWorker(
@@ -188,6 +199,7 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         {"delta": "Hello", "message": "Hello"},
         {"delta": " there", "message": " there"},
     ]
+    assert "progress" not in [event.event_type for event in events]
     assistant_messages = [
         message for message in store.messages.values() if message.role == "assistant"
     ]
@@ -304,6 +316,15 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
             },
         }
         yield {
+            "type": "custom",
+            "ns": ("tools:task_123",),
+            "data": {
+                "api_event_type": "reasoning_summary_delta",
+                "summary": "Researcher is comparing source confidence.",
+                "delta": "Comparing source confidence",
+            },
+        }
+        yield {
             "type": "messages",
             "ns": (),
             "data": (
@@ -372,6 +393,12 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     subagent_event = next(event for event in events if event.event_type == "subagent_started")
     assert subagent_event.task_id == "task_123"
     assert subagent_event.subagent_id == "researcher"
+    subagent_reasoning_event = next(
+        event
+        for event in events
+        if event.event_type == "reasoning_summary_delta" and event.parent_task_id == "task_123"
+    )
+    assert subagent_reasoning_event.source == "subagent"
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

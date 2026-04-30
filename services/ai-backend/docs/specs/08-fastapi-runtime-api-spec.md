@@ -19,6 +19,7 @@ Document the implemented FastAPI runtime API surface for conversations, runs, ev
 - `src/agent_runtime/settings.py`: env-backed runtime settings and provider credentials.
 - `src/agent_runtime/execution/models.py`: request model selection resolver.
 - `src/runtime_adapters/in_memory/`: deterministic in-memory persistence, event store, and queue adapter for tests/local development.
+- `src/runtime_worker/stream_events.py`: stream chunk to runtime event mapping.
 
 The API layer depends on ports and typed runtime contracts. It does not import connector SDKs or execute long-running agent work inline.
 
@@ -32,7 +33,7 @@ Implemented endpoints under `/v1/agent`:
 - `POST /runs`: persist a user message and queued run, append `run_queued`, and enqueue a runtime worker command.
 - `GET /runs/{run_id}`: fetch current run state.
 - `GET /runs/{run_id}/events?after_sequence=N`: replay persisted event envelopes after a client checkpoint.
-- `GET /runs/{run_id}/stream?after_sequence=N`: stream replayed and live event envelopes as SSE.
+- `GET /runs/{run_id}/stream?after_sequence=N&follow=true`: stream replayed and live event envelopes as SSE. `follow=false` returns replay plus a transient heartbeat when no newer events exist.
 - `POST /runs/{run_id}/cancel`: persist best-effort cancellation, append `run_cancelling`, and enqueue a cancel command.
 - `POST /approvals/{approval_id}/decision`: persist approval decisions, append `approval_resolved`, and enqueue a worker resume command.
 
@@ -60,9 +61,9 @@ sequenceDiagram
   API-->>Facade: run_id, events_url, stream_url
   Facade-->>Client: run_id, events_url, stream_url
   Worker->>Queue: Claim command
-  Worker->>Events: Append run_started
+  Worker->>Events: Append run_started through RuntimeEventProducer
   Worker->>Events: Append model_delta chunks as provider output streams
-  Worker->>Events: Append final_response and run_completed
+  Worker->>Events: Append final_response and run_completed through RuntimeEventProducer
   Client->>Facade: GET /events or /stream after_sequence=N
   Facade->>API: GET /events or /stream after_sequence=N
   API-->>Facade: Replayable RuntimeEventEnvelope records
