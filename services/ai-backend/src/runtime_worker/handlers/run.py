@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode, StreamEventSource
+from agent_runtime.agent.contracts import (
+    AgentRuntimeContext,
+    RuntimeDependencies,
+    RuntimeErrorCode,
+    StreamEvent,
+    StreamEventSource,
+    StreamEventType,
+)
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
+from agent_runtime.observability.constants import Keys as StreamKeys
+from agent_runtime.observability.constants import Values as StreamValues
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
     MessageRecord,
     MessageRole,
+    RunRecord,
     RuntimeApiEventType,
     RuntimeEventDraft,
     RuntimeRunCommand,
@@ -50,6 +61,10 @@ class RuntimeRunHandler:
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
         self.runtime_streamer = runtime_streamer
+        self.event_producer = RuntimeEventProducer(
+            persistence=self.persistence,
+            event_store=self.event_store,
+        )
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
 
     async def handle(self, command: RuntimeRunCommand) -> None:
@@ -76,7 +91,7 @@ class RuntimeRunHandler:
             if command.runtime_context.model_profile.supports_streaming and (
                 self._runtime_streamer_explicit or callable(getattr(harness.agent, "astream", None))
             ):
-                result = await self._stream_runtime(command, harness, messages)
+                result = await self._stream_runtime(command, run, harness, messages)
             else:
                 result = await asyncio.wait_for(
                     self.runtime_invoker(
@@ -140,6 +155,7 @@ class RuntimeRunHandler:
     async def _stream_runtime(
         self,
         command: RuntimeRunCommand,
+        run: RunRecord,
         harness: RuntimeHarness,
         messages: Sequence[object],
     ) -> object:
@@ -150,8 +166,8 @@ class RuntimeRunHandler:
                 candidate = self._stream_result_candidate(chunk)
                 if candidate is not None:
                     final_result = candidate
-                self._append_non_model_events(command, chunk)
                 delta = self._stream_delta(chunk)
+                self._append_non_model_events(command, run, harness, chunk, delta=delta)
                 if delta is None:
                     continue
                 deltas.append(delta)
@@ -168,7 +184,15 @@ class RuntimeRunHandler:
             return {"content": "".join(deltas)}
         return None
 
-    def _append_non_model_events(self, command: RuntimeRunCommand, chunk: object) -> None:
+    def _append_non_model_events(
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+        harness: RuntimeHarness,
+        chunk: object,
+        *,
+        delta: str | None,
+    ) -> None:
         for payload in self._mcp_auth_payloads(chunk):
             self._append_lifecycle(
                 command,
@@ -177,6 +201,95 @@ class RuntimeRunHandler:
                 source=StreamEventSource.MCP,
                 payload=payload,
             )
+        raw_event = self._raw_stream_event(chunk)
+        if raw_event is None or self._is_mcp_auth_event(raw_event):
+            return
+        normalized = harness.dependencies.stream_normalizer.normalize(raw_event, command.runtime_context)
+        stream_events = tuple(
+            event
+            for event in normalized
+            if isinstance(event, StreamEvent)
+            and self._should_append_stream_event(event, raw_event=raw_event, delta=delta)
+        )
+        if stream_events:
+            self.event_producer.append_stream_events(run=run, stream_events=stream_events)
+
+    @classmethod
+    def _raw_stream_event(cls, chunk: object) -> dict[str, object] | None:
+        if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
+            if chunk[0] == StreamValues.StreamMode.VALUES and not cls._chunk_has_explicit_stream_event(
+                chunk[1]
+            ):
+                return None
+            return {StreamKeys.Raw.MODE: chunk[0], StreamKeys.Raw.CHUNK: chunk[1]}
+        if not isinstance(chunk, Mapping):
+            return None
+        raw_event = dict(chunk)
+        if StreamKeys.Raw.MODE in raw_event:
+            return raw_event
+        if cls._has_explicit_stream_event(raw_event):
+            raw_event[StreamKeys.Raw.MODE] = StreamValues.StreamMode.CUSTOM
+            return raw_event
+        if StreamKeys.Raw.NS in raw_event or StreamKeys.Raw.NAMESPACE in raw_event:
+            raw_event[StreamKeys.Raw.MODE] = StreamValues.StreamMode.CUSTOM
+            return raw_event
+        return None
+
+    @classmethod
+    def _has_explicit_stream_event(cls, raw_event: Mapping[str, object]) -> bool:
+        return any(
+            isinstance(raw_event.get(key), str)
+            for key in (
+                StreamKeys.Field.API_EVENT_TYPE,
+                StreamKeys.Raw.EVENT,
+                StreamKeys.Raw.EVENT_TYPE,
+            )
+        )
+
+    @classmethod
+    def _chunk_has_explicit_stream_event(cls, chunk: object) -> bool:
+        if isinstance(chunk, Mapping):
+            if cls._has_explicit_stream_event(chunk):
+                return True
+            return any(cls._chunk_has_explicit_stream_event(value) for value in chunk.values())
+        if isinstance(chunk, Sequence) and not isinstance(chunk, (str, bytes, bytearray)):
+            return any(cls._chunk_has_explicit_stream_event(value) for value in chunk)
+        return False
+
+    @classmethod
+    def _is_mcp_auth_event(cls, raw_event: Mapping[str, object]) -> bool:
+        event_type = (
+            raw_event.get(StreamKeys.Field.API_EVENT_TYPE)
+            or raw_event.get(StreamKeys.Raw.EVENT_TYPE)
+            or raw_event.get(StreamKeys.Raw.EVENT)
+        )
+        return event_type == RuntimeApiEventType.MCP_AUTH_REQUIRED.value
+
+    @classmethod
+    def _should_append_stream_event(
+        cls,
+        event: StreamEvent,
+        *,
+        raw_event: Mapping[str, object],
+        delta: str | None,
+    ) -> bool:
+        mode = raw_event.get(StreamKeys.Raw.MODE)
+        has_api_event_type = isinstance(event.payload.get(StreamKeys.Field.API_EVENT_TYPE), str)
+        if (
+            delta is not None
+            and mode == StreamValues.StreamMode.MESSAGES
+            and event.source is StreamEventSource.MAIN_AGENT
+            and event.event_type in {StreamEventType.PROGRESS, StreamEventType.CUSTOM}
+            and not has_api_event_type
+        ):
+            return False
+        if (
+            mode == StreamValues.StreamMode.VALUES
+            and event.event_type is StreamEventType.PROGRESS
+            and not has_api_event_type
+        ):
+            return False
+        return True
 
     @classmethod
     def _mcp_auth_payloads(cls, value: object) -> tuple[dict[str, object], ...]:

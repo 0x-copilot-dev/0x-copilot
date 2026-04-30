@@ -284,6 +284,58 @@ export interface RuntimeTextPayload {
   [key: string]: unknown;
 }
 
+export interface ReasoningSummaryPayload {
+  summary: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface ReasoningSummaryDeltaPayload {
+  delta: string;
+  summary?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface ToolCallPayload {
+  tool_name: string;
+  call_id: string;
+  args?: Record<string, unknown>;
+  status?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+export interface ToolCallDeltaPayload {
+  tool_name?: string;
+  call_id: string;
+  delta?: string;
+  args_delta?: Record<string, unknown>;
+  status?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+export interface ToolResultPayload {
+  tool_name: string;
+  call_id: string;
+  status?: string;
+  output?: Record<string, unknown>;
+  summary?: string;
+  safe_message?: string;
+  [key: string]: unknown;
+}
+
+export interface SubagentActivityPayload {
+  task_id: string;
+  subagent_name?: string;
+  subagent_id?: string;
+  status?: string;
+  summary?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
 export type SkillScope = "user" | "org";
 export type SkillSourceType = "user" | "preloaded";
 
@@ -343,6 +395,56 @@ export function isRuntimeEventEnvelope(value: unknown): value is RuntimeEventEnv
 
 export function isRuntimeTextPayload(payload: unknown): payload is RuntimeTextPayload {
   return typeof payload === "object" && payload !== null;
+}
+
+export function isReasoningSummaryPayload(payload: unknown): payload is ReasoningSummaryPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.summary === "string";
+}
+
+export function isReasoningSummaryDeltaPayload(
+  payload: unknown
+): payload is ReasoningSummaryDeltaPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.delta === "string";
+}
+
+export function isToolCallPayload(payload: unknown): payload is ToolCallPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.tool_name === "string" && typeof candidate.call_id === "string";
+}
+
+export function isToolCallDeltaPayload(payload: unknown): payload is ToolCallDeltaPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.call_id === "string";
+}
+
+export function isToolResultPayload(payload: unknown): payload is ToolResultPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.tool_name === "string" && typeof candidate.call_id === "string";
+}
+
+export function isSubagentActivityPayload(payload: unknown): payload is SubagentActivityPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.task_id === "string";
 }
 
 export function isApprovalRequestedPayload(payload: unknown): payload is ApprovalRequestedPayload {

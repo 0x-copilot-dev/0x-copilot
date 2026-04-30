@@ -34,7 +34,19 @@ class FastApiRuntimeApiTestMixin:
 
     def create_client(self) -> tuple[TestClient, InMemoryRuntimeApiStore]:
         store = InMemoryRuntimeApiStore()
-        service = RuntimeApiService(persistence=store, event_store=store, queue=store)
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+        )
         app = RuntimeApiAppFactory.create_app(service)
         app.state.runtime_api_store = store
         return TestClient(app), store
@@ -71,12 +83,22 @@ class FastApiRuntimeApiTestMixin:
         }
 
     def run_payload(self, conversation_id: str, *, run_id: str | None = None) -> dict[str, Any]:
+        _ = run_id
         return {
             "conversation_id": conversation_id,
+            "org_id": self.Values.ORG_ID,
+            "user_id": self.Values.USER_ID,
             "user_input": self.Values.USER_INPUT,
             "content_format": "text",
             "idempotency_key": self.Values.IDEMPOTENCY_KEY,
-            "runtime_context": self.runtime_context_payload(run_id=run_id),
+            "model": {"provider": "openai", "model_name": "gpt-4.1-mini"},
+            "request_context": {
+                "roles": ["employee"],
+                "permission_scopes": ["search:read", "docs:read"],
+                "connector_scopes": {"google-drive": ["docs:read"]},
+                "trace_metadata": {"source": "unit-test"},
+                "feature_flags": ["streaming_observability"],
+            },
             "request_options": {"authorization": self.Values.SECRET},
         }
 
@@ -366,8 +388,10 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "Now focus only on launch risks without named owners."
         )
         follow_up_payload["idempotency_key"] = "idem_followup_123"
-        follow_up_payload["runtime_context"]["request_id"] = "request_followup_123"
-        follow_up_payload["runtime_context"]["trace_id"] = "trace_followup_123"
+        follow_up_payload["request_context"]["trace_metadata"] = {
+            "requested_run_id": "run_followup_123",
+            "requested_trace_id": "trace_followup_123",
+        }
         second_response = client.post("/v1/agent/runs", json=follow_up_payload)
         second_run = second_response.json()
 

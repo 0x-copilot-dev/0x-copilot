@@ -253,6 +253,117 @@ def test_runtime_worker_persists_mcp_auth_required_event() -> None:
     assert auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
 
 
+def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "api_event_type": "reasoning_summary_delta",
+            "summary": "Checking source coverage",
+            "delta": "Checking source coverage",
+            "raw_thought": "private hidden reasoning",
+        }
+        yield {
+            "mode": "custom",
+            "ns": ("supervisor", "subagent:researcher"),
+            "chunk": {
+                "api_event_type": "subagent_started",
+                "task_id": "task_123",
+                "subagent_name": "researcher",
+                "status": "started",
+                "summary": "Researcher is reading sources.",
+            },
+        }
+        yield (
+            "messages",
+            (
+                {
+                    "tool_calls": (
+                        {
+                            "name": "doc_search",
+                            "id": "call_123",
+                            "args": {
+                                "query": "launch risks",
+                                "authorization": "bearer secret-token",
+                            },
+                        },
+                    ),
+                },
+                {},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                {
+                    "type": "tool_result",
+                    "name": "doc_search",
+                    "id": "call_123",
+                    "content": "Found two launch risks.",
+                },
+                {},
+            ),
+        )
+        yield ("values", {"messages": [{"role": "assistant", "content": "Two risks found."}]})
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    events = store.events_by_run[run_id]
+    event_types = [event.event_type for event in events]
+    assert "reasoning_summary_delta" in event_types
+    assert "subagent_started" in event_types
+    assert "tool_call_started" in event_types
+    assert "tool_result" in event_types
+    assert "tool_call_completed" in event_types
+    reasoning_event = next(event for event in events if event.event_type == "reasoning_summary_delta")
+    assert reasoning_event.payload == {
+        "summary": "Checking source coverage",
+        "delta": "Checking source coverage",
+    }
+    assert "private hidden reasoning" not in reasoning_event.model_dump_json()
+    tool_event = next(event for event in events if event.event_type == "tool_call_started")
+    assert tool_event.payload["args"]["authorization"] == "[redacted]"
+    assert tool_event.span_id == "call_123"
+    subagent_event = next(event for event in events if event.event_type == "subagent_started")
+    assert subagent_event.task_id == "task_123"
+    assert subagent_event.subagent_id == "researcher"
+
+
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings(max_retries=1)

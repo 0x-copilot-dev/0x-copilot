@@ -47,7 +47,7 @@ class RuntimeEventPresentationProjector:
         if stream_event.event_type is StreamEventType.TOOL_CALL:
             return RuntimeApiEventType.TOOL_CALL_STARTED
         if stream_event.event_type is StreamEventType.TOOL_RESULT:
-            return RuntimeApiEventType.TOOL_CALL_COMPLETED
+            return RuntimeApiEventType.TOOL_RESULT
         if stream_event.event_type in {
             StreamEventType.LIFECYCLE,
             StreamEventType.SUBAGENT_UPDATE,
@@ -210,6 +210,14 @@ class RuntimeEventPresentationProjector:
             if tool_name is None:
                 return Messages.Event.TOOL_CALL
             return Messages.Event.tool_started_title(tool_name)
+        if event_type is RuntimeApiEventType.TOOL_CALL_DELTA:
+            if tool_name is None:
+                return Messages.Event.TOOL_CALL
+            return Messages.Event.tool_running_title(tool_name)
+        if event_type is RuntimeApiEventType.TOOL_RESULT:
+            if tool_name is None:
+                return Messages.Event.TOOL_RESULT
+            return Messages.Event.tool_result_title(tool_name)
         if event_type is RuntimeApiEventType.TOOL_CALL_COMPLETED:
             if tool_name is None:
                 return Messages.Event.TOOL_CALL
@@ -270,11 +278,13 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.REASONING_SUMMARY,
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
             RuntimeApiEventType.SUBAGENT_PROGRESS,
+            RuntimeApiEventType.TOOL_CALL_DELTA,
         }:
             return Values.Status.RUNNING
         if event_type in {
             RuntimeApiEventType.RUN_COMPLETED,
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
+            RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.SUBAGENT_COMPLETED,
             RuntimeApiEventType.FINAL_RESPONSE,
         }:

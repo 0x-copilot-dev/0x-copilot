@@ -14,6 +14,7 @@ from runtime_api.schemas import (
 )
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.settings import RuntimeSettings
 
 
 class RuntimeEventTimelineTestMixin:
@@ -30,7 +31,19 @@ class RuntimeEventTimelineTestMixin:
         runtime_context_admin: AgentRuntimeContext,
     ) -> tuple[InMemoryRuntimeApiStore, RuntimeApiService, RunRecord]:
         store = InMemoryRuntimeApiStore()
-        service = RuntimeApiService(persistence=store, event_store=store, queue=store)
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+        )
         conversation = service.create_conversation(
             CreateConversationRequest(
                 org_id=runtime_context_admin.org_id,
@@ -41,8 +54,19 @@ class RuntimeEventTimelineTestMixin:
         run_response = service.create_run(
             CreateRunRequest(
                 conversation_id=conversation.conversation_id,
+                org_id=runtime_context_admin.org_id,
+                user_id=runtime_context_admin.user_id,
                 user_input=self.Values.USER_INPUT,
-                runtime_context=runtime_context_admin,
+                model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+                request_context={
+                    "roles": sorted(runtime_context_admin.roles),
+                    "permission_scopes": sorted(runtime_context_admin.permission_scopes),
+                    "connector_scopes": {
+                        key: sorted(value)
+                        for key, value in runtime_context_admin.connector_scopes.items()
+                    },
+                    "feature_flags": [flag.value for flag in runtime_context_admin.feature_flags],
+                },
             )
         )
         return store, service, store.runs[run_response.run_id]
@@ -84,6 +108,48 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             "authorization": "[redacted]",
         }
         assert store.runs[run.run_id].latest_sequence_no == 2
+
+    def test_tool_delta_and_result_events_project_to_specific_api_types(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        _store, service, run = self.create_store_and_run(runtime_context_admin)
+
+        delta_envelope = service.event_producer.append_stream_event(
+            run=run,
+            stream_event=StreamEvent(
+                source=StreamEventSource.TOOL,
+                event_type=StreamEventType.CUSTOM,
+                trace_id=runtime_context_admin.trace_id,
+                payload={
+                    "api_event_type": "tool_call_delta",
+                    "tool_name": "doc_search",
+                    "call_id": self.Values.CALL_ID,
+                    "delta": "Searching",
+                },
+            ),
+        )
+        result_envelope = service.event_producer.append_stream_event(
+            run=run,
+            stream_event=StreamEvent(
+                source=StreamEventSource.TOOL,
+                event_type=StreamEventType.TOOL_RESULT,
+                trace_id=runtime_context_admin.trace_id,
+                payload={
+                    "tool_name": "doc_search",
+                    "call_id": self.Values.CALL_ID,
+                    "status": "completed",
+                    "output": {"message": "Found launch risks"},
+                },
+            ),
+        )
+
+        assert delta_envelope.event_type is RuntimeApiEventType.TOOL_CALL_DELTA
+        assert delta_envelope.status == "running"
+        assert delta_envelope.span_id == self.Values.CALL_ID
+        assert result_envelope.event_type is RuntimeApiEventType.TOOL_RESULT
+        assert result_envelope.status == "completed"
+        assert result_envelope.display_title == "doc_search result"
 
     def test_reasoning_summary_event_does_not_expose_raw_thought_payload(
         self,

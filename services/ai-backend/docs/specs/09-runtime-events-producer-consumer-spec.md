@@ -56,6 +56,7 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Invoke `astream_runtime()` through `create_agent_runtime()` for streaming-capable model profiles, falling back to `ainvoke_runtime()` when streaming is disabled or unavailable.
 - Append ordered lifecycle events for queued, started, completed, cancelled, failed, and approval-resolution paths.
 - Append `model_delta` events from provider stream chunks while the model is running.
+- Normalize non-model stream chunks through `LangGraphStreamNormalizer` and append replayable reasoning, tool, observation, and subagent events through `RuntimeEventProducer`.
 - Persist the final assistant output as both an assistant message and a `final_response` event.
 - Observe cancellation and approval commands.
 - Mark terminal run state exactly once.
@@ -86,6 +87,8 @@ Implemented API event types include:
 - Run lifecycle: `run_queued`, `run_started`, `run_cancelling`, `run_cancelled`, `run_completed`, `run_failed`.
 - Progress/model output: `progress`, `reasoning_summary`, `reasoning_summary_delta`, `observation`, `model_delta`, `final_response`.
 - Tools: `tool_call`, `tool_call_started`, `tool_call_delta`, `tool_result`, `tool_call_completed`.
+  Tool results remain visible as result events; completion events are emitted when
+  source data indicates the tool call finished.
 - Subagents: `subagent_update`, `subagent_started`, `subagent_progress`, `subagent_completed`.
 - Approvals: `approval_requested`, `approval_resolved`.
 - Transport/system: `heartbeat`, `error`.

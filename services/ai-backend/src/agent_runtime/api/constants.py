@@ -127,6 +127,7 @@ class Messages:
         RUN_QUEUED = "Run was queued for runtime execution."
         SUBAGENT = "Subagent update"
         TOOL_CALL = "Calling tool"
+        TOOL_RESULT = "Tool result"
 
         @classmethod
         def subagent_title(cls, subagent_name: str) -> str:
@@ -135,6 +136,14 @@ class Messages:
         @classmethod
         def tool_completed_title(cls, tool_name: str) -> str:
             return f"{tool_name} completed"
+
+        @classmethod
+        def tool_result_title(cls, tool_name: str) -> str:
+            return f"{tool_name} result"
+
+        @classmethod
+        def tool_running_title(cls, tool_name: str) -> str:
+            return f"{tool_name} running"
 
         @classmethod
         def tool_started_title(cls, tool_name: str) -> str:

@@ -15,10 +15,13 @@ Implemented modules:
 - `observability/tracing.py`: trace IDs and correlation helpers.
 - `observability/redaction.py`: payload redaction helpers.
 
-The worker uses LangGraph streaming with `stream_mode=["messages", "values"]`.
-Provider text chunks from OpenAI, Anthropic, Gemini, or any compatible LangChain
-chat model are emitted as `model_delta` events. The exact provider text belongs
-in `payload.delta`; the terminal full answer is emitted as `final_response`.
+The worker uses LangGraph streaming with `stream_mode=["messages", "updates", "custom", "values"]`
+and falls back to `["messages", "values"]` when a graph does not support the
+richer stream modes. Provider text chunks from OpenAI, Anthropic, Gemini, or any
+compatible LangChain chat model are emitted as `model_delta` events. Non-model
+chunks are normalized through `LangGraphStreamNormalizer` and persisted as
+replayable runtime events. The exact provider text belongs in `payload.delta`;
+the terminal full answer is emitted as `final_response`.
 
 ## Pydantic Contracts
 
@@ -45,6 +48,8 @@ Payloads must be redacted before serialization. Unknown event fields should be p
 - Normalize main-agent update chunks.
 - Normalize subagent namespace chunks.
 - Normalize tool call and tool result message chunks.
+- Persist safe reasoning summaries, tool deltas/results/completions, and
+  subagent lifecycle/progress events from worker streams.
 - Emit provider text chunks as `model_delta` events before `final_response`.
 - Redact secrets in args and payloads.
 - Preserve trace/task correlation across events.

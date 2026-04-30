@@ -9,6 +9,7 @@ class Keys:
     """Stable field names used by stream and observation contracts."""
 
     class Field:
+        API_EVENT_TYPE = "api_event_type"
         ARGS = "args"
         CALL_ID = "call_id"
         EVENT_ID = "event_id"
@@ -74,6 +75,18 @@ class Values:
         PROGRESS = "progress"
         SUBAGENT_UPDATE = "subagent_update"
         TOOL_CALL = "tool_call"
+        TOOL_RESULT = "tool_result"
+
+    class ApiEventType:
+        MCP_AUTH_REQUIRED = "mcp_auth_required"
+        REASONING_SUMMARY = "reasoning_summary"
+        REASONING_SUMMARY_DELTA = "reasoning_summary_delta"
+        SUBAGENT_COMPLETED = "subagent_completed"
+        SUBAGENT_PROGRESS = "subagent_progress"
+        SUBAGENT_STARTED = "subagent_started"
+        TOOL_CALL_COMPLETED = "tool_call_completed"
+        TOOL_CALL_DELTA = "tool_call_delta"
+        TOOL_CALL_STARTED = "tool_call_started"
         TOOL_RESULT = "tool_result"
 
     class StreamMode:

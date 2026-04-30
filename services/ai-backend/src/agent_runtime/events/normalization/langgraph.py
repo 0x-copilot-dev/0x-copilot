@@ -134,6 +134,16 @@ class LangGraphStreamNormalizer:
                 namespace=namespace,
                 metadata=metadata,
             )
+        if event_name in cls._api_event_types():
+            payload[Keys.Field.API_EVENT_TYPE] = event_name
+            return cls._normalize_progress_event(
+                raw_event=raw_event,
+                chunk=payload,
+                trace_id=trace_id,
+                namespace=namespace,
+                metadata=metadata,
+                event_type=StreamEventType.CUSTOM,
+            )
         if event_name == Values.EventType.OBSERVATION:
             observation = ObservationEvent(
                 metric_name=payload[Keys.Field.METRIC_NAME],
@@ -271,6 +281,12 @@ class LangGraphStreamNormalizer:
             status=str(payload.get(Keys.Field.STATUS, Values.Status.COMPLETED)),
             output=cls._tool_output_for(payload),
         )
+        completed_payload = {
+            Keys.Field.API_EVENT_TYPE: Values.ApiEventType.TOOL_CALL_COMPLETED,
+            Keys.Field.TOOL_NAME: tool_result.tool_name,
+            Keys.Field.CALL_ID: tool_result.call_id,
+            Keys.Field.STATUS: tool_result.status,
+        }
         return (
             cls._event(
                 source=StreamEventSource.TOOL,
@@ -278,6 +294,14 @@ class LangGraphStreamNormalizer:
                 trace_id=trace_id,
                 parent_task_id=cls._parent_task_id_for(raw_event, payload),
                 payload=tool_result.model_dump(mode="json"),
+                metadata=metadata,
+            ),
+            cls._event(
+                source=StreamEventSource.TOOL,
+                event_type=StreamEventType.CUSTOM,
+                trace_id=trace_id,
+                parent_task_id=cls._parent_task_id_for(raw_event, payload),
+                payload=completed_payload,
                 metadata=metadata,
             ),
         )
@@ -436,17 +460,24 @@ class LangGraphStreamNormalizer:
             return True
         if isinstance(raw_event.get(Keys.Raw.EVENT), str):
             return True
+        if isinstance(raw_event.get(Keys.Field.API_EVENT_TYPE), str):
+            return True
         return isinstance(chunk, Mapping) and (
             isinstance(chunk.get(Keys.Raw.EVENT_TYPE), str)
             or isinstance(chunk.get(Keys.Raw.EVENT), str)
+            or isinstance(chunk.get(Keys.Field.API_EVENT_TYPE), str)
         )
 
     @classmethod
     def _event_type_for(cls, raw_event: Mapping[str, object], chunk: object) -> str:
+        if isinstance(raw_event.get(Keys.Field.API_EVENT_TYPE), str):
+            return str(raw_event[Keys.Field.API_EVENT_TYPE])
         if isinstance(raw_event.get(Keys.Raw.EVENT_TYPE), str):
             return str(raw_event[Keys.Raw.EVENT_TYPE])
         if isinstance(raw_event.get(Keys.Raw.EVENT), str):
             return str(raw_event[Keys.Raw.EVENT])
+        if isinstance(chunk, Mapping) and isinstance(chunk.get(Keys.Field.API_EVENT_TYPE), str):
+            return str(chunk[Keys.Field.API_EVENT_TYPE])
         if isinstance(chunk, Mapping) and isinstance(chunk.get(Keys.Raw.EVENT_TYPE), str):
             return str(chunk[Keys.Raw.EVENT_TYPE])
         if isinstance(chunk, Mapping) and isinstance(chunk.get(Keys.Raw.EVENT), str):
@@ -524,6 +555,7 @@ class LangGraphStreamNormalizer:
     @classmethod
     def _tool_output_for(cls, payload: JsonObject) -> JsonObject:
         excluded = {
+            Keys.Field.API_EVENT_TYPE,
             Keys.Field.CALL_ID,
             Keys.Field.STATUS,
             Keys.Field.TOOL_NAME,
@@ -535,6 +567,23 @@ class LangGraphStreamNormalizer:
         }
         output = {key: value for key, value in payload.items() if key not in excluded}
         return output or payload
+
+    @classmethod
+    def _api_event_types(cls) -> frozenset[str]:
+        return frozenset(
+            {
+                Values.ApiEventType.MCP_AUTH_REQUIRED,
+                Values.ApiEventType.REASONING_SUMMARY,
+                Values.ApiEventType.REASONING_SUMMARY_DELTA,
+                Values.ApiEventType.SUBAGENT_COMPLETED,
+                Values.ApiEventType.SUBAGENT_PROGRESS,
+                Values.ApiEventType.SUBAGENT_STARTED,
+                Values.ApiEventType.TOOL_CALL_COMPLETED,
+                Values.ApiEventType.TOOL_CALL_DELTA,
+                Values.ApiEventType.TOOL_CALL_STARTED,
+                Values.ApiEventType.TOOL_RESULT,
+            }
+        )
 
     @classmethod
     def _stream_event_type(cls, value: str) -> StreamEventType:
