@@ -1,0 +1,14 @@
+---
+description: Workspace architecture for the Enterprise Search monorepo
+alwaysApply: true
+---
+
+# Enterprise Search Workspace Architecture
+
+- Treat `enterprise-search` as one GitHub monorepo with multiple independently deployable components.
+- Runtime architecture can be microservice-style: each service owns its API, Docker image, tests, and deploy path.
+- Apps call `backend-facade`; apps must not call internal services directly without an accepted spec.
+- `backend` owns tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
+- `ai-backend-src` is transitional; future canonical AI service path is `services/ai-backend`.
+- Shared packages are for stable contracts and cross-cutting primitives, not hidden business logic.
+

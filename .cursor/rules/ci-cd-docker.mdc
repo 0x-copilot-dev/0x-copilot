@@ -1,0 +1,15 @@
+---
+description: CI/CD and Docker rules for the Enterprise Search monorepo
+globs: "{.github/**,infra/**,**/Dockerfile,**/docker-compose*.yml,**/compose*.yaml,**/compose*.yml}"
+alwaysApply: false
+---
+
+# CI/CD And Docker
+
+- CI should be path-filtered so unrelated apps and services do not rebuild unnecessarily.
+- Every backend service should have its own Docker image and deploy path.
+- Do not commit secrets, real `.env` files, tokens, certificates, or production credentials.
+- Docker builds must be reproducible and scoped to the service being built.
+- Production deploys require GitHub Environments with manual approval.
+- Pull request CI should not require production secrets or live third-party services.
+

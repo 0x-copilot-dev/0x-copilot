@@ -1,0 +1,6 @@
+langchain
+langgraph
+deepagents
+pydantic>=2
+pytest
+

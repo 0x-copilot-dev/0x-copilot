@@ -1,0 +1,14 @@
+---
+description: Unit testing rules for the AI backend
+globs: "{ai-backend-src/tests/**/*.py,services/ai-backend/tests/**/*.py}"
+alwaysApply: false
+---
+
+# AI Backend Testing
+
+- Prefer focused unit tests with fakes over live service integration.
+- Test valid and invalid Pydantic parsing for every contract.
+- Cover permission denial, duplicate names, malformed schemas, external failures, and oversized context.
+- Assert typed errors and safe messages, not just that an exception occurred.
+- Never require network access, real credentials, or live LLM calls in unit tests.
+

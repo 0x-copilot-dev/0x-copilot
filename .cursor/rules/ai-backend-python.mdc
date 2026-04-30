@@ -1,0 +1,14 @@
+---
+description: Python and Pydantic standards for the AI backend
+globs: "{ai-backend-src/**/*.py,services/ai-backend/**/*.py}"
+alwaysApply: false
+---
+
+# Python and Pydantic
+
+- Use Pydantic at IO and domain boundaries: runtime context, tools, MCP, memory, subagents, and stream events.
+- Avoid long-lived `dict[str, Any]` domain state.
+- Use enums, literals, constrained strings, and positive integers for known domains.
+- Treat model output, connector payloads, MCP descriptors, and memory content as untrusted until validated.
+- Convert broad exceptions into typed domain errors with safe public messages.
+

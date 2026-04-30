@@ -1,0 +1,24 @@
+---
+description: Require agents to read applicable Cursor rules before work
+alwaysApply: true
+---
+
+# Agent Rule Loading
+
+Before implementing, reviewing, or editing docs/code in this repo, agents must read the applicable `.cursor/rules/*.mdc` files for the paths they will touch.
+
+Minimum rule-loading requirements:
+
+- For any `ai-backend-src/**` or future `services/ai-backend/**` work, read:
+  - `.cursor/rules/ai-backend-engineering.mdc`
+  - `.cursor/rules/ai-backend-python.mdc` when touching Python code
+  - `.cursor/rules/ai-backend-spec-first.mdc` when touching AI backend docs/specs
+  - `.cursor/rules/ai-backend-testing.mdc` when touching tests
+- For workspace architecture or service boundary work, read:
+  - `.cursor/rules/workspace-architecture.mdc`
+  - `.cursor/rules/service-boundaries.mdc`
+- For CI/CD, Docker, or workflow work, read:
+  - `.cursor/rules/ci-cd-docker.mdc`
+
+Do not assume rule contents from memory. Re-read the rule files in the current workspace before making changes.
+

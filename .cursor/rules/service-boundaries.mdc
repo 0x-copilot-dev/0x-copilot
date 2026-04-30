@@ -1,0 +1,15 @@
+---
+description: Service boundary rules for apps, services, and shared packages
+globs: "{apps/**,services/**,packages/**,ai-backend-src/**}"
+alwaysApply: false
+---
+
+# Service Boundaries
+
+- Keep deployable service boundaries explicit even though code lives in one repo.
+- Do not import across services directly; use typed contracts, generated clients, queues, or documented APIs.
+- `backend-facade` is the product API surface for web, Mac, and Windows apps.
+- Do not put AI orchestration logic in `backend-facade`.
+- Do not put tenant auth ownership, billing/admin state, or product persistence in `ai-backend-src` or `services/ai-backend`.
+- Add or update a service-boundary doc before creating a new service or shared package.
+

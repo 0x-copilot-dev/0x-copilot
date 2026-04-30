@@ -1,0 +1,14 @@
+---
+description: Spec-first workflow for AI backend docs and implementation
+globs: "{ai-backend-src/docs/**/*.md,services/ai-backend/docs/**/*.md}"
+alwaysApply: false
+---
+
+# Spec-First Workflow
+
+- PRDs must state problem, goals, non-goals, acceptance criteria, risks, and unit testing requirements.
+- Specs must include architecture, module boundaries, Pydantic contracts, edge cases, security, observability, and tests.
+- Keep implementation decisions consistent with Deep Agents, LangGraph, LangChain, and Agent Skills primitives.
+- Do not remove edge cases to simplify implementation.
+- Treat docs as the contract future agents must implement against.
+
