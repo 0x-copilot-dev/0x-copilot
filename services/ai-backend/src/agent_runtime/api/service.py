@@ -20,6 +20,7 @@ from agent_runtime.api.contracts import (
     CreateConversationRequest,
     CreateRunRequest,
     CreateRunResponse,
+    HistoryDeletionResponse,
     MessageListResponse,
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
@@ -71,7 +72,18 @@ class RuntimeApiService:
     def create_conversation(self, request: CreateConversationRequest) -> ConversationResponse:
         """Create or idempotently return a conversation."""
 
-        return self.persistence.create_conversation(request).to_response()
+        conversation = self.persistence.create_conversation(request)
+        self.persistence.write_audit_log(
+            event_type="conversation_created",
+            record={
+                "org_id": conversation.org_id,
+                "user_id": conversation.user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation.conversation_id,
+                "outcome": "success",
+            },
+        )
+        return conversation.to_response()
 
     def get_conversation(
         self,
@@ -139,6 +151,18 @@ class RuntimeApiService:
             conversation=conversation,
         )
         if created:
+            self.persistence.write_audit_log(
+                event_type="run_created",
+                record={
+                    "org_id": run.org_id,
+                    "user_id": run.user_id,
+                    "resource_type": "run",
+                    "resource_id": run.run_id,
+                    "run_id": run.run_id,
+                    "trace_id": run.trace_id,
+                    "outcome": "success",
+                },
+            )
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.RUNTIME,
@@ -156,6 +180,35 @@ class RuntimeApiService:
                 )
             )
         return self._create_run_response(run=run, user_message_id=user_message.message_id)
+
+    def delete_user_history(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        reason: str | None = None,
+    ) -> HistoryDeletionResponse:
+        """Delete user-visible conversation history and persist deletion evidence."""
+
+        result = self.persistence.delete_user_history(org_id=org_id, user_id=user_id, reason=reason)
+        self.persistence.write_audit_log(
+            event_type="user_history_deleted",
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "user_history",
+                "resource_id": user_id,
+                "outcome": "success",
+                "metadata": {
+                    "reason": reason,
+                    "conversations_archived": result.conversations_archived,
+                    "messages_tombstoned": result.messages_tombstoned,
+                    "runs_cancelled": result.runs_cancelled,
+                    "events_retained": result.events_retained,
+                },
+            },
+        )
+        return result
 
     def get_run(self, *, org_id: str, user_id: str, run_id: str) -> RunStatusResponse:
         """Return current run state."""
@@ -241,6 +294,19 @@ class RuntimeApiService:
                     reason=request.reason,
                 )
             )
+            self.persistence.write_audit_log(
+                event_type="run_cancel_requested",
+                record={
+                    "org_id": run.org_id,
+                    "user_id": run.user_id,
+                    "resource_type": "run",
+                    "resource_id": run.run_id,
+                    "run_id": run.run_id,
+                    "trace_id": run.trace_id,
+                    "outcome": "success",
+                    "metadata": {"reason": request.reason},
+                },
+            )
         return CancelRunResponse(
             run_id=run.run_id,
             status=run.status,
@@ -312,6 +378,18 @@ class RuntimeApiService:
                 decision=request.decision,
             )
         )
+        self.persistence.write_audit_log(
+            event_type="approval_decision_recorded",
+            record={
+                "org_id": record.org_id,
+                "user_id": record.user_id,
+                "resource_type": "approval",
+                "resource_id": record.approval_id,
+                "run_id": record.run_id,
+                "outcome": "success",
+                "metadata": {"status": record.status.value},
+            },
+        )
         return ApprovalDecisionResponse(
             approval_id=record.approval_id,
             run_id=record.run_id,
@@ -333,8 +411,6 @@ class RuntimeApiService:
         )
 
     def _request_with_runtime_context(self, request: CreateRunRequest) -> CreateRunRequest:
-        if request.runtime_context is not None:
-            return request
         try:
             model = request.model
             model_config = self.model_resolver.resolve(

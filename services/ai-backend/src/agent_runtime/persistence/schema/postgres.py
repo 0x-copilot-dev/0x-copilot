@@ -23,6 +23,8 @@ AGENT_RUNTIME_TABLES = (
     "runtime_compression_events",
     "runtime_capability_snapshots",
     "runtime_audit_log",
+    "runtime_legal_holds",
+    "runtime_deletion_evidence",
     "runtime_checkpoints",
 )
 
@@ -420,6 +422,38 @@ CREATE INDEX IF NOT EXISTS idx_runtime_audit_log_org_run_created
     ON runtime_audit_log (org_id, run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_audit_log_org_trace
     ON runtime_audit_log (org_id, trace_id);
+
+CREATE TABLE IF NOT EXISTS runtime_legal_holds (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT,
+    scope TEXT NOT NULL CHECK (scope IN ('org', 'user', 'conversation')),
+    resource_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    released_by_user_id TEXT,
+    released_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_legal_holds_org_resource_active
+    ON runtime_legal_holds (org_id, scope, resource_id)
+    WHERE released_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS runtime_deletion_evidence (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    request_type TEXT NOT NULL,
+    reason TEXT,
+    conversations_archived INTEGER NOT NULL DEFAULT 0,
+    messages_tombstoned INTEGER NOT NULL DEFAULT 0,
+    runs_cancelled INTEGER NOT NULL DEFAULT 0,
+    events_retained INTEGER NOT NULL DEFAULT 0,
+    audit_event_id TEXT REFERENCES runtime_audit_log(id),
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_deletion_evidence_org_user_created
+    ON runtime_deletion_evidence (org_id, user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS runtime_checkpoints (
     id TEXT PRIMARY KEY,

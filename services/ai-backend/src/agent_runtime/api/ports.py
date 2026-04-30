@@ -14,6 +14,7 @@ from agent_runtime.api.contracts import (
     CreateConversationRequest,
     CreateRunRequest,
     MessageRecord,
+    HistoryDeletionResponse,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeEventDraft,
@@ -87,6 +88,15 @@ class PersistencePort(Protocol):
 
     def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
+
+    def delete_user_history(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        reason: str | None = None,
+    ) -> HistoryDeletionResponse:
+        """Tombstone user-visible history while retaining audit-safe evidence."""
 
 
 @runtime_checkable

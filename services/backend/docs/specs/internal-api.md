@@ -14,10 +14,16 @@ metadata and backend-only session helpers.
 - Product-facing exposure: none. `services/backend-facade` should not proxy
   these routes unless a future accepted spec changes the boundary.
 
-Current implementation relies on network and deployment trust plus explicit
-`org_id` and `user_id` scope parameters. There is no dedicated auth middleware
-on these routes yet. Before production exposure beyond a trusted private
-network, add service authentication and authorization checks.
+Internal routes require service authentication through the
+`X-Enterprise-Service-Token` header. The expected value is loaded from
+`ENTERPRISE_SERVICE_TOKEN`; production startup and requests must fail closed if
+that value is not configured. Internal callers should also forward
+`X-Enterprise-Org-Id` and `X-Enterprise-User-Id` so tenant and user scope is
+derived from authenticated service context, not browser-controlled parameters.
+
+Deployment network policy must keep `/internal/v1/*` reachable only from the
+private service network. Public ingress, load balancer rules, and API gateway
+routes must deny direct browser or internet access to this path prefix.
 
 ## MCP Routes
 
@@ -28,8 +34,9 @@ network, add service authentication and authorization checks.
 | `POST` | `/internal/v1/mcp/servers/{server_id}/client-session` | Create a backend-only MCP client session |
 | `POST` | `/internal/v1/mcp/servers/{server_id}/test-token` | Upsert a token for local/test flows |
 
-All MCP routes require the caller to provide scoped identity either through the
-Pydantic body or `org_id` and `user_id` query parameters.
+All MCP routes require scoped identity from trusted service headers in
+production. Local development may still pass `org_id` and `user_id` query/body
+values when `ENTERPRISE_SERVICE_TOKEN` is unset.
 
 Internal MCP responses may include connection material that apps should not see.
 They must not be forwarded through the product facade.
@@ -47,6 +54,8 @@ model-consumable markdown and metadata required by the runtime.
 
 ## Failure Semantics
 
+- Missing or invalid service tokens should return `401`.
+- Missing production token configuration should return `503`.
 - Missing or invalid scope parameters should return FastAPI validation errors.
 - Unknown or inaccessible records should return `404`.
 - Unsupported auth flows should return `400`.

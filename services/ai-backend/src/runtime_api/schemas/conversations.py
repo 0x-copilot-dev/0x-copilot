@@ -198,3 +198,15 @@ class MessageListResponse(RuntimeContract):
     messages: tuple[MessageResponse, ...]
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class HistoryDeletionResponse(RuntimeContract):
+    """Audit-safe result for deleting a user's visible runtime history."""
+
+    org_id: str
+    user_id: str
+    conversations_archived: NonNegativeInt = 0
+    messages_tombstoned: NonNegativeInt = 0
+    runs_cancelled: NonNegativeInt = 0
+    events_retained: NonNegativeInt = 0
+    audit_event_id: str | None = None

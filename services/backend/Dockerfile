@@ -1,10 +1,12 @@
-FROM python:3.13-slim
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src
 
 WORKDIR /app
+
+RUN addgroup --system app && adduser --system --ingroup app app
 
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip \
@@ -13,5 +15,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 COPY src ./src
 
 EXPOSE 8100
+
+USER app
 
 CMD ["uvicorn", "backend_app.app:app", "--host", "0.0.0.0", "--port", "8100"]

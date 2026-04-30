@@ -59,7 +59,7 @@ class CreateRunRequest(RuntimeContract):
     idempotency_key: str | None = None
     model: ModelSelectionRequest | None = None
     request_context: RuntimeRequestContext = Field(default_factory=RuntimeRequestContext)
-    runtime_context: AgentRuntimeContext | None = None
+    runtime_context: AgentRuntimeContext | None = Field(default=None, exclude=True)
     request_options: JsonObject = Field(default_factory=dict)
 
     @field_validator(Keys.Field.CONVERSATION_ID)
@@ -90,7 +90,7 @@ class CreateRunRequest(RuntimeContract):
     @model_validator(mode="after")
     def _require_identity_or_context(self) -> "CreateRunRequest":
         if self.runtime_context is not None:
-            return self
+            raise ValueError("runtime_context is server-owned and cannot be supplied by clients")
         if self.org_id is None or self.user_id is None:
             raise ValueError("org_id and user_id are required when runtime_context is omitted")
         return self

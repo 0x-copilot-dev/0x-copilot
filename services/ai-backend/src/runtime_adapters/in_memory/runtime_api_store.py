@@ -13,11 +13,14 @@ from agent_runtime.api.contracts import (
     AgentRunStatus,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
+    ConversationStatus,
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
+    HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
+    MessageStatus,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeEventDraft,
@@ -28,6 +31,15 @@ from agent_runtime.api.contracts import (
 from agent_runtime.api.errors import RuntimeApiError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.contracts import OutboxStatus, RuntimeWorkerClaim, RuntimeWorkerResult
+
+RuntimeApiServiceTerminalStatuses = frozenset(
+    {
+        AgentRunStatus.CANCELLED,
+        AgentRunStatus.COMPLETED,
+        AgentRunStatus.FAILED,
+        AgentRunStatus.TIMED_OUT,
+    }
+)
 
 
 class InMemoryRuntimeApiStore:
@@ -234,6 +246,84 @@ class InMemoryRuntimeApiStore:
         """Append a deterministic audit record for assertions."""
 
         self.audit_log.append((event_type, record))
+
+    def delete_user_history(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        reason: str | None = None,
+    ) -> HistoryDeletionResponse:
+        """Tombstone user-visible history while preserving audit evidence."""
+
+        now = datetime.now(UTC)
+        conversation_ids = {
+            conversation.conversation_id
+            for conversation in self.conversations.values()
+            if conversation.org_id == org_id and conversation.user_id == user_id
+        }
+        conversations_archived = 0
+        for conversation_id in conversation_ids:
+            conversation = self.conversations[conversation_id]
+            if conversation.status != ConversationStatus.ARCHIVED:
+                conversations_archived += 1
+            self.conversations[conversation_id] = conversation.model_copy(
+                update={"status": ConversationStatus.ARCHIVED, "archived_at": now, "updated_at": now}
+            )
+
+        messages_tombstoned = 0
+        for message_id, message in tuple(self.messages.items()):
+            if message.org_id != org_id or message.conversation_id not in conversation_ids:
+                continue
+            if message.deleted_at is None:
+                messages_tombstoned += 1
+            self.messages[message_id] = message.model_copy(
+                update={
+                    "status": MessageStatus.DELETED,
+                    "content_text": "[deleted by user request]",
+                    "deleted_at": now,
+                }
+            )
+
+        runs_cancelled = 0
+        for run_id, run in tuple(self.runs.items()):
+            if run.org_id != org_id or run.user_id != user_id:
+                continue
+            if run.status not in RuntimeApiServiceTerminalStatuses:
+                runs_cancelled += 1
+                self.runs[run_id] = run.model_copy(
+                    update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
+                )
+
+        events_retained = sum(
+            len(events)
+            for run_id, events in self.events_by_run.items()
+            if self.runs.get(run_id) is not None
+            and self.runs[run_id].org_id == org_id
+            and self.runs[run_id].user_id == user_id
+        )
+        audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
+        self.audit_log.append(
+            (
+                "user_history_deleted",
+                {
+                    "audit_event_id": audit_event_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "reason": reason,
+                    "deleted_at": now.isoformat(),
+                },
+            )
+        )
+        return HistoryDeletionResponse(
+            org_id=org_id,
+            user_id=user_id,
+            conversations_archived=conversations_archived,
+            messages_tombstoned=messages_tombstoned,
+            runs_cancelled=runs_cancelled,
+            events_retained=events_retained,
+            audit_event_id=audit_event_id,
+        )
 
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with a monotonically increasing run sequence number."""

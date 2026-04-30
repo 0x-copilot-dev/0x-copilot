@@ -1,0 +1,17 @@
+---
+description: Evidence-first rules for regulated security and compliance reviews
+alwaysApply: true
+---
+
+# Compliance And Audit Reviews
+
+When reviewing Enterprise Search for bank, government, or other regulated buyers:
+
+- Treat a control as implemented only when code, config, tests, and documentation all support it. Architecture intent is not enough.
+- Separate product controls from deployment controls. Mark TLS, WAF, KMS, SIEM, backup, private networking, and branch protection as "not evidenced in repo" unless there is deploy config or a runbook.
+- Treat caller-supplied identity, role, scope, tenant, org, and user values as untrusted unless derived from verified session, token, mTLS identity, or IdP claims.
+- For every sensitive workflow, answer: who can do it, who approved it, what changed, where it is logged, how long it is retained, and how it is deleted.
+- For retention and deletion, verify conversations, messages, runs, events, outbox rows, payload refs, memory, checkpoints, approvals, tool invocations, MCP tokens, skills, and audit records.
+- Never mark audit logging complete if the adapter is no-op, in-memory only, mutable without controls, or not exportable to customer SIEM.
+- Require tests for tenant isolation, unauthorized access, deletion cascades, retention expiry, audit immutability, redaction, and legal hold behavior.
+- Findings must include severity, confidence, evidence paths, exploit or compliance impact, and concrete remediation. Separate confirmed gaps from deployment assumptions.

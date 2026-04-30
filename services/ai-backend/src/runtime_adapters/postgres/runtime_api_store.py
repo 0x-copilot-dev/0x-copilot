@@ -19,6 +19,7 @@ from agent_runtime.api.contracts import (
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
+    HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
     MessageStatus,
@@ -331,8 +332,173 @@ class PostgresRuntimeApiStore:
     def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
 
-        # Full audit contracts live outside the current API port surface.
-        return None
+        data = record if isinstance(record, dict) else {"record": str(record)}
+        now = datetime.now(UTC)
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        audit_id = str(data.get("audit_event_id") or f"audit_{now.timestamp_ns()}")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_audit_log (
+                    id, org_id, user_id, actor_type, action, resource_type, resource_id,
+                    run_id, trace_id, outcome, metadata_json_redacted, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    audit_id,
+                    str(data.get("org_id", "unknown")),
+                    data.get("user_id") if isinstance(data.get("user_id"), str) else None,
+                    str(data.get("actor_type", "system")),
+                    event_type,
+                    str(data.get("resource_type", "runtime")),
+                    str(data.get("resource_id", "unknown")),
+                    data.get("run_id") if isinstance(data.get("run_id"), str) else None,
+                    data.get("trace_id") if isinstance(data.get("trace_id"), str) else None,
+                    str(data.get("outcome", "success")),
+                    Jsonb(metadata),
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def delete_user_history(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        reason: str | None = None,
+    ) -> HistoryDeletionResponse:
+        """Tombstone user-visible history while preserving audit/event evidence."""
+
+        now = datetime.now(UTC)
+        audit_event_id = f"history_delete_{now.timestamp_ns()}"
+        with self._connect() as conn:
+            hold = conn.execute(
+                """
+                SELECT id FROM runtime_legal_holds
+                WHERE org_id = %s
+                  AND released_at IS NULL
+                  AND (
+                    (scope = 'org' AND resource_id = %s)
+                    OR (scope = 'user' AND user_id = %s)
+                    OR (
+                        scope = 'conversation'
+                        AND resource_id IN (
+                            SELECT id FROM agent_conversations WHERE org_id = %s AND user_id = %s
+                        )
+                    )
+                  )
+                LIMIT 1
+                """,
+                (org_id, org_id, user_id, org_id, user_id),
+            ).fetchone()
+            if hold is not None:
+                raise RuntimeApiError(
+                    RuntimeErrorCode.VALIDATION_ERROR,
+                    "Deletion is blocked by an active legal hold.",
+                    http_status=status.HTTP_409_CONFLICT,
+                    retryable=False,
+                )
+            conversations_archived = conn.execute(
+                """
+                UPDATE agent_conversations
+                SET status = 'archived', archived_at = COALESCE(archived_at, %s), updated_at = %s
+                WHERE org_id = %s AND user_id = %s AND status <> 'archived'
+                """,
+                (now, now, org_id, user_id),
+            ).rowcount
+            messages_tombstoned = conn.execute(
+                """
+                UPDATE agent_messages
+                SET status = 'deleted', deleted_at = COALESCE(deleted_at, %s),
+                    content_text = '[deleted by user request]'
+                WHERE org_id = %s
+                  AND conversation_id IN (
+                    SELECT id FROM agent_conversations WHERE org_id = %s AND user_id = %s
+                  )
+                  AND deleted_at IS NULL
+                """,
+                (now, org_id, org_id, user_id),
+            ).rowcount
+            runs_cancelled = conn.execute(
+                """
+                UPDATE agent_runs
+                SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, %s)
+                WHERE org_id = %s AND user_id = %s
+                  AND status NOT IN ('cancelled', 'completed', 'failed', 'timed_out')
+                """,
+                (now, org_id, user_id),
+            ).rowcount
+            events_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM runtime_events e
+                JOIN agent_runs r ON r.id = e.run_id
+                WHERE e.org_id = %s AND r.user_id = %s
+                """,
+                (org_id, user_id),
+            ).fetchone()
+            events_retained = int(events_row["count"]) if events_row is not None else 0
+            conn.execute(
+                """
+                INSERT INTO runtime_audit_log (
+                    id, org_id, user_id, actor_type, action, resource_type, resource_id,
+                    run_id, trace_id, outcome, metadata_json_redacted, created_at
+                )
+                VALUES (%s, %s, %s, 'user', 'user_history_deleted', 'user_history', %s,
+                        NULL, NULL, 'success', %s, %s)
+                """,
+                (
+                    audit_event_id,
+                    org_id,
+                    user_id,
+                    user_id,
+                    Jsonb(
+                        {
+                            "reason": reason,
+                            "conversations_archived": conversations_archived,
+                            "messages_tombstoned": messages_tombstoned,
+                            "runs_cancelled": runs_cancelled,
+                            "events_retained": events_retained,
+                        }
+                    ),
+                    now,
+                ),
+            )
+            evidence_id = f"deletion_evidence_{now.timestamp_ns()}"
+            conn.execute(
+                """
+                INSERT INTO runtime_deletion_evidence (
+                    id, org_id, user_id, request_type, reason, conversations_archived,
+                    messages_tombstoned, runs_cancelled, events_retained, audit_event_id,
+                    created_at
+                )
+                VALUES (%s, %s, %s, 'user_history_delete', %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    evidence_id,
+                    org_id,
+                    user_id,
+                    reason,
+                    conversations_archived,
+                    messages_tombstoned,
+                    runs_cancelled,
+                    events_retained,
+                    audit_event_id,
+                    now,
+                ),
+            )
+            conn.commit()
+        return HistoryDeletionResponse(
+            org_id=org_id,
+            user_id=user_id,
+            conversations_archived=conversations_archived,
+            messages_tombstoned=messages_tombstoned,
+            runs_cancelled=runs_cancelled,
+            events_retained=events_retained,
+            audit_event_id=audit_event_id,
+        )
 
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number."""

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.service import RuntimeApiService
+from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -16,7 +17,9 @@ from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
     CreateRunResponse,
+    HistoryDeletionResponse,
     MessageListResponse,
+    RuntimeRequestContext,
     RuntimeEventReplayResponse,
     RunStatusResponse,
 )
@@ -32,6 +35,9 @@ class RuntimeApiRoutes:
         request: Request,
         payload: CreateConversationRequest,
     ) -> ConversationResponse:
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        if identity is not None:
+            payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
         return cls.service(request).create_conversation(payload)
 
     @classmethod
@@ -39,9 +45,10 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         conversation_id: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).get_conversation(
             org_id=org_id,
             user_id=user_id,
@@ -53,11 +60,12 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         conversation_id: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
         limit: int = Query(50, ge=1, le=200),
         include_deleted: bool = False,
     ) -> MessageListResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).list_messages(
             org_id=org_id,
             user_id=user_id,
@@ -68,6 +76,21 @@ class RuntimeApiRoutes:
 
     @classmethod
     def create_run(cls, request: Request, payload: CreateRunRequest) -> CreateRunResponse:
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        if identity is not None:
+            if payload.runtime_context is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "runtime_context is server-owned")
+            payload = payload.model_copy(
+                update={
+                    "org_id": identity.org_id,
+                    "user_id": identity.user_id,
+                    "request_context": RuntimeRequestContext(
+                        roles=identity.roles,
+                        permission_scopes=identity.permission_scopes,
+                        connector_scopes=identity.connector_scopes or {},
+                    ),
+                }
+            )
         return cls.service(request).create_run(payload)
 
     @classmethod
@@ -75,9 +98,10 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
     ) -> RunStatusResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).get_run(org_id=org_id, user_id=user_id, run_id=run_id)
 
     @classmethod
@@ -85,10 +109,11 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
     ) -> RuntimeEventReplayResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).replay_events(
             org_id=org_id,
             user_id=user_id,
@@ -101,10 +126,11 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
     ) -> StreamingResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return StreamingResponse(
             RuntimeSseAdapter.stream(
                 service=cls.service(request),
@@ -123,9 +149,11 @@ class RuntimeApiRoutes:
         request: Request,
         run_id: str,
         payload: CancelRunRequest,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
     ) -> CancelRunResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        payload = payload.model_copy(update={"requested_by_user_id": user_id})
         return cls.service(request).cancel_run(
             org_id=org_id,
             user_id=user_id,
@@ -139,8 +167,14 @@ class RuntimeApiRoutes:
         request: Request,
         approval_id: str,
         payload: ApprovalDecisionRequest,
-        org_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
     ) -> ApprovalDecisionResponse:
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        if identity is not None:
+            org_id = identity.org_id
+            payload = payload.model_copy(update={"decided_by_user_id": identity.user_id})
+        if org_id is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id is required")
         return cls.service(request).record_approval_decision(
             org_id=org_id,
             approval_id=approval_id,
@@ -148,10 +182,36 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    def delete_user_history(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        reason: str | None = Query(None),
+    ) -> HistoryDeletionResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return cls.service(request).delete_user_history(org_id=org_id, user_id=user_id, reason=reason)
+
+    @classmethod
     def service(cls, request: Request) -> RuntimeApiService:
         """Return the configured application service."""
 
         return request.app.state.runtime_api_service
+
+    @classmethod
+    def scoped_identity(
+        cls,
+        request: Request,
+        *,
+        org_id: str | None,
+        user_id: str | None,
+    ) -> tuple[str, str]:
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        if identity is not None:
+            return identity.org_id, identity.user_id
+        if org_id is None or user_id is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id and user_id are required")
+        return org_id, user_id
 
 
 class RuntimeApiRouter:
@@ -221,5 +281,12 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=ApprovalDecisionResponse,
             name=Keys.RouteName.APPROVAL_DECISION,
+        )
+        router.add_api_route(
+            "/history",
+            RuntimeApiRoutes.delete_user_history,
+            methods=["DELETE"],
+            response_model=HistoryDeletionResponse,
+            name="delete_user_history",
         )
         return router

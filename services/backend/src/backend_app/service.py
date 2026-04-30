@@ -41,7 +41,7 @@ from backend_app.contracts import (
     normalize_skill_slug,
 )
 from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
-from backend_app.token_vault import LocalTokenVault, TokenVault
+from backend_app.token_vault import TokenVault, TokenVaultFactory
 
 
 class McpRegistryService:
@@ -55,7 +55,7 @@ class McpRegistryService:
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or InMemoryMcpStore()
-        self.token_vault = token_vault or LocalTokenVault()
+        self.token_vault = token_vault or TokenVaultFactory.create()
         self.auth_session_ttl = auth_session_ttl
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:

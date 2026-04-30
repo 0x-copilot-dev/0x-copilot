@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
+from backend_app.auth import BackendServiceAuthenticator
 from backend_app.contracts import (
     CreateMcpServerRequest,
     CreateSkillRequest,
@@ -35,38 +36,46 @@ def create_app(
     app.state.skill_service = skill_service or SkillRegistryService()
 
     @app.post("/v1/mcp/servers", response_model=McpServerResponse)
-    def create_server(payload: CreateMcpServerRequest) -> McpServerResponse:
+    def create_server(request: Request, payload: CreateMcpServerRequest) -> McpServerResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=payload.org_id, user_id=payload.user_id)
+        payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
         return mcp_service(app).create_server(payload)
 
     @app.get("/v1/mcp/servers", response_model=McpServerListResponse)
     def list_servers(
+        request: Request,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> McpServerListResponse:
-        return mcp_service(app).list_servers(org_id=org_id, user_id=user_id)
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return mcp_service(app).list_servers(org_id=identity.org_id, user_id=identity.user_id)
 
     @app.delete("/v1/mcp/servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_server(
+        request: Request,
         server_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> Response:
-        deleted = mcp_service(app).delete_server(org_id=org_id, user_id=user_id, server_id=server_id)
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
+        deleted = mcp_service(app).delete_server(org_id=identity.org_id, user_id=identity.user_id, server_id=server_id)
         if not deleted:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.patch("/v1/mcp/servers/{server_id}", response_model=McpServerResponse)
     def update_server(
+        request: Request,
         server_id: str,
         payload: UpdateMcpServerRequest,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> McpServerResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return mcp_service(app).update_server(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 server_id=server_id,
                 request=payload,
             )
@@ -74,7 +83,9 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.post("/v1/mcp/servers/{server_id}/auth/start", response_model=McpAuthStartResponse)
-    def start_auth(server_id: str, payload: McpAuthStartRequest) -> McpAuthStartResponse:
+    def start_auth(request: Request, server_id: str, payload: McpAuthStartRequest) -> McpAuthStartResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=payload.org_id, user_id=payload.user_id)
+        payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
         try:
             return mcp_service(app).start_auth(server_id=server_id, request=payload)
         except ValueError as exc:
@@ -82,12 +93,14 @@ def create_app(
 
     @app.post("/v1/mcp/servers/{server_id}/auth/skip", response_model=McpServerResponse)
     def skip_auth(
+        request: Request,
         server_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> McpServerResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
-            return mcp_service(app).skip_auth(org_id=org_id, user_id=user_id, server_id=server_id)
+            return mcp_service(app).skip_auth(org_id=identity.org_id, user_id=identity.user_id, server_id=server_id)
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
@@ -100,16 +113,19 @@ def create_app(
 
     @app.get("/internal/v1/mcp/cards", response_model=InternalMcpServerListResponse)
     def internal_cards(
+        request: Request,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalMcpServerListResponse:
+        BackendServiceAuthenticator.require_service_request(request)
         return mcp_service(app).list_internal_cards(org_id=org_id, user_id=user_id)
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/auth/start",
         response_model=McpAuthStartResponse,
     )
-    def internal_start_auth(server_id: str, payload: InternalMcpAuthRequest) -> McpAuthStartResponse:
+    def internal_start_auth(request: Request, server_id: str, payload: InternalMcpAuthRequest) -> McpAuthStartResponse:
+        BackendServiceAuthenticator.require_service_request(request)
         try:
             return mcp_service(app).start_auth(server_id=server_id, request=payload)
         except ValueError as exc:
@@ -120,10 +136,12 @@ def create_app(
         response_model=InternalMcpClientSession,
     )
     def internal_client_session(
+        request: Request,
         server_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalMcpClientSession:
+        BackendServiceAuthenticator.require_service_request(request)
         try:
             return mcp_service(app).create_internal_client_session(
                 org_id=org_id,
@@ -138,11 +156,13 @@ def create_app(
         response_model=McpServerResponse,
     )
     def internal_test_token(
+        request: Request,
         server_id: str,
         payload: OAuthTokenRequest,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> McpServerResponse:
+        BackendServiceAuthenticator.require_service_request(request)
         try:
             return mcp_service(app).upsert_token_for_test(
                 org_id=org_id,
@@ -154,7 +174,9 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.post("/v1/skills", response_model=SkillResponse)
-    def create_skill(payload: CreateSkillRequest) -> SkillResponse:
+    def create_skill(request: Request, payload: CreateSkillRequest) -> SkillResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=payload.org_id, user_id=payload.user_id)
+        payload = payload.model_copy(update={"org_id": identity.org_id, "user_id": identity.user_id})
         try:
             return skills_service(app).create_skill(payload)
         except ValueError as exc:
@@ -162,33 +184,39 @@ def create_app(
 
     @app.get("/v1/skills", response_model=SkillListResponse)
     def list_skills(
+        request: Request,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> SkillListResponse:
-        return skills_service(app).list_skills(org_id=org_id, user_id=user_id)
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return skills_service(app).list_skills(org_id=identity.org_id, user_id=identity.user_id)
 
     @app.get("/v1/skills/{skill_id}", response_model=SkillResponse)
     def get_skill(
+        request: Request,
         skill_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> SkillResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
-            return skills_service(app).get_skill(org_id=org_id, user_id=user_id, skill_id=skill_id)
+            return skills_service(app).get_skill(org_id=identity.org_id, user_id=identity.user_id, skill_id=skill_id)
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.put("/v1/skills/{skill_id}", response_model=SkillResponse)
     def update_skill(
+        request: Request,
         skill_id: str,
         payload: UpdateSkillRequest,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> SkillResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return skills_service(app).update_skill(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 skill_id=skill_id,
                 request=payload,
             )
@@ -197,14 +225,16 @@ def create_app(
 
     @app.delete("/v1/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_skill(
+        request: Request,
         skill_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> Response:
+        identity = BackendServiceAuthenticator.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             deleted = skills_service(app).delete_skill(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 skill_id=skill_id,
             )
         except ValueError as exc:
@@ -215,17 +245,21 @@ def create_app(
 
     @app.get("/internal/v1/skills/cards", response_model=InternalSkillListResponse)
     def internal_skill_cards(
+        request: Request,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillListResponse:
+        BackendServiceAuthenticator.require_service_request(request)
         return skills_service(app).list_internal_cards(org_id=org_id, user_id=user_id)
 
     @app.get("/internal/v1/skills/{skill_id}", response_model=InternalSkillBundle)
     def internal_skill_bundle(
+        request: Request,
         skill_id: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillBundle:
+        BackendServiceAuthenticator.require_service_request(request)
         try:
             return skills_service(app).get_internal_bundle(
                 org_id=org_id,
@@ -237,10 +271,12 @@ def create_app(
 
     @app.get("/internal/v1/skills/by-name/{name}", response_model=InternalSkillBundle)
     def internal_skill_bundle_by_name(
+        request: Request,
         name: str,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> InternalSkillBundle:
+        BackendServiceAuthenticator.require_service_request(request)
         try:
             return skills_service(app).get_internal_bundle_by_name(
                 org_id=org_id,

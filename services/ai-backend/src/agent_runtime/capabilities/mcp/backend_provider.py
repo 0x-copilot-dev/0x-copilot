@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ class BackendMcpProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            headers=BackendMcpServiceAuth.headers(),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -60,6 +62,7 @@ class BackendMcpProvider:
                 "user_id": runtime_context.user_id,
                 "redirect_uri": self.auth_redirect_uri,
             },
+            headers=BackendMcpServiceAuth.headers(),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -108,6 +111,7 @@ class BackendMcpClient:
             response = await client.post(
                 f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
                 params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+                headers=BackendMcpServiceAuth.headers(),
             )
         response.raise_for_status()
         payload = response.json()
@@ -141,3 +145,12 @@ class BackendMcpClient:
         if not isinstance(values, list):
             return ()
         return tuple(item for item in values if isinstance(item, dict))
+
+
+class BackendMcpServiceAuth:
+    """Service-auth header construction for backend MCP calls."""
+
+    @staticmethod
+    def headers() -> dict[str, str]:
+        token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
+        return {"x-enterprise-service-token": token} if token else {}

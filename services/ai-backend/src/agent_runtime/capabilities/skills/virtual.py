@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import os
 from typing import Protocol
 
 import httpx
@@ -62,6 +63,7 @@ class BackendSkillProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            headers=BackendSkillServiceAuth.headers(),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -72,6 +74,7 @@ class BackendSkillProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
+            headers=BackendSkillServiceAuth.headers(),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -175,3 +178,12 @@ class VirtualSkillRegistry:
                 "Runtime context is invalid.",
                 retryable=False,
             ) from exc
+
+
+class BackendSkillServiceAuth:
+    """Service-auth header construction for backend Skill calls."""
+
+    @staticmethod
+    def headers() -> dict[str, str]:
+        token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
+        return {"x-enterprise-service-token": token} if token else {}
