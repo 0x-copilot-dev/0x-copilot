@@ -17,6 +17,7 @@ import { DEFAULT_IDENTITY } from "../../api/config";
 import { ConnectorConsentCard, ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import { applyRuntimeEvent, messagesToChatItems, optimisticUserMessage, type ChatItem } from "./chatModel";
+import { RunActivityPanel } from "./RunActivityPanel";
 
 export function ChatScreen({
   connectors,
@@ -151,6 +152,9 @@ export function ChatScreen({
           {item.text}
         </ChatBubble>
       );
+    }
+    if (item.kind === "run-activity") {
+      return <RunActivityPanel key={item.id} activity={item.activity} />;
     }
     if (item.kind === "mcp-auth") {
       return (
