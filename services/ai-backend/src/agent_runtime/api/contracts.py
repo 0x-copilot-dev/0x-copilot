@@ -369,9 +369,13 @@ class RuntimeEventPresentationProjector:
             return configured
         tool_name = cls._text(payload.get(Keys.Field.TOOL_NAME))
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
-            return Messages.Event.tool_started_title(tool_name or Messages.Event.TOOL_CALL)
+            if tool_name is None:
+                return Messages.Event.TOOL_CALL
+            return Messages.Event.tool_started_title(tool_name)
         if event_type is RuntimeApiEventType.TOOL_CALL_COMPLETED:
-            return Messages.Event.tool_completed_title(tool_name or Messages.Event.TOOL_CALL)
+            if tool_name is None:
+                return Messages.Event.TOOL_CALL
+            return Messages.Event.tool_completed_title(tool_name)
         subagent_name = cls._text(payload.get(Keys.Field.SUBAGENT_NAME))
         if event_type in {
             RuntimeApiEventType.SUBAGENT_STARTED,
@@ -379,7 +383,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.SUBAGENT_COMPLETED,
             RuntimeApiEventType.SUBAGENT_UPDATE,
         }:
-            return Messages.Event.subagent_title(subagent_name or Messages.Event.SUBAGENT)
+            if subagent_name is None:
+                return Messages.Event.SUBAGENT
+            return Messages.Event.subagent_title(subagent_name)
         if event_type in {
             RuntimeApiEventType.REASONING_SUMMARY,
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,

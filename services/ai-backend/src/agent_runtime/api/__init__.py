@@ -13,10 +13,13 @@ from agent_runtime.api.contracts import (
     CreateRunResponse,
     MessageListResponse,
     RuntimeApiEventType,
+    RuntimeEventRedactionState,
     RuntimeEventEnvelope,
     RuntimeEventReplayResponse,
+    RuntimeEventVisibility,
     RunStatusResponse,
 )
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 
@@ -34,8 +37,11 @@ __all__ = [
     "MessageListResponse",
     "RuntimeApiAppFactory",
     "RuntimeApiEventType",
+    "RuntimeEventRedactionState",
     "RuntimeApiService",
     "RuntimeEventEnvelope",
+    "RuntimeEventProducer",
     "RuntimeEventReplayResponse",
+    "RuntimeEventVisibility",
     "RunStatusResponse",
 ]

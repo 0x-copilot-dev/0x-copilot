@@ -24,13 +24,13 @@ from agent_runtime.api.contracts import (
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
-    RuntimeEventDraft,
     RuntimeEventReplayResponse,
     RuntimeRunCommand,
     RunRecord,
     RunStatusResponse,
 )
 from agent_runtime.api.errors import RuntimeApiError
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 
 
@@ -56,6 +56,10 @@ class RuntimeApiService:
         self.persistence = persistence
         self.event_store = event_store
         self.queue = queue
+        self.event_producer = RuntimeEventProducer(
+            persistence=persistence,
+            event_store=event_store,
+        )
 
     def create_conversation(self, request: CreateConversationRequest) -> ConversationResponse:
         """Create or idempotently return a conversation."""
@@ -120,19 +124,11 @@ class RuntimeApiService:
             conversation=conversation,
         )
         if created:
-            event = self.event_store.append_event(
-                RuntimeEventDraft(
-                    run_id=run.run_id,
-                    conversation_id=run.conversation_id,
-                    source=StreamEventSource.RUNTIME,
-                    event_type=RuntimeApiEventType.RUN_QUEUED,
-                    trace_id=run.trace_id,
-                    payload={Keys.Payload.MESSAGE: Messages.Event.RUN_QUEUED},
-                )
-            )
-            self.persistence.set_run_latest_sequence(
-                run_id=run.run_id,
-                latest_sequence_no=event.sequence_no,
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.RUN_QUEUED,
+                payload={Keys.Payload.MESSAGE: Messages.Event.RUN_QUEUED},
             )
             self.queue.enqueue_run(
                 RuntimeRunCommand(
@@ -212,23 +208,16 @@ class RuntimeApiService:
                 run_id=run.run_id,
                 status=AgentRunStatus.CANCELLING,
             )
-            event = self.event_store.append_event(
-                RuntimeEventDraft(
-                    run_id=run.run_id,
-                    conversation_id=run.conversation_id,
-                    source=StreamEventSource.RUNTIME,
-                    event_type=RuntimeApiEventType.RUN_CANCELLING,
-                    trace_id=run.trace_id,
-                    payload={
-                        Keys.Payload.MESSAGE: Messages.Event.RUN_CANCELLING,
-                        Keys.Payload.REASON: request.reason,
-                    },
-                )
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.RUN_CANCELLING,
+                payload={
+                    Keys.Payload.MESSAGE: Messages.Event.RUN_CANCELLING,
+                    Keys.Payload.REASON: request.reason,
+                },
             )
-            run = self.persistence.set_run_latest_sequence(
-                run_id=run.run_id,
-                latest_sequence_no=event.sequence_no,
-            )
+            run = self.persistence.get_run(org_id=org_id, run_id=run.run_id) or run
             self.queue.enqueue_cancel(
                 RuntimeCancelCommand(
                     run_id=run.run_id,
@@ -285,27 +274,20 @@ class RuntimeApiService:
                 reason=request.reason,
             )
         )
-        event = self.event_store.append_event(
-            RuntimeEventDraft(
-                run_id=record.run_id,
-                conversation_id=record.conversation_id,
-                source=StreamEventSource.RUNTIME,
-                event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
-                trace_id=self._run_for_scope(
-                    org_id=record.org_id,
-                    user_id=record.user_id,
-                    run_id=record.run_id,
-                ).trace_id,
-                payload={
-                    Keys.Field.APPROVAL_ID: record.approval_id,
-                    Keys.Field.STATUS: record.status,
-                    Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
-                },
-            )
-        )
-        self.persistence.set_run_latest_sequence(
+        run = self._run_for_scope(
+            org_id=record.org_id,
+            user_id=record.user_id,
             run_id=record.run_id,
-            latest_sequence_no=event.sequence_no,
+        )
+        self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
+            payload={
+                Keys.Field.APPROVAL_ID: record.approval_id,
+                Keys.Field.STATUS: record.status,
+                Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+            },
         )
         self.queue.enqueue_approval_resolved(
             RuntimeApprovalResolvedCommand(

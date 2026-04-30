@@ -6,7 +6,12 @@ from collections.abc import AsyncIterator
 
 from agent_runtime.agent.contracts import StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
-from agent_runtime.api.contracts import AgentRunStatus, RuntimeApiEventType, RuntimeEventEnvelope
+from agent_runtime.api.contracts import (
+    AgentRunStatus,
+    RuntimeApiEventType,
+    RuntimeEventEnvelope,
+    RuntimeEventPresentationProjector,
+)
 from agent_runtime.api.service import RuntimeApiService
 
 
@@ -40,6 +45,15 @@ class RuntimeSseAdapter:
             yield cls.format_event(event)
         if not yielded and replay.run_status not in cls.TERMINAL_RUN_STATUSES:
             run = service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
+            payload = {Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT}
+            metadata = {"transient": True}
+            presentation = RuntimeEventPresentationProjector.presentation_fields(
+                event_type=RuntimeApiEventType.HEARTBEAT,
+                source=StreamEventSource.SYSTEM,
+                parent_task_id=None,
+                payload=payload,
+                metadata=metadata,
+            )
             yield cls.format_event(
                 RuntimeEventEnvelope(
                     run_id=run.run_id,
@@ -48,8 +62,9 @@ class RuntimeSseAdapter:
                     source=StreamEventSource.SYSTEM,
                     event_type=RuntimeApiEventType.HEARTBEAT,
                     trace_id=run.trace_id,
-                    payload={Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT},
-                    metadata={"transient": True},
+                    payload=payload,
+                    metadata=metadata,
+                    **presentation,
                 )
             )
 
