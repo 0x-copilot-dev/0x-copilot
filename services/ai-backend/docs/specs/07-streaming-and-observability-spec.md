@@ -6,12 +6,12 @@ Normalize Deep Agents and LangGraph stream output into stable product events for
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `agent/streaming.py`: event normalizer and router.
 - `observability/tracing.py`: trace IDs and correlation helpers.
 - `observability/redaction.py`: payload redaction helpers.
-- `app/streams.py`: future API streaming adapter.
+- Future API streaming adapter: product-facing transport outside the core normalizer.
 
 Use LangGraph v2 stream format with `subgraphs=True` so subagent events are visible.
 

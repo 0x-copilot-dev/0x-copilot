@@ -4,7 +4,8 @@ Use this checklist before opening any future implementation PR for the AI backen
 
 ## Required Reading
 
-- The feature PRD in `docs/prds/`.
+- `docs/architecture/system-overview.md`.
+- `docs/architecture/data-flow.md`.
 - The matching technical spec in `docs/specs/`.
 - `docs/testing/unit-testing-strategy.md`.
 - `docs/testing/edge-case-matrix.md`.
@@ -14,7 +15,7 @@ Use this checklist before opening any future implementation PR for the AI backen
 
 Every implementation PR must state:
 
-- Which PRD/spec it implements.
+- Which architecture/spec behavior it implements or changes.
 - Which Pydantic contracts were added or changed.
 - Which edge cases from the matrix are covered.
 - Which unit tests prove permission, validation, and failure behavior.

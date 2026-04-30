@@ -1,4 +1,4 @@
-# PRD: Enterprise AI Work Surface Vision
+# Enterprise AI Work Surface Vision
 
 ## Problem
 
@@ -20,7 +20,7 @@ Build an enterprise AI work surface that can search, reason, delegate, and act a
 - Trust through transparency: stream progress, tools, subagents, and source references.
 - Permission-first: never expose data or actions beyond the user's scopes.
 - Context discipline: summarize, offload, and delegate instead of stuffing prompts.
-- Spec-first engineering: every feature must have PRD, spec, typed contracts, and tests.
+- Contract-first engineering: every runtime feature must have architecture context, typed contracts, and deterministic tests.
 
 ## Success Metrics
 
@@ -33,12 +33,12 @@ Build an enterprise AI work surface that can search, reason, delegate, and act a
 ## Non-Goals
 
 - Replacing Slack, Google Workspace, Atlassian, or internal systems.
-- Building production connector auth in the PRD/spec phase.
+- Building production connector auth in the runtime foundation phase.
 - Allowing untyped model output to trigger side effects.
 
 ## Acceptance Criteria
 
-- PRDs/specs cover runtime, tools, skills, MCP, context/memory, subagents, and streaming.
+- Architecture and specs cover runtime, tools, skills, MCP, context/memory, subagents, and streaming.
 - Specs define Pydantic contracts and unit testing requirements.
 - Future implementation agents have rules for architecture, testing, and typed boundaries.
 

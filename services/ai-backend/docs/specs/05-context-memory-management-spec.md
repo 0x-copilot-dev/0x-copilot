@@ -6,7 +6,7 @@ Use Deep Agents built-in context compression and filesystem offloading while def
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `memory/backends.py`: constructs `CompositeBackend` routes.
 - `memory/policy.py`: read/write policy for memory paths.

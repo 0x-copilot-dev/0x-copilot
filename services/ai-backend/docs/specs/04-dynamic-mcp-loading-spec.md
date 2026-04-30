@@ -6,7 +6,7 @@ Allow the agent to discover MCP server cards and load selected MCP tools/resourc
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `mcp/cards.py`: server card contracts.
 - `mcp/registry.py`: list and lookup MCP server cards.

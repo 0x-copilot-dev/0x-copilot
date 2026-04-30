@@ -2,7 +2,7 @@
 
 Python backend workspace for the agent runtime layer.
 
-This backend is currently in a spec-first phase. Future implementation agents must read the relevant PRD, technical spec, testing guidance, and engineering rules before writing code.
+This backend now contains the implemented agent runtime foundation for dynamic tools, skills, MCP loading, context and memory management, subagents, streaming, and typed contracts. Future implementation agents should read the architecture docs, relevant technical spec, testing guidance, and engineering rules before changing runtime behavior.
 
 ## Workspace Context
 
@@ -50,17 +50,17 @@ The long-term product is closer to a trusted operating layer for enterprise work
 - Pydantic for typed contracts and validation at IO boundaries
 - Vector search and retrieval components for enterprise knowledge search
 
-## Documentation-First Workflow
+## Documentation Workflow
 
 Start here:
 
-- `docs/README.md` for the documentation index and implementation handoff workflow
-- `docs/prds/` for product requirements
+- `docs/README.md` for the documentation index
+- `docs/architecture/` for current architecture, runtime contracts, package structure, and data flows
 - `docs/specs/` for technical architecture and typed contracts
 - `docs/testing/` for unit test strategy, edge cases, and fixtures
 - `docs/rules/` for engineering rules every agent must follow
 
-Do not implement a backend feature until its PRD and technical spec are accepted. Each feature implementation must include focused unit tests, edge-case coverage, and Pydantic contracts where data crosses runtime, tool, MCP, memory, or subagent boundaries.
+Each feature implementation must include focused unit tests, edge-case coverage, and Pydantic contracts where data crosses runtime, tool, MCP, memory, subagent, or streaming boundaries.
 
 ## Repo Rules
 
@@ -71,7 +71,7 @@ Rules for future agents live in two places:
 
 Core rules:
 
-- Spec first: read `docs/README.md`, the relevant PRD, the matching technical spec, testing guidance, and rule docs before implementation.
+- Architecture first: read `docs/README.md`, the relevant architecture docs, matching technical spec, testing guidance, and rule docs before implementation.
 - Pydantic first: validate runtime context, tool specs, MCP descriptors, memory scopes, subagent tasks/results, and stream events with typed contracts.
 - Tests required: every feature needs focused unit tests, malformed-input tests, permission-denial tests, external-failure tests, and edge-case coverage.
 - Architecture boundaries matter: keep orchestration separate from connector side effects; depend on protocols and ports, not vendor SDKs.
@@ -106,5 +106,5 @@ Run tests with the same service-local environment:
 
 ## Intended Direction
 
-This backend will host the AI orchestration layer for an enterprise work surface: one place connected to Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise knowledge. The first shipped artifacts are PRDs and specs so later implementation agents can build the runtime deliberately rather than improvising architecture.
+This backend hosts the AI orchestration layer for an enterprise work surface: one place connected through future Slack, Google Workspace, Atlassian, internal API, MCP, and enterprise knowledge adapters. The runtime currently provides the typed harness and fake-driven tests needed to add those adapters deliberately.
 

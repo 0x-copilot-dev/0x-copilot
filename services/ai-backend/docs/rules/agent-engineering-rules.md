@@ -1,8 +1,8 @@
 # Agent Engineering Rules
 
-## Spec-First Workflow
+## Architecture-First Workflow
 
-- Read the relevant PRD and technical spec before writing code.
+- Read the current architecture docs and relevant technical spec before writing code.
 - Do not implement a feature whose spec lacks Pydantic contracts and unit test requirements.
 - Keep implementation changes scoped to the feature being built.
 - Update the matching spec when implementation reveals a real contract or edge-case change.
@@ -17,7 +17,7 @@
 
 ## Review Checklist
 
-- Does the implementation match the PRD acceptance criteria?
+- Does the implementation match the architecture and spec contract?
 - Are all external inputs parsed into Pydantic contracts?
 - Are permission checks applied before capabilities are visible to the model?
 - Are errors typed and safe to show?

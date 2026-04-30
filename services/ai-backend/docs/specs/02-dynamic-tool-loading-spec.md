@@ -6,13 +6,13 @@ Let the agent reason over compact tool cards and load full tool specs only when 
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `tools/cards.py`: `ToolCard` definitions and validation helpers.
 - `tools/registry.py`: index and lookup interface.
 - `tools/loader.py`: resolves cards to full specs.
 - `tools/builtin/load_tool.py`: LangChain tool exposed to the agent.
-- `connectors/*`: concrete tool providers behind registry ports.
+- Future connector packages: concrete tool providers behind registry ports.
 
 The registry returns cards only after permission filtering. The loader rechecks permissions before returning a full spec.
 

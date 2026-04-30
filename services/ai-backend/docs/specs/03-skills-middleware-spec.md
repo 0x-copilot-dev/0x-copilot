@@ -6,7 +6,7 @@ Use Deep Agents skills and Agent Skills-compatible `SKILL.md` bundles for large 
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `skills/sources.py`: configured skill source paths.
 - `skills/manifest.py`: optional product-side manifest parsing.

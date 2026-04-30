@@ -6,7 +6,7 @@ Define the Deep Agents runtime foundation for the `agent_runtime` package. This 
 
 ## Architecture
 
-Future modules:
+Implemented modules:
 
 - `agent/factory.py`: builds the `create_deep_agent` runtime.
 - `agent/graph.py`: exports graph objects for `langgraph.json`.

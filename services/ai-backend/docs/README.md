@@ -1,6 +1,6 @@
 # AI Backend Docs
 
-This directory is the implementation handoff for the enterprise AI backend. It is intentionally documentation-first: agents should not write feature code until they have read the relevant PRD, technical spec, testing guidance, and rules.
+This directory documents the current enterprise AI backend runtime. The seven implementation PRDs have been completed and removed; the technical specs, architecture docs, testing guidance, and rules are now the source of truth for future runtime work.
 
 ## Workspace Context
 
@@ -19,27 +19,27 @@ The AI backend should expose contracts to `backend-facade`; frontend and native 
 
 1. Workspace topology and service boundaries in `../../../docs/architecture/`
 2. `architecture/system-overview.md`
-3. The relevant PRD in `prds/`
+3. `architecture/data-flow.md`
 4. The matching technical spec in `specs/`
 5. `testing/unit-testing-strategy.md` and `testing/edge-case-matrix.md`
 6. The relevant rule docs in `rules/`
 
 ## Feature Map
 
-| Feature | PRD | Spec |
+| Feature | Current docs | Spec |
 | --- | --- | --- |
-| Product vision | `prds/00-product-vision.md` | `architecture/system-overview.md` |
-| Runtime foundation | `prds/01-runtime-foundation.md` | `specs/01-runtime-foundation-spec.md` |
-| Dynamic tool loading | `prds/02-dynamic-tool-loading.md` | `specs/02-dynamic-tool-loading-spec.md` |
-| Skills middleware | `prds/03-skills-middleware.md` | `specs/03-skills-middleware-spec.md` |
-| Dynamic MCP loading | `prds/04-dynamic-mcp-loading.md` | `specs/04-dynamic-mcp-loading-spec.md` |
-| Context and memory | `prds/05-context-memory-management.md` | `specs/05-context-memory-management-spec.md` |
-| Subagents and async agents | `prds/06-subagents-and-async-agents.md` | `specs/06-subagents-and-async-agents-spec.md` |
-| Streaming and observability | `prds/07-streaming-and-observability.md` | `specs/07-streaming-and-observability-spec.md` |
+| Product vision | `prds/00-product-vision.md`, `architecture/system-overview.md` | `architecture/runtime-contracts.md` |
+| Runtime foundation | `architecture/system-overview.md`, `architecture/package-structure.md` | `specs/01-runtime-foundation-spec.md` |
+| Dynamic tool loading | `architecture/data-flow.md` | `specs/02-dynamic-tool-loading-spec.md` |
+| Skills middleware | `architecture/data-flow.md` | `specs/03-skills-middleware-spec.md` |
+| Dynamic MCP loading | `architecture/data-flow.md` | `specs/04-dynamic-mcp-loading-spec.md` |
+| Context and memory | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/05-context-memory-management-spec.md` |
+| Subagents and async agents | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/06-subagents-and-async-agents-spec.md` |
+| Streaming and observability | `architecture/data-flow.md`, `architecture/runtime-contracts.md` | `specs/07-streaming-and-observability-spec.md` |
 
-## Definition of Ready
+## Definition of Ready For New Runtime Work
 
-A feature is ready for implementation when its PRD and spec include:
+A future feature is ready for implementation when its architecture note or spec includes:
 
 - User problem, goals, non-goals, and acceptance criteria.
 - Architecture boundaries and module ownership.
@@ -49,5 +49,5 @@ A feature is ready for implementation when its PRD and spec include:
 
 ## Definition of Done
 
-An implementation PR must include focused unit tests for the contract, registry, middleware, and failure paths it touches. It must prove edge-case handling with deterministic fake tools, fake MCP servers, fake stores, and fake subagent runners rather than relying on external services.
+An implementation PR must include focused unit tests for the contract, registry, middleware, and failure paths it touches. It must prove edge-case handling with deterministic fake tools, fake MCP servers, fake stores, fake model builders, fake stream chunks, and fake subagent runners rather than relying on external services.
 

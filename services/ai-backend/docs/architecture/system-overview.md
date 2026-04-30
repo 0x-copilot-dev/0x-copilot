@@ -1,55 +1,80 @@
 # System Overview
 
-## Product Direction
+## Current State
 
-The AI backend powers an enterprise work surface for executives and employees who are not power users or engineers. The system should answer questions, coordinate work, and act across Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise search indexes without exposing users to connector complexity.
+The AI backend is now an implemented Python runtime layer for an enterprise AI work surface. It owns agent orchestration, typed capability discovery, lazy loading, memory policy, subagent delegation, and product-safe stream events. Product APIs still belong in `backend-facade`; durable business state and connector ownership still belong in sibling backend services.
 
-The backend is not just search. It is an agentic orchestration layer that can select capabilities, load deeper instructions, manage context, delegate work, and stream progress in a way that feels trustworthy inside a product UI.
+The runtime does not yet include production Slack, Google Workspace, Atlassian, Jira, or internal API adapters. Those systems are represented by typed tool, MCP, and subagent boundaries that can be satisfied by fakes in unit tests and real adapters later.
 
 ## Runtime Architecture
 
 ```mermaid
 flowchart TD
-  UserRequest[User Request] --> RuntimeContext[Runtime Context]
-  RuntimeContext --> DeepAgentRuntime[Deep Agents Runtime]
-  DeepAgentRuntime --> ToolLoader[Dynamic Tool Loader]
-  DeepAgentRuntime --> SkillSystem[Skills System]
-  DeepAgentRuntime --> McpLoader[Dynamic MCP Loader]
-  DeepAgentRuntime --> ContextMemory[Context and Memory]
-  DeepAgentRuntime --> Subagents[Subagents]
-  DeepAgentRuntime --> StreamRouter[Stream Router]
-  ToolLoader --> EnterpriseConnectors[Enterprise Connectors]
-  McpLoader --> McpServers[MCP Servers]
-  SkillSystem --> SkillStore[Skill Store]
-  ContextMemory --> DurableStore[Durable Store]
-  Subagents --> SubagentResults[Response plus Summary]
-  StreamRouter --> WorkSurfaceUI[Work Surface UI]
+  UserRequest[User Request] --> Facade[backend-facade API]
+  Facade --> RuntimeContext[AgentRuntimeContext]
+  RuntimeContext --> RuntimeFactory[create_agent_runtime]
+  RuntimeFactory --> DeepAgent[Deep Agents Runtime]
+
+  RuntimeFactory --> ToolRegistry[DynamicToolRegistry]
+  RuntimeFactory --> McpRegistry[DynamicMcpRegistry]
+  RuntimeFactory --> SkillRegistry[SkillSourceRegistry]
+  RuntimeFactory --> MemoryFactory[ScopedMemoryBackendFactory]
+  RuntimeFactory --> SubagentCatalog[DynamicSubagentCatalog]
+  RuntimeFactory --> StreamNormalizer[LangGraphStreamNormalizer]
+
+  ToolRegistry --> ToolCards[ToolCard summaries]
+  McpRegistry --> McpCards[McpServerCard summaries]
+  SkillRegistry --> SkillDirs[Agent Skills directories]
+  MemoryFactory --> MemoryRoutes[MemoryRoutePlan]
+  SubagentCatalog --> SubagentDefs[SubagentDefinition summaries]
+
+  DeepAgent --> ToolLoader[ToolLoader]
+  ToolLoader --> LoadedToolSpec[LoadedToolSpec]
+  LoadedToolSpec --> ConnectorAdapters[Future connector adapters]
+
+  DeepAgent --> McpLoader[McpLoader]
+  McpLoader --> McpDescriptors[MCP tools and resources]
+  McpDescriptors --> McpServers[Future MCP servers]
+
+  DeepAgent --> Handoff[SubagentHandoffBuilder]
+  Handoff --> AsyncLifecycle[AsyncSubagentLifecycle]
+  AsyncLifecycle --> SubagentResult[SubagentResult]
+
+  DeepAgent --> ContextManagers[ContextPayloadManager and SummarizationManager]
+  ContextManagers --> MemoryRoutes
+
+  DeepAgent --> RawEvents[LangGraph stream chunks]
+  RawEvents --> StreamNormalizer
+  StreamNormalizer --> StreamEvents[StreamEvent records]
+  StreamEvents --> WorkSurfaceUI[Product UI]
 ```
 
-## Staff-Level Design Tenets
+## Implementation Boundaries
 
-- Put typed boundaries around every untrusted or external surface: user input, connector payloads, MCP descriptors, model outputs, subagent results, memories, and stream events.
-- Use Pydantic models for parse, validate, normalize, and serialize steps. Avoid untyped dictionaries for domain state.
-- Keep orchestration separate from side effects. Agent runtime modules decide what should happen; connector modules perform external IO.
-- Prefer explicit invariants over defensive sprawl. Invalid state should fail early with typed errors.
-- Use dependency inversion for registries, stores, tool loaders, and subagent runners so tests can use fakes.
-- Apply DRY only when it removes meaningful duplication. Do not force a shared abstraction across features that evolve differently.
-- Design interfaces so implementations are substitutable: fake MCP clients, remote MCP clients, local subagents, and remote async subagents should satisfy the same contracts.
+- `agent/` owns runtime construction, runtime context parsing, LangGraph export shape, stream normalization, and typed runtime errors.
+- `tools/` owns compact tool cards, full tool specs, permission checks, lazy full-spec loading, and safe load failures.
+- `skills/` owns Agent Skills-compatible `SKILL.md` manifest parsing, source precedence, directory wiring, and access policy for main agents and subagents.
+- `mcp/` owns MCP server cards, client protocol boundaries, dynamic server load, descriptor validation, collisions, health, auth, timeout, and budget failures.
+- `memory/` owns scoped memory routes, read/write policy, user/org/agent namespaces, token budgets, offloading, summarization fallback, compression events, and optimistic concurrency fakes.
+- `subagents/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
+- `observability/` owns redaction and trace helpers used by stream and compression contracts.
 
-## Primary Feature Areas
+## What Works Today
 
-- Runtime foundation: Deep Agents harness, LangGraph execution, runtime context, model configuration, and dependency injection.
-- Dynamic tool loading: small tool cards first, full LangChain tool definitions only after the model chooses a tool.
-- Skills middleware: Agent Skills-compatible `SKILL.md` folders with progressive disclosure.
-- Dynamic MCP loading: discover MCP servers and expose selected tools/resources at runtime.
-- Context and memory: use Deep Agents offloading and summarization, with scoped durable memory for users, agents, and organizations.
-- Subagents and async agents: delegate heavy work without sending full conversation history.
-- Streaming and observability: normalize LangGraph v2 events for product UI and traces.
+- A request can be converted into an `AgentRuntimeContext` with normalized identity, roles, scopes, model profile, feature flags, and trace ID.
+- `create_agent_runtime` wires injected registries, stores, catalogs, and stream normalizers into a Deep Agents runtime without importing connector SDKs.
+- Tool and MCP listings expose compact, permission-filtered cards first. Full schemas and descriptors load only after explicit selection and permission re-check.
+- Skills are discovered from configured Agent Skills directories and passed to Deep Agents in deterministic precedence order.
+- Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
+- Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
+- LangGraph stream chunks normalize into stable `StreamEvent` contracts with source, type, trace correlation, parent task IDs, and redacted payloads.
+- Unit tests use fake model builders, fake tool providers, fake MCP clients, fake memory stores, fake subagent runners, and fake stream chunks. No tests require live LLMs or external credentials.
 
-## Non-Goals for the Spec Phase
+## Current Non-Goals
 
-- No production Slack, Google Workspace, Atlassian, or internal API integration.
-- No final database choice.
-- No custom replacement for Deep Agents built-in context compression before measuring SDK behavior.
-- No implementation code until PRDs/specs/rules are accepted.
+- No production connector SDK calls in the runtime package.
+- No final product API shape in `services/ai-backend`.
+- No durable production persistence selection.
+- No custom replacement for Deep Agents' native context compression until production behavior is measured.
+- No side-effecting model action without typed parsing, permission checks, and connector-layer implementation.
 

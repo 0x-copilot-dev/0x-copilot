@@ -18,6 +18,12 @@ from agent_runtime.agent.ports import (
     SubagentCatalog,
     ToolRegistry,
 )
+from agent_runtime.observability.constants import Keys as ObservabilityKeys
+from agent_runtime.observability.constants import Messages as ObservabilityMessages
+from agent_runtime.observability.constants import Patterns as ObservabilityPatterns
+from agent_runtime.observability.constants import Values as ObservabilityValues
+from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.skills.sources import SkillSourceConfig
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
@@ -25,6 +31,8 @@ _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SCOPE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?::[a-z0-9][a-z0-9_.-]*)*$")
 
 JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonScalar | dict[str, JsonScalar] | list[JsonScalar]
+JsonObject: TypeAlias = dict[str, JsonValue]
 
 
 class RuntimeContract(BaseModel):
@@ -61,22 +69,32 @@ class RuntimeErrorCode(StrEnum):
 class StreamEventSource(StrEnum):
     """Runtime subsystem that produced a stream event."""
 
-    RUNTIME = "runtime"
-    MODEL = "model"
-    TOOL = "tool"
-    MCP = "mcp"
-    SUBAGENT = "subagent"
-    SYSTEM = "system"
+    MAIN_AGENT = ObservabilityValues.Source.MAIN_AGENT
+    SUBAGENT = ObservabilityValues.Source.SUBAGENT
+    TOOL = ObservabilityValues.Source.TOOL
+    MCP = ObservabilityValues.Source.MCP
+    SUMMARIZATION = ObservabilityValues.Source.SUMMARIZATION
+    SYSTEM = ObservabilityValues.Source.SYSTEM
+    RUNTIME = ObservabilityValues.Source.RUNTIME
+    MODEL = ObservabilityValues.Source.MODEL
 
 
 class StreamEventType(StrEnum):
     """User-safe event types emitted by the runtime."""
 
-    PROGRESS = "progress"
-    TOOL_CALL = "tool_call"
-    SUBAGENT_UPDATE = "subagent_update"
-    ERROR = "error"
-    FINAL = "final"
+    PROGRESS = ObservabilityValues.EventType.PROGRESS
+    TOOL_CALL = ObservabilityValues.EventType.TOOL_CALL
+    TOOL_RESULT = ObservabilityValues.EventType.TOOL_RESULT
+    CUSTOM = ObservabilityValues.EventType.CUSTOM
+    LIFECYCLE = ObservabilityValues.EventType.LIFECYCLE
+    SUBAGENT_UPDATE = ObservabilityValues.EventType.SUBAGENT_UPDATE
+    OBSERVATION = ObservabilityValues.EventType.OBSERVATION
+    ERROR = ObservabilityValues.EventType.ERROR
+    FINAL = ObservabilityValues.EventType.FINAL
+    FINAL_RESPONSE = ObservabilityValues.EventType.FINAL_RESPONSE
+
+
+StreamSource = StreamEventSource
 
 
 class ModelConfig(RuntimeContract):
@@ -254,23 +272,203 @@ class RuntimeErrorEnvelope(RuntimeContract):
         )
 
 
+class ToolCallEvent(RuntimeContract):
+    """Redacted details for a model-requested tool invocation."""
+
+    tool_name: str
+    call_id: str
+    args: JsonObject = Field(default_factory=dict)
+    status: str = ObservabilityValues.Status.PENDING
+
+    @field_validator(ObservabilityKeys.Field.TOOL_NAME)
+    @classmethod
+    def _normalize_tool_name(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_slug(value, ObservabilityKeys.Field.TOOL_NAME)
+
+    @field_validator(ObservabilityKeys.Field.CALL_ID)
+    @classmethod
+    def _normalize_call_id(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.CALL_ID)
+
+    @field_validator(ObservabilityKeys.Field.STATUS)
+    @classmethod
+    def _normalize_status(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_nonempty_string(
+            value,
+            ObservabilityKeys.Field.STATUS,
+        )
+
+    @field_validator(ObservabilityKeys.Field.ARGS, mode="before")
+    @classmethod
+    def _redact_args(cls, value: object) -> JsonObject:
+        return StreamValueNormalizer.redact_json_object(value)
+
+
+class ToolResultEvent(RuntimeContract):
+    """Redacted tool result summary safe to expose in streams."""
+
+    tool_name: str
+    call_id: str
+    status: str = ObservabilityValues.Status.COMPLETED
+    output: JsonObject = Field(default_factory=dict)
+
+    @field_validator(ObservabilityKeys.Field.TOOL_NAME)
+    @classmethod
+    def _normalize_tool_name(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_slug(value, ObservabilityKeys.Field.TOOL_NAME)
+
+    @field_validator(ObservabilityKeys.Field.CALL_ID)
+    @classmethod
+    def _normalize_call_id(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.CALL_ID)
+
+    @field_validator(ObservabilityKeys.Field.STATUS)
+    @classmethod
+    def _normalize_status(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_nonempty_string(
+            value,
+            ObservabilityKeys.Field.STATUS,
+        )
+
+    @field_validator("output", mode="before")
+    @classmethod
+    def _redact_output(cls, value: object) -> JsonObject:
+        return StreamValueNormalizer.redact_json_object(value)
+
+
+class SubagentLifecycleEvent(RuntimeContract):
+    """Subagent lifecycle update correlated to a parent supervisor task."""
+
+    task_id: str
+    subagent_name: str
+    status: str
+    summary: str | None = None
+
+    @field_validator(ObservabilityKeys.Field.TASK_ID)
+    @classmethod
+    def _normalize_task_id(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.TASK_ID)
+
+    @field_validator(ObservabilityKeys.Field.SUBAGENT_NAME)
+    @classmethod
+    def _normalize_subagent_name(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_slug(
+            value,
+            ObservabilityKeys.Field.SUBAGENT_NAME,
+        )
+
+    @field_validator(ObservabilityKeys.Field.STATUS)
+    @classmethod
+    def _normalize_lifecycle_status(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_nonempty_string(
+            value,
+            ObservabilityKeys.Field.STATUS,
+        )
+
+    @field_validator(ObservabilityKeys.Field.SUMMARY)
+    @classmethod
+    def _normalize_optional_summary(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return StreamValueNormalizer.normalize_nonempty_string(
+            value,
+            ObservabilityKeys.Field.SUMMARY,
+        )
+
+
+class ObservationEvent(RuntimeContract):
+    """Trace-correlated metric or diagnostic observation."""
+
+    metric_name: str
+    value: float
+    trace_id: str
+    tags: JsonObject = Field(default_factory=dict)
+
+    @field_validator(ObservabilityKeys.Field.METRIC_NAME)
+    @classmethod
+    def _normalize_metric_name(cls, value: object) -> str:
+        normalized = StreamValueNormalizer.normalize_nonempty_string(
+            value,
+            ObservabilityKeys.Field.METRIC_NAME,
+        ).lower()
+        if not ObservabilityPatterns.METRIC.fullmatch(normalized):
+            msg = ObservabilityMessages.Validation.metric_name(
+                ObservabilityKeys.Field.METRIC_NAME,
+            )
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator(ObservabilityKeys.Field.TRACE_ID)
+    @classmethod
+    def _normalize_trace_id(cls, value: object) -> str:
+        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.TRACE_ID)
+
+    @field_validator(ObservabilityKeys.Field.TAGS, mode="before")
+    @classmethod
+    def _redact_tags(cls, value: object) -> JsonObject:
+        return StreamValueNormalizer.redact_json_object(value)
+
+
 class StreamEvent(RuntimeContract):
     """Normalized, redacted event emitted by the runtime."""
 
+    event_id: str = Field(default_factory=TraceContext.event_id)
     source: StreamEventSource
     event_type: StreamEventType
     trace_id: str
-    payload: Mapping[str, JsonScalar] = Field(default_factory=dict)
+    parent_task_id: str | None = None
+    payload: JsonObject = Field(default_factory=dict)
+    metadata: JsonObject = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    @field_validator("trace_id")
+    @field_validator(ObservabilityKeys.Field.EVENT_ID, ObservabilityKeys.Field.TRACE_ID)
     @classmethod
-    def _normalize_event_trace_id(cls, value: str) -> str:
-        normalized = _normalize_nonempty_string(value, "trace_id")
+    def _normalize_event_id(cls, value: object, info: ValidationInfo) -> str:
+        return StreamValueNormalizer.normalize_id(value, info.field_name)
+
+    @field_validator(ObservabilityKeys.Field.PARENT_TASK_ID)
+    @classmethod
+    def _normalize_parent_task_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return StreamValueNormalizer.normalize_id(value, ObservabilityKeys.Field.PARENT_TASK_ID)
+
+    @field_validator(
+        ObservabilityKeys.Field.PAYLOAD,
+        ObservabilityKeys.Field.METADATA,
+        mode="before",
+    )
+    @classmethod
+    def _redact_json_fields(cls, value: object) -> JsonObject:
+        return StreamValueNormalizer.redact_json_object(value)
+
+
+class StreamValueNormalizer:
+    """Normalization helpers used by streaming Pydantic validators."""
+
+    @classmethod
+    def normalize_id(cls, value: object, field_name: str) -> str:
+        normalized = cls.normalize_nonempty_string(value, field_name)
         if not _ID_PATTERN.fullmatch(normalized):
-            msg = "trace_id contains unsupported characters"
+            msg = f"{field_name} contains unsupported characters"
             raise ValueError(msg)
         return normalized
+
+    @classmethod
+    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
+        return _normalize_nonempty_string(value, field_name)
+
+    @classmethod
+    def normalize_slug(cls, value: object, field_name: str) -> str:
+        normalized = cls.normalize_nonempty_string(value, field_name).lower()
+        if not ObservabilityPatterns.SLUG.fullmatch(normalized):
+            msg = f"{field_name} must be a stable slug"
+            raise ValueError(msg)
+        return normalized
+
+    @classmethod
+    def redact_json_object(cls, value: object) -> JsonObject:
+        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
 
 
 def _normalize_nonempty_string(value: object, field_name: str) -> str:
