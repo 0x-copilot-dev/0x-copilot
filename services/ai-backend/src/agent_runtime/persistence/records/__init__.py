@@ -1,0 +1,74 @@
+"""Durable persistence records grouped by aggregate."""
+
+from agent_runtime.persistence.records.approvals import PersistenceApprovalRequestRecord
+from agent_runtime.persistence.records.audit import AuditLogRecord
+from agent_runtime.persistence.records.checkpoints import CheckpointRecord
+from agent_runtime.persistence.records.common import (
+    ApprovalRiskClass,
+    AsyncTaskStatus,
+    AuditActorType,
+    AuditOutcome,
+    OutboxStatus,
+    PayloadKind,
+    PayloadRedactionState,
+    PayloadStorageBackend,
+    PersistenceApprovalStatus,
+    PersistenceValueNormalizer,
+    RuntimeMemoryScopeType,
+    ToolInvocationStatus,
+    ToolSideEffectClass,
+)
+from agent_runtime.persistence.records.memory import MemoryItemRecord, MemoryScopeRecord
+from agent_runtime.persistence.records.outbox import ConsumerCursorRecord, OutboxEventRecord, RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records.payloads import ContextPayloadRecord
+from agent_runtime.persistence.records.subagents import AsyncTaskRecord, SubagentResultRecord
+from agent_runtime.persistence.records.telemetry import CapabilitySnapshotRecord, CompressionEventRecord
+from agent_runtime.persistence.records.tools import ToolInvocationRecord
+
+PERSISTENCE_TABLE_RECORDS = (
+    OutboxEventRecord,
+    ConsumerCursorRecord,
+    AsyncTaskRecord,
+    SubagentResultRecord,
+    ToolInvocationRecord,
+    PersistenceApprovalRequestRecord,
+    MemoryScopeRecord,
+    MemoryItemRecord,
+    ContextPayloadRecord,
+    CompressionEventRecord,
+    CapabilitySnapshotRecord,
+    AuditLogRecord,
+    CheckpointRecord,
+)
+
+__all__ = [
+    "OutboxStatus",
+    "AsyncTaskStatus",
+    "ToolInvocationStatus",
+    "ToolSideEffectClass",
+    "ApprovalRiskClass",
+    "PersistenceApprovalStatus",
+    "RuntimeMemoryScopeType",
+    "PayloadKind",
+    "PayloadStorageBackend",
+    "PayloadRedactionState",
+    "AuditActorType",
+    "AuditOutcome",
+    "PersistenceValueNormalizer",
+    "OutboxEventRecord",
+    "RuntimeWorkerClaim",
+    "RuntimeWorkerResult",
+    "ConsumerCursorRecord",
+    "AsyncTaskRecord",
+    "SubagentResultRecord",
+    "ToolInvocationRecord",
+    "PersistenceApprovalRequestRecord",
+    "MemoryScopeRecord",
+    "MemoryItemRecord",
+    "ContextPayloadRecord",
+    "CompressionEventRecord",
+    "CapabilitySnapshotRecord",
+    "AuditLogRecord",
+    "CheckpointRecord",
+    "PERSISTENCE_TABLE_RECORDS",
+]

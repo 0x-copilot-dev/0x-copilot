@@ -2,7 +2,7 @@
 
 ## Current Package
 
-The AI backend uses an installable `src` layout:
+The AI backend uses an installable `src` layout with one runtime-core package and small sibling packages for deployable surfaces and adapters:
 
 ```text
 services/ai-backend/
@@ -10,80 +10,75 @@ services/ai-backend/
   requirements.txt
   src/
     agent_runtime/
-      __init__.py
-      settings.py
-      api/
-        app.py
-        contracts.py
-        errors.py
-        in_memory.py
-        ports.py
-        service.py
-        streaming.py
-      agent/
-        contracts.py
-        errors.py
-        factory.py
-        graph.py
-        middleware/
-        ports.py
-        runtime.py
-        state.py
-        streaming.py
-      memory/
-      mcp/
+      execution/
+      capabilities/
+        tools/
+        mcp/
+        skills/
+      context/
+        memory/
+      delegation/
+        subagents/
+      events/
+        normalization/
+        contracts/
+        projection/
       observability/
       persistence/
-        postgres/
-      skills/
-      subagents/
-      tools/
-        builtin/
+        records/
+        schema/
+        ports.py
+      api/
+        # compatibility imports plus runtime producer service/ports/events
+    runtime_api/
+      app.py
+      http/
+      schemas/
+      sse/
+    runtime_adapters/
+      in_memory/
+      postgres/
+      queue/
+    runtime_worker/
+      handlers/
   tests/
     unit/
       agent_runtime/
-        agent/
-        memory/
-        mcp/
-        persistence/
-        skills/
-        subagents/
-        tools/
+      runtime_api/
+      runtime_adapters/
 ```
 
 ## Module Ownership
 
-- `api/`: narrow FastAPI runtime API exception for conversation, run, event replay, streaming, cancellation, and approval endpoints. It must stay thin over persistence, event store, and queue ports.
-- `agent/`: Deep Agents factory, LangGraph graph exports, runtime wiring, stream normalization, dependency ports, and middleware composition.
-- `tools/`: dynamic tool cards, full tool specs, and built-in loader tools. Tools should call connector interfaces, not raw SDKs.
-- `skills/`: local Agent Skills bundles and skill discovery helpers. `SKILL.md` remains the source of truth.
-- `mcp/`: MCP server cards, connection clients, tool/resource discovery, and failure classification.
-- `memory/`: backend routing, scoped memory policy, token budget metrics, and summarization observability.
-- `subagents/`: sync/async subagent definitions, task/result contracts, and handoff policy.
-- `observability/`: redaction, trace, and correlation helpers shared by stream and compression contracts.
-- `persistence/`: durable runtime records, PostgreSQL migration catalog, payload/checkpoint ports, and persistence constants.
-- Future connector implementations should live outside the core runtime contracts and satisfy the existing provider/client/runner ports.
-- Runtime API code stays thin and delegates to runtime services and ports. Product API ownership still belongs in `backend-facade`; the current FastAPI runtime API is the accepted narrow streaming-phase exception.
+- `agent_runtime/`: reusable runtime domain and orchestration core. It owns execution contracts, Deep Agents/LangGraph wiring, capability discovery, context/memory policy, subagent delegation, event normalization, observability helpers, persistence records, and abstract ports.
+- `runtime_api/`: deployable FastAPI surface for conversations, runs, event replay, SSE, cancellation, approvals, safe HTTP errors, and API request/response schemas.
+- `runtime_adapters/`: concrete adapters for tests and future infrastructure, including the deterministic in-memory persistence/event/queue adapter. Future Postgres repositories and queue implementations belong here.
+- `runtime_worker/`: future runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
+
+Compatibility modules remain under older paths such as `agent_runtime.agent.*`, `agent_runtime.tools.*`, and `agent_runtime.api.contracts` so existing imports keep working during the migration. New code should prefer the canonical packages above.
 
 ## Dependency Direction
 
-High-level runtime modules depend on abstract ports and Pydantic contracts. Connector implementations depend on vendor SDKs. Domain contracts must not import connector SDKs.
+High-level runtime modules depend on abstract ports and Pydantic contracts. Deployable API and worker packages compose runtime services with concrete adapters. Connector implementations depend on vendor SDKs; domain contracts must not import connector SDKs.
 
 ```mermaid
 flowchart TD
-  Facade[backend-facade] --> AgentRuntime[Agent Runtime]
+  RuntimeApi[runtime_api] --> AgentRuntime[agent_runtime]
+  RuntimeWorker[runtime_worker] --> AgentRuntime
+  RuntimeApi --> RuntimeAdapters[runtime_adapters]
+  RuntimeWorker --> RuntimeAdapters
   AgentRuntime --> Contracts[Pydantic Contracts]
   AgentRuntime --> Ports[Abstract Ports]
-  Ports --> Connectors[Future Connector Implementations]
-  Ports --> McpClients[MCP Clients]
-  Ports --> Stores[Persistence and Event Stores]
-  Ports --> Runners[Subagent Runners]
+  RuntimeAdapters --> Stores[Persistence Event Queue Adapters]
+  RuntimeAdapters --> Connectors[Future Connector Implementations]
 ```
 
 ## Testing Implication
 
-The package structure must make it possible to unit test core behavior without Slack, Google Workspace, Atlassian, LangSmith, or live MCP servers. Fakes should satisfy the same interfaces as real implementations.
+Unit tests mirror source ownership:
 
-Unit tests mirror source ownership under `tests/unit/agent_runtime/<subpackage>/`.
-Shared fakes and helpers should live in non-test helper modules, while concrete `test_*.py` files contain at most one test class.
+- Runtime-domain behavior stays under `tests/unit/agent_runtime/`.
+- FastAPI route and schema behavior lives under `tests/unit/runtime_api/`.
+- Concrete adapter behavior lives under `tests/unit/runtime_adapters/`.
 
+Shared fakes and helpers should live in non-test helper modules, while concrete `test_*.py` files contain focused behavior tests.

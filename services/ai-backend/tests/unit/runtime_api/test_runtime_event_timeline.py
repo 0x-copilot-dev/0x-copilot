@@ -6,13 +6,13 @@ from agent_runtime.agent.contracts import (
     StreamEventSource,
     StreamEventType,
 )
-from agent_runtime.api.contracts import (
+from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
     RunRecord,
     RuntimeApiEventType,
 )
-from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 
 

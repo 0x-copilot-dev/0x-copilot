@@ -8,11 +8,13 @@ PostgreSQL is the first durable database target. Supabase is acceptable as a man
 
 ## Implemented Modules
 
-- `src/agent_runtime/persistence/contracts.py`: Pydantic records for durable runtime entities.
+- `src/agent_runtime/persistence/records/`: grouped Pydantic records for durable runtime entities.
+- `src/agent_runtime/persistence/contracts.py`: compatibility re-export for persistence records.
 - `src/agent_runtime/persistence/constants.py`: stable field names, event names, validation patterns, and defaults.
 - `src/agent_runtime/persistence/ports.py`: future payload and checkpoint storage protocols.
-- `src/agent_runtime/persistence/postgres/schema.py`: initial PostgreSQL migration catalog and table list.
-- `src/agent_runtime/api/in_memory.py`: in-memory persistence, event store, and queue implementation used for API acceptance tests.
+- `src/agent_runtime/persistence/schema/postgres.py`: initial PostgreSQL migration catalog and table list.
+- `src/agent_runtime/persistence/postgres/schema.py`: compatibility re-export for the PostgreSQL schema catalog.
+- `src/runtime_adapters/in_memory/`: in-memory persistence, event store, and queue implementation used for API acceptance tests.
 
 The implementation defines contracts and schema. Production repository adapters can be added behind these records and ports without changing API/domain contracts.
 

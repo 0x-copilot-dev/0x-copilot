@@ -1,47 +1,8 @@
-"""FastAPI runtime API for conversations, runs, events, and approvals."""
+"""Compatibility package for legacy `agent_runtime.api.*` imports.
 
-from agent_runtime.api.app import RuntimeApiAppFactory
-from agent_runtime.api.contracts import (
-    AgentRunStatus,
-    ApprovalDecisionRequest,
-    ApprovalDecisionResponse,
-    CancelRunRequest,
-    CancelRunResponse,
-    ConversationResponse,
-    CreateConversationRequest,
-    CreateRunRequest,
-    CreateRunResponse,
-    MessageListResponse,
-    RuntimeApiEventType,
-    RuntimeEventRedactionState,
-    RuntimeEventEnvelope,
-    RuntimeEventReplayResponse,
-    RuntimeEventVisibility,
-    RunStatusResponse,
-)
-from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
-from agent_runtime.api.service import RuntimeApiService
+New code should import FastAPI composition from `runtime_api`, concrete test
+adapters from `runtime_adapters`, and runtime producer ports/services from the
+specific `agent_runtime.api` submodules.
+"""
 
-__all__ = [
-    "AgentRunStatus",
-    "ApprovalDecisionRequest",
-    "ApprovalDecisionResponse",
-    "CancelRunRequest",
-    "CancelRunResponse",
-    "ConversationResponse",
-    "CreateConversationRequest",
-    "CreateRunRequest",
-    "CreateRunResponse",
-    "InMemoryRuntimeApiStore",
-    "MessageListResponse",
-    "RuntimeApiAppFactory",
-    "RuntimeApiEventType",
-    "RuntimeEventRedactionState",
-    "RuntimeApiService",
-    "RuntimeEventEnvelope",
-    "RuntimeEventProducer",
-    "RuntimeEventReplayResponse",
-    "RuntimeEventVisibility",
-    "RunStatusResponse",
-]
+__all__: list[str] = []

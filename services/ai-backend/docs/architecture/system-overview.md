@@ -56,15 +56,16 @@ flowchart TD
 
 ## Implementation Boundaries
 
-- `agent/` owns runtime construction, runtime context parsing, LangGraph export shape, stream normalization, and typed runtime errors.
-- `tools/` owns compact tool cards, full tool specs, permission checks, lazy full-spec loading, and safe load failures.
-- `skills/` owns Agent Skills-compatible `SKILL.md` manifest parsing, source precedence, directory wiring, and access policy for main agents and subagents.
-- `mcp/` owns MCP server cards, client protocol boundaries, dynamic server load, descriptor validation, collisions, health, auth, timeout, and budget failures.
-- `memory/` owns scoped memory routes, read/write policy, user/org/agent namespaces, token budgets, offloading, summarization fallback, compression events, and optimistic concurrency fakes.
-- `subagents/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
-- `observability/` owns redaction and trace helpers used by stream and compression contracts.
-- `api/` owns the narrow FastAPI runtime API, safe HTTP errors, replay/SSE transport, in-memory test ports, and producer orchestration over persistence, event store, and queue ports.
-- `persistence/` owns durable runtime records, PostgreSQL schema migrations, and future payload/checkpoint storage ports.
+- `agent_runtime/execution/` owns runtime construction, runtime context parsing, LangGraph export shape, invocation helpers, state, and typed runtime errors.
+- `agent_runtime/capabilities/` owns dynamic tools, MCP server loading, and Agent Skills discovery/policy.
+- `agent_runtime/context/` owns scoped memory routes, read/write policy, token budgets, offloading, summarization fallback, and compression events.
+- `agent_runtime/delegation/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
+- `agent_runtime/events/` owns LangGraph stream normalization and runtime event-domain helpers.
+- `agent_runtime/observability/` owns redaction and trace helpers used by streams and persistence contracts.
+- `agent_runtime/persistence/` owns durable runtime records, abstract persistence ports, and PostgreSQL-compatible schema catalogs.
+- `runtime_api/` owns the narrow FastAPI runtime API, safe HTTP errors, request/response schemas, and replay/SSE transport.
+- `runtime_adapters/` owns concrete in-memory adapters now and future Postgres/queue adapters.
+- `runtime_worker/` is reserved for the future command consumer process.
 
 ## What Works Today
 

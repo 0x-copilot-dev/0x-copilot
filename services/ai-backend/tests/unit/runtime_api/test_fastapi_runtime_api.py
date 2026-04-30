@@ -6,14 +6,14 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from agent_runtime.agent.contracts import StreamEventSource
-from agent_runtime.api.app import RuntimeApiAppFactory
-from agent_runtime.api.contracts import (
+from runtime_api.app import RuntimeApiAppFactory
+from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalRequestRecord,
     RuntimeApiEventType,
 )
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.api.in_memory import InMemoryRuntimeApiStore
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.contracts import RuntimeWorkerResult
 

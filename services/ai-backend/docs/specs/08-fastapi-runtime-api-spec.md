@@ -8,14 +8,15 @@ Document the implemented FastAPI runtime API surface for conversations, runs, ev
 
 ## Implemented Modules
 
-- `src/agent_runtime/api/app.py`: v1 FastAPI router and application factory.
-- `src/agent_runtime/api/contracts.py`: request, response, record, command, event, and error Pydantic contracts.
-- `src/agent_runtime/api/errors.py`: safe HTTP error mapping.
+- `src/runtime_api/app.py`: FastAPI application factory and app composition.
+- `src/runtime_api/http/routes.py`: v1 FastAPI route handlers and router registration.
+- `src/runtime_api/http/errors.py`: safe HTTP error mapping.
+- `src/runtime_api/schemas/`: request, response, approval, run, conversation, event, command, and error Pydantic schemas.
+- `src/runtime_api/sse/adapter.py`: Server-Sent Events adapter over replayable runtime event envelopes.
+- `src/agent_runtime/api/service.py`: thin runtime producer orchestration over ports.
 - `src/agent_runtime/api/events.py`: runtime event projection and append helpers.
-- `src/agent_runtime/api/in_memory.py`: deterministic in-memory persistence, event store, and queue ports for tests/local development.
 - `src/agent_runtime/api/ports.py`: API persistence, event store, and runtime queue protocols.
-- `src/agent_runtime/api/service.py`: thin orchestration over ports.
-- `src/agent_runtime/api/streaming.py`: Server-Sent Events adapter over replayable runtime event envelopes.
+- `src/runtime_adapters/in_memory/`: deterministic in-memory persistence, event store, and queue adapter for tests/local development.
 
 The API layer depends on ports and typed runtime contracts. It does not import connector SDKs or execute long-running agent work inline.
 

@@ -1,5 +1,3 @@
-"""Built-in model-facing tools for the AI runtime."""
+"""Compatibility imports for `agent_runtime.capabilities.tools.builtin`."""
 
-from agent_runtime.tools.builtin.load_tool import LoadToolInput, LoadToolSpecTool
-
-__all__ = ["LoadToolInput", "LoadToolSpecTool"]
+from agent_runtime.capabilities.tools.builtin import *  # noqa: F401,F403

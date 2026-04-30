@@ -4,11 +4,11 @@
 
 Document the implemented runtime event producer, replay, streaming, and queue contracts that separate HTTP request handling from long-running agent execution.
 
-The current implementation provides the FastAPI producer, typed command queue port, deterministic in-memory queue, event envelope projection, replay endpoint, and SSE adapter. A production worker process and external broker adapter can be added behind the same ports.
+The current implementation provides the FastAPI producer in `runtime_api`, typed command queue port in `agent_runtime`, deterministic in-memory queue in `runtime_adapters`, event envelope projection, replay endpoint, and SSE adapter. A production worker process and external broker adapter can be added behind the same ports.
 
 ## Event Envelope
 
-Client-visible runtime events use `RuntimeEventEnvelope` from `src/agent_runtime/api/contracts.py`.
+Client-visible runtime events use `RuntimeEventEnvelope` from `src/runtime_api/schemas/events.py` and the compatibility import at `src/agent_runtime/api/contracts.py`.
 
 Required semantics:
 
