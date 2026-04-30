@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
@@ -43,11 +44,34 @@ class StreamNamespace:
         return metadata
 
 
+@dataclass
+class ToolCallStreamState:
+    """Incremental tool-call state for provider chunks that omit name/id fields."""
+
+    namespace: StreamNamespace
+    key: str
+    tool_name: str | None = None
+    call_id: str | None = None
+    args_text: str = ""
+    last_delta: str = ""
+    args: JsonObject = field(default_factory=dict)
+    summary: str | None = None
+    subagent_name: str | None = None
+    started_emitted: bool = False
+
+
 class RuntimeStreamPartAdapter:
     """Project LangGraph v2 StreamPart chunks into stable runtime API events."""
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
+        self._tool_call_states: dict[
+            tuple[str, tuple[str, ...], str], ToolCallStreamState
+        ] = {}
+        self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
+        self._subagent_lifecycle_keys: set[
+            tuple[str, RuntimeApiEventType, str]
+        ] = set()
 
     def append_activity_events(
         self,
@@ -130,23 +154,29 @@ class RuntimeStreamPartAdapter:
         parent_task_id = namespace.subagent_task_id
 
         for tool_call in self.tool_call_chunks(message):
-            payload = self.tool_call_payload(tool_call)
-            event_type = (
-                RuntimeApiEventType.TOOL_CALL_STARTED
-                if payload.get("tool_name") != "unknown_tool"
-                else RuntimeApiEventType.TOOL_CALL_DELTA
-            )
-            self.event_producer.append_api_event(
+            self.append_tool_call_chunk_event(
                 run=run,
-                source=StreamEventSource.TOOL,
-                event_type=event_type,
-                payload=payload,
+                namespace=namespace,
+                tool_call=tool_call,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
             )
 
         if self.is_tool_result_message(message):
             payload = self.tool_result_payload(message)
+            payload = self.tool_result_payload_with_state(run.run_id, payload)
+            if payload["tool_name"] == "task":
+                state = self.tool_call_state_for_payload(run.run_id, payload)
+                self.append_task_lifecycle_event(
+                    run=run,
+                    event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                    payload=self.task_tool_result_payload(
+                        payload,
+                        subagent_name=state.subagent_name if state is not None else None,
+                    ),
+                    metadata=metadata,
+                )
+                return
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -168,6 +198,90 @@ class RuntimeStreamPartAdapter:
                 parent_task_id=parent_task_id,
             )
 
+    def append_tool_call_chunk_event(
+        self,
+        *,
+        run: RunRecord,
+        namespace: StreamNamespace,
+        tool_call: object,
+        metadata: JsonObject,
+        parent_task_id: str | None,
+    ) -> None:
+        state = self.tool_call_state(run.run_id, namespace, tool_call)
+        if state.tool_name == "task":
+            self.append_task_tool_call_event(
+                run=run,
+                state=state,
+                metadata=metadata,
+            )
+            return
+        if state.tool_name is None or state.call_id is None:
+            return
+        payload = self.tool_call_payload_from_state(state)
+        event_type = (
+            RuntimeApiEventType.TOOL_CALL_STARTED
+            if not state.started_emitted
+            else RuntimeApiEventType.TOOL_CALL_DELTA
+        )
+        if event_type is RuntimeApiEventType.TOOL_CALL_DELTA:
+            payload["status"] = "running"
+        self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.TOOL,
+            event_type=event_type,
+            payload=payload,
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+        )
+        state.started_emitted = True
+
+    def append_task_tool_call_event(
+        self,
+        *,
+        run: RunRecord,
+        state: ToolCallStreamState,
+        metadata: JsonObject,
+    ) -> None:
+        if state.started_emitted or state.call_id is None:
+            return
+        args = state.args or self.parse_args_text(state.args_text)
+        if not args:
+            return
+        payload = self.task_tool_call_payload(
+            call_id=state.call_id,
+            args_payload=args,
+        )
+        state.subagent_name = self.text(payload.get("subagent_name"))
+        self.append_task_lifecycle_event(
+            run=run,
+            event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+            payload=payload,
+            metadata=metadata,
+        )
+        state.started_emitted = True
+
+    def append_task_lifecycle_event(
+        self,
+        *,
+        run: RunRecord,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        metadata: JsonObject,
+    ) -> None:
+        task_id = self.text(payload.get("task_id"))
+        if task_id is not None:
+            key = (run.run_id, event_type, task_id)
+            if key in self._subagent_lifecycle_keys:
+                return
+            self._subagent_lifecycle_keys.add(key)
+        self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=event_type,
+            payload=payload,
+            metadata=metadata,
+        )
+
     def append_subagent_lifecycle_events(
         self,
         *,
@@ -180,18 +294,16 @@ class RuntimeStreamPartAdapter:
 
         emitted = False
         for payload in self.task_tool_call_payloads(data):
-            self.event_producer.append_api_event(
+            self.append_task_lifecycle_event(
                 run=run,
-                source=StreamEventSource.SUBAGENT,
                 event_type=RuntimeApiEventType.SUBAGENT_STARTED,
                 payload=payload,
                 metadata=metadata,
             )
             emitted = True
         for payload in self.task_tool_result_payloads(data):
-            self.event_producer.append_api_event(
+            self.append_task_lifecycle_event(
                 run=run,
-                source=StreamEventSource.SUBAGENT,
                 event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                 payload=payload,
                 metadata=metadata,
@@ -378,6 +490,96 @@ class RuntimeStreamPartAdapter:
             result["summary"] = summary
         return result
 
+    def tool_call_state(
+        self,
+        run_id: str,
+        namespace: StreamNamespace,
+        tool_call: object,
+    ) -> ToolCallStreamState:
+        payload = self.payload_mapping(tool_call)
+        tool_name = self.text(payload.get("name")) or self.text(payload.get("tool_name"))
+        call_id = self.text(payload.get("id")) or self.text(payload.get("call_id"))
+        key = self.tool_call_state_key(run_id, namespace, payload, call_id)
+        state_key = (run_id, namespace.parts, key)
+        state = self._tool_call_states.get(state_key)
+        if state is None:
+            state = ToolCallStreamState(namespace=namespace, key=key)
+            self._tool_call_states[state_key] = state
+        elif call_id is not None and state.call_id not in {None, call_id}:
+            state = ToolCallStreamState(namespace=namespace, key=key)
+            self._tool_call_states[state_key] = state
+        if tool_name is not None:
+            state.tool_name = tool_name
+        summary = self.text(payload.get("summary"))
+        if summary is not None:
+            state.summary = summary
+        if call_id is not None:
+            state.call_id = call_id
+            self._tool_call_ids[(run_id, call_id)] = state
+        args = payload.get("args", {})
+        if isinstance(args, Mapping):
+            if "delta" in args:
+                delta = self.raw_text(args.get("delta"))
+                if delta is not None:
+                    state.args_text += delta
+                    state.last_delta = delta
+            elif args:
+                state.args = self.payload_mapping(args)
+                state.last_delta = ""
+        else:
+            delta = self.raw_text(args)
+            if delta is not None:
+                state.args_text += delta
+                state.last_delta = delta
+        return state
+
+    def tool_call_state_key(
+        self,
+        run_id: str,
+        namespace: StreamNamespace,
+        payload: Mapping[str, object],
+        call_id: str | None,
+    ) -> str:
+        index = payload.get("index")
+        if isinstance(index, int | str):
+            normalized = str(index).strip()
+            if normalized:
+                return f"index:{normalized}"
+        if call_id is not None:
+            return f"call:{call_id}"
+        namespace_states = [
+            state
+            for (state_run_id, parts, _), state in self._tool_call_states.items()
+            if state_run_id == run_id and parts == namespace.parts
+        ]
+        if len(namespace_states) == 1:
+            return namespace_states[0].key
+        return "__current__"
+
+    @classmethod
+    def tool_call_payload_from_state(cls, state: ToolCallStreamState) -> JsonObject:
+        args = state.args or cls.parse_args_text(state.args_text)
+        payload: JsonObject = {
+            "tool_name": state.tool_name or "unknown_tool",
+            "call_id": state.call_id or TraceContext.event_id(),
+            "args": args or ({"delta": state.args_text} if state.args_text else {}),
+            "delta": state.last_delta if state.started_emitted else "",
+            "status": "started",
+        }
+        if state.summary is not None:
+            payload["summary"] = state.summary
+        return payload
+
+    @classmethod
+    def parse_args_text(cls, value: str) -> JsonObject:
+        if not value.strip():
+            return {}
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return cls.payload_mapping(parsed)
+
     @classmethod
     def is_tool_result_message(cls, message: object) -> bool:
         if isinstance(message, Mapping):
@@ -418,6 +620,78 @@ class RuntimeStreamPartAdapter:
             "output": output or payload,
         }
 
+    def tool_result_payload_with_state(
+        self, run_id: str, payload: JsonObject
+    ) -> JsonObject:
+        call_id = self.text(payload.get("call_id"))
+        if call_id is None:
+            return payload
+        state = self._tool_call_ids.get((run_id, call_id))
+        if state is None:
+            return payload
+        if payload.get("tool_name") == "unknown_tool" and state.tool_name is not None:
+            return {**payload, "tool_name": state.tool_name}
+        return payload
+
+    def tool_call_state_for_payload(
+        self,
+        run_id: str,
+        payload: Mapping[str, object],
+    ) -> ToolCallStreamState | None:
+        call_id = self.text(payload.get("call_id"))
+        if call_id is None:
+            return None
+        return self._tool_call_ids.get((run_id, call_id))
+
+    @classmethod
+    def task_tool_call_payload(
+        cls,
+        *,
+        call_id: str,
+        args_payload: Mapping[str, object],
+    ) -> JsonObject:
+        subagent_name = (
+            cls.text(args_payload.get("subagent_type"))
+            or cls.text(args_payload.get("subagent_name"))
+            or "subagent"
+        )
+        summary = cls.text(args_payload.get("description")) or cls.text(
+            args_payload.get("task")
+        )
+        event_payload: JsonObject = {
+            "task_id": call_id,
+            "subagent_name": subagent_name,
+            "status": "queued",
+        }
+        if summary is not None:
+            event_payload["summary"] = summary
+        return event_payload
+
+    @classmethod
+    def task_tool_result_payload(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        subagent_name: str | None = None,
+    ) -> JsonObject:
+        call_id = cls.text(payload.get("call_id")) or TraceContext.event_id()
+        output = payload.get("output")
+        output_payload = output if isinstance(output, Mapping) else {}
+        summary = (
+            cls.content_delta_to_text(output_payload.get("content"))
+            or cls.text(output_payload.get("message"))
+            or cls.content_delta_to_text(payload.get("content"))
+            or cls.text(payload.get("message"))
+        )
+        event_payload: JsonObject = {
+            "task_id": call_id,
+            "subagent_name": subagent_name or "subagent",
+            "status": "completed",
+        }
+        if summary is not None:
+            event_payload["summary"] = summary
+        return event_payload
+
     @classmethod
     def task_tool_call_payloads(cls, value: object) -> tuple[JsonObject, ...]:
         payloads: list[JsonObject] = []
@@ -436,22 +710,12 @@ class RuntimeStreamPartAdapter:
                     continue
                 args = payload.get("args")
                 args_payload = args if isinstance(args, Mapping) else {}
-                subagent_name = (
-                    cls.text(args_payload.get("subagent_type"))
-                    or cls.text(args_payload.get("subagent_name"))
-                    or "subagent"
+                payloads.append(
+                    cls.task_tool_call_payload(
+                        call_id=call_id,
+                        args_payload=args_payload,
+                    )
                 )
-                summary = cls.text(args_payload.get("description")) or cls.text(
-                    args_payload.get("task")
-                )
-                event_payload: JsonObject = {
-                    "task_id": call_id,
-                    "subagent_name": subagent_name,
-                    "status": "queued",
-                }
-                if summary is not None:
-                    event_payload["summary"] = summary
-                payloads.append(event_payload)
         return tuple(payloads)
 
     @classmethod
@@ -473,17 +737,7 @@ class RuntimeStreamPartAdapter:
             )
             if call_id is None:
                 continue
-            summary = cls.content_delta_to_text(payload.get("content")) or cls.text(
-                payload.get("message")
-            )
-            event_payload: JsonObject = {
-                "task_id": call_id,
-                "subagent_name": "subagent",
-                "status": "completed",
-            }
-            if summary is not None:
-                event_payload["summary"] = summary
-            payloads.append(event_payload)
+            payloads.append(cls.task_tool_result_payload({"call_id": call_id, **payload}))
         return tuple(payloads)
 
     @classmethod
@@ -516,7 +770,33 @@ class RuntimeStreamPartAdapter:
             return {str(key): cls.json_value(item) for key, item in value.items()}
         if value is None:
             return {}
+        object_payload = cls.object_payload_mapping(value)
+        if object_payload:
+            return object_payload
         return {"content": cls.json_value(value)}
+
+    @classmethod
+    def object_payload_mapping(cls, value: object) -> JsonObject:
+        payload: JsonObject = {}
+        for key in (
+            "type",
+            "name",
+            "id",
+            "tool_call_id",
+            "call_id",
+            "tool_name",
+            "content",
+            "status",
+            "args",
+            "summary",
+            "index",
+        ):
+            if not hasattr(value, key):
+                continue
+            item = getattr(value, key)
+            if item is not None:
+                payload[key] = cls.json_value(item)
+        return payload
 
     @classmethod
     def json_value(cls, value: object) -> object:
@@ -588,3 +868,9 @@ class RuntimeStreamPartAdapter:
         if not isinstance(value, str):
             return None
         return value.strip() or None
+
+    @classmethod
+    def raw_text(cls, value: object) -> str | None:
+        if not isinstance(value, str) or value == "":
+            return None
+        return value

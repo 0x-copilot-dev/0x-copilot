@@ -168,6 +168,186 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         assert result_envelope.status == "completed"
         assert result_envelope.display_title == "doc_search result"
 
+    def test_incremental_tool_call_chunks_keep_stable_tool_identity(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        store, service, run = self.create_store_and_run(runtime_context_admin)
+        adapter = RuntimeStreamPartAdapter(service.event_producer)
+
+        for chunk in (
+            {"name": "write_todos", "id": self.Values.CALL_ID, "index": 0, "args": {"delta": ""}},
+            {"index": 0, "args": {"delta": '{"todos":[{"content":"check prime helper"'}},
+            {"index": 0, "args": {"delta": ',"status":"pending"}]}'}},
+        ):
+            adapter.append_activity_events(
+                run=run,
+                chunk={
+                    "type": "messages",
+                    "ns": (),
+                    "data": ({"tool_call_chunks": (chunk,)}, {}),
+                },
+                delta=None,
+            )
+
+        adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "write_todos",
+                        "tool_call_id": self.Values.CALL_ID,
+                        "content": "Updated todo list.",
+                    },
+                    {},
+                ),
+            },
+            delta=None,
+        )
+
+        tool_events = [
+            event
+            for event in store.events_by_run[run.run_id]
+            if event.event_type
+            in {
+                RuntimeApiEventType.TOOL_CALL_STARTED,
+                RuntimeApiEventType.TOOL_CALL_DELTA,
+                RuntimeApiEventType.TOOL_RESULT,
+                RuntimeApiEventType.TOOL_CALL_COMPLETED,
+            }
+        ]
+        assert [event.event_type for event in tool_events] == [
+            RuntimeApiEventType.TOOL_CALL_STARTED,
+            RuntimeApiEventType.TOOL_CALL_DELTA,
+            RuntimeApiEventType.TOOL_CALL_DELTA,
+            RuntimeApiEventType.TOOL_RESULT,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
+        ]
+        assert {event.payload["tool_name"] for event in tool_events} == {"write_todos"}
+        assert {event.payload["call_id"] for event in tool_events} == {self.Values.CALL_ID}
+        assert "unknown_tool" not in store.events_by_run[run.run_id][-1].model_dump_json()
+
+    def test_incremental_task_tool_chunks_project_to_subagent_lifecycle(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        store, service, run = self.create_store_and_run(runtime_context_admin)
+        adapter = RuntimeStreamPartAdapter(service.event_producer)
+
+        for chunk in (
+            {"name": "task", "id": self.Values.TASK_ID, "index": 0, "args": {"delta": ""}},
+            {"index": 0, "args": {"delta": "{"}},
+            {
+                "index": 0,
+                "args": {
+                    "delta": '"description":"Write a prime checker.","subagent_type":"coder"}'
+                },
+            },
+        ):
+            adapter.append_activity_events(
+                run=run,
+                chunk={
+                    "type": "messages",
+                    "ns": (),
+                    "data": ({"tool_call_chunks": (chunk,)}, {}),
+                },
+                delta=None,
+            )
+
+        adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "model_request": {
+                        "messages": [
+                            {
+                                "tool_calls": [
+                                    {
+                                        "name": "task",
+                                        "id": self.Values.TASK_ID,
+                                        "args": {
+                                            "description": "Write a prime checker.",
+                                            "subagent_type": "coder",
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+            },
+            delta=None,
+        )
+        adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "task",
+                        "tool_call_id": self.Values.TASK_ID,
+                        "content": "Prime checker written.",
+                    },
+                    {},
+                ),
+            },
+            delta=None,
+        )
+        adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "tools": {
+                        "messages": [
+                            {
+                                "type": "tool",
+                                "name": "task",
+                                "tool_call_id": self.Values.TASK_ID,
+                                "content": "Prime checker written.",
+                            }
+                        ]
+                    }
+                },
+            },
+            delta=None,
+        )
+
+        activity_events = store.events_by_run[run.run_id]
+        assert RuntimeApiEventType.TOOL_CALL_STARTED not in [
+            event.event_type for event in activity_events
+        ]
+        subagent_started = next(
+            event
+            for event in activity_events
+            if event.event_type is RuntimeApiEventType.SUBAGENT_STARTED
+        )
+        subagent_completed = next(
+            event
+            for event in activity_events
+            if event.event_type is RuntimeApiEventType.SUBAGENT_COMPLETED
+        )
+        assert subagent_started.task_id == self.Values.TASK_ID
+        assert subagent_started.subagent_id == "coder"
+        assert subagent_started.summary == "Write a prime checker."
+        assert subagent_completed.task_id == self.Values.TASK_ID
+        assert subagent_completed.subagent_id == "coder"
+        assert subagent_completed.status == "completed"
+        assert [
+            event.event_type for event in activity_events
+        ].count(RuntimeApiEventType.SUBAGENT_STARTED) == 1
+        assert [
+            event.event_type for event in activity_events
+        ].count(RuntimeApiEventType.SUBAGENT_COMPLETED) == 1
+
     def test_reasoning_summary_event_does_not_expose_raw_thought_payload(
         self,
         runtime_context_admin: AgentRuntimeContext,

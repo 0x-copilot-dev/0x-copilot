@@ -539,6 +539,176 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     assert task_completed.summary == "Research complete."
 
 
+def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "write_todos",
+                            "id": "call_123",
+                            "index": 0,
+                            "args": {"delta": ""},
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "index": 0,
+                            "args": {"delta": '{"todos":[{"content":"check prime helper"'},
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "index": 0,
+                            "args": {"delta": ',"status":"pending"}]}'},
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "type": "tool",
+                    "name": "write_todos",
+                    "tool_call_id": "call_123",
+                    "content": "Updated todo list.",
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "task",
+                            "id": "task_123",
+                            "index": 0,
+                            "args": {"delta": ""},
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "index": 0,
+                            "args": {
+                                "delta": '{"description":"Write prime code","subagent_type":"coder"}'
+                            },
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "type": "tool",
+                    "name": "task",
+                    "tool_call_id": "task_123",
+                    "content": "Prime code written.",
+                },
+                {},
+            ),
+        }
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Done."}]}}
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    events = store.events_by_run[run_id]
+    assert "unknown_tool" not in " ".join(str(event.payload) for event in events)
+    tool_events = [
+        event
+        for event in events
+        if event.event_type
+        in {"tool_call_started", "tool_call_delta", "tool_result", "tool_call_completed"}
+    ]
+    assert {event.payload["tool_name"] for event in tool_events} == {"write_todos"}
+    assert {event.payload["call_id"] for event in tool_events} == {"call_123"}
+    assert any(
+        event.event_type == "subagent_started" and event.task_id == "task_123"
+        for event in events
+    )
+    assert any(
+        event.event_type == "subagent_completed" and event.task_id == "task_123"
+        for event in events
+    )
+
+
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings(max_retries=1)
