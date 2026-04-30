@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     FeatureFlag,
     ModelConfig,

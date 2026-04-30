@@ -6,6 +6,7 @@ import type {
 } from "@enterprise-search/api-types";
 import {
   isApprovalRequestedPayload,
+  isMcpAuthRequiredPayload,
   isReasoningSummaryDeltaPayload,
   isReasoningSummaryPayload,
   isRuntimeTextPayload,
@@ -14,7 +15,6 @@ import {
   isToolCallPayload,
   isToolResultPayload
 } from "@enterprise-search/api-types";
-import { isMcpAuthRequiredPayload } from "../../api/mcpApi";
 
 export type ActivityStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "waiting" | "unknown";
 
@@ -112,10 +112,10 @@ export function optimisticUserMessage(text: string): ChatItem {
 }
 
 export function applyRuntimeEvent(items: ChatItem[], event: RuntimeEventEnvelope): ChatItem[] {
-  if (event.event_type === "heartbeat") {
+  if (event.activity_kind === "heartbeat") {
     return items;
   }
-  if (event.event_type === "mcp_auth_required" && isMcpAuthRequiredPayload(event.payload)) {
+  if (event.activity_kind === "mcp_auth" && isMcpAuthRequiredPayload(event.payload)) {
     return upsertById(items, {
       id: event.event_id,
       kind: "mcp-auth",
@@ -161,23 +161,7 @@ export function applyRuntimeEvent(items: ChatItem[], event: RuntimeEventEnvelope
 }
 
 function isActivityEvent(event: RuntimeEventEnvelope): boolean {
-  return (
-    event.event_type.startsWith("run_") ||
-    event.event_type === "progress" ||
-    event.event_type === "reasoning_summary" ||
-    event.event_type === "reasoning_summary_delta" ||
-    event.event_type === "tool_call" ||
-    event.event_type === "tool_call_started" ||
-    event.event_type === "tool_call_delta" ||
-    event.event_type === "tool_result" ||
-    event.event_type === "tool_call_completed" ||
-    event.event_type === "subagent_update" ||
-    event.event_type === "subagent_started" ||
-    event.event_type === "subagent_progress" ||
-    event.event_type === "subagent_completed" ||
-    event.event_type === "observation" ||
-    event.event_type === "error"
-  );
+  return ["run", "tool", "subagent", "reasoning", "approval", "event"].includes(event.activity_kind);
 }
 
 function upsertRunActivity(items: ChatItem[], event: RuntimeEventEnvelope): ChatItem[] {
@@ -222,16 +206,16 @@ function applyActivityEvent(activity: RunActivity, event: RuntimeEventEnvelope):
     }))
   };
 
-  if (event.event_type === "reasoning_summary" || event.event_type === "reasoning_summary_delta") {
+  if (event.activity_kind === "reasoning") {
     return appendReasoning(next, event);
   }
-  if (event.event_type.startsWith("tool_")) {
+  if (event.activity_kind === "tool") {
     return upsertTool(next, event);
   }
-  if (event.event_type.startsWith("subagent_")) {
+  if (event.activity_kind === "subagent") {
     return upsertSubagent(next, event);
   }
-  if (event.event_type !== "model_delta" && event.event_type !== "final_response") {
+  if (event.activity_kind !== "message") {
     next = appendActivityRow(next, event);
   }
   return next;
@@ -445,23 +429,23 @@ function runTitleForEvent(event: RuntimeEventEnvelope, activity: RunActivity): s
 }
 
 function statusFromEvent(event: RuntimeEventEnvelope, fallback: ActivityStatus = "unknown"): ActivityStatus {
-  const value = (event.status ?? payloadString(event.payload, "status") ?? event.event_type).toLowerCase();
-  if (value.includes("queued")) {
+  const value = (event.status ?? payloadString(event.payload, "status") ?? "").toLowerCase();
+  if (value === "queued") {
     return "queued";
   }
-  if (value.includes("cancel")) {
+  if (value === "cancelled" || event.event_type === "run_cancelled") {
     return "cancelled";
   }
-  if (value.includes("fail") || value.includes("error")) {
+  if (value === "failed" || value === "error" || event.event_type === "run_failed" || event.event_type === "error") {
     return "failed";
   }
-  if (value.includes("complete") || value.includes("succeed") || value.includes("final")) {
+  if (value === "completed" || value === "succeeded" || value === "success" || event.event_type === "run_completed") {
     return "completed";
   }
-  if (value.includes("wait") || value.includes("approval")) {
+  if (value === "waiting" || value === "waiting_for_approval" || event.activity_kind === "approval") {
     return "waiting";
   }
-  if (value.includes("running") || value.includes("started") || value.includes("progress") || value.includes("delta")) {
+  if (value === "running" || value === "started" || value === "progress") {
     return "running";
   }
   return fallback;

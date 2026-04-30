@@ -7,10 +7,11 @@ from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
 
-from agent_runtime.agent.contracts import JsonObject, RuntimeContract, StreamEvent, StreamEventSource, StreamEventType
+from agent_runtime.execution.contracts import JsonObject, RuntimeContract, StreamEvent, StreamEventSource, StreamEventType
 from agent_runtime.api.constants import Keys, Messages, Values
 from runtime_api.schemas.common import (
     AgentRunStatus,
+    RuntimeActivityKind,
     RuntimeApiEventType,
     RuntimeApiValueNormalizer,
     RuntimeEventRedactionState,
@@ -114,12 +115,64 @@ class RuntimeEventPresentationProjector:
             ),
             Keys.Field.SUMMARY: cls._summary_for(payload=payload, metadata=metadata),
             Keys.Field.STATUS: cls._status_for(event_type=event_type, payload=payload),
+            "activity_kind": cls.activity_kind_for(event_type=event_type, source=source),
             Keys.Field.VISIBILITY: cls._visibility_for(source=source, payload=payload),
             Keys.Field.REDACTION_STATE: cls._redaction_state_for(
                 payload=payload,
                 metadata=metadata,
             ),
         }
+
+    @classmethod
+    def activity_kind_for(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        source: StreamEventSource,
+    ) -> RuntimeActivityKind:
+        """Project transport event details into a stable client activity bucket."""
+
+        if event_type is RuntimeApiEventType.HEARTBEAT:
+            return RuntimeActivityKind.HEARTBEAT
+        if event_type in {RuntimeApiEventType.MODEL_DELTA, RuntimeApiEventType.FINAL_RESPONSE}:
+            return RuntimeActivityKind.MESSAGE
+        if event_type in {
+            RuntimeApiEventType.REASONING_SUMMARY,
+            RuntimeApiEventType.REASONING_SUMMARY_DELTA,
+        }:
+            return RuntimeActivityKind.REASONING
+        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return RuntimeActivityKind.MCP_AUTH
+        if event_type in {
+            RuntimeApiEventType.APPROVAL_REQUESTED,
+            RuntimeApiEventType.APPROVAL_RESOLVED,
+        }:
+            return RuntimeActivityKind.APPROVAL
+        if source is StreamEventSource.TOOL or event_type in {
+            RuntimeApiEventType.TOOL_CALL,
+            RuntimeApiEventType.TOOL_CALL_STARTED,
+            RuntimeApiEventType.TOOL_CALL_DELTA,
+            RuntimeApiEventType.TOOL_RESULT,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
+        }:
+            return RuntimeActivityKind.TOOL
+        if source is StreamEventSource.SUBAGENT or event_type in {
+            RuntimeApiEventType.SUBAGENT_UPDATE,
+            RuntimeApiEventType.SUBAGENT_STARTED,
+            RuntimeApiEventType.SUBAGENT_PROGRESS,
+            RuntimeApiEventType.SUBAGENT_COMPLETED,
+        }:
+            return RuntimeActivityKind.SUBAGENT
+        if event_type in {
+            RuntimeApiEventType.RUN_QUEUED,
+            RuntimeApiEventType.RUN_STARTED,
+            RuntimeApiEventType.RUN_CANCELLING,
+            RuntimeApiEventType.RUN_CANCELLED,
+            RuntimeApiEventType.RUN_COMPLETED,
+            RuntimeApiEventType.RUN_FAILED,
+        }:
+            return RuntimeActivityKind.RUN
+        return RuntimeActivityKind.EVENT
 
     @classmethod
     def _event_type_override(
@@ -391,6 +444,7 @@ class RuntimeEventEnvelope(RuntimeContract):
     display_title: str | None = None
     summary: str | None = None
     status: str | None = None
+    activity_kind: RuntimeActivityKind
     visibility: RuntimeEventVisibility = RuntimeEventVisibility.USER
     redaction_state: RuntimeEventRedactionState = RuntimeEventRedactionState.REDACTED
     payload: JsonObject = Field(default_factory=dict)
@@ -504,6 +558,7 @@ class RuntimeEventDraft(RuntimeContract):
     display_title: str | None = None
     summary: str | None = None
     status: str | None = None
+    activity_kind: RuntimeActivityKind | None = None
     visibility: RuntimeEventVisibility = RuntimeEventVisibility.USER
     redaction_state: RuntimeEventRedactionState = RuntimeEventRedactionState.REDACTED
     payload: JsonObject = Field(default_factory=dict)

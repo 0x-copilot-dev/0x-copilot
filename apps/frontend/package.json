@@ -12,10 +12,11 @@
     "@enterprise-search/api-types": "0.1.0",
     "@enterprise-search/design-system": "0.1.0",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "streamdown": "^2.5.0",
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",

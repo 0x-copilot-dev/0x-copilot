@@ -23,7 +23,6 @@ flowchart TD
   RuntimeFactory --> SkillRegistry[SkillSourceRegistry]
   RuntimeFactory --> MemoryFactory[ScopedMemoryBackendFactory]
   RuntimeFactory --> SubagentCatalog[DynamicSubagentCatalog]
-  RuntimeFactory --> StreamNormalizer[LangGraphStreamNormalizer]
 
   ToolRegistry --> ToolCards[ToolCard summaries]
   McpRegistry --> McpCards[McpServerCard summaries]
@@ -46,9 +45,9 @@ flowchart TD
   DeepAgent --> ContextManagers[ContextPayloadManager and SummarizationManager]
   ContextManagers --> MemoryRoutes
 
-  DeepAgent --> RawEvents[LangGraph messages and values stream]
-  RawEvents --> StreamNormalizer
-  StreamNormalizer --> StreamEvents[model_delta and StreamEvent records]
+  DeepAgent --> RawEvents[LangGraph v2 StreamPart events]
+  RawEvents --> Worker
+  Worker --> StreamEvents[model_delta and runtime event records]
   StreamEvents --> EventEnvelope[RuntimeEventEnvelope]
   EventEnvelope --> Persistence
   Persistence --> WorkSurfaceUI[Product UI]
@@ -60,7 +59,7 @@ flowchart TD
 - `agent_runtime/capabilities/` owns dynamic tools, MCP server loading, and Agent Skills discovery/policy.
 - `agent_runtime/context/` owns scoped memory routes, read/write policy, token budgets, offloading, summarization fallback, and compression events.
 - `agent_runtime/delegation/` owns model-visible subagent definitions, compact handoffs, async task state, lifecycle operations, result contracts, and timeout/stale/cancelled handling.
-- `agent_runtime/events/` owns LangGraph stream normalization and runtime event-domain helpers.
+- `agent_runtime/events/` owns runtime event-domain helpers.
 - `agent_runtime/observability/` owns redaction and trace helpers used by streams and persistence contracts.
 - `agent_runtime/persistence/` owns durable runtime records, abstract persistence ports, and PostgreSQL-compatible schema catalogs.
 - `runtime_api/` owns the narrow FastAPI runtime API, safe HTTP errors, request/response schemas, and replay/SSE transport.
@@ -70,12 +69,12 @@ flowchart TD
 ## What Works Today
 
 - A request can be converted into an `AgentRuntimeContext` with normalized identity, roles, scopes, model profile, feature flags, and trace ID.
-- `create_agent_runtime` wires injected registries, stores, catalogs, and stream normalizers into a Deep Agents runtime without importing connector SDKs.
+- `create_agent_runtime` wires injected registries, stores, and catalogs into a Deep Agents runtime without importing connector SDKs.
 - Tool and MCP listings expose compact, permission-filtered cards first. Full schemas and descriptors load only after explicit selection and permission re-check.
 - Skills are discovered from configured Agent Skills directories and passed to Deep Agents in deterministic precedence order.
 - Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
 - Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
-- LangGraph stream chunks normalize into stable `StreamEvent` contracts with source, type, trace correlation, parent task IDs, and redacted payloads; provider text chunks are surfaced as `model_delta` runtime envelopes with text in `payload.delta`.
+- The worker consumes documented LangGraph v2 `StreamPart` chunks, projects tool/subagent/progress activity into runtime envelopes, and surfaces provider text chunks as `model_delta` runtime envelopes with text in `payload.delta`.
 - FastAPI endpoints create conversations, enqueue runs, replay events, stream live/replayed SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
 - Runtime event envelopes provide ordered per-run sequence numbers, UI timeline fields, redacted payloads, and replay cursors.
 - Persistence contracts, the PostgreSQL adapter, and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.

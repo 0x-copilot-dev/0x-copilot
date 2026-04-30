@@ -6,11 +6,20 @@ from backend_app.contracts import (
     McpAuthStartRequest,
     McpServerHealth,
     McpAuthState,
+    OAuthTokenRequest,
     UpdateMcpServerRequest,
 )
 from backend_app.service import McpRegistryService
 from backend_app.store import InMemoryMcpStore
-from backend_app.token_vault import LocalTokenVault
+from backend_app.token_vault import LocalTokenVault, TokenVaultFactory
+
+
+class FakeOAuthTokenExchanger:
+    def exchange_code(self, **kwargs) -> OAuthTokenRequest:
+        return OAuthTokenRequest(
+            access_token=f"access-token-for-{kwargs['code']}",
+            refresh_token=f"refresh-token-for-{kwargs['code']}",
+        )
 
 
 def test_mcp_registration_skip_and_internal_cards() -> None:
@@ -74,8 +83,12 @@ def test_mcp_disable_hides_server_from_internal_cards_and_can_reenable() -> None
 
 def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
     store = InMemoryMcpStore()
-    vault = LocalTokenVault(secret="unit-test-secret")
-    service = McpRegistryService(store=store, token_vault=vault)
+    vault = LocalTokenVault(secret="unit-test-secret-value-at-least-32-chars")
+    service = McpRegistryService(
+        store=store,
+        token_vault=vault,
+        token_exchanger=FakeOAuthTokenExchanger(),
+    )
     created = service.create_server(
         CreateMcpServerRequest(
             org_id="org_123",
@@ -101,7 +114,44 @@ def test_oauth_flow_stores_encrypted_tokens_without_plaintext() -> None:
     assert completed.auth_state == McpAuthState.AUTHENTICATED
     assert token is not None
     assert "oauth_code" not in token.encrypted_access_token
-    assert vault.decrypt(token.encrypted_access_token) == "access:oauth_code"
+    assert vault.decrypt(token.encrypted_access_token) == "access-token-for-oauth_code"
+    assert token.encrypted_refresh_token is not None
+    assert vault.decrypt(token.encrypted_refresh_token) == "refresh-token-for-oauth_code"
+
+
+def test_oauth_start_uses_random_pkce_verifiers() -> None:
+    store = InMemoryMcpStore()
+    service = McpRegistryService(store=store)
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://mcp.example.com",
+            display_name="Drive MCP",
+        )
+    )
+
+    service.start_auth(
+        server_id=created.server_id,
+        request=McpAuthStartRequest(
+            org_id="org_123",
+            user_id="user_123",
+            redirect_uri="http://localhost:5173/mcp/oauth/callback",
+        ),
+    )
+    first_verifier = next(iter(store.auth_sessions.values())).code_verifier
+    service.start_auth(
+        server_id=created.server_id,
+        request=McpAuthStartRequest(
+            org_id="org_123",
+            user_id="user_123",
+            redirect_uri="http://localhost:5173/mcp/oauth/callback",
+        ),
+    )
+    verifiers = {session.code_verifier for session in store.auth_sessions.values()}
+
+    assert len(verifiers) == 2
+    assert first_verifier in verifiers
 
 
 def test_url_validation_rejects_localhost() -> None:
@@ -119,3 +169,26 @@ def test_url_validation_rejects_localhost() -> None:
         assert "https" in str(exc) or "localhost" in str(exc)
     else:
         raise AssertionError("localhost MCP URL should be rejected")
+
+
+def test_production_refuses_in_memory_mcp_registry(monkeypatch) -> None:
+    monkeypatch.setenv("BACKEND_ENVIRONMENT", "production")
+
+    try:
+        McpRegistryService()
+    except RuntimeError as exc:
+        assert "persistent MCP registry" in str(exc)
+    else:
+        raise AssertionError("production must not default to in-memory MCP registry")
+
+
+def test_managed_token_vault_fails_closed_when_adapter_missing(monkeypatch) -> None:
+    monkeypatch.setenv("BACKEND_ENVIRONMENT", "production")
+    monkeypatch.setenv("MCP_TOKEN_VAULT_PROVIDER", "managed")
+
+    try:
+        TokenVaultFactory.create()
+    except RuntimeError as exc:
+        assert "Managed MCP token vault adapter" in str(exc)
+    else:
+        raise AssertionError("managed token vault must fail closed without adapter")

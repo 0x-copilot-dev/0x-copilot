@@ -70,13 +70,24 @@ export type AgentRunStatus =
   | "timed_out";
 export type RuntimeEventVisibility = "user" | "internal" | "audit";
 export type RuntimeEventRedactionState = "redacted" | "truncated" | "offloaded";
+export type RuntimeActivityKind =
+  | "run"
+  | "message"
+  | "tool"
+  | "subagent"
+  | "reasoning"
+  | "mcp_auth"
+  | "approval"
+  | "heartbeat"
+  | "event";
 export type RuntimeEventSource =
+  | "main_agent"
   | "runtime"
   | "model"
   | "tool"
   | "mcp"
   | "subagent"
-  | "memory"
+  | "summarization"
   | "system";
 export type RuntimeApiEventType =
   | "run_queued"
@@ -106,8 +117,71 @@ export type RuntimeApiEventType =
   | "final_response"
   | "heartbeat";
 
+export const RUNTIME_EVENT_SOURCES = [
+  "main_agent",
+  "runtime",
+  "model",
+  "tool",
+  "mcp",
+  "subagent",
+  "summarization",
+  "system"
+] as const satisfies readonly RuntimeEventSource[];
+
+export const RUNTIME_API_EVENT_TYPES = [
+  "run_queued",
+  "run_started",
+  "run_cancelling",
+  "run_cancelled",
+  "run_completed",
+  "run_failed",
+  "progress",
+  "reasoning_summary",
+  "reasoning_summary_delta",
+  "tool_call",
+  "tool_call_started",
+  "tool_call_delta",
+  "tool_result",
+  "tool_call_completed",
+  "mcp_auth_required",
+  "subagent_update",
+  "subagent_started",
+  "subagent_progress",
+  "subagent_completed",
+  "approval_requested",
+  "approval_resolved",
+  "observation",
+  "error",
+  "model_delta",
+  "final_response",
+  "heartbeat"
+] as const satisfies readonly RuntimeApiEventType[];
+
+export const RUNTIME_ACTIVITY_KINDS = [
+  "run",
+  "message",
+  "tool",
+  "subagent",
+  "reasoning",
+  "mcp_auth",
+  "approval",
+  "heartbeat",
+  "event"
+] as const satisfies readonly RuntimeActivityKind[];
+
 export type ApprovalDecision = "approved" | "rejected";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface SessionIdentity {
+  org_id: string;
+  user_id: string;
+  roles: string[];
+  permission_scopes: string[];
+}
+
+export interface SessionResponse {
+  identity: SessionIdentity;
+}
 
 export interface CreateConversationRequest {
   org_id: string;
@@ -229,8 +303,8 @@ export interface RuntimeEventEnvelope {
   run_id: string;
   conversation_id: string;
   sequence_no: number;
-  source?: RuntimeEventSource | string;
-  event_type: RuntimeApiEventType | string;
+  source?: RuntimeEventSource;
+  event_type: RuntimeApiEventType;
   trace_id?: string;
   parent_event_id?: string | null;
   span_id?: string | null;
@@ -241,6 +315,7 @@ export interface RuntimeEventEnvelope {
   display_title?: string | null;
   summary?: string | null;
   status?: string | null;
+  activity_kind: RuntimeActivityKind;
   visibility?: RuntimeEventVisibility;
   redaction_state?: RuntimeEventRedactionState;
   payload: Record<string, unknown>;
@@ -378,79 +453,117 @@ export interface SkillListResponse {
 }
 
 export function isRuntimeEventEnvelope(value: unknown): value is RuntimeEventEnvelope {
-  if (typeof value !== "object" || value === null) {
+  if (!isPlainRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
+  const candidate = value;
   return (
     typeof candidate.event_id === "string" &&
     typeof candidate.run_id === "string" &&
     typeof candidate.conversation_id === "string" &&
     typeof candidate.sequence_no === "number" &&
-    typeof candidate.event_type === "string" &&
-    typeof candidate.payload === "object" &&
-    candidate.payload !== null
+    Number.isInteger(candidate.sequence_no) &&
+    candidate.sequence_no >= 0 &&
+    isRuntimeApiEventType(candidate.event_type) &&
+    (candidate.source === undefined || isRuntimeEventSource(candidate.source)) &&
+    isRuntimeActivityKind(candidate.activity_kind) &&
+    isPlainRecord(candidate.payload) &&
+    (candidate.metadata === undefined || isPlainRecord(candidate.metadata)) &&
+    typeof candidate.created_at === "string"
   );
 }
 
 export function isRuntimeTextPayload(payload: unknown): payload is RuntimeTextPayload {
-  return typeof payload === "object" && payload !== null;
+  if (!isPlainRecord(payload)) {
+    return false;
+  }
+  return (
+    typeof payload.message === "string" ||
+    typeof payload.delta === "string" ||
+    typeof payload.summary === "string" ||
+    typeof payload.display_title === "string"
+  );
 }
 
 export function isReasoningSummaryPayload(payload: unknown): payload is ReasoningSummaryPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.summary === "string";
+  return typeof payload.summary === "string";
 }
 
 export function isReasoningSummaryDeltaPayload(
   payload: unknown
 ): payload is ReasoningSummaryDeltaPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.delta === "string";
+  return typeof payload.delta === "string";
 }
 
 export function isToolCallPayload(payload: unknown): payload is ToolCallPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.tool_name === "string" && typeof candidate.call_id === "string";
+  return typeof payload.tool_name === "string" && typeof payload.call_id === "string";
 }
 
 export function isToolCallDeltaPayload(payload: unknown): payload is ToolCallDeltaPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.call_id === "string";
+  return typeof payload.call_id === "string";
 }
 
 export function isToolResultPayload(payload: unknown): payload is ToolResultPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.tool_name === "string" && typeof candidate.call_id === "string";
+  return typeof payload.tool_name === "string" && typeof payload.call_id === "string";
 }
 
 export function isSubagentActivityPayload(payload: unknown): payload is SubagentActivityPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.task_id === "string";
+  return typeof payload.task_id === "string";
 }
 
 export function isApprovalRequestedPayload(payload: unknown): payload is ApprovalRequestedPayload {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isPlainRecord(payload)) {
     return false;
   }
-  const candidate = payload as Record<string, unknown>;
-  return typeof candidate.approval_id === "string";
+  return typeof payload.approval_id === "string";
+}
+
+export function isMcpAuthRequiredPayload(payload: unknown): payload is McpAuthRequiredEventPayload {
+  if (!isPlainRecord(payload)) {
+    return false;
+  }
+  return (
+    typeof payload.server_id === "string" &&
+    typeof payload.display_name === "string" &&
+    typeof payload.auth_url === "string" &&
+    typeof payload.expires_at === "string"
+  );
+}
+
+export function isRuntimeApiEventType(value: unknown): value is RuntimeApiEventType {
+  return typeof value === "string" && (RUNTIME_API_EVENT_TYPES as readonly string[]).includes(value);
+}
+
+export function isRuntimeEventSource(value: unknown): value is RuntimeEventSource {
+  return typeof value === "string" && (RUNTIME_EVENT_SOURCES as readonly string[]).includes(value);
+}
+
+export function isRuntimeActivityKind(value: unknown): value is RuntimeActivityKind {
+  return typeof value === "string" && (RUNTIME_ACTIVITY_KINDS as readonly string[]).includes(value);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

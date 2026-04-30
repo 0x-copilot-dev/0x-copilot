@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_runtime.agent.streaming import LangGraphStreamNormalizer
-from agent_runtime.skills.constants import Keys
+from agent_runtime.capabilities.skills.constants import Keys
 
 
 class MissingToolRegistryMethod:
@@ -50,65 +49,3 @@ class StreamingObservabilityTestMixin:
         SUBAGENT_NAME = "researcher"
         SECRET = "super-secret"
         SAFE_MESSAGE = "Searching the knowledge base."
-
-    def make_normalizer(self) -> LangGraphStreamNormalizer:
-        return LangGraphStreamNormalizer()
-
-    def main_update_chunk(self) -> dict[str, object]:
-        return {
-            "mode": "updates",
-            "chunk": {
-                "message": self.Values.SAFE_MESSAGE,
-                "api_key": self.Values.SECRET,
-            },
-        }
-
-    def subagent_progress_chunk(self) -> dict[str, object]:
-        return {
-            "mode": "custom",
-            "ns": ("supervisor", f"subagent:{self.Values.SUBAGENT_NAME}"),
-            "chunk": {
-                "message": "Subagent is reading sources.",
-                "parent_task_id": self.Values.TASK_ID,
-            },
-        }
-
-    def tool_call_chunk(self) -> dict[str, object]:
-        return {
-            "mode": "messages",
-            "chunk": {
-                "tool_calls": (
-                    {
-                        "name": self.Values.TOOL_NAME,
-                        "id": self.Values.CALL_ID,
-                        "args": {
-                            "query": "board plan",
-                            "authorization": f"bearer {self.Values.SECRET}",
-                        },
-                    },
-                ),
-            },
-        }
-
-    def tool_result_chunk(self, content: str) -> dict[str, object]:
-        return {
-            "mode": "messages",
-            "chunk": {
-                "type": "tool_result",
-                "name": self.Values.TOOL_NAME,
-                "id": self.Values.CALL_ID,
-                "content": content,
-                "token": self.Values.SECRET,
-            },
-        }
-
-    def lifecycle_chunk_without_task_metadata(self) -> dict[str, object]:
-        return {
-            "mode": "custom",
-            "event_type": "lifecycle",
-            "ns": ("supervisor", f"subagent:{self.Values.SUBAGENT_NAME}"),
-            "chunk": {
-                "status": "running",
-                "summary": "Subagent started before supervisor metadata arrived.",
-            },
-        }

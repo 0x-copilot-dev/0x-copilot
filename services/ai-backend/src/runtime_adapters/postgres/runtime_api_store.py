@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import psycopg
@@ -10,9 +10,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from starlette import status
 
-from agent_runtime.agent.contracts import RuntimeErrorCode, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeErrorEnvelope, StreamEventSource
 from agent_runtime.api.constants import Messages
-from agent_runtime.api.contracts import (
+from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
@@ -25,14 +25,16 @@ from agent_runtime.api.contracts import (
     MessageStatus,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeApiEventType,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
+    RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
 )
-from agent_runtime.api.errors import RuntimeApiError
+from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.contracts import RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.persistence.records import OutboxStatus
 from agent_runtime.persistence.schema.postgres import POSTGRES_AGENT_RUNTIME_MIGRATION_SQL
 
@@ -532,6 +534,11 @@ class PostgresRuntimeApiStore:
                 display_title=event.display_title,
                 summary=event.summary,
                 status=event.status,
+                activity_kind=event.activity_kind
+                or RuntimeEventPresentationProjector.activity_kind_for(
+                    event_type=event.event_type,
+                    source=event.source,
+                ),
                 visibility=event.visibility,
                 redaction_state=event.redaction_state,
                 payload=event.payload,
@@ -614,22 +621,6 @@ class PostgresRuntimeApiStore:
                 (run_id,),
             ).fetchone()
         return int(row["latest"])
-
-    async def subscribe_run_events(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        after_sequence: int,
-    ) -> AsyncIterator[RuntimeEventEnvelope]:
-        """Yield replayed events and close; live fanout can layer on this later."""
-
-        for event in self.list_events_after(
-            org_id=org_id,
-            run_id=run_id,
-            after_sequence=after_sequence,
-        ):
-            yield event
 
     def enqueue_run(self, command: RuntimeRunCommand) -> None:
         """Enqueue a run command for workers."""
@@ -865,6 +856,10 @@ class PostgresRuntimeApiStore:
             display_title=row["display_title"],
             summary=row["summary"],
             status=row["status"],
+            activity_kind=RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=RuntimeApiEventType(row["event_type"]),
+                source=StreamEventSource(row["source"]),
+            ),
             visibility=row["visibility"],
             redaction_state=row["redaction_state"],
             payload=dict(row["payload_json_redacted"]),

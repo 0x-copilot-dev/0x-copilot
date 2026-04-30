@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
@@ -155,9 +155,9 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         _harness: RuntimeHarness,
         _messages: Sequence[object],
     ):
-        yield ("messages", (FakeChunk([{"type": "text", "text": "Hello"}]), {}))
-        yield ("messages", (FakeChunk([{"type": "text", "text": " there"}]), {}))
-        yield ("values", {"messages": [{"role": "assistant", "content": "Hello there"}]})
+        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": "Hello"}]), {})}
+        yield {"type": "messages", "ns": (), "data": (FakeChunk([{"type": "text", "text": " there"}]), {})}
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Hello there"}]}}
 
     worker = RuntimeWorker(
         persistence=store,
@@ -220,15 +220,19 @@ def test_runtime_worker_persists_mcp_auth_required_event() -> None:
         _messages: Sequence[object],
     ):
         yield {
-            "api_event_type": "mcp_auth_required",
-            "server_id": "server_123",
-            "server_name": "drive_mcp",
-            "display_name": "Drive MCP",
-            "auth_url": "https://mcp.example.com/oauth/authorize",
-            "expires_at": "2026-04-30T18:30:00+00:00",
-            "message": "Authenticate Drive MCP to continue.",
+            "type": "custom",
+            "ns": (),
+            "data": {
+                "api_event_type": "mcp_auth_required",
+                "server_id": "server_123",
+                "server_name": "drive_mcp",
+                "display_name": "Drive MCP",
+                "auth_url": "https://mcp.example.com/oauth/authorize",
+                "expires_at": "2026-04-30T18:30:00+00:00",
+                "message": "Authenticate Drive MCP to continue.",
+            },
         }
-        yield ("values", {"messages": [{"role": "assistant", "content": "Please authenticate."}]})
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Please authenticate."}]}}
 
     worker = RuntimeWorker(
         persistence=store,
@@ -279,15 +283,19 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
         _messages: Sequence[object],
     ):
         yield {
-            "api_event_type": "reasoning_summary_delta",
-            "summary": "Checking source coverage",
-            "delta": "Checking source coverage",
-            "raw_thought": "private hidden reasoning",
+            "type": "custom",
+            "ns": (),
+            "data": {
+                "api_event_type": "reasoning_summary_delta",
+                "summary": "Checking source coverage",
+                "delta": "Checking source coverage",
+                "raw_thought": "private hidden reasoning",
+            },
         }
         yield {
-            "mode": "custom",
-            "ns": ("supervisor", "subagent:researcher"),
-            "chunk": {
+            "type": "custom",
+            "ns": ("tools:task_123",),
+            "data": {
                 "api_event_type": "subagent_started",
                 "task_id": "task_123",
                 "subagent_name": "researcher",
@@ -295,11 +303,12 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
                 "summary": "Researcher is reading sources.",
             },
         }
-        yield (
-            "messages",
-            (
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
                 {
-                    "tool_calls": (
+                    "tool_call_chunks": (
                         {
                             "name": "doc_search",
                             "id": "call_123",
@@ -312,20 +321,21 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
                 },
                 {},
             ),
-        )
-        yield (
-            "messages",
-            (
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
                 {
-                    "type": "tool_result",
+                    "type": "tool",
                     "name": "doc_search",
-                    "id": "call_123",
+                    "tool_call_id": "call_123",
                     "content": "Found two launch risks.",
                 },
                 {},
             ),
-        )
-        yield ("values", {"messages": [{"role": "assistant", "content": "Two risks found."}]})
+        }
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Two risks found."}]}}
 
     worker = RuntimeWorker(
         persistence=store,

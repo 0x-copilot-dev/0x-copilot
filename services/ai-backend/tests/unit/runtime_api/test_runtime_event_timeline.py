@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     StreamEvent,
     StreamEventSource,

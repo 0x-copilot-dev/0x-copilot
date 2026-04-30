@@ -19,7 +19,7 @@ Remove duplication when it protects a real invariant or repeated policy. Do not 
 - Registries describe capabilities.
 - Loaders resolve full specs.
 - Policies authorize visibility and execution.
-- Stream normalizers translate runtime events for UI consumers.
+- Runtime workers project LangGraph v2 stream parts into UI-safe events.
 
 ## Invariants
 

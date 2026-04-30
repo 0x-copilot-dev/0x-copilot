@@ -55,10 +55,10 @@ MCP registry state currently uses `InMemoryMcpStore` by default. Skill state use
 `InMemorySkillStore` by default and can use `PostgresSkillStore` when
 `DATABASE_URL` is configured by the service layer.
 
-Token material is stored through `TokenVault`. The local implementation is for
-development and tests; production token handling must remain behind this
-boundary rather than leaking raw credentials into route handlers or app-facing
-responses.
+Token material is stored through `TokenVault`. The local implementation is only
+for development and tests. Production must provide a managed token-vault adapter
+and a persistent MCP registry store; the service fails closed rather than
+falling back to local crypto-shaped storage or in-memory registry state.
 
 ## Request Flow
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeContract
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from runtime_api.schemas.common import ApprovalDecision
 
 

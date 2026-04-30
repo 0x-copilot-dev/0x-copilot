@@ -11,7 +11,6 @@ from agent_runtime.execution.contracts import (
 from tests.unit.fakes import (
     FakeMcpRegistry,
     FakeMemoryBackendFactory,
-    FakeStreamNormalizer,
     FakeSubagentCatalog,
     FakeToolRegistry,
 )
@@ -51,5 +50,4 @@ def fake_dependencies() -> RuntimeDependencies:
         skill_source_config=SkillSourceConfig(roots=("skills",)),
         memory_backend_factory=FakeMemoryBackendFactory(),
         subagent_catalog=FakeSubagentCatalog(),
-        stream_normalizer=FakeStreamNormalizer(),
     )

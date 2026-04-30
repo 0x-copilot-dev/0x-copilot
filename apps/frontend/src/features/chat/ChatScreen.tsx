@@ -1,4 +1,4 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { ApprovalDecision, RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import {
   Button,
   ChatBubble,
@@ -11,9 +11,9 @@ import {
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cancelRun, createConversation, createRun, listMessages, streamRunEvents } from "../../api/agentApi";
+import { Streamdown } from "streamdown";
+import { cancelRun, createConversation, createRun, decideApproval, listMessages, streamRunEvents } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
-import { DEFAULT_IDENTITY } from "../../api/config";
 import { ConnectorConsentCard, ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import { applyRuntimeEvent, messagesToChatItems, optimisticUserMessage, type ChatItem } from "./chatModel";
@@ -22,12 +22,12 @@ import { RunActivityPanel } from "./RunActivityPanel";
 export function ChatScreen({
   connectors,
   onOpenSettings,
-  identity = DEFAULT_IDENTITY,
+  identity,
   oauthStatus
 }: {
   connectors: ConnectorState;
   onOpenSettings: () => void;
-  identity?: RequestIdentity;
+  identity: RequestIdentity;
   oauthStatus: string | null;
 }): ReactElement {
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -39,6 +39,7 @@ export function ChatScreen({
   const [status, setStatus] = useState("Ready");
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
+  const reconnectTimeoutRef = useRef<number | null>(null);
 
   const suggestedServers = useMemo(
     () =>
@@ -73,6 +74,10 @@ export function ChatScreen({
     void loadConversation();
     return () => {
       cancelled = true;
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       streamRef.current?.close();
     };
   }, [identity]);
@@ -88,12 +93,38 @@ export function ChatScreen({
       event.event_type === "run_cancelled" ||
       event.event_type === "run_failed"
     ) {
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       streamRef.current?.close();
       streamRef.current = null;
       setActiveRunId(null);
       setStatus(event.event_type === "run_completed" ? "Ready" : "Stopped");
     }
   }, []);
+
+  const startEventStream = useCallback((runId: string, afterSequence: number) => {
+    if (reconnectTimeoutRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    streamRef.current?.close();
+    streamRef.current = streamRunEvents({
+      runId,
+      afterSequence,
+      identity,
+      onEvent: handleEvent,
+      onError: () => {
+        streamRef.current?.close();
+        streamRef.current = null;
+        setStatus("Stream paused. Reconnecting...");
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          startEventStream(runId, latestSequenceRef.current);
+        }, 750);
+      }
+    });
+  }, [handleEvent, identity]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -105,21 +136,10 @@ export function ChatScreen({
     setItems((current) => [...current, optimisticUserMessage(text)]);
     try {
       const run = await createRun(conversationId, text, identity);
+      latestSequenceRef.current = 0;
       setActiveRunId(run.run_id);
       setStatus("Queued...");
-      streamRef.current?.close();
-      streamRef.current = streamRunEvents({
-        runId: run.run_id,
-        afterSequence: 0,
-        identity,
-        onEvent: handleEvent,
-        onError: () => {
-          streamRef.current?.close();
-          streamRef.current = null;
-          setActiveRunId(null);
-          setStatus("Stream paused. Check run events or send another message.");
-        }
-      });
+      startEventStream(run.run_id, latestSequenceRef.current);
     } catch (err) {
       setItems((current) => [
         ...current,
@@ -139,17 +159,56 @@ export function ChatScreen({
       return;
     }
     await cancelRun(activeRunId, identity);
+    if (reconnectTimeoutRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     streamRef.current?.close();
     streamRef.current = null;
     setActiveRunId(null);
     setStatus("Cancelling...");
   }
 
+  async function onApprovalDecision(approvalId: string, decision: ApprovalDecision): Promise<void> {
+    try {
+      await decideApproval(approvalId, decision, identity);
+      setItems((current) =>
+        current.map((item) =>
+          item.kind === "approval" && item.payload.approval_id === approvalId
+            ? {
+                id: `approval-${approvalId}-${decision}`,
+                kind: "status",
+                title: "Approval resolved",
+                text: decision === "approved" ? "Approved." : "Rejected."
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setItems((current) => [
+        ...current,
+        {
+          id: `approval-error-${Date.now()}`,
+          kind: "status",
+          title: "Approval failed",
+          text: errorMessage(err, "Could not submit approval decision")
+        }
+      ]);
+    }
+  }
+
   function renderItem(item: ChatItem): ReactElement {
     if (item.kind === "message") {
+      const isStreamingAssistant = item.role === "assistant" && item.id === `assistant-${activeRunId}`;
       return (
         <ChatBubble key={item.id} role={item.role}>
-          {item.text}
+          {item.role === "assistant" ? (
+            <Streamdown className="assistant-markdown" mode={isStreamingAssistant ? "streaming" : "static"}>
+              {item.text}
+            </Streamdown>
+          ) : (
+            item.text
+          )}
         </ChatBubble>
       );
     }
@@ -169,6 +228,14 @@ export function ChatScreen({
       return (
         <ChatBubble key={item.id} role="system">
           Approval requested: {item.payload.message ?? item.payload.reason ?? item.payload.approval_id}
+          <div className="approval-actions">
+            <Button type="button" variant="secondary" onClick={() => void onApprovalDecision(item.payload.approval_id, "approved")}>
+              Approve
+            </Button>
+            <Button type="button" variant="danger" onClick={() => void onApprovalDecision(item.payload.approval_id, "rejected")}>
+              Reject
+            </Button>
+          </div>
         </ChatBubble>
       );
     }

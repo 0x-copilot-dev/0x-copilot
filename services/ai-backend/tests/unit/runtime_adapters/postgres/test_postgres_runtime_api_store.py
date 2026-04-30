@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.settings import RuntimeSettings

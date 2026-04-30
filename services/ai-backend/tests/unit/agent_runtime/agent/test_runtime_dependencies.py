@@ -3,12 +3,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import RuntimeDependencies, SkillSourceConfig
+from agent_runtime.execution.contracts import RuntimeDependencies, SkillSourceConfig
 from tests.unit.agent_runtime.agent.helpers import MissingToolRegistryMethod
 from tests.unit.fakes import (
     FakeMcpRegistry,
     FakeMemoryBackendFactory,
-    FakeStreamNormalizer,
     FakeSubagentCatalog,
     FakeToolRegistry,
 )
@@ -30,5 +29,4 @@ def test_runtime_dependencies_reject_missing_required_protocol_method() -> None:
             skill_source_config=SkillSourceConfig(),
             memory_backend_factory=FakeMemoryBackendFactory(),
             subagent_catalog=FakeSubagentCatalog(),
-            stream_normalizer=FakeStreamNormalizer(),
         )

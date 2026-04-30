@@ -22,7 +22,6 @@ class RuntimeStreamModes:
     """LangGraph stream mode sets used by the runtime."""
 
     RICH = ["messages", "updates", "custom", "values"]
-    LEGACY = ["messages", "values"]
 
 
 class RuntimeStreamOptions:
@@ -35,10 +34,6 @@ class RuntimeStreamOptions:
             "subgraphs": True,
             "version": "v2",
         }
-
-    @classmethod
-    def legacy(cls) -> dict[str, object]:
-        return {"stream_mode": RuntimeStreamModes.LEGACY}
 
 
 def runtime_run_handle(harness: RuntimeHarness) -> RuntimeRunHandle:
@@ -290,56 +285,6 @@ async def astream_runtime(
             **RuntimeStreamOptions.rich(),
         ):
             yield chunk
-    except (TypeError, ValueError) as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.stream.fallback",
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="retrying",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        try:
-            async for chunk in harness.agent.astream(
-                {"messages": list(messages)},
-                config=runtime_config(harness),
-                **RuntimeStreamOptions.legacy(),
-            ):
-                yield chunk
-        except AgentRuntimeError as retry_exc:
-            runtime_logger.event(
-                context=harness.context,
-                event="runtime.stream.failed",
-                level=RuntimeLogLevel.ERROR,
-                subsystem="runtime",
-                operation=TraceNames.RUNTIME_INVOKE,
-                status="failed",
-                duration_ms=_elapsed_ms(started_at),
-                error_code=retry_exc.code,
-                retryable=retry_exc.retryable,
-                safe_message=retry_exc.safe_message,
-            )
-            raise
-        except Exception as retry_exc:
-            runtime_logger.event(
-                context=harness.context,
-                event="runtime.stream.failed",
-                level=RuntimeLogLevel.ERROR,
-                subsystem="runtime",
-                operation=TraceNames.RUNTIME_INVOKE,
-                status="failed",
-                duration_ms=_elapsed_ms(started_at),
-                error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-                retryable=True,
-                safe_message="Runtime streaming failed safely.",
-                metadata={"exception_type": type(retry_exc).__name__},
-            )
-            raise AgentRuntimeError(
-                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-                "Runtime streaming failed safely.",
-                retryable=True,
-                correlation_id=harness.context.trace_id,
-            ) from retry_exc
     except AgentRuntimeError as exc:
         runtime_logger.event(
             context=harness.context,

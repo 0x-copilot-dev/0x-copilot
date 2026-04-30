@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from starlette import status
 
-from agent_runtime.agent.contracts import RuntimeErrorCode
+from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.api.constants import Messages
-from agent_runtime.api.contracts import (
+from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
@@ -25,12 +25,13 @@ from agent_runtime.api.contracts import (
     RuntimeCancelCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
+    RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
 )
-from agent_runtime.api.errors import RuntimeApiError
+from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.contracts import OutboxStatus, RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import OutboxStatus, RuntimeWorkerClaim, RuntimeWorkerResult
 
 RuntimeApiServiceTerminalStatuses = frozenset(
     {
@@ -345,6 +346,11 @@ class InMemoryRuntimeApiStore:
             display_title=event.display_title,
             summary=event.summary,
             status=event.status,
+            activity_kind=event.activity_kind
+            or RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=event.event_type,
+                source=event.source,
+            ),
             visibility=event.visibility,
             redaction_state=event.redaction_state,
             payload=event.payload,
@@ -380,22 +386,6 @@ class InMemoryRuntimeApiStore:
         """Return latest persisted sequence number for a run."""
 
         return len(self.events_by_run.get(run_id, ()))
-
-    async def subscribe_run_events(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        after_sequence: int,
-    ) -> AsyncIterator[RuntimeEventEnvelope]:
-        """Yield replayed events and close; durable workers arrive later."""
-
-        for event in self.list_events_after(
-            org_id=org_id,
-            run_id=run_id,
-            after_sequence=after_sequence,
-        ):
-            yield event
 
     def enqueue_run(self, command: RuntimeRunCommand) -> None:
         """Enqueue a run command for deterministic worker tests."""

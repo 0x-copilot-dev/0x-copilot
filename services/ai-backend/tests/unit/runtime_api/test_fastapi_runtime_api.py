@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.agent.contracts import StreamEventSource
+from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -15,7 +15,7 @@ from runtime_api.schemas import (
 from agent_runtime.api.events import RuntimeEventProducer
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
-from agent_runtime.persistence.contracts import RuntimeWorkerResult
+from agent_runtime.persistence.records import RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
 
 

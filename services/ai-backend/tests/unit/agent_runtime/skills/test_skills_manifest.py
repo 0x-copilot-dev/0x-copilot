@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skills.manifest import (
+from agent_runtime.capabilities.skills.manifest import (
     MAX_SKILL_DESCRIPTION_LENGTH,
     SkillErrorCode,
     SkillManifestError,
 )
-from agent_runtime.skills.constants import Messages
+from agent_runtime.capabilities.skills.constants import Messages
 from tests.unit.agent_runtime.skills.helpers import SkillManifestTestMixin
 
 

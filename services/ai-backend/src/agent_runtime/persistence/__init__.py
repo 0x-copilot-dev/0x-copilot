@@ -1,6 +1,6 @@
 """Durable persistence contracts and provider ports for the agent runtime."""
 
-from agent_runtime.persistence.contracts import (
+from agent_runtime.persistence.records import (
     AsyncTaskRecord,
     AsyncTaskStatus,
     AuditActorType,

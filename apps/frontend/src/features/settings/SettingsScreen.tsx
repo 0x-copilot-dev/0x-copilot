@@ -60,7 +60,7 @@ export function SettingsScreen({
         {activeSection === "capabilities" ? (
           <PlaceholderSettings
             title="Capabilities"
-            body="Agent capabilities are driven by enabled connectors and skills for this milestone."
+            body="Agent capabilities are driven by enabled connectors for this milestone."
           />
         ) : null}
         {activeSection === "connectors" ? <ConnectorsSettings connectors={connectors} /> : null}

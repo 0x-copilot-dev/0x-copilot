@@ -21,7 +21,6 @@ from pydantic import (
 from agent_runtime.execution.ports import (
     McpRegistry,
     MemoryBackendFactory,
-    StreamNormalizer,
     SubagentCatalog,
     ToolRegistry,
 )
@@ -301,14 +300,12 @@ class RuntimeDependencies(RuntimeContract):
     skill_registry: object | None = None
     memory_backend_factory: MemoryBackendFactory
     subagent_catalog: SubagentCatalog
-    stream_normalizer: StreamNormalizer
 
     @field_validator(
         "tool_registry",
         "mcp_registry",
         "memory_backend_factory",
         "subagent_catalog",
-        "stream_normalizer",
     )
     @classmethod
     def _validate_protocol(cls, value: object, info: ValidationInfo) -> object:
@@ -317,7 +314,6 @@ class RuntimeDependencies(RuntimeContract):
             "mcp_registry": "list_available_servers",
             "memory_backend_factory": "create",
             "subagent_catalog": "list_available_subagents",
-            "stream_normalizer": "normalize",
         }
         method_name = method_by_field[info.field_name]
         if not callable(getattr(value, method_name, None)):

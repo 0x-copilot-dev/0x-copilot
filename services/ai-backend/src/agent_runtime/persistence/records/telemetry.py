@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt
 
-from agent_runtime.agent.contracts import JsonObject, RuntimeContract
+from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 
 
 class CompressionEventRecord(RuntimeContract):

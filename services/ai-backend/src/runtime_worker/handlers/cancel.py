@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent_runtime.agent.contracts import StreamEventSource
+from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from runtime_api.schemas import AgentRunStatus, RuntimeApiEventType, RuntimeCancelCommand, RuntimeEventDraft
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from agent_runtime.agent.contracts import JsonObject, StreamEvent, StreamEventSource
-from agent_runtime.api.contracts import (
+from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
+from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
     RuntimeEventDraft,

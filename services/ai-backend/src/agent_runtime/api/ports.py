@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from agent_runtime.api.contracts import (
+from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
@@ -22,7 +22,7 @@ from agent_runtime.api.contracts import (
     RuntimeRunCommand,
     RunRecord,
 )
-from agent_runtime.persistence.contracts import RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 
 
 @runtime_checkable
@@ -120,16 +120,6 @@ class EventStorePort(Protocol):
 
     def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
-
-    def subscribe_run_events(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        after_sequence: int,
-    ) -> AsyncIterator[RuntimeEventEnvelope]:
-        """Yield replayed and live events for a run."""
-
 
 @runtime_checkable
 class RuntimeQueuePort(Protocol):

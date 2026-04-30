@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from agent_runtime.agent.contracts import (
-    AgentRuntimeContext,
-    StreamEvent,
-    StreamEventSource,
-    StreamEventType,
-)
+from agent_runtime.execution.contracts import AgentRuntimeContext
 
 
 @dataclass
@@ -49,19 +44,3 @@ class FakeSubagentCatalog:
     def list_available_subagents(self, context: object) -> Sequence[object]:
         self.seen_contexts.append(context)  # type: ignore[arg-type]
         return self.subagents
-
-
-@dataclass
-class FakeStreamNormalizer:
-    seen_contexts: list[AgentRuntimeContext] = field(default_factory=list)
-
-    def normalize(self, raw_event: Mapping[str, object], context: object) -> Sequence[object]:
-        self.seen_contexts.append(context)  # type: ignore[arg-type]
-        return (
-            StreamEvent(
-                source=StreamEventSource.RUNTIME,
-                event_type=StreamEventType.PROGRESS,
-                trace_id=context.trace_id,  # type: ignore[attr-defined]
-                payload={"message": str(raw_event.get("message", "ok"))},
-            ),
-        )

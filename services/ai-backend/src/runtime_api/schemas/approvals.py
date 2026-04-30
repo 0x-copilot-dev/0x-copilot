@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field, field_validator
 
-from agent_runtime.agent.contracts import JsonObject, RuntimeContract
+from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys
 from runtime_api.schemas.common import ApprovalDecision, ApprovalStatus, RuntimeApiValueNormalizer
 

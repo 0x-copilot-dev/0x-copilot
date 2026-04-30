@@ -62,19 +62,15 @@ class LocalTokenVault(TokenVault):
         return b"".join(chunks)[:size]
 
 
-class ManagedSecretTokenVault(LocalTokenVault):
-    """Production-mode envelope vault backed by externally managed root material.
+class ManagedSecretTokenVault(TokenVault):
+    """Fail-closed boundary for production managed secret-store integration.
 
-    Deployments must inject `MCP_TOKEN_VAULT_SECRET` from KMS or a managed secret
-    store and rotate it through that provider. The application refuses to use a
-    baked-in development fallback in production.
+    Production must provide a real adapter for the deployment's KMS or managed
+    secret store. This class deliberately does not reuse the local XOR envelope.
     """
 
     def __init__(self) -> None:
-        raw_secret = os.environ.get("MCP_TOKEN_VAULT_SECRET", "").strip()
-        if not raw_secret:
-            raise RuntimeError("MCP_TOKEN_VAULT_SECRET must be supplied by the managed secret store")
-        super().__init__(raw_secret)
+        raise RuntimeError("Managed MCP token vault adapter is not configured")
 
 
 class TokenVaultFactory:

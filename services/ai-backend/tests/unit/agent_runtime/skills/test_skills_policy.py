@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_runtime.skills.manifest import SkillManifest
-from agent_runtime.skills.policy import SkillAccessEvaluator, SkillAccessPolicy
-from agent_runtime.skills.sources import (
+from agent_runtime.capabilities.skills.manifest import SkillManifest
+from agent_runtime.capabilities.skills.policy import SkillAccessEvaluator, SkillAccessPolicy
+from agent_runtime.capabilities.skills.sources import (
     ConfiguredSkill,
     SkillSource,
     SkillSourceScope,

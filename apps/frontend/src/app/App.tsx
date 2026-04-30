@@ -2,8 +2,11 @@ import { ThemeProvider } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import "@enterprise-search/design-system/styles.css";
+import "streamdown/styles.css";
 import "../styles.css";
+import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";
+import { getSessionIdentity } from "../api/sessionApi";
 import { ChatScreen } from "../features/chat/ChatScreen";
 import { useConnectors } from "../features/connectors/useConnectors";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
@@ -19,9 +22,33 @@ export default function App(): ReactElement {
 }
 
 function EnterpriseSearchApp(): ReactElement {
-  const connectors = useConnectors();
+  const [identity, setIdentity] = useState<RequestIdentity | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const connectors = useConnectors(identity);
   const [screen, setScreen] = useState<Screen>("chat");
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSession(): Promise<void> {
+      try {
+        const nextIdentity = await getSessionIdentity();
+        if (!cancelled) {
+          setIdentity(nextIdentity);
+          setSessionError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSessionError(err instanceof Error ? err.message : "Could not load session identity.");
+        }
+      }
+    }
+
+    void loadSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (window.location.pathname !== "/mcp/oauth/callback") {
@@ -62,6 +89,22 @@ function EnterpriseSearchApp(): ReactElement {
     };
   }, [connectors.refresh]);
 
+  if (sessionError !== null) {
+    return (
+      <main className="app-loading">
+        <p>{sessionError}</p>
+      </main>
+    );
+  }
+
+  if (identity === null) {
+    return (
+      <main className="app-loading">
+        <p>Loading session...</p>
+      </main>
+    );
+  }
+
   if (screen === "settings") {
     return <SettingsScreen connectors={connectors} onBackToChat={() => setScreen("chat")} />;
   }
@@ -69,6 +112,7 @@ function EnterpriseSearchApp(): ReactElement {
   return (
     <ChatScreen
       connectors={connectors}
+      identity={identity}
       onOpenSettings={() => setScreen("settings")}
       oauthStatus={oauthStatus}
     />

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent_runtime.agent.contracts import RuntimeContract
+from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.persistence.constants import Values
 
 

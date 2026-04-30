@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent_runtime.agent.contracts import RuntimeErrorCode, RuntimeErrorEnvelope
-from agent_runtime.agent.errors import AgentRuntimeError
+from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeErrorEnvelope
+from agent_runtime.execution.errors import AgentRuntimeError
 
 
 def test_runtime_error_envelope_uses_safe_agent_message() -> None:

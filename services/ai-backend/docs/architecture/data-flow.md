@@ -17,7 +17,6 @@ sequenceDiagram
   participant Runtime as Deep Agents runtime
   participant Registries as Tool/MCP/Skill/Subagent registries
   participant Memory as MemoryRoutePlan
-  participant Normalizer as LangGraphStreamNormalizer
   participant UI as Work surface UI
 
   User->>API: Natural-language request
@@ -33,8 +32,8 @@ sequenceDiagram
   Registries-->>Factory: ToolCard, McpServerCard, skill directories, SubagentDefinition
   Factory->>Memory: Create scoped memory backend
   Factory-->>Runtime: Deep Agents graph with typed dependencies
-  Runtime-->>Worker: LangGraph messages/values stream
-  Worker->>Store: Append model_delta events from provider chunks
+  Runtime-->>Worker: LangGraph v2 StreamPart events
+  Worker->>Store: Append model_delta, tool, subagent, and progress events
   Worker->>Store: Append final_response/run_completed or typed failure
   Store-->>UI: Replayable RuntimeEventEnvelope updates over /events or /stream
 ```
@@ -48,9 +47,12 @@ The worker path is async-first. `RuntimeWorker` claims queued commands with lock
 expiration, limits active run handling with `RUNTIME_MAX_PARALLEL_RUNS`, applies
 `RUNTIME_MAX_RETRIES`, loads conversation history, builds local runtime
 dependencies, and calls `astream_runtime()` for streaming-capable model profiles
-rather than running the model inline inside FastAPI. Provider text chunks are
-persisted as `model_delta` events with the exact text in `payload.delta`; the
-same run still ends with `final_response` and `run_completed`.
+rather than running the model inline inside FastAPI. The worker consumes
+documented LangGraph v2 `StreamPart` dictionaries (`type`, `ns`, `data`).
+Provider text chunks are persisted as `model_delta` events with the exact text in
+`payload.delta`; tool, subagent, custom, and progress parts become replayable
+runtime event envelopes. The same run still ends with `final_response` and
+`run_completed`.
 
 ## Dynamic Capability Loading
 
@@ -124,14 +126,14 @@ sequenceDiagram
   participant Facade as backend-facade
   participant Factory as Runtime factory
   participant Runtime as Deep Agents runtime
-  participant Normalizer as Stream normalizer
+  participant Worker as Runtime worker
   participant UI
 
   User->>Facade: "Hi"
   Facade->>Factory: AgentRuntimeContext
   Factory-->>Runtime: Authorized compact capabilities + memory routes
-  Runtime-->>Normalizer: Provider text chunks and final response
-  Normalizer-->>UI: model_delta events followed by final_response
+  Runtime-->>Worker: v2 messages and values StreamParts
+  Worker-->>UI: model_delta events followed by final_response
   Runtime-->>Facade: Direct greeting
   Facade-->>User: Friendly response, no connector calls
 ```
@@ -148,7 +150,7 @@ sequenceDiagram
   participant Loader as ToolLoader
   participant Slack as Future Slack adapter
   participant Jira as Future Jira adapter
-  participant Normalizer as Stream normalizer
+  participant Worker as Runtime worker
 
   User->>Runtime: "Check Slack and Jira. What all do I need to do today?"
   Runtime->>Tools: List authorized ToolCard summaries
@@ -159,8 +161,8 @@ sequenceDiagram
   Runtime->>Loader: Load jira_search
   Loader-->>Runtime: LoadedToolSpec after permission re-check
   Runtime->>Jira: Search assigned tickets and due work
-  Runtime-->>Normalizer: Tool call/result/progress chunks
-  Normalizer-->>Runtime: Redacted StreamEvent records
+  Runtime-->>Worker: v2 messages, updates, and custom StreamParts
+  Worker-->>Runtime: Redacted runtime event envelopes
   Runtime-->>User: Prioritized todo list with sources
 ```
 
@@ -210,7 +212,7 @@ sequenceDiagram
   participant McpLoader
   participant Docs as Future document adapter
   participant DriveMcp as Future Drive MCP server
-  participant Normalizer
+  participant Worker
 
   User->>Runtime: "Find the latest launch plan and risks."
   Runtime->>Tools: List authorized document search cards
@@ -239,7 +241,7 @@ sequenceDiagram
   participant Lifecycle as AsyncSubagentLifecycle
   participant Runner as SubagentRunner
   participant Researcher as Research subagent
-  participant Normalizer as Stream normalizer
+  participant Worker as Runtime worker
 
   User->>Supervisor: "Research customer escalations from Q3..."
   Supervisor->>Catalog: List authorized SubagentDefinition summaries
@@ -250,7 +252,7 @@ sequenceDiagram
   Lifecycle->>Runner: Start researcher with compact task
   Runner->>Researcher: Execute delegated research
   Lifecycle-->>Supervisor: AsyncTaskState(task_id, status=running)
-  Supervisor-->>Normalizer: Subagent lifecycle event with parent task ID
+  Supervisor-->>Worker: Subagent progress StreamPart with task namespace
   Researcher-->>Runner: SubagentResult(response, execution_summary, plan_summary)
   Supervisor->>Lifecycle: Check task
   Lifecycle-->>Supervisor: Succeeded state + SubagentResult
@@ -273,7 +275,7 @@ sequenceDiagram
   Loader->>Adapter: Connect or fetch schema
   Adapter--xLoader: Auth failure, timeout, malformed descriptor, or connector down
   Loader-->>Runtime: Typed load result with safe_message and correlation_id
-  Runtime-->>Normalizer: Error chunk
-  Normalizer-->>UI: StreamEvent(type=error, redacted payload)
+  Runtime-->>Worker: Safe error event data
+  Worker-->>UI: RuntimeEventEnvelope(type=error, redacted payload)
 ```
 

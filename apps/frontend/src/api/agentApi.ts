@@ -8,17 +8,17 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   MessageListResponse,
-  RunStatus,
   RuntimeEventEnvelope
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
-import { DEFAULT_IDENTITY, type RequestIdentity, identityParams } from "./config";
+import type { RequestIdentity } from "./config";
+import { identityParams } from "./config";
 import { assertOk, jsonHeaders } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
 export async function createConversation(
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<Conversation> {
   const payload: CreateConversationRequest = {
     org_id: identity.orgId,
@@ -37,7 +37,7 @@ export async function createConversation(
 
 export async function listMessages(
   conversationId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<MessageListResponse> {
   const params = identityParams(identity);
   params.set("limit", "100");
@@ -49,7 +49,7 @@ export async function listMessages(
 export async function createRun(
   conversationId: string,
   userInput: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<CreateRunResponse> {
   const payload: CreateRunRequest = {
     conversation_id: conversationId,
@@ -66,18 +66,9 @@ export async function createRun(
   return (await response.json()) as CreateRunResponse;
 }
 
-export async function getRun(
-  runId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
-): Promise<RunStatus> {
-  const response = await fetch(`/v1/agent/runs/${runId}?${identityParams(identity)}`);
-  await assertOk(response);
-  return (await response.json()) as RunStatus;
-}
-
 export async function cancelRun(
   runId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<CancelRunResponse> {
   const payload: CancelRunRequest = {
     requested_by_user_id: identity.userId,
@@ -95,7 +86,7 @@ export async function cancelRun(
 export async function decideApproval(
   approvalId: string,
   decision: ApprovalDecisionRequest["decision"],
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
@@ -114,14 +105,14 @@ export async function decideApproval(
 export function streamRunEvents({
   runId,
   afterSequence = 0,
-  identity = DEFAULT_IDENTITY,
+  identity,
   onEvent,
   onError,
   onOpen
 }: {
   runId: string;
   afterSequence?: number;
-  identity?: RequestIdentity;
+  identity: RequestIdentity;
   onEvent: (event: RuntimeEventEnvelope) => void;
   onError: (error: Event) => void;
   onOpen?: () => void;

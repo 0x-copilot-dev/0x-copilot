@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from agent_runtime.persistence.contracts import (
+from agent_runtime.persistence.records import (
     CheckpointRecord,
     ContextPayloadRecord,
     MemoryItemRecord,

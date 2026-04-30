@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.agent.factory import RuntimeHarness
-from agent_runtime.agent.graph import ConfiguredRuntimeGraph
-from agent_runtime.agent.runtime import invoke_runtime, runtime_config, runtime_run_handle
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.factory import RuntimeHarness
+from agent_runtime.execution.graph import ConfiguredRuntimeGraph
+from agent_runtime.execution.runtime import invoke_runtime, runtime_config, runtime_run_handle
 from agent_runtime.observability.tracing import TraceNames
 
 

@@ -5,9 +5,9 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.mcp import (
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
     McpAuthError,
     McpAuthMode,
@@ -19,7 +19,7 @@ from agent_runtime.mcp import (
     McpTimeoutError,
     McpTransport,
 )
-from agent_runtime.mcp.constants import Keys, Messages, Values
+from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 

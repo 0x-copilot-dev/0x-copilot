@@ -5,8 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import base64
 import hashlib
+import json
 import os
+from secrets import token_urlsafe
+from typing import Protocol
 from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 from backend_app.contracts import (
     AuditEventRecord,
@@ -44,6 +48,83 @@ from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkil
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 
 
+class OAuthTokenExchanger(Protocol):
+    """Exchange an OAuth authorization code for backend-held connector tokens."""
+
+    def exchange_code(
+        self,
+        *,
+        record: McpServerRecord,
+        session: McpAuthSessionRecord,
+        code: str,
+    ) -> OAuthTokenRequest:
+        """Return tokens for a verified OAuth callback."""
+
+
+class HttpOAuthTokenExchanger:
+    """HTTP form-post OAuth code exchanger for MCP servers."""
+
+    def exchange_code(
+        self,
+        *,
+        record: McpServerRecord,
+        session: McpAuthSessionRecord,
+        code: str,
+    ) -> OAuthTokenRequest:
+        token_url = f"{record.url.rstrip('/')}/oauth/token"
+        body = urlencode(
+            {
+                "grant_type": "authorization_code",
+                "client_id": "enterprise-search",
+                "code": code,
+                "redirect_uri": session.redirect_uri,
+                "code_verifier": session.code_verifier,
+            }
+        ).encode("utf-8")
+        request = Request(
+            token_url,
+            data=body,
+            headers={
+                "accept": "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("OAuth token endpoint returned an invalid response")
+        expires_at = self._expires_at(payload.get("expires_in"))
+        return OAuthTokenRequest(
+            access_token=self._required_text(payload, "access_token"),
+            refresh_token=self._optional_text(payload.get("refresh_token")),
+            expires_at=expires_at,
+        )
+
+    @staticmethod
+    def _required_text(payload: dict[str, object], key: str) -> str:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"OAuth token endpoint response missing {key}")
+        return value
+
+    @staticmethod
+    def _optional_text(value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("OAuth token endpoint response has invalid refresh_token")
+        return value
+
+    @staticmethod
+    def _expires_at(value: object) -> datetime | None:
+        if value is None:
+            return None
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError("OAuth token endpoint response has invalid expires_in")
+        return datetime.now(UTC) + timedelta(seconds=value)
+
+
 class McpRegistryService:
     """Owns MCP registration, auth state, and backend-only credentials."""
 
@@ -52,10 +133,12 @@ class McpRegistryService:
         *,
         store: InMemoryMcpStore | None = None,
         token_vault: TokenVault | None = None,
+        token_exchanger: OAuthTokenExchanger | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
-        self.store = store or InMemoryMcpStore()
+        self.store = store or self._default_store()
         self.token_vault = token_vault or TokenVaultFactory.create()
+        self.token_exchanger = token_exchanger or HttpOAuthTokenExchanger()
         self.auth_session_ttl = auth_session_ttl
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
@@ -143,9 +226,7 @@ class McpRegistryService:
             self._audit(updated, "mcp_auth_unsupported")
             raise ValueError("MCP server does not support OAuth authentication")
 
-        verifier = base64.urlsafe_b64encode(hashlib.sha256(record.server_id.encode()).digest()).decode(
-            "ascii"
-        ).rstrip("=")
+        verifier = token_urlsafe(64)
         expires_at = datetime.now(UTC) + self.auth_session_ttl
         auth_url = self._oauth_authorization_url(record=record, redirect_uri=request.redirect_uri)
         session = McpAuthSessionRecord(
@@ -183,13 +264,19 @@ class McpRegistryService:
             user_id=session.user_id,
             server_id=session.server_id,
         )
+        tokens = self.token_exchanger.exchange_code(record=record, session=session, code=request.code)
         self.store.put_token(
             TokenEnvelope(
                 server_id=record.server_id,
                 org_id=record.org_id,
                 user_id=record.user_id,
-                encrypted_access_token=self.token_vault.encrypt(f"access:{request.code}"),
-                encrypted_refresh_token=self.token_vault.encrypt(f"refresh:{request.code}"),
+                encrypted_access_token=self.token_vault.encrypt(tokens.access_token),
+                encrypted_refresh_token=(
+                    self.token_vault.encrypt(tokens.refresh_token)
+                    if tokens.refresh_token is not None
+                    else None
+                ),
+                expires_at=tokens.expires_at,
             )
         )
         updated = self._update_record(record, auth_state=McpAuthState.AUTHENTICATED)
@@ -265,6 +352,12 @@ class McpRegistryService:
     def _update_record(self, record: McpServerRecord, **changes: object) -> McpServerRecord:
         updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         return self.store.update_server(updated)
+
+    @classmethod
+    def _default_store(cls) -> InMemoryMcpStore:
+        if TokenVaultFactory.environment() == "production":
+            raise RuntimeError("Production requires a persistent MCP registry store")
+        return InMemoryMcpStore()
 
     def _require_server_for_user(self, *, org_id: str, user_id: str, server_id: str) -> McpServerRecord:
         record = self._server_for_user(org_id=org_id, user_id=user_id, server_id=server_id)

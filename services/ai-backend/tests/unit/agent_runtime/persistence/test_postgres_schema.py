@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_runtime.persistence.postgres import (
+from agent_runtime.persistence.schema.postgres import (
     AGENT_RUNTIME_TABLES,
     POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
     PostgresMigrationCatalog,

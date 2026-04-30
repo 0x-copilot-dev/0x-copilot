@@ -4,8 +4,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from agent_runtime.agent.contracts import AgentRuntimeContext
-from agent_runtime.subagents import (
+from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.delegation.subagents import (
     AsyncSubagentLifecycle,
     AsyncSubagentLaunch,
     AsyncTaskState,
@@ -15,7 +15,7 @@ from agent_runtime.subagents import (
     SubagentResult,
     SubagentTask,
 )
-from agent_runtime.subagents.contracts import RuntimeContextReference
+from agent_runtime.delegation.subagents.contracts import RuntimeContextReference
 
 
 class SubagentTestMixin:

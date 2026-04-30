@@ -22,7 +22,7 @@ Required models:
 
 - `AgentRuntimeContext`: `user_id`, `org_id`, `roles`, `permission_scopes`, `connector_scopes`, `model_profile`, `trace_id`, `feature_flags`.
 - `ModelConfig`: provider, model name, max input tokens, timeout, temperature, and streaming support.
-- `RuntimeDependencies`: tool registry, MCP registry, skill source config, memory backend factory, subagent catalog, stream normalizer.
+- `RuntimeDependencies`: tool registry, MCP registry, skill source config, memory backend factory, and subagent catalog.
 - `RuntimeErrorEnvelope`: typed error code, safe message, retryable flag, correlation ID.
 
 Use strict mode where possible. IDs and names should be constrained strings, not raw `str`.

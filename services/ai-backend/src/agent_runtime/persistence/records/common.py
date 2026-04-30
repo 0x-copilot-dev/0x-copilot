@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from agent_runtime.agent.contracts import JsonObject
+from agent_runtime.execution.contracts import JsonObject
 from agent_runtime.observability.redaction import ObservabilityRedactor
 from agent_runtime.persistence.constants import Messages, Patterns
 

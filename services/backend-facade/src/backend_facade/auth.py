@@ -37,17 +37,23 @@ class AuthenticatedIdentity:
             params.update(extra)
         return params
 
-    def scoped_payload(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+    def scoped_payload(
+        self,
+        payload: dict[str, object] | None = None,
+        *,
+        include_request_context: bool = False,
+    ) -> dict[str, object]:
         scoped = dict(payload or {})
         scoped["org_id"] = self.org_id
         scoped["user_id"] = self.user_id
         scoped.pop("runtime_context", None)
-        scoped["request_context"] = {
-            **dict(scoped.get("request_context") if isinstance(scoped.get("request_context"), dict) else {}),
-            "roles": self.roles,
-            "permission_scopes": self.permission_scopes,
-            "connector_scopes": self.connector_scopes,
-        }
+        if include_request_context:
+            scoped["request_context"] = {
+                **dict(scoped.get("request_context") if isinstance(scoped.get("request_context"), dict) else {}),
+                "roles": self.roles,
+                "permission_scopes": self.permission_scopes,
+                "connector_scopes": self.connector_scopes,
+            }
         return scoped
 
 
@@ -60,7 +66,7 @@ class FacadeAuthenticator:
 
         header = request.headers.get(AUTH_HEADER, "")
         if not header.lower().startswith("bearer "):
-            if cls._environment() != "production":
+            if cls._environment() == "development":
                 return cls._development_identity()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         token = header.split(" ", maxsplit=1)[1].strip()
@@ -122,7 +128,7 @@ class FacadeAuthenticator:
         value = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
         if value:
             return value
-        if cls._environment() != "production":
+        if cls._environment() == "development":
             return "local-dev-service-token"
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENTERPRISE_SERVICE_TOKEN is not configured")
 

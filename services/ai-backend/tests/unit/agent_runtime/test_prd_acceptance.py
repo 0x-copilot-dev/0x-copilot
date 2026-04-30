@@ -4,17 +4,14 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     FeatureFlag,
     ModelConfig,
     RuntimeDependencies,
-    StreamEventSource,
-    StreamEventType,
 )
-from agent_runtime.agent.factory import create_agent_runtime
-from agent_runtime.agent.streaming import LangGraphStreamNormalizer
-from agent_runtime.mcp import (
+from agent_runtime.execution.factory import create_agent_runtime
+from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
     McpAuthMode,
     McpLoadRequest,
@@ -27,7 +24,7 @@ from agent_runtime.mcp import (
     McpToolDescriptor,
     McpTransport,
 )
-from agent_runtime.memory import (
+from agent_runtime.context.memory import (
     ContextCompressionStrategy,
     ContextPayloadManager,
     ContextSummarizationManager,
@@ -38,9 +35,9 @@ from agent_runtime.memory import (
     ScopedMemoryBackendFactory,
     TokenBudgetPolicy,
 )
-from agent_runtime.memory.policy import MemoryPolicyAuthorizer
-from agent_runtime.skills.sources import SkillSourceConfig, SkillSourceRegistry
-from agent_runtime.subagents import (
+from agent_runtime.context.memory.policy import MemoryPolicyAuthorizer
+from agent_runtime.capabilities.skills.sources import SkillSourceConfig, SkillSourceRegistry
+from agent_runtime.delegation.subagents import (
     AsyncSubagentLaunch,
     AsyncSubagentLifecycle,
     AsyncTaskStatus,
@@ -50,7 +47,7 @@ from agent_runtime.subagents import (
     SubagentResult,
     SubagentTask,
 )
-from agent_runtime.tools import (
+from agent_runtime.capabilities.tools import (
     DynamicToolRegistry,
     LoadedToolSpec,
     ToolCard,
@@ -279,7 +276,6 @@ Use this only when source-backed research is needed.
         providers=(FakeSubagentDefinitionProvider((subagent_definition,)),)
     )
 
-    normalizer = LangGraphStreamNormalizer()
     builder = CapturingAgentBuilder()
     harness = create_agent_runtime(
         context=context,
@@ -289,7 +285,6 @@ Use this only when source-backed research is needed.
             skill_source_config=skill_config,
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=subagent_catalog,
-            stream_normalizer=normalizer,
         ),
         agent_builder=builder,
     )
@@ -384,53 +379,3 @@ Use this only when source-backed research is needed.
     assert started.state is not None
     assert checked.result is not None
     assert checked.result.execution_summary is not None
-
-    tool_call_events = normalizer.normalize(
-        {
-            "mode": "messages",
-            "chunk": {
-                "tool_calls": (
-                    {
-                        "name": "doc_search",
-                        "id": "call_123",
-                        "args": {
-                            "query": "launch risks",
-                            "authorization": "bearer super-secret",
-                        },
-                    },
-                )
-            },
-            "metadata": {"trace_id": context.trace_id},
-        },
-        context,
-    )
-    lifecycle_events = normalizer.normalize(
-        {
-            "mode": "custom",
-            "event_type": "lifecycle",
-            "ns": ("supervisor", "subagent:researcher"),
-            "chunk": {
-                "task_id": "task_123",
-                "parent_task_id": "task_123",
-                "status": "running",
-                "summary": "Subagent started.",
-            },
-        },
-        context,
-    )
-    filtered_events = normalizer.normalize(
-        {
-            "mode": "messages",
-            "ns": ("summarization",),
-            "chunk": {"content": "internal summary token"},
-        },
-        context,
-    )
-
-    assert tool_call_events[0].event_type == StreamEventType.TOOL_CALL
-    assert tool_call_events[0].source == StreamEventSource.TOOL
-    assert tool_call_events[0].payload["args"]["authorization"] == "[redacted]"
-    assert lifecycle_events[0].source == StreamEventSource.SUBAGENT
-    assert lifecycle_events[0].parent_task_id == "task_123"
-    assert "ns" not in lifecycle_events[0].payload
-    assert filtered_events == ()

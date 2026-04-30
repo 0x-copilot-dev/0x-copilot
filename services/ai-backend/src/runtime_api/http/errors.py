@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette import status
 
-from agent_runtime.agent.contracts import JsonObject, RuntimeErrorCode, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import JsonObject, RuntimeErrorCode, RuntimeErrorEnvelope
 from agent_runtime.api.constants import Messages
 from runtime_api.schemas import ApiErrorResponse
 

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import BackendSkillProvider, VirtualSkillRegistry
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
-from agent_runtime.events.normalization.langgraph import LangGraphStreamNormalizer
 from agent_runtime.settings import RuntimeSettings
 
 
@@ -50,7 +49,6 @@ class DefaultRuntimeDependenciesFactory:
             skill_registry=self._skill_registry(_context),
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=EmptySubagentCatalog(),
-            stream_normalizer=LangGraphStreamNormalizer(),
         )
 
     def _mcp_registry(self, context: AgentRuntimeContext) -> object:

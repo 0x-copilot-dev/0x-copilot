@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.tools import (
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.capabilities.tools import (
     DynamicToolRegistry,
     Messages,
     ToolLoadErrorCode,

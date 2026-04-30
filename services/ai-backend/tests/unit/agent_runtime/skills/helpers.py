@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skills.constants import Keys
-from agent_runtime.skills.manifest import (
+from agent_runtime.capabilities.skills.constants import Keys
+from agent_runtime.capabilities.skills.manifest import (
     SkillErrorCode,
     SkillManifest,
     SkillManifestError,
     SkillManifestParser,
     SkillManifestReader,
 )
-from agent_runtime.skills.policy import SkillAccessPolicy
-from agent_runtime.skills.sources import (
+from agent_runtime.capabilities.skills.policy import SkillAccessPolicy
+from agent_runtime.capabilities.skills.sources import (
     ConfiguredSkill,
     SkillSource,
     SkillSourceConfig,

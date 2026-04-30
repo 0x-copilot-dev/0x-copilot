@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from backend_app.contracts import OAuthTokenRequest
 from backend_app.app import create_app
 from backend_app.service import McpRegistryService
 from backend_app.store import InMemoryMcpStore
 
 
+class FakeOAuthTokenExchanger:
+    def exchange_code(self, **kwargs) -> OAuthTokenRequest:
+        return OAuthTokenRequest(
+            access_token=f"access-token-for-{kwargs['code']}",
+            refresh_token=f"refresh-token-for-{kwargs['code']}",
+        )
+
+
 def test_public_and_internal_mcp_auth_flow() -> None:
     store = InMemoryMcpStore()
-    app = create_app(McpRegistryService(store=store))
+    app = create_app(McpRegistryService(store=store, token_exchanger=FakeOAuthTokenExchanger()))
     client = TestClient(app)
 
     created = client.post(

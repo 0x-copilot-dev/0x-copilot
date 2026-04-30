@@ -61,7 +61,7 @@ class TestFacadeSettings(FacadeAuthTestMixin):
             assert args[2] == "/v1/agent/conversations"
             assert kwargs["json"]["org_id"] == "org_123"
             assert kwargs["json"]["user_id"] == "user_123"
-            assert kwargs["json"]["request_context"]["permission_scopes"] == ("runtime:use",)
+            assert "request_context" not in kwargs["json"]
             return {"conversation_id": "conv_123"}
 
         monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
@@ -76,13 +76,13 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_123"}
 
-    def test_facade_uses_development_identity_without_bearer_token(self, monkeypatch) -> None:
+    def test_facade_uses_default_development_identity_without_bearer_token(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
             assert args[2] == "/v1/agent/conversations"
             assert kwargs["json"]["org_id"] == "org_123"
             assert kwargs["json"]["user_id"] == "user_123"
-            assert kwargs["json"]["request_context"]["permission_scopes"] == ("runtime:use",)
+            assert "request_context" not in kwargs["json"]
             return {"conversation_id": "conv_dev"}
 
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
@@ -98,6 +98,59 @@ class TestFacadeSettings(FacadeAuthTestMixin):
 
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_dev"}
+
+    def test_facade_uses_configured_development_identity_without_bearer_token(self, monkeypatch) -> None:
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            assert args[1] == "POST"
+            assert args[2] == "/v1/agent/runs"
+            assert kwargs["json"]["org_id"] == "org_dev"
+            assert kwargs["json"]["user_id"] == "user_dev"
+            assert kwargs["json"]["request_context"]["permission_scopes"] == ("runtime:use",)
+            return {"run_id": "run_dev"}
+
+        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
+        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
+        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        monkeypatch.setenv("FACADE_DEV_ORG_ID", "org_dev")
+        monkeypatch.setenv("FACADE_DEV_USER_ID", "user_dev")
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.post(
+            "/v1/agent/runs",
+            json={
+                "conversation_id": "conversation_dev",
+                "org_id": "forged_org",
+                "user_id": "forged_user",
+                "user_input": "Hi",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"run_id": "run_dev"}
+
+    def test_facade_rejects_missing_bearer_token_outside_development(self, monkeypatch) -> None:
+        monkeypatch.setenv("FACADE_ENVIRONMENT", "staging")
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get("/v1/skills")
+
+        assert response.status_code == 401
+
+    def test_facade_exposes_authenticated_session_identity(self, monkeypatch) -> None:
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get("/v1/session", headers=self.auth_headers(monkeypatch))
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "identity": {
+                "org_id": "org_123",
+                "user_id": "user_123",
+                "roles": ["employee"],
+                "permission_scopes": ["runtime:use"],
+            }
+        }
 
     def test_facade_forwards_run_cancel_to_ai(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):

@@ -4,8 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from agent_runtime.agent.contracts import AgentRuntimeContext
-from agent_runtime.mcp import McpAuthState, McpServerCard
+from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.capabilities.mcp import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool, McpAuthSession
 
 

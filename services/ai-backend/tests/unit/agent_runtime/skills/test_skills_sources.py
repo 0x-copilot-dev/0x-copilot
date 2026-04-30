@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skills.manifest import SkillErrorCode, SkillManifestError
-from agent_runtime.skills.sources import (
+from agent_runtime.capabilities.skills.manifest import SkillErrorCode, SkillManifestError
+from agent_runtime.capabilities.skills.sources import (
     SkillSource,
     SkillSourceConfig,
     SkillSourceScope,

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, field_validator
 
-from agent_runtime.agent.contracts import JsonObject, RuntimeContract, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import JsonObject, RuntimeContract, RuntimeErrorEnvelope
 from agent_runtime.persistence.constants import Keys
 from agent_runtime.persistence.records.common import OutboxStatus, PersistenceValueNormalizer
 

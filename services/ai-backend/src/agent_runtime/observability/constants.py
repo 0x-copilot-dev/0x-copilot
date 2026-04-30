@@ -108,7 +108,7 @@ class Values:
 
 
 class Defaults:
-    """Default limits and placeholders for stream normalization."""
+    """Default limits and placeholders for stream projection."""
 
     MAX_STREAM_FIELD_LENGTH = 2_000
     MAX_STREAM_PAYLOAD_CHARS = 4_000

@@ -1,15 +1,15 @@
 import type {
   CreateMcpServerRequest,
-  McpAuthRequiredEventPayload,
   McpAuthStartResponse,
   McpServer,
   McpServerListResponse,
   UpdateMcpServerRequest
 } from "@enterprise-search/api-types";
-import { DEFAULT_IDENTITY, type RequestIdentity, identityParams } from "./config";
+import type { RequestIdentity } from "./config";
+import { identityParams } from "./config";
 import { assertOk, jsonHeaders } from "./http";
 
-export async function listMcpServers(identity: RequestIdentity = DEFAULT_IDENTITY): Promise<McpServer[]> {
+export async function listMcpServers(identity: RequestIdentity): Promise<McpServer[]> {
   const response = await fetch(`/v1/mcp/servers?${identityParams(identity)}`);
   await assertOk(response);
   const payload = (await response.json()) as McpServerListResponse;
@@ -18,7 +18,7 @@ export async function listMcpServers(identity: RequestIdentity = DEFAULT_IDENTIT
 
 export async function createMcpServer(
   url: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<McpServer> {
   const payload: CreateMcpServerRequest = {
     org_id: identity.orgId,
@@ -37,7 +37,7 @@ export async function createMcpServer(
 export async function updateMcpServer(
   serverId: string,
   payload: UpdateMcpServerRequest,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<McpServer> {
   const response = await fetch(`/v1/mcp/servers/${serverId}?${identityParams(identity)}`, {
     method: "PATCH",
@@ -50,7 +50,7 @@ export async function updateMcpServer(
 
 export async function deleteMcpServer(
   serverId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<void> {
   const response = await fetch(`/v1/mcp/servers/${serverId}?${identityParams(identity)}`, {
     method: "DELETE"
@@ -60,7 +60,7 @@ export async function deleteMcpServer(
 
 export async function startMcpAuth(
   serverId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<McpAuthStartResponse> {
   const response = await fetch(`/v1/mcp/servers/${serverId}/auth/start`, {
     method: "POST",
@@ -77,7 +77,7 @@ export async function startMcpAuth(
 
 export async function skipMcpAuth(
   serverId: string,
-  identity: RequestIdentity = DEFAULT_IDENTITY
+  identity: RequestIdentity
 ): Promise<McpServer> {
   const response = await fetch(`/v1/mcp/servers/${serverId}/auth/skip?${identityParams(identity)}`, {
     method: "POST"
@@ -91,19 +91,4 @@ export async function completeMcpOAuth(state: string, code: string): Promise<Mcp
   const response = await fetch(`/v1/mcp/oauth/callback?${params}`);
   await assertOk(response);
   return (await response.json()) as McpServer;
-}
-
-export function isMcpAuthRequiredPayload(
-  payload: unknown
-): payload is McpAuthRequiredEventPayload {
-  if (typeof payload !== "object" || payload === null) {
-    return false;
-  }
-  const candidate = payload as Record<string, unknown>;
-  return (
-    typeof candidate.server_id === "string" &&
-    typeof candidate.display_name === "string" &&
-    typeof candidate.auth_url === "string" &&
-    typeof candidate.expires_at === "string"
-  );
 }

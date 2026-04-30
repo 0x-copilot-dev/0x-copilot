@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from agent_runtime.agent.contracts import StreamEventSource
+from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
 from runtime_api.schemas import (
     AgentRunStatus,

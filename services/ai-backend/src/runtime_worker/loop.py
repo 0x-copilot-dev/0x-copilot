@@ -11,7 +11,7 @@ from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueu
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.contracts import RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import RuntimeApprovalResolvedCommand, RuntimeCancelCommand, RuntimeRunCommand
 from runtime_worker.handlers.approval import RuntimeApprovalHandler

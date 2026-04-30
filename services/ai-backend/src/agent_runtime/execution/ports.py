@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 
@@ -36,11 +36,3 @@ class SubagentCatalog(Protocol):
 
     def list_available_subagents(self, context: object) -> Sequence[object]:
         """Return subagent definitions visible to this context."""
-
-
-@runtime_checkable
-class StreamNormalizer(Protocol):
-    """Normalizes runtime events before they are emitted to product surfaces."""
-
-    def normalize(self, raw_event: Mapping[str, object], context: object) -> Sequence[object]:
-        """Return redacted, typed stream events for this context."""

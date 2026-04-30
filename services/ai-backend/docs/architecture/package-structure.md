@@ -15,22 +15,11 @@ services/ai-backend/
         tools/
         mcp/
         skills/
-      tools/
-        # compatibility path; new code prefers capabilities/tools
-      mcp/
-        # compatibility path; new code prefers capabilities/mcp
-      skills/
-        # compatibility path; new code prefers capabilities/skills
       context/
         memory/
-      memory/
-        # compatibility path; new code prefers context/memory
       delegation/
         subagents/
-      subagents/
-        # compatibility path; new code prefers delegation/subagents
       events/
-        normalization/
         contracts/
         projection/
       observability/
@@ -39,7 +28,7 @@ services/ai-backend/
         schema/
         ports.py
       api/
-        # compatibility imports plus runtime producer service/ports/events
+        # runtime producer service/ports/events
     runtime_api/
       app.py
       http/
@@ -66,21 +55,22 @@ services/ai-backend/
 - `runtime_adapters/`: concrete adapters for tests and local/production-style infrastructure, including deterministic in-memory persistence/event/queue behavior and the PostgreSQL runtime adapter.
 - `runtime_worker/`: async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
 
-Compatibility modules remain under older paths such as `agent_runtime.agent.*`, `agent_runtime.tools.*`, `agent_runtime.mcp.*`, `agent_runtime.skills.*`, `agent_runtime.memory.*`, `agent_runtime.subagents.*`, and `agent_runtime.api.contracts` so existing imports keep working during the migration. New code should prefer the canonical packages above.
+Legacy compatibility modules under `agent_runtime.agent.*`, `agent_runtime.tools.*`, `agent_runtime.mcp.*`, `agent_runtime.skills.*`, `agent_runtime.memory.*`, `agent_runtime.subagents.*`, and broad `agent_runtime.api.*` re-export paths have been removed. Use the canonical packages below.
 
 ## Canonical Import Paths
 
-| Concern | New code should use | Compatibility paths |
-| --- | --- | --- |
-| Tool capabilities | `agent_runtime.capabilities.tools.*` | `agent_runtime.tools.*` |
-| MCP capabilities | `agent_runtime.capabilities.mcp.*` | `agent_runtime.mcp.*` |
-| Skills middleware and registries | `agent_runtime.capabilities.skills.*` | `agent_runtime.skills.*` |
-| Context memory | `agent_runtime.context.memory.*` | `agent_runtime.memory.*` |
-| Subagent delegation | `agent_runtime.delegation.subagents.*` | `agent_runtime.subagents.*` |
-| Runtime API service and ports | `agent_runtime.api.*` | selected legacy contract re-exports |
+| Concern | Canonical package |
+| --- | --- |
+| Execution contracts, graph, and factory | `agent_runtime.execution.*` |
+| Tool capabilities | `agent_runtime.capabilities.tools.*` |
+| MCP capabilities | `agent_runtime.capabilities.mcp.*` |
+| Skills middleware and registries | `agent_runtime.capabilities.skills.*` |
+| Context memory | `agent_runtime.context.memory.*` |
+| Subagent delegation | `agent_runtime.delegation.subagents.*` |
+| Runtime API service and producer ports | `agent_runtime.api.service`, `agent_runtime.api.ports`, `agent_runtime.api.events` |
 
-Do not add new behavior only to a compatibility path. If a compatibility module
-is still needed, keep it as a thin import wrapper over the canonical package.
+Do not add compatibility aliases for old package paths. Move callers to the
+canonical owner instead.
 
 ## Dependency Direction
 

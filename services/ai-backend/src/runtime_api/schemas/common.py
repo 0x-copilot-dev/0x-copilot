@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from agent_runtime.agent.contracts import JsonObject, StreamEventType
+from agent_runtime.execution.contracts import JsonObject, StreamEventType
 from agent_runtime.api.constants import Messages, Patterns
 from agent_runtime.observability.redaction import ObservabilityRedactor
 
@@ -64,6 +64,20 @@ class RuntimeEventRedactionState(StrEnum):
     REDACTED = "redacted"
     TRUNCATED = "truncated"
     OFFLOADED = "offloaded"
+
+
+class RuntimeActivityKind(StrEnum):
+    """Server-projected UI activity bucket for runtime events."""
+
+    RUN = "run"
+    MESSAGE = "message"
+    TOOL = "tool"
+    SUBAGENT = "subagent"
+    REASONING = "reasoning"
+    MCP_AUTH = "mcp_auth"
+    APPROVAL = "approval"
+    HEARTBEAT = "heartbeat"
+    EVENT = "event"
 
 
 

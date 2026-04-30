@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig
-from agent_runtime.tools import (
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.capabilities.tools import (
     DynamicToolRegistry,
     LoadedToolSpec,
     ToolCard,

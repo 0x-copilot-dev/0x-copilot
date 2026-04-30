@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 
 from starlette import status
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeErrorCode, StreamEventSource
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode, StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
-from agent_runtime.api.contracts import (
+from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -30,7 +30,7 @@ from agent_runtime.api.contracts import (
     RunRecord,
     RunStatusResponse,
 )
-from agent_runtime.api.errors import RuntimeApiError
+from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.errors import AgentRuntimeError

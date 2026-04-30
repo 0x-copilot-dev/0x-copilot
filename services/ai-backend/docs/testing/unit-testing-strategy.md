@@ -33,7 +33,7 @@ Every backend feature must ship with focused unit tests before integration tests
 2. Policy tests: permissions, memory scopes, risk levels, and read-only paths.
 3. Registry tests: list, lookup, duplicate handling, disabled entries, and load failures.
 4. Middleware tests: pre/post behavior, injected tools, and safe error handling.
-5. State transition tests: async subagent lifecycle, context compression events, and stream normalization.
+5. State transition tests: async subagent lifecycle, context compression events, and v2 stream projection.
 6. Backend-backed capability tests: virtual skills, internal MCP cards, and
    other service-provided capability metadata using fake providers or fake HTTP
    transports.

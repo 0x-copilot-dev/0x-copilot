@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent import factory as factory_module
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.memory import (
+from agent_runtime.execution import factory as factory_module
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.context.memory import (
     ContextCompressionEvent,
     ContextCompressionStrategy,
     ContextPayloadManager,
@@ -20,7 +20,7 @@ from agent_runtime.memory import (
     TokenBudgetPolicy,
     VersionedMemoryStore,
 )
-from agent_runtime.memory.policy import MemoryPolicyAuthorizer
+from agent_runtime.context.memory.policy import MemoryPolicyAuthorizer
 from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig
-from agent_runtime.mcp import (
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
     McpAuthMode,
     McpConnectionMetadata,
@@ -18,7 +18,7 @@ from agent_runtime.mcp import (
     McpToolDescriptor,
     McpTransport,
 )
-from agent_runtime.mcp.constants import Keys, Values
+from agent_runtime.capabilities.mcp.constants import Keys, Values
 
 
 class DynamicMcpLoadingMixin:

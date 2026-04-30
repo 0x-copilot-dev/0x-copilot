@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.observability.tracing import (
     RuntimeTracer,
     TraceContext,

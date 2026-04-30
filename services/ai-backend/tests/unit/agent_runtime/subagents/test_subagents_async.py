@@ -6,15 +6,15 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeErrorCode
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.subagents import (
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.delegation.subagents import (
     AsyncTaskStatus,
     SubagentHandoffBuilder,
     SubagentResult,
 )
-from agent_runtime.subagents.constants import Limits, Messages
-from agent_runtime.subagents.contracts import SubagentErrorCode
+from agent_runtime.delegation.subagents.constants import Limits, Messages
+from agent_runtime.delegation.subagents.contracts import SubagentErrorCode
 from tests.unit.agent_runtime.subagents.helpers import SubagentTestMixin
 
 

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from pydantic import Field, NonNegativeInt, ValidationInfo, field_validator, model_validator
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, JsonObject, RuntimeContract, RuntimeErrorEnvelope
+from agent_runtime.execution.contracts import AgentRuntimeContext, JsonObject, RuntimeContract, RuntimeErrorEnvelope
 from agent_runtime.api.constants import Keys, Values
 from runtime_api.schemas.common import AgentRunStatus, RuntimeApiValueNormalizer
 

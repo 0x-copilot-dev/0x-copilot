@@ -16,6 +16,18 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
     app = FastAPI(title="Enterprise Search Backend Facade")
     app.state.settings = settings or FacadeSettings.load()
 
+    @app.get("/v1/session")
+    async def get_session(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return {
+            "identity": {
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+                "roles": list(identity.roles),
+                "permission_scopes": list(identity.permission_scopes),
+            }
+        }
+
     @app.post("/v1/mcp/servers")
     async def create_mcp_server(request: Request, payload: dict[str, object]) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
@@ -158,7 +170,7 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             app,
             "POST",
             "/v1/agent/runs",
-            json=identity.scoped_payload(payload),
+            json=identity.scoped_payload(payload, include_request_context=True),
             identity=identity,
         )
 

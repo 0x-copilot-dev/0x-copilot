@@ -1,7 +1,6 @@
 import type { McpServer } from "@enterprise-search/api-types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RequestIdentity } from "../../api/config";
-import { DEFAULT_IDENTITY } from "../../api/config";
 import {
   createMcpServer,
   deleteMcpServer,
@@ -23,12 +22,16 @@ export interface ConnectorState {
   skipAuth: (serverId: string) => Promise<void>;
 }
 
-export function useConnectors(identity: RequestIdentity = DEFAULT_IDENTITY): ConnectorState {
+export function useConnectors(identity: RequestIdentity | null): ConnectorState {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (identity === null) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setServers(await listMcpServers(identity));
@@ -48,23 +51,28 @@ export function useConnectors(identity: RequestIdentity = DEFAULT_IDENTITY): Con
     () => ({
       refresh,
       async addServer(url: string): Promise<void> {
-        await createMcpServer(url, identity);
+        const currentIdentity = requireIdentity(identity);
+        await createMcpServer(url, currentIdentity);
         await refresh();
       },
       async removeServer(serverId: string): Promise<void> {
-        await deleteMcpServer(serverId, identity);
+        const currentIdentity = requireIdentity(identity);
+        await deleteMcpServer(serverId, currentIdentity);
         await refresh();
       },
       async setEnabled(serverId: string, enabled: boolean): Promise<void> {
-        await updateMcpServer(serverId, { enabled }, identity);
+        const currentIdentity = requireIdentity(identity);
+        await updateMcpServer(serverId, { enabled }, currentIdentity);
         await refresh();
       },
       async authenticate(serverId: string): Promise<void> {
-        const auth = await startMcpAuth(serverId, identity);
+        const currentIdentity = requireIdentity(identity);
+        const auth = await startMcpAuth(serverId, currentIdentity);
         window.location.href = auth.auth_url;
       },
       async skipAuth(serverId: string): Promise<void> {
-        await skipMcpAuth(serverId, identity);
+        const currentIdentity = requireIdentity(identity);
+        await skipMcpAuth(serverId, currentIdentity);
         await refresh();
       }
     }),
@@ -81,4 +89,11 @@ export function useConnectors(identity: RequestIdentity = DEFAULT_IDENTITY): Con
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+function requireIdentity(identity: RequestIdentity | null): RequestIdentity {
+  if (identity === null) {
+    throw new Error("Session identity is not loaded.");
+  }
+  return identity;
 }

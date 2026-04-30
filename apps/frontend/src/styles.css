@@ -20,6 +20,50 @@ p {
   line-height: 1.55;
 }
 
+:root {
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --muted: var(--color-surface-muted);
+  --muted-foreground: var(--color-text-muted);
+  --border: var(--color-border);
+  --accent: var(--color-surface-muted);
+  --accent-foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-accent-contrast);
+  --secondary: var(--color-surface-muted);
+  --secondary-foreground: var(--color-text);
+  --radius: var(--radius-md);
+}
+
+.assistant-markdown {
+  color: var(--color-text);
+  white-space: normal;
+}
+
+.assistant-markdown :where(p, ul, ol, pre, blockquote, table) {
+  margin: 0 0 var(--space-md);
+}
+
+.assistant-markdown :where(p:last-child, ul:last-child, ol:last-child, pre:last-child, blockquote:last-child, table:last-child) {
+  margin-bottom: 0;
+}
+
+.assistant-markdown :where(p, li) {
+  color: var(--color-text);
+}
+
+.assistant-markdown :where(a) {
+  color: var(--color-accent-strong);
+}
+
+.assistant-markdown :where(code, pre) {
+  font-family: var(--font-mono);
+}
+
 .app-eyebrow {
   color: var(--color-text-subtle);
   display: inline-flex;
@@ -32,6 +76,19 @@ p {
 .app-error {
   color: var(--color-danger);
   margin-bottom: 0;
+}
+
+.app-loading {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
 }
 
 .chat-header {

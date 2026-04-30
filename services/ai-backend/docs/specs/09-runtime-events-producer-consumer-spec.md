@@ -55,8 +55,9 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Build no-op local runtime dependencies until production connector adapters exist.
 - Invoke `astream_runtime()` through `create_agent_runtime()` for streaming-capable model profiles, falling back to `ainvoke_runtime()` when streaming is disabled or unavailable.
 - Append ordered lifecycle events for queued, started, completed, cancelled, failed, and approval-resolution paths.
-- Append `model_delta` events from provider stream chunks while the model is running.
-- Normalize non-model stream chunks through `LangGraphStreamNormalizer` and append replayable reasoning, tool, observation, and subagent events through `RuntimeEventProducer`.
+- Consume LangGraph/DeepAgents v2 `StreamPart` chunks with `type`, `ns`, and `data`.
+- Append `model_delta` events from `messages` token chunks while the model is running.
+- Project `messages`, `updates`, and `custom` parts into replayable reasoning, tool, observation, and subagent events through `RuntimeEventProducer`.
 - Persist the final assistant output as both an assistant message and a `final_response` event.
 - Observe cancellation and approval commands.
 - Mark terminal run state exactly once.
@@ -75,10 +76,10 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 
 Clients should store the highest received `sequence_no` per `run_id` and reconnect with `after_sequence`.
 
-Provider stream chunks are exposed as `model_delta` events. The exact text chunk
-is in `payload.delta`; `summary` is display-oriented and may be normalized.
-Clients that want incremental text rendering should concatenate `payload.delta`
-until the `final_response` event arrives.
+Provider message token chunks are exposed as `model_delta` events. The exact text
+chunk is in `payload.delta`; `summary` is display-oriented and may be normalized.
+Clients that want incremental Markdown rendering should concatenate
+`payload.delta` until the `final_response` event arrives.
 
 ## Lifecycle Events
 

@@ -12,10 +12,9 @@ The app calls `backend-facade` through `/v1/*`.
 | --- | --- | --- |
 | `src/api/agentApi.ts` | `/v1/agent/*` | `services/ai-backend`, reached through `services/backend-facade` |
 | `src/api/mcpApi.ts` | `/v1/mcp/*` | `services/backend`, reached through `services/backend-facade` |
-| `src/skillsApi.ts` | `/v1/skills*` | `services/backend`, reached through `services/backend-facade` |
 
-Use `src/api/*` as the canonical API layer for new work. Legacy root-level API
-helpers should not gain new callers; move behavior into `src/api/*` first.
+Use `src/api/*` as the only browser route-client layer. Add a new module there
+when a route family becomes part of the shipped frontend surface.
 
 ## App Structure
 
@@ -28,6 +27,19 @@ helpers should not gain new callers; move behavior into `src/api/*` first.
 Shared contracts come from `@enterprise-search/api-types`. Shared UI primitives
 and theme behavior come from `@enterprise-search/design-system`.
 
+## Streaming Chat Rendering
+
+`src/api/agentApi.ts` opens the runtime SSE stream and emits typed
+`RuntimeEventEnvelope` records into `src/features/chat/chatModel.ts`.
+The backend projects each event into `activity_kind`, `display_title`,
+`summary`, and `status`; the frontend renders those fields instead of deriving
+tool/subagent/run categories from event name prefixes.
+Assistant text is assembled by concatenating `model_delta.payload.delta` until a
+`final_response` reconciles the completed message. Assistant messages are
+Markdown and render through Streamdown so incomplete streamed Markdown remains
+stable while tokens arrive. User, system, status, approval, and activity text
+remain plain React text unless a feature explicitly opts into Markdown.
+
 ## Dev And Production Routing
 
 During local development, Vite proxies `/v1` to `http://127.0.0.1:8200`, the
@@ -39,9 +51,10 @@ route `/v1/*` to `backend-facade` at the ingress, gateway, or hosting layer.
 
 ## Identity State
 
-`src/api/config.ts` contains temporary default org/user identifiers. Treat them
-as local-development placeholders until auth and tenant context are owned by
-`services/backend` and surfaced through `backend-facade`.
+`src/api/sessionApi.ts` loads the current identity from `backend-facade` before
+chat and connector clients are mounted. Local development may still resolve to
+the facade's dev identity, but the browser API clients do not carry hidden
+`org_123` / `user_123` defaults.
 
 ## OAuth Callback
 

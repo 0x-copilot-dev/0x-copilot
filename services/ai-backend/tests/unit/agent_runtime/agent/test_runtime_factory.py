@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.agent.contracts import (
+from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
     RuntimeErrorCode,
 )
-from agent_runtime.agent.errors import AgentRuntimeError
-from agent_runtime.agent.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
+from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
 from tests.unit.fakes import (
     FakeMcpRegistry,
@@ -55,6 +57,45 @@ def test_factory_propagates_permissions_to_runtime_ports(
     assert call["tools"] == ("doc_search",)
 
 
+class FakeMcpProvider:
+    def list_server_cards(self) -> tuple[McpServerCard, ...]:
+        return (
+            McpServerCard(
+                name="drive_mcp",
+                display_name="Drive MCP",
+                short_description="Search Drive.",
+                transport="http",
+                auth_mode="oauth2",
+                auth_state=McpAuthState.AUTH_SKIPPED,
+                required_scopes=("docs:read",),
+                health="healthy",
+                load_cost=1,
+            ),
+        )
+
+    def create_client(self, _name: str) -> object:
+        return object()
+
+
+def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+    dependencies = fake_dependencies.model_copy(
+        update={"mcp_registry": DynamicMcpRegistry(providers=(FakeMcpProvider(),))}
+    )
+
+    create_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=dependencies,
+        agent_builder=builder,
+    )
+
+    tool_names = {getattr(tool, "name", "") for tool in builder.calls[0]["tools"]}
+    assert "load_mcp_server" in tool_names
+
+
 def test_factory_rejects_invalid_dependency_dict(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
@@ -67,7 +108,6 @@ def test_factory_rejects_invalid_dependency_dict(
                 "skill_source_config": {},
                 "memory_backend_factory": object(),
                 "subagent_catalog": object(),
-                "stream_normalizer": object(),
             },
             agent_builder=CapturingAgentBuilder(),
         )

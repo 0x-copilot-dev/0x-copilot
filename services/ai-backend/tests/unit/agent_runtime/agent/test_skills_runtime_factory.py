@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies
-from agent_runtime.agent.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
+from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.capabilities.skills.virtual import VirtualSkillCard
-from agent_runtime.skills.constants import Keys
+from agent_runtime.capabilities.skills.constants import Keys
 from tests.unit.agent_runtime.agent.helpers import SkillsRuntimeFactoryTestMixin
 
 

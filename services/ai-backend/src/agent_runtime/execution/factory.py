@@ -8,6 +8,7 @@ import inspect
 from importlib import import_module
 from typing import Any
 
+from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import (
@@ -17,10 +18,10 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
-from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
+from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
+from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerInput, LoadMcpServerTool
 from agent_runtime.capabilities.skills.constants import Keys as SkillKeys
-from agent_runtime.capabilities.skills.middleware import LoadSkillTool
+from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 
 AgentBuilder = Callable[..., object]
@@ -99,7 +100,6 @@ def create_agent_runtime(
             mcp_servers=mcp_servers,
             subagents=subagents,
             memory_backend=memory_backend,
-            stream_normalizer=runtime_dependencies.stream_normalizer,
             **{SkillKeys.DeepAgents.SKILLS: skill_directories},
         )
     except AgentRuntimeError:
@@ -176,18 +176,33 @@ def _model_visible_tools(
     model_tools = list(tools)
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
-        model_tools.append(LoadMcpServerTool(loader=loader, runtime_context=runtime_context))
+        model_tools.append(_structured_tool(LoadMcpServerTool(loader=loader, runtime_context=runtime_context), LoadMcpServerInput))
     auth_session_creator = _auth_session_creator(mcp_registry)
     if auth_session_creator is not None:
         model_tools.append(
-            AuthMcpTool(
-                auth_session_creator=auth_session_creator,
-                runtime_context=runtime_context,
+            _structured_tool(
+                AuthMcpTool(
+                    auth_session_creator=auth_session_creator,
+                    runtime_context=runtime_context,
+                ),
+                AuthMcpInput,
             )
         )
     if skill_registry is not None and callable(getattr(skill_registry, "load_skill_by_name", None)):
-        model_tools.append(LoadSkillTool(registry=skill_registry))  # type: ignore[arg-type]
+        model_tools.append(_structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput))  # type: ignore[arg-type]
     return tuple(model_tools)
+
+
+def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
+    async def invoke_adapter(**kwargs: Any) -> object:
+        return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
+
+    return StructuredTool.from_function(
+        coroutine=invoke_adapter,
+        name=str(getattr(tool_adapter, "name")),
+        description=str(getattr(tool_adapter, "description")),
+        args_schema=args_schema,
+    )
 
 
 def _auth_session_creator(mcp_registry: object) -> object | None:
