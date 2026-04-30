@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@enterprise-search/api-types": "0.1.0",
+    "@enterprise-search/design-system": "0.1.0",
     "@vitejs/plugin-react": "latest",
     "vite": "latest",
     "typescript": "latest",
