@@ -53,8 +53,10 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Re-check current run state before starting run execution.
 - Load conversation history through the persistence port.
 - Build no-op local runtime dependencies until production connector adapters exist.
-- Invoke `ainvoke_runtime()` through `create_agent_runtime()`.
+- Invoke `astream_runtime()` through `create_agent_runtime()` for streaming-capable model profiles, falling back to `ainvoke_runtime()` when streaming is disabled or unavailable.
 - Append ordered lifecycle events for queued, started, completed, cancelled, failed, and approval-resolution paths.
+- Append `model_delta` events from provider stream chunks while the model is running.
+- Persist the final assistant output as both an assistant message and a `final_response` event.
 - Observe cancellation and approval commands.
 - Mark terminal run state exactly once.
 
@@ -66,17 +68,23 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 
 - Replay persisted events first.
 - Emit `runtime_event` SSE frames.
-- Send a transient heartbeat if no replayed events are available and the run is non-terminal.
+- Follow live event appends until the run reaches a terminal state when the app has an active worker.
+- Send a transient heartbeat only for non-follow replay streams that have no persisted events and are still non-terminal.
 - Reuse the same `RuntimeEventEnvelope` contract as replay.
 
 Clients should store the highest received `sequence_no` per `run_id` and reconnect with `after_sequence`.
+
+Provider stream chunks are exposed as `model_delta` events. The exact text chunk
+is in `payload.delta`; `summary` is display-oriented and may be normalized.
+Clients that want incremental text rendering should concatenate `payload.delta`
+until the `final_response` event arrives.
 
 ## Lifecycle Events
 
 Implemented API event types include:
 
 - Run lifecycle: `run_queued`, `run_started`, `run_cancelling`, `run_cancelled`, `run_completed`, `run_failed`.
-- Progress: `progress`, `reasoning_summary`, `reasoning_summary_delta`, `observation`, `final_response`.
+- Progress/model output: `progress`, `reasoning_summary`, `reasoning_summary_delta`, `observation`, `model_delta`, `final_response`.
 - Tools: `tool_call`, `tool_call_started`, `tool_call_delta`, `tool_result`, `tool_call_completed`.
 - Subagents: `subagent_update`, `subagent_started`, `subagent_progress`, `subagent_completed`.
 - Approvals: `approval_requested`, `approval_resolved`.
@@ -92,4 +100,4 @@ Implemented API event types include:
 
 ## Test Coverage
 
-Unit tests cover ordered event envelopes, replay from sequence checkpoints, SSE output, heartbeats, cancellation events, approval resolution events, queue claim/retry/dead-letter behavior, async worker execution, retry limits, parallelism limits, and an acceptance-style multi-turn run lifecycle.
+Unit tests cover ordered event envelopes, replay from sequence checkpoints, SSE output, heartbeats, provider chunk `model_delta` streaming, cancellation events, approval resolution events, queue claim/retry/dead-letter behavior, async worker execution, retry limits, parallelism limits, and an acceptance-style multi-turn run lifecycle.

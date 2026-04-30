@@ -171,8 +171,24 @@ PYTHONPATH=src .venv/bin/python -m uvicorn runtime_api.app:app --host 127.0.0.1 
 ```
 
 This mode does not require Docker or Postgres. Submitted runs are claimed by the
-in-process worker and the SSE stream stays open until `final_response` and
-`run_completed` are emitted. Use this mode when debugging locally.
+in-process worker and the SSE stream stays open until the run reaches a terminal
+state. Model provider chunks are emitted as `model_delta` events, followed by
+`final_response` and `run_completed`. Use this mode when debugging locally.
+
+Stream a run from:
+
+```text
+GET /v1/agent/runs/{run_id}/stream?after_sequence=0&org_id=org_123&user_id=user_123
+```
+
+The event stream is Server-Sent Events. Provider chunks from OpenAI, Anthropic,
+Gemini, or any LangChain-compatible streaming model appear in `payload.delta`:
+
+```text
+event: runtime_event
+id: 3
+data: {"event_type":"model_delta","source":"model","payload":{"delta":" Hello","message":" Hello"}}
+```
 
 For API-only development without executing queued runs in-process, disable the
 worker:
@@ -221,14 +237,20 @@ DATABASE_URL=postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
 ```
 
 The schema is bootstrapped from the application on startup. After submitting a
-run, read the response from:
+run, stream live and replayed events from:
+
+```text
+GET /v1/agent/runs/{run_id}/stream?after_sequence=0&org_id=org_123&user_id=user_123
+```
+
+For non-streaming replay, use:
 
 ```text
 GET /v1/agent/runs/{run_id}/events?after_sequence=0&org_id=org_123&user_id=user_123
 ```
 
-When the worker finishes, the event stream includes `final_response` and
-`run_completed`.
+When the worker runs a streaming-capable model, the stream includes `model_delta`
+events as provider chunks arrive, then `final_response` and `run_completed`.
 
 ## Intended Direction
 

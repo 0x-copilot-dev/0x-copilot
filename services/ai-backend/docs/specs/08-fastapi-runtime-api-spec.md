@@ -32,7 +32,7 @@ Implemented endpoints under `/v1/agent`:
 - `POST /runs`: persist a user message and queued run, append `run_queued`, and enqueue a runtime worker command.
 - `GET /runs/{run_id}`: fetch current run state.
 - `GET /runs/{run_id}/events?after_sequence=N`: replay persisted event envelopes after a client checkpoint.
-- `GET /runs/{run_id}/stream?after_sequence=N`: stream replayed events and idle heartbeats as SSE.
+- `GET /runs/{run_id}/stream?after_sequence=N`: stream replayed and live event envelopes as SSE.
 - `POST /runs/{run_id}/cancel`: persist best-effort cancellation, append `run_cancelling`, and enqueue a cancel command.
 - `POST /approvals/{approval_id}/decision`: persist approval decisions, append `approval_resolved`, and enqueue a worker resume command.
 
@@ -56,7 +56,9 @@ sequenceDiagram
   API->>Queue: Enqueue RuntimeRunCommand
   API-->>Client: run_id, events_url, stream_url
   Worker->>Queue: Claim command
-  Worker->>Events: Append ordered runtime events
+  Worker->>Events: Append run_started
+  Worker->>Events: Append model_delta chunks as provider output streams
+  Worker->>Events: Append final_response and run_completed
   Client->>API: GET /events or /stream after_sequence=N
   API-->>Client: Replayable RuntimeEventEnvelope records
 ```
@@ -110,6 +112,31 @@ selection values are `openai`, `anthropic`, `google`, and `gemini`; provider
 credentials come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and
 `GOOGLE_API_KEY`.
 
+## Streaming Semantics
+
+`/events` is a replay endpoint and returns one JSON response containing persisted
+events after `after_sequence`.
+
+`/stream` is the SSE endpoint. It replays persisted envelopes first, then follows
+the run until it reaches a terminal state when an in-process or separate worker
+is appending events. Streaming-capable providers are surfaced as `model_delta`
+events with the exact provider text chunk in `payload.delta`; clients should
+concatenate those deltas for incremental display. The worker still emits a
+`final_response` event with the full assistant answer and persists that answer as
+an assistant message.
+
+Typical streamed order:
+
+```text
+run_queued
+run_started
+model_delta
+model_delta
+...
+final_response
+run_completed
+```
+
 ## Error And Security Rules
 
 - Every request is scoped by `org_id` and `user_id` where the route exposes user-owned state.
@@ -121,4 +148,4 @@ credentials come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and
 
 ## Test Coverage
 
-Unit tests cover conversation scope, idempotent run submission, simple request context construction, model selection, message history, event replay, SSE formatting, cancellation, approval decisions, queue claim/retry/dead-letter behavior, safe error mapping, and a multi-turn acceptance flow across the API, event store, queue, and in-memory persistence ports.
+Unit tests cover conversation scope, idempotent run submission, simple request context construction, model selection, message history, event replay, SSE formatting, provider chunk streaming through `model_delta`, cancellation, approval decisions, queue claim/retry/dead-letter behavior, safe error mapping, and a multi-turn acceptance flow across the API, event store, queue, and in-memory persistence ports.

@@ -33,10 +33,10 @@ sequenceDiagram
   Registries-->>Factory: ToolCard, McpServerCard, skill directories, SubagentDefinition
   Factory->>Memory: Create scoped memory backend
   Factory-->>Runtime: Deep Agents graph with typed dependencies
-  Runtime-->>Normalizer: Raw LangGraph stream chunks
-  Normalizer-->>Store: Redacted StreamEvent updates
-  Store-->>UI: Replayable RuntimeEventEnvelope updates
-  Runtime-->>Worker: Final response or typed error envelope
+  Runtime-->>Worker: LangGraph messages/values stream
+  Worker->>Store: Append model_delta events from provider chunks
+  Worker->>Store: Append final_response/run_completed or typed failure
+  Store-->>UI: Replayable RuntimeEventEnvelope updates over /events or /stream
 ```
 
 `RuntimeSettings.load()` reads `env_example`, `.env`, and process environment.
@@ -47,8 +47,10 @@ Gemini before the API persists a run.
 The worker path is async-first. `RuntimeWorker` claims queued commands with lock
 expiration, limits active run handling with `RUNTIME_MAX_PARALLEL_RUNS`, applies
 `RUNTIME_MAX_RETRIES`, loads conversation history, builds local runtime
-dependencies, and calls `ainvoke_runtime()` rather than running the model inline
-inside FastAPI.
+dependencies, and calls `astream_runtime()` for streaming-capable model profiles
+rather than running the model inline inside FastAPI. Provider text chunks are
+persisted as `model_delta` events with the exact text in `payload.delta`; the
+same run still ends with `final_response` and `run_completed`.
 
 ## Dynamic Capability Loading
 
@@ -128,8 +130,8 @@ sequenceDiagram
   User->>Facade: "Hi"
   Facade->>Factory: AgentRuntimeContext
   Factory-->>Runtime: Authorized compact capabilities + memory routes
-  Runtime-->>Normalizer: Progress/final response chunks
-  Normalizer-->>UI: StreamEvent(source=main_agent, type=progress/final_response)
+  Runtime-->>Normalizer: Provider text chunks and final response
+  Normalizer-->>UI: model_delta events followed by final_response
   Runtime-->>Facade: Direct greeting
   Facade-->>User: Friendly response, no connector calls
 ```

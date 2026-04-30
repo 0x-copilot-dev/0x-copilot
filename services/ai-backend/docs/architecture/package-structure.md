@@ -46,14 +46,15 @@ services/ai-backend/
       agent_runtime/
       runtime_api/
       runtime_adapters/
+      runtime_worker/
 ```
 
 ## Module Ownership
 
 - `agent_runtime/`: reusable runtime domain and orchestration core. It owns execution contracts, Deep Agents/LangGraph wiring, capability discovery, context/memory policy, subagent delegation, event normalization, observability helpers, persistence records, and abstract ports.
 - `runtime_api/`: deployable FastAPI surface for conversations, runs, event replay, SSE, cancellation, approvals, safe HTTP errors, and API request/response schemas.
-- `runtime_adapters/`: concrete adapters for tests and future infrastructure, including the deterministic in-memory persistence/event/queue adapter. Future Postgres repositories and queue implementations belong here.
-- `runtime_worker/`: future runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
+- `runtime_adapters/`: concrete adapters for tests and local/production-style infrastructure, including deterministic in-memory persistence/event/queue behavior and the PostgreSQL runtime adapter.
+- `runtime_worker/`: async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
 
 Compatibility modules remain under older paths such as `agent_runtime.agent.*`, `agent_runtime.tools.*`, and `agent_runtime.api.contracts` so existing imports keep working during the migration. New code should prefer the canonical packages above.
 

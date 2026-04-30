@@ -8,12 +8,17 @@ Normalize Deep Agents and LangGraph stream output into stable product events for
 
 Implemented modules:
 
-- `agent/streaming.py`: event normalizer and router.
+- `agent_runtime/events/normalization/langgraph.py`: normalizes LangGraph chunks into product-safe stream events.
+- `agent_runtime/execution/runtime.py`: invokes and streams Deep Agents/LangGraph runtime output with stable runtime config.
+- `runtime_worker/handlers/run.py`: consumes provider chunks and appends `model_delta`, `final_response`, and lifecycle events.
+- `runtime_api/sse/adapter.py`: product-facing Server-Sent Events transport over replayable runtime envelopes.
 - `observability/tracing.py`: trace IDs and correlation helpers.
 - `observability/redaction.py`: payload redaction helpers.
-- Future API streaming adapter: product-facing transport outside the core normalizer.
 
-Use LangGraph v2 stream format with `subgraphs=True` so subagent events are visible.
+The worker uses LangGraph streaming with `stream_mode=["messages", "values"]`.
+Provider text chunks from OpenAI, Anthropic, Gemini, or any compatible LangChain
+chat model are emitted as `model_delta` events. The exact provider text belongs
+in `payload.delta`; the terminal full answer is emitted as `final_response`.
 
 ## Pydantic Contracts
 
@@ -33,12 +38,14 @@ Payloads must be redacted before serialization. Unknown event fields should be p
 - Stream events should be additive and backwards-compatible.
 - Redaction happens before event emission.
 - Internal summarization tokens should be filterable from user-facing streams.
+- Clients should concatenate `payload.delta` from `model_delta` events for live text display, then reconcile against `final_response`.
 
 ## Unit Tests
 
 - Normalize main-agent update chunks.
 - Normalize subagent namespace chunks.
 - Normalize tool call and tool result message chunks.
+- Emit provider text chunks as `model_delta` events before `final_response`.
 - Redact secrets in args and payloads.
 - Preserve trace/task correlation across events.
 - Gracefully handle malformed chunks.
@@ -47,6 +54,7 @@ Payloads must be redacted before serialization. Unknown event fields should be p
 
 - Missing namespace.
 - Unknown stream mode.
+- Empty provider chunks that carry metadata but no text.
 - Subagent event arrives before task metadata.
 - Tool result exceeds stream size limit.
 - Summarization event leaks into user-facing output.

@@ -15,8 +15,9 @@ PostgreSQL is the first durable database target. Supabase is acceptable as a man
 - `src/agent_runtime/persistence/schema/postgres.py`: initial PostgreSQL migration catalog and table list.
 - `src/agent_runtime/persistence/postgres/schema.py`: compatibility re-export for the PostgreSQL schema catalog.
 - `src/runtime_adapters/in_memory/`: in-memory persistence, event store, and queue implementation used for API acceptance tests.
+- `src/runtime_adapters/postgres/`: PostgreSQL persistence, event store, queue, and migration/bootstrap adapter for separate API and worker processes.
 
-The implementation defines contracts and schema. Production repository adapters can be added behind these records and ports without changing API/domain contracts.
+The implementation defines contracts, schema, and concrete in-memory/PostgreSQL adapters. Additional repository or queue adapters can be added behind these records and ports without changing API/domain contracts.
 
 ## Core Runtime Tables
 
@@ -72,6 +73,7 @@ Runtime persistence must support:
 - Ordered message history for later turns in the same conversation.
 - Idempotent run creation by `(org_id, user_id, idempotency_key)`.
 - Append-only runtime event replay by `sequence_no`.
+- Streaming model output as append-only `runtime_events` such as `model_delta`, followed by `final_response` and terminal lifecycle events.
 - Outbox command claim, retry, completion, and dead-letter transitions.
 - Approval request and decision persistence.
 - Async subagent task state outside message history.

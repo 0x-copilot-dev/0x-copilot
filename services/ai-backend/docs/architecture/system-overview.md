@@ -46,9 +46,9 @@ flowchart TD
   DeepAgent --> ContextManagers[ContextPayloadManager and SummarizationManager]
   ContextManagers --> MemoryRoutes
 
-  DeepAgent --> RawEvents[LangGraph stream chunks]
+  DeepAgent --> RawEvents[LangGraph messages and values stream]
   RawEvents --> StreamNormalizer
-  StreamNormalizer --> StreamEvents[StreamEvent records]
+  StreamNormalizer --> StreamEvents[model_delta and StreamEvent records]
   StreamEvents --> EventEnvelope[RuntimeEventEnvelope]
   EventEnvelope --> Persistence
   Persistence --> WorkSurfaceUI[Product UI]
@@ -64,8 +64,8 @@ flowchart TD
 - `agent_runtime/observability/` owns redaction and trace helpers used by streams and persistence contracts.
 - `agent_runtime/persistence/` owns durable runtime records, abstract persistence ports, and PostgreSQL-compatible schema catalogs.
 - `runtime_api/` owns the narrow FastAPI runtime API, safe HTTP errors, request/response schemas, and replay/SSE transport.
-- `runtime_adapters/` owns concrete in-memory adapters now and future Postgres/queue adapters.
-- `runtime_worker/` is reserved for the future command consumer process.
+- `runtime_adapters/` owns concrete in-memory and PostgreSQL adapters for persistence, event storage, and queue semantics.
+- `runtime_worker/` owns the async runtime command consumer process and handlers for run, cancel, and approval-resolution commands.
 
 ## What Works Today
 
@@ -75,17 +75,17 @@ flowchart TD
 - Skills are discovered from configured Agent Skills directories and passed to Deep Agents in deterministic precedence order.
 - Memory routing isolates user memory by user ID, keeps organization policy memory read-only to conversational actors, and supports offloading or fallback summaries when context is too large.
 - Subagents receive compact `SubagentTask` handoffs instead of raw conversation history and return `SubagentResult` with both execution and plan summaries.
-- LangGraph stream chunks normalize into stable `StreamEvent` contracts with source, type, trace correlation, parent task IDs, and redacted payloads.
-- FastAPI endpoints create conversations, enqueue runs, replay events, stream SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
+- LangGraph stream chunks normalize into stable `StreamEvent` contracts with source, type, trace correlation, parent task IDs, and redacted payloads; provider text chunks are surfaced as `model_delta` runtime envelopes with text in `payload.delta`.
+- FastAPI endpoints create conversations, enqueue runs, replay events, stream live/replayed SSE runtime envelopes, request cancellation, and resolve approvals through thin service/port boundaries.
 - Runtime event envelopes provide ordered per-run sequence numbers, UI timeline fields, redacted payloads, and replay cursors.
-- Persistence contracts and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.
+- Persistence contracts, the PostgreSQL adapter, and the initial PostgreSQL migration cover conversations, messages, runs, events, outbox commands, async tasks, subagent results, tool invocations, approvals, memory metadata, payload refs, compression events, capability snapshots, audit records, and checkpoints.
 - Unit tests use fake model builders, fake tool providers, fake MCP clients, fake memory stores, fake subagent runners, and fake stream chunks. No tests require live LLMs or external credentials.
 
 ## Current Non-Goals
 
 - No production connector SDK calls in the runtime package.
 - No broad product API ownership in `services/ai-backend` beyond the narrow runtime API exception.
-- No production database repository, external broker, deployed runtime worker process, or connector adapter implementation yet.
+- No external broker, deployed production worker service, or connector adapter implementation yet.
 - No custom replacement for Deep Agents' native context compression until production behavior is measured.
 - No side-effecting model action without typed parsing, permission checks, and connector-layer implementation.
 

@@ -24,7 +24,7 @@ The implemented contracts live under `src/agent_runtime/`:
 - `SubagentResult`: response, execution summary, plan summary, artifacts, recent messages, or typed error.
 - `AsyncTaskState` and `AsyncTaskLifecycleResult`: task IDs and lifecycle status stored outside message history.
 - `StreamEvent`: normalized event ID, source, event type, trace ID, parent task ID, payload, metadata, and timestamp.
-- `RuntimeEventEnvelope`: API transport envelope with ordered sequence numbers, span correlation, task/subagent IDs, UI display titles, one-phrase summaries, visibility, redaction state, redacted payloads, and protocol versioning for replayable client timelines.
+- `RuntimeEventEnvelope`: API transport envelope with ordered sequence numbers, span correlation, task/subagent IDs, UI display titles, one-phrase summaries, visibility, redaction state, redacted payloads, and protocol versioning for replayable client timelines. Provider streaming chunks are represented as `model_delta` envelopes with exact text in `payload.delta`.
 - `ConversationRecord`, `MessageRecord`, and `RunRecord`: API-facing persistence records for conversation shells, ordered messages, and queued/runtime execution state.
 - `RuntimeRunCommand`, `RuntimeCancelCommand`, and `RuntimeApprovalResolvedCommand`: durable commands exchanged through the runtime queue port.
 - `OutboxEventRecord`, `RuntimeWorkerClaim`, and `RuntimeWorkerResult`: persistence-layer queue records for claim, retry, completion, and dead-letter semantics.
@@ -42,6 +42,7 @@ The implemented contracts live under `src/agent_runtime/`:
 - Secrets and oversized payloads must be redacted or truncated before reaching stream events.
 - API event payloads, event metadata, request metadata, persistence JSON payloads, and audit metadata must be redacted before storage.
 - Runtime event sequence numbers are per run and must remain replayable after reconnect.
+- Provider chunk streams must preserve exact chunk text in `payload.delta`; display summaries may normalize whitespace.
 - Raw chain-of-thought, provider reasoning tokens, hidden scratchpads, and private prompt text must not be streamed or persisted as client-visible runtime events. Use `reasoning_summary` events with product-safe summaries instead.
 - Subagent handoffs must not serialize raw conversation history by default.
 
