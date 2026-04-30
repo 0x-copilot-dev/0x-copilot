@@ -1,6 +1,6 @@
 ---
 description: Unit testing rules for the AI backend
-globs: "{ai-backend-src/tests/**/*.py,services/ai-backend/tests/**/*.py}"
+globs: services/ai-backend/tests/**/*.py
 alwaysApply: false
 ---
 

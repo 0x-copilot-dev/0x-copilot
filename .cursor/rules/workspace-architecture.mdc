@@ -9,6 +9,6 @@ alwaysApply: true
 - Runtime architecture can be microservice-style: each service owns its API, Docker image, tests, and deploy path.
 - Apps call `backend-facade`; apps must not call internal services directly without an accepted spec.
 - `backend` owns tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
-- `ai-backend-src` is transitional; future canonical AI service path is `services/ai-backend`.
+- `services/ai-backend` is the canonical AI backend service path.
 - Shared packages are for stable contracts and cross-cutting primitives, not hidden business logic.
 

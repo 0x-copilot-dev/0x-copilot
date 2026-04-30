@@ -42,7 +42,7 @@ enterprise-search/
     decisions/
 ```
 
-`ai-backend-src` is the current transitional AI backend path. Do not move it casually. Rename or move it to `services/ai-backend` only in a deliberate migration that updates docs, rules, CI paths, imports, and setup commands together.
+`services/ai-backend` is the canonical AI backend service path. Do not move service directories casually; any future service move must update docs, rules, CI paths, imports, and setup commands together.
 
 ## Allowed Call Direction
 

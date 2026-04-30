@@ -4,7 +4,7 @@ Enterprise Search is the workspace for a broader enterprise work surface: one pr
 
 This should be one GitHub monorepo with multiple deployable components. The runtime architecture can still be microservice-style: each service owns its API, Docker image, tests, and deployment path.
 
-Today only `ai-backend-src` exists. It is a transitional path for the AI backend; the future canonical location is expected to be `services/ai-backend` when the workspace is reorganized in one deliberate migration.
+Today only `services/ai-backend` exists. The other apps, services, packages, and infrastructure folders will arrive one at a time as their responsibilities become concrete.
 
 ## Target Repository Layout
 
@@ -45,7 +45,7 @@ Monorepo and microservices are separate decisions. This repo should keep related
 
 ## Planned Components
 
-- `services/ai-backend`: AI orchestration backend for Deep Agents, LangGraph, LangChain tools, dynamic MCP loading, skills, context/memory management, subagents, streaming, and retrieval orchestration. Current transitional path: `ai-backend-src`.
+- `services/ai-backend`: AI orchestration backend for Deep Agents, LangGraph, LangChain tools, dynamic MCP loading, skills, context/memory management, subagents, streaming, and retrieval orchestration.
 - `services/backend-facade`: stable product-facing API surface that frontend and native apps call. It hides internal service topology.
 - `services/backend`: core backend services for product data, persistence, tenant/auth integration, permissions, billing/admin workflows, and operational jobs.
 - `apps/frontend`: web work surface for enterprise search, agent interaction, source review, workflow execution, and admin views.
@@ -73,7 +73,7 @@ Each backend service should eventually have its own Docker image:
 
 - `ghcr.io/<org>/enterprise-search-backend-facade`
 - `ghcr.io/<org>/enterprise-search-backend`
-- `ghcr.io/<org>/enterprise-search-ai-backend`
+- `ghcr.io/<org>/agent-runtime-backend`
 
 Starting CI/CD model:
 
@@ -86,18 +86,18 @@ Starting CI/CD model:
 
 ## Current Status
 
-`ai-backend-src` is in a spec-first phase. Its PRDs, technical specs, testing docs, and agent rules define how future implementation agents should build the AI runtime deliberately.
+`services/ai-backend` is in a spec-first phase. Its PRDs, technical specs, testing docs, and agent rules define how future implementation agents should build the AI runtime deliberately.
 
 Start there:
 
-- `ai-backend-src/README.md`
-- `ai-backend-src/docs/README.md`
+- `services/ai-backend/README.md`
+- `services/ai-backend/docs/README.md`
 - `docs/architecture/workspace-topology.md`
 - `docs/architecture/service-boundaries.md`
 
 ## Repo Rules
 
-- Keep service boundaries clear. Do not put frontend, facade, core backend, or native app concerns into `ai-backend-src` or future `services/ai-backend`.
+- Keep service boundaries clear. Do not put frontend, facade, core backend, or native app concerns into `services/ai-backend`.
 - Prefer stable APIs and generated clients between components over direct cross-service imports.
 - Document responsibilities before implementation when introducing a new component.
 - Treat permissions, auth context, and tenant boundaries as cross-cutting product requirements.

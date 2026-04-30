@@ -1,6 +1,0 @@
-{
-  "dependencies": ["."],
-  "graphs": {
-    "enterprise_search_ai": "./src/enterprise_search_ai/agent/graph.py:create_graph"
-  }
-}

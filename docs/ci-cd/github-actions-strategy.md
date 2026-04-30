@@ -32,7 +32,7 @@ Each backend service should have its own image:
 
 - `ghcr.io/<org>/enterprise-search-backend-facade`
 - `ghcr.io/<org>/enterprise-search-backend`
-- `ghcr.io/<org>/enterprise-search-ai-backend`
+- `ghcr.io/<org>/agent-runtime-backend`
 
 Dockerfiles should be reproducible, minimal, and scoped to their service. Do not bake secrets into images.
 

@@ -22,7 +22,7 @@ The target shape is:
 - `infra/*` for Docker and local orchestration.
 - `docs/*` for architecture, CI/CD, and decisions.
 
-`ai-backend-src` remains as the current transitional AI backend path. It should move to `services/ai-backend` only in a deliberate migration.
+`services/ai-backend` is the canonical AI backend service path.
 
 ## Consequences
 

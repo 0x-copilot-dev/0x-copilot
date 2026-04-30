@@ -1,6 +1,6 @@
 ---
 description: Spec-first workflow for AI backend docs and implementation
-globs: "{ai-backend-src/docs/**/*.md,services/ai-backend/docs/**/*.md}"
+globs: services/ai-backend/docs/**/*.md
 alwaysApply: false
 ---
 

@@ -9,7 +9,7 @@ Before implementing, reviewing, or editing docs/code in this repo, agents must r
 
 Minimum rule-loading requirements:
 
-- For any `ai-backend-src/**` or future `services/ai-backend/**` work, read:
+- For any `services/ai-backend/**` work, read:
   - `.cursor/rules/ai-backend-engineering.mdc`
   - `.cursor/rules/ai-backend-python.mdc` when touching Python code
   - `.cursor/rules/ai-backend-spec-first.mdc` when touching AI backend docs/specs

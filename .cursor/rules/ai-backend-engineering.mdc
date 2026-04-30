@@ -1,13 +1,13 @@
 ---
 description: Engineering standards for the enterprise AI backend
-globs: "{ai-backend-src/**,services/ai-backend/**}"
+globs: services/ai-backend/**
 alwaysApply: false
 ---
 
 # AI Backend Engineering
 
-- Read `ai-backend-src/docs/README.md`, the relevant PRD, and the matching spec before implementation.
-- `ai-backend-src` is transitional; future canonical service path is `services/ai-backend`.
+- Read `services/ai-backend/docs/README.md`, the relevant PRD, and the matching spec before implementation.
+- `services/ai-backend` is the canonical AI backend service path.
 - Keep orchestration separate from connector side effects.
 - Use dependency inversion for registries, stores, MCP clients, and subagent runners.
 - Do not expose unauthorized tools, MCP servers, memories, or skills to the model.

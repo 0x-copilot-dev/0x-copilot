@@ -1,6 +1,6 @@
 ---
 description: Python and Pydantic standards for the AI backend
-globs: "{ai-backend-src/**/*.py,services/ai-backend/**/*.py}"
+globs: services/ai-backend/**/*.py
 alwaysApply: false
 ---
 
