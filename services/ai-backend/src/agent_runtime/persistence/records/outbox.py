@@ -63,7 +63,7 @@ class RuntimeWorkerClaim(RuntimeContract):
     locked_by: str
     lock_expires_at: datetime
     attempts: PositiveInt = 1
-    payload: JsonObject = Field(default_factory=dict)
+    payload: dict[str, object] = Field(default_factory=dict)
     claimed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_validator(
@@ -86,13 +86,6 @@ class RuntimeWorkerClaim(RuntimeContract):
     @classmethod
     def _normalize_command_type(cls, value: object) -> str:
         return PersistenceValueNormalizer.normalize_slug(value, "command_type")
-
-    @field_validator(Keys.Field.PAYLOAD, mode="before")
-    @classmethod
-    def _redact_payload(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
-
-
 
 class RuntimeWorkerResult(RuntimeContract):
     """A worker result used to complete, retry, or dead-letter a claim."""

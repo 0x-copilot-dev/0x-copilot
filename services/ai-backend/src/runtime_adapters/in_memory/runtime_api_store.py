@@ -113,6 +113,12 @@ class InMemoryRuntimeApiStore:
             records = [message for message in records if message.deleted_at is None]
         return tuple(sorted(records, key=lambda message: message.created_at)[:limit])
 
+    def append_message(self, message: MessageRecord) -> MessageRecord:
+        """Append a runtime-created message."""
+
+        self.messages[message.message_id] = message
+        return message
+
     def create_run_with_user_message(
         self,
         *,
@@ -311,6 +317,7 @@ class InMemoryRuntimeApiStore:
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,
+            payload=command.model_dump(mode="json"),
         )
 
     def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
@@ -323,6 +330,7 @@ class InMemoryRuntimeApiStore:
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,
+            payload=command.model_dump(mode="json"),
         )
 
     def enqueue_approval_resolved(self, command: RuntimeApprovalResolvedCommand) -> None:
@@ -335,6 +343,7 @@ class InMemoryRuntimeApiStore:
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=command.approval_id,
+            payload=command.model_dump(mode="json"),
         )
 
     def claim_next(
@@ -414,9 +423,11 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         run_id: str,
         approval_id: str | None,
+        payload: dict[str, object],
     ) -> None:
         self._queue_order.append(command_id)
         self._queue_payloads[command_id] = {
+            **payload,
             "command_id": command_id,
             "command_type": command_type,
             "org_id": org_id,

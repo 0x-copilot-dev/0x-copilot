@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import logging
 from uuid import uuid4
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
@@ -55,6 +56,7 @@ class RuntimeWorker:
             event_store=event_store,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
+        self.logger = logging.getLogger("runtime_worker")
 
     async def run_once(self) -> bool:
         """Claim and process one command, returning whether work was found."""
@@ -108,9 +110,21 @@ class RuntimeWorker:
         try:
             await self._dispatch(claim)
         except AgentRuntimeError as exc:
+            self.logger.exception(
+                "runtime worker command failed command_id=%s command_type=%s run_id=%s",
+                claim.command_id,
+                claim.command_type,
+                claim.run_id,
+            )
             self._mark_failure(claim=claim, error=exc)
             return
         except Exception as exc:
+            self.logger.exception(
+                "runtime worker command crashed command_id=%s command_type=%s run_id=%s",
+                claim.command_id,
+                claim.command_type,
+                claim.run_id,
+            )
             safe_error = AgentRuntimeError(
                 RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
                 "Runtime worker command failed safely.",
@@ -155,8 +169,10 @@ class RuntimeWorker:
         self.queue.mark_dead_letter(result=result)
 
     def _runtime_run_command(self, claim: RuntimeWorkerClaim) -> RuntimeRunCommand:
-        command = self._command_from_store(claim, self.queue.run_commands, "run_id")
-        if command is not None:
+        if "runtime_context" in claim.payload:
+            return RuntimeRunCommand.model_validate(self._command_payload(claim))
+        command = self._command_from_store(claim, getattr(self.queue, "run_commands", ()))
+        if isinstance(command, RuntimeRunCommand):
             return command
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
@@ -165,8 +181,10 @@ class RuntimeWorker:
         )
 
     def _runtime_cancel_command(self, claim: RuntimeWorkerClaim) -> RuntimeCancelCommand:
-        command = self._command_from_store(claim, self.queue.cancel_commands, "run_id")
-        if command is not None:
+        if "requested_by_user_id" in claim.payload:
+            return RuntimeCancelCommand.model_validate(self._command_payload(claim))
+        command = self._command_from_store(claim, getattr(self.queue, "cancel_commands", ()))
+        if isinstance(command, RuntimeCancelCommand):
             return command
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
@@ -178,8 +196,10 @@ class RuntimeWorker:
         self,
         claim: RuntimeWorkerClaim,
     ) -> RuntimeApprovalResolvedCommand:
-        command = self._command_from_store(claim, self.queue.approval_commands, "approval_id")
-        if command is not None:
+        if "decision" in claim.payload:
+            return RuntimeApprovalResolvedCommand.model_validate(self._command_payload(claim))
+        command = self._command_from_store(claim, getattr(self.queue, "approval_commands", ()))
+        if isinstance(command, RuntimeApprovalResolvedCommand):
             return command
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
@@ -188,8 +208,19 @@ class RuntimeWorker:
         )
 
     @staticmethod
-    def _command_from_store(claim: RuntimeWorkerClaim, commands: object, _key: str) -> object | None:
+    def _command_from_store(claim: RuntimeWorkerClaim, commands: object) -> object | None:
         for command in commands:
             if getattr(command, "command_id", None) == claim.command_id:
                 return command
         return None
+
+    @staticmethod
+    def _command_payload(claim: RuntimeWorkerClaim) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        for key, value in claim.payload.items():
+            if key == "command_type":
+                continue
+            if key == "approval_id" and value is None:
+                continue
+            payload[key] = value
+        return payload

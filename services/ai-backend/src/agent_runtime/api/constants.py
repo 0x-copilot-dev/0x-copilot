@@ -116,6 +116,7 @@ class Messages:
         APPROVAL_RESOLVED = "Approval decision was recorded."
         FINAL_RESPONSE = "Final response"
         HEARTBEAT = "Runtime stream heartbeat."
+        MODEL_DELTA = "Model response"
         REASONING = "Thinking"
         RUN_CANCELLING = "Run cancellation was requested."
         RUN_QUEUED = "Run was queued for runtime execution."

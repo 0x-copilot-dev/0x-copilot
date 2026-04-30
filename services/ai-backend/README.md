@@ -119,6 +119,11 @@ RUNTIME_DEFAULT_TIMEOUT_SECONDS=60
 RUNTIME_MAX_RETRIES=2
 RUNTIME_MAX_PARALLEL_RUNS=4
 RUNTIME_MAX_PARALLEL_SUBAGENTS=4
+RUNTIME_STORE_BACKEND=in_memory
+DATABASE_URL=
+RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
+RUNTIME_WORKER_LOCK_SECONDS=60
+RUNTIME_START_IN_PROCESS_WORKER=true
 ```
 
 Run requests should not include API keys. Provider credentials are loaded by
@@ -154,6 +159,76 @@ Run tests with the same service-local environment:
 ```bash
 .venv/bin/python -m pytest
 ```
+
+## Running The API
+
+For local in-memory debugging, run the FastAPI app and worker in one process:
+
+```bash
+RUNTIME_STORE_BACKEND=in_memory \
+RUNTIME_START_IN_PROCESS_WORKER=true \
+PYTHONPATH=src .venv/bin/python -m uvicorn runtime_api.app:app --host 127.0.0.1 --port 8000
+```
+
+This mode does not require Docker or Postgres. Submitted runs are claimed by the
+in-process worker and the SSE stream stays open until `final_response` and
+`run_completed` are emitted. Use this mode when debugging locally.
+
+For API-only development without executing queued runs in-process, disable the
+worker:
+
+```bash
+RUNTIME_START_IN_PROCESS_WORKER=false \
+PYTHONPATH=src .venv/bin/python -m uvicorn runtime_api.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+For production-style serving, use Gunicorn to supervise multiple Uvicorn worker
+processes:
+
+```bash
+PYTHONPATH=src gunicorn runtime_api.app:app \
+  -k uvicorn.workers.UvicornWorker \
+  --workers ${WEB_CONCURRENCY:-4} \
+  --bind 0.0.0.0:${PORT:-8000}
+```
+
+Gunicorn worker count controls HTTP process parallelism. Runtime execution
+parallelism is configured separately with `RUNTIME_MAX_PARALLEL_RUNS` for queued
+AI work.
+
+## Production-Style Local Execution
+
+For separate API and worker processes, use Postgres as the shared runtime store:
+
+```bash
+cp env_example .env
+# set OPENAI_API_KEY in .env
+docker compose up --build
+```
+
+The API container starts with Gunicorn and Uvicorn workers. The worker container
+runs:
+
+```bash
+python -m runtime_worker
+```
+
+Both processes use:
+
+```bash
+RUNTIME_STORE_BACKEND=postgres
+DATABASE_URL=postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
+```
+
+The schema is bootstrapped from the application on startup. After submitting a
+run, read the response from:
+
+```text
+GET /v1/agent/runs/{run_id}/events?after_sequence=0&org_id=org_123&user_id=user_123
+```
+
+When the worker finishes, the event stream includes `final_response` and
+`run_completed`.
 
 ## Intended Direction
 

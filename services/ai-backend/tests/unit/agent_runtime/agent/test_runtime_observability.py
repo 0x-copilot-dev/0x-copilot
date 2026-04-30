@@ -90,7 +90,7 @@ def test_runtime_config_uses_product_run_id_without_raw_identity(
     assert config["metadata"]["org_id_hash"] != harness.context.org_id  # type: ignore[index]
     assert "query" not in config["metadata"]  # type: ignore[operator]
     assert config["metadata"]["safe_count"] == 3  # type: ignore[index]
-    assert config["tags"] == ("agent_runtime", "run:run_123")
+    assert config["tags"] == ["agent_runtime", "run:run_123"]
 
 
 def test_invoke_runtime_logs_success_and_passes_langgraph_config(

@@ -19,6 +19,9 @@ dependencies = [
   "anthropic",
   "pydantic>=2",
   "python-dotenv",
+  "uvicorn",
+  "gunicorn",
+  "psycopg[binary]",
 ]
 
 [project.optional-dependencies]

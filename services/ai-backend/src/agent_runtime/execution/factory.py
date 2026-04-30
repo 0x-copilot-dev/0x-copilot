@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import inspect
 from importlib import import_module
 from typing import Any
 
@@ -125,17 +126,32 @@ def _build_deep_agent(
     model_name = getattr(model_config, "model_name")
     create_kwargs: dict[str, object] = {
         "tools": list(tools),
-        "instructions": instructions,
         "model": model_name,
     }
+    parameters = inspect.signature(create_deep_agent).parameters
+    if "instructions" in parameters:
+        create_kwargs["instructions"] = instructions
+    else:
+        create_kwargs["system_prompt"] = instructions
     if skills:
         create_kwargs[SkillKeys.DeepAgents.SKILLS] = list(skills)
-    if memory_backend is not None:
+    if _is_deepagents_backend(memory_backend):
         create_kwargs["backend"] = memory_backend
         memory_paths = tuple(getattr(memory_backend, "memory_paths", ()))
         if memory_paths:
             create_kwargs["memory"] = list(memory_paths)
     return create_deep_agent(**create_kwargs)
+
+
+def _is_deepagents_backend(memory_backend: object | None) -> bool:
+    """Return whether the object implements the DeepAgents backend protocol."""
+
+    if memory_backend is None:
+        return False
+    return all(
+        hasattr(memory_backend, method)
+        for method in ("download_files", "upload_files", "adownload_files", "aupload_files")
+    )
 
 
 def _parse_context(context: AgentRuntimeContext | dict[str, Any]) -> AgentRuntimeContext:

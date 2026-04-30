@@ -24,6 +24,22 @@ from agent_runtime.memory.policy import MemoryPolicyAuthorizer
 from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
 
+class FakeConcreteMemoryBackend:
+    memory_paths = ("/memories/",)
+
+    def download_files(self, _paths: list[str]) -> dict[str, str]:
+        return {}
+
+    def upload_files(self, _files: dict[str, str]) -> None:
+        return None
+
+    async def adownload_files(self, _paths: list[str]) -> dict[str, str]:
+        return {}
+
+    async def aupload_files(self, _files: dict[str, str]) -> None:
+        return None
+
+
 def test_memory_routes_isolate_user_memory_by_user_id(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
@@ -220,6 +236,26 @@ def test_concurrent_memory_writes_raise_safe_retryable_error() -> None:
 
 def test_deep_agent_builder_receives_backend_and_memory_paths(
     monkeypatch: pytest.MonkeyPatch,
+    model_config: ModelConfig,
+) -> None:
+    fake_deepagents = FakeDeepAgentsModule()
+    monkeypatch.setattr(factory_module, "import_module", lambda _: fake_deepagents)
+    memory_backend = FakeConcreteMemoryBackend()
+
+    agent = factory_module._build_deep_agent(
+        tools=("doc_search",),
+        model_config=model_config,
+        instructions="Follow policy.",
+        memory_backend=memory_backend,
+    )
+
+    assert agent == {"agent": "fake"}
+    assert fake_deepagents.calls[0]["backend"] is memory_backend
+    assert fake_deepagents.calls[0]["memory"] == ["/memories/"]
+
+
+def test_deep_agent_builder_does_not_treat_route_plan_as_backend(
+    monkeypatch: pytest.MonkeyPatch,
     runtime_context_admin: AgentRuntimeContext,
     model_config: ModelConfig,
 ) -> None:
@@ -235,5 +271,5 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     )
 
     assert agent == {"agent": "fake"}
-    assert fake_deepagents.calls[0]["backend"] is route_plan
-    assert fake_deepagents.calls[0]["memory"] == ["/memories/"]
+    assert "backend" not in fake_deepagents.calls[0]
+    assert "memory" not in fake_deepagents.calls[0]

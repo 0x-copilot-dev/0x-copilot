@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ai_backend
+      POSTGRES_USER: ai_backend
+      POSTGRES_PASSWORD: ai_backend
+    ports:
+      - "5432:5432"
+    volumes:
+      - ai_backend_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_backend -d ai_backend"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      RUNTIME_STORE_BACKEND: postgres
+      DATABASE_URL: postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["python", "-m", "runtime_worker"]
+    env_file:
+      - .env
+    environment:
+      RUNTIME_STORE_BACKEND: postgres
+      DATABASE_URL: postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  ai_backend_postgres:

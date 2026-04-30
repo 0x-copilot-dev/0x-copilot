@@ -112,6 +112,7 @@ class RuntimeApiRoutes:
                 user_id=user_id,
                 run_id=run_id,
                 after_sequence=after_sequence,
+                follow=getattr(request.app.state, "runtime_in_process_worker_task", None) is not None,
             ),
             media_type=RuntimeSseAdapter.MEDIA_TYPE,
         )

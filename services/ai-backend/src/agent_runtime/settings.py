@@ -38,6 +38,16 @@ class RuntimeExecutionSettings(RuntimeContract):
     max_retries: int = Field(default=2, ge=0, le=10)
     max_parallel_runs: int = Field(default=4, ge=1, le=100)
     max_parallel_subagents: int = Field(default=4, ge=1, le=100)
+    worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
+    worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
+    start_in_process_worker: bool = True
+
+
+class RuntimeStoreSettings(RuntimeContract):
+    """Runtime storage adapter configuration."""
+
+    backend: str = "in_memory"
+    database_url: str | None = Field(default=None, repr=False, exclude=True)
 
 
 class RuntimeSettings(RuntimeContract):
@@ -47,6 +57,7 @@ class RuntimeSettings(RuntimeContract):
     default_model: ModelConfig
     default_timeout_seconds: float = Field(default=60, gt=0, le=600)
     execution: RuntimeExecutionSettings = Field(default_factory=RuntimeExecutionSettings)
+    store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
     openai: ProviderSettings = Field(default_factory=ProviderSettings)
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
@@ -72,6 +83,8 @@ class RuntimeSettings(RuntimeContract):
             cls._load_env_file(Path(env_file) if env_file is not None else service_root / ".env")
         )
         values.update(dict(environ if environ is not None else os.environ))
+        if environ is None:
+            cls._sync_provider_environment(values)
 
         default_provider = cls._get(values, "RUNTIME_DEFAULT_PROVIDER", "openai")
         default_timeout = cls._float(values, "RUNTIME_DEFAULT_TIMEOUT_SECONDS", 60)
@@ -93,6 +106,21 @@ class RuntimeSettings(RuntimeContract):
                 max_retries=cls._int(values, "RUNTIME_MAX_RETRIES", 2),
                 max_parallel_runs=cls._int(values, "RUNTIME_MAX_PARALLEL_RUNS", 4),
                 max_parallel_subagents=cls._int(values, "RUNTIME_MAX_PARALLEL_SUBAGENTS", 4),
+                worker_poll_interval_seconds=cls._float(
+                    values,
+                    "RUNTIME_WORKER_POLL_INTERVAL_SECONDS",
+                    1,
+                ),
+                worker_lock_seconds=cls._int(values, "RUNTIME_WORKER_LOCK_SECONDS", 60),
+                start_in_process_worker=cls._bool(
+                    values,
+                    "RUNTIME_START_IN_PROCESS_WORKER",
+                    True,
+                ),
+            ),
+            store=RuntimeStoreSettings(
+                backend=cls._get(values, "RUNTIME_STORE_BACKEND", "in_memory").lower(),
+                database_url=cls._optional(values, "DATABASE_URL"),
             ),
             openai=ProviderSettings(api_key=cls._optional(values, "OPENAI_API_KEY")),
             anthropic=ProviderSettings(api_key=cls._optional(values, "ANTHROPIC_API_KEY")),
@@ -109,6 +137,15 @@ class RuntimeSettings(RuntimeContract):
         if provider in {"google", "gemini"}:
             return self.gemini
         raise ValueError(f"Unsupported model provider: {provider}")
+
+    @classmethod
+    def _sync_provider_environment(cls, values: Mapping[str, str]) -> None:
+        """Expose .env provider keys to SDKs that read credentials from os.environ."""
+
+        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            value = cls._optional(values, key)
+            if value is not None:
+                os.environ.setdefault(key, value)
 
     @classmethod
     def _load_env_file(cls, path: Path) -> dict[str, str]:

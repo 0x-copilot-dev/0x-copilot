@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 import asyncio
 
 from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeDependencies, RuntimeErrorCode, StreamEventSource
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
-from agent_runtime.execution.runtime import ainvoke_runtime
+from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from runtime_api.schemas import (
     AgentRunStatus,
+    MessageRecord,
     MessageRole,
     RuntimeApiEventType,
     RuntimeEventDraft,
@@ -22,6 +23,7 @@ from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 AgentFactory = Callable[..., RuntimeHarness]
 RuntimeInvoker = Callable[[RuntimeHarness, Sequence[object]], object]
+RuntimeStreamer = Callable[[RuntimeHarness, Sequence[object]], AsyncIterator[object]]
 
 
 class RuntimeRunHandler:
@@ -35,12 +37,15 @@ class RuntimeRunHandler:
         dependencies_factory: RuntimeDependenciesFactory | None = None,
         agent_factory: AgentFactory = create_agent_runtime,
         runtime_invoker: RuntimeInvoker = ainvoke_runtime,
+        runtime_streamer: RuntimeStreamer = astream_runtime,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
         self.dependencies_factory = dependencies_factory or DefaultRuntimeDependenciesFactory()
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
+        self.runtime_streamer = runtime_streamer
+        self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -62,13 +67,37 @@ class RuntimeRunHandler:
                 context=command.runtime_context,
                 dependencies=self.dependencies_factory(command.runtime_context),
             )
-            await asyncio.wait_for(
-                self.runtime_invoker(
-                    harness,
-                    self._messages_for_run(command),
-                ),
-                timeout=command.runtime_context.model_profile.timeout_seconds,
-            )
+            messages = self._messages_for_run(command)
+            if command.runtime_context.model_profile.supports_streaming and (
+                self._runtime_streamer_explicit or callable(getattr(harness.agent, "astream", None))
+            ):
+                result = await self._stream_runtime(command, harness, messages)
+            else:
+                result = await asyncio.wait_for(
+                    self.runtime_invoker(
+                        harness,
+                        messages,
+                    ),
+                    timeout=command.runtime_context.model_profile.timeout_seconds,
+                )
+            final_text = self._extract_final_text(result)
+            if final_text is not None:
+                self.persistence.append_message(
+                    MessageRecord(
+                        conversation_id=command.conversation_id,
+                        org_id=command.org_id,
+                        run_id=command.run_id,
+                        role=MessageRole.ASSISTANT,
+                        content_text=final_text,
+                        trace_id=command.trace_id,
+                    )
+                )
+                self._append_lifecycle(
+                    command,
+                    RuntimeApiEventType.FINAL_RESPONSE,
+                    final_text,
+                    payload={"message": final_text},
+                )
         except TimeoutError as exc:
             self.persistence.update_run_status(run_id=command.run_id, status=AgentRunStatus.TIMED_OUT)
             self._append_lifecycle(command, RuntimeApiEventType.RUN_FAILED, "Run timed out")
@@ -103,20 +132,158 @@ class RuntimeRunHandler:
             if message.role in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
         )
 
+    async def _stream_runtime(
+        self,
+        command: RuntimeRunCommand,
+        harness: RuntimeHarness,
+        messages: Sequence[object],
+    ) -> object:
+        final_result: object | None = None
+        deltas: list[str] = []
+        async with asyncio.timeout(command.runtime_context.model_profile.timeout_seconds):
+            async for chunk in self.runtime_streamer(harness, messages):
+                candidate = self._stream_result_candidate(chunk)
+                if candidate is not None:
+                    final_result = candidate
+                delta = self._stream_delta(chunk)
+                if delta is None:
+                    continue
+                deltas.append(delta)
+                self._append_lifecycle(
+                    command,
+                    RuntimeApiEventType.MODEL_DELTA,
+                    delta,
+                    source=StreamEventSource.MODEL,
+                    payload={"delta": delta, "message": delta},
+                )
+        if final_result is not None:
+            return final_result
+        if deltas:
+            return {"content": "".join(deltas)}
+        return None
+
     def _append_lifecycle(
         self,
         command: RuntimeRunCommand,
         event_type: RuntimeApiEventType,
         summary: str,
+        *,
+        source: StreamEventSource = StreamEventSource.SYSTEM,
+        payload: dict[str, object] | None = None,
     ) -> None:
         self.event_store.append_event(
             RuntimeEventDraft(
                 run_id=command.run_id,
                 conversation_id=command.conversation_id,
-                source=StreamEventSource.SYSTEM,
+                source=source,
                 event_type=event_type,
                 trace_id=command.trace_id,
                 summary=summary,
-                payload={"status": event_type.value},
+                status="completed" if event_type == RuntimeApiEventType.FINAL_RESPONSE else None,
+                payload=payload or {"status": event_type.value},
             )
         )
+
+    @classmethod
+    def _stream_delta(cls, chunk: object) -> str | None:
+        if isinstance(chunk, tuple) and len(chunk) == 2 and chunk[0] == "messages":
+            message = cls._message_from_stream_payload(chunk[1])
+            return cls._message_delta(message)
+        if isinstance(chunk, dict) and chunk.get("event") in {"on_chat_model_stream", "on_llm_stream"}:
+            data = chunk.get("data")
+            if isinstance(data, dict):
+                return cls._message_delta(data.get("chunk"))
+        return None
+
+    @classmethod
+    def _stream_result_candidate(cls, chunk: object) -> object | None:
+        if isinstance(chunk, tuple) and len(chunk) == 2 and chunk[0] == "values":
+            return chunk[1]
+        if isinstance(chunk, dict) and chunk.get("event") in {"on_chain_end", "on_chat_model_end"}:
+            data = chunk.get("data")
+            if isinstance(data, dict):
+                output = data.get("output")
+                if output is not None:
+                    return output
+        return None
+
+    @classmethod
+    def _message_from_stream_payload(cls, payload: object) -> object:
+        if isinstance(payload, tuple) and payload:
+            return payload[0]
+        if isinstance(payload, dict):
+            return payload.get("chunk") or payload.get("message") or payload
+        return payload
+
+    @classmethod
+    def _message_delta(cls, message: object) -> str | None:
+        if isinstance(message, dict):
+            return cls._content_delta_to_text(message.get("content"))
+        return cls._content_delta_to_text(getattr(message, "content", None))
+
+    @classmethod
+    def _content_delta_to_text(cls, value: object) -> str | None:
+        if isinstance(value, str):
+            return value or None
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            text = "".join(parts)
+            return text or None
+        return None
+
+    @classmethod
+    def _extract_final_text(cls, result: object) -> str | None:
+        """Extract a best-effort assistant response from common LangChain result shapes."""
+
+        if result is None:
+            return None
+        if isinstance(result, str):
+            return result.strip() or None
+        if isinstance(result, dict):
+            for key in ("final_response", "response", "output", "content"):
+                text = cls._text(result.get(key))
+                if text is not None:
+                    return text
+            messages = result.get("messages")
+            if isinstance(messages, Sequence):
+                for message in reversed(messages):
+                    text = cls._message_content(message)
+                    if text is not None:
+                        return text
+        return cls._message_content(result)
+
+    @classmethod
+    def _message_content(cls, message: object) -> str | None:
+        if isinstance(message, dict):
+            return cls._content_to_text(message.get("content"))
+        return cls._content_to_text(getattr(message, "content", None))
+
+    @classmethod
+    def _content_to_text(cls, value: object) -> str | None:
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            text = "".join(parts).strip()
+            return text or None
+        return None
+
+    @classmethod
+    def _text(cls, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        return value.strip() or None

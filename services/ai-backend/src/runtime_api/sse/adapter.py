@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 from agent_runtime.agent.contracts import StreamEventSource
@@ -30,43 +31,68 @@ class RuntimeSseAdapter:
         user_id: str,
         run_id: str,
         after_sequence: int,
+        follow: bool = False,
     ) -> AsyncIterator[str]:
-        """Yield replayed events and an idle heartbeat for non-terminal runs."""
+        """Yield replayed events, then poll until the run reaches a terminal state."""
 
-        replay = service.replay_events(
-            org_id=org_id,
-            user_id=user_id,
-            run_id=run_id,
-            after_sequence=after_sequence,
+        latest_sequence = after_sequence
+        while True:
+            replay = service.replay_events(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                after_sequence=latest_sequence,
+            )
+            for event in replay.events:
+                latest_sequence = max(latest_sequence, event.sequence_no)
+                yield cls.format_event(event)
+            if replay.run_status in cls.TERMINAL_RUN_STATUSES:
+                return
+            if not follow:
+                if not replay.events:
+                    yield cls.heartbeat_event(
+                        service=service,
+                        org_id=org_id,
+                        user_id=user_id,
+                        run_id=run_id,
+                        sequence_no=max(1, replay.latest_sequence_no + 1),
+                    )
+                return
+            await asyncio.sleep(0.25)
+
+    @classmethod
+    def heartbeat_event(
+        cls,
+        *,
+        service: RuntimeApiService,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        sequence_no: int,
+    ) -> str:
+        run = service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        payload = {Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT}
+        metadata = {"transient": True}
+        presentation = RuntimeEventPresentationProjector.presentation_fields(
+            event_type=RuntimeApiEventType.HEARTBEAT,
+            source=StreamEventSource.SYSTEM,
+            parent_task_id=None,
+            payload=payload,
+            metadata=metadata,
         )
-        yielded = False
-        for event in replay.events:
-            yielded = True
-            yield cls.format_event(event)
-        if not yielded and replay.run_status not in cls.TERMINAL_RUN_STATUSES:
-            run = service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
-            payload = {Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT}
-            metadata = {"transient": True}
-            presentation = RuntimeEventPresentationProjector.presentation_fields(
-                event_type=RuntimeApiEventType.HEARTBEAT,
+        return cls.format_event(
+            RuntimeEventEnvelope(
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                sequence_no=sequence_no,
                 source=StreamEventSource.SYSTEM,
-                parent_task_id=None,
+                event_type=RuntimeApiEventType.HEARTBEAT,
+                trace_id=run.trace_id,
                 payload=payload,
                 metadata=metadata,
+                **presentation,
             )
-            yield cls.format_event(
-                RuntimeEventEnvelope(
-                    run_id=run.run_id,
-                    conversation_id=run.conversation_id,
-                    sequence_no=max(1, replay.latest_sequence_no + 1),
-                    source=StreamEventSource.SYSTEM,
-                    event_type=RuntimeApiEventType.HEARTBEAT,
-                    trace_id=run.trace_id,
-                    payload=payload,
-                    metadata=metadata,
-                    **presentation,
-                )
-            )
+        )
 
     @classmethod
     def format_event(cls, event: RuntimeEventEnvelope) -> str:

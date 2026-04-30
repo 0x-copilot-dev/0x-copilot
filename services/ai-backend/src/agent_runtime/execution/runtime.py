@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from time import perf_counter
 from typing import Any
 
@@ -48,7 +48,7 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
             "trace_id": context.trace_id,
         },
         "metadata": metadata,
-        "tags": ("agent_runtime", f"run:{run_id}"),
+        "tags": ["agent_runtime", f"run:{run_id}"],
     }
 
 
@@ -234,6 +234,82 @@ async def ainvoke_runtime(
         duration_ms=_elapsed_ms(started_at),
     )
     return result
+
+
+@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+async def astream_runtime(
+    harness: RuntimeHarness,
+    messages: Sequence[object],
+    *,
+    logger: RuntimeLogger | None = None,
+) -> AsyncIterator[object]:
+    """Stream runtime chunks from the graph while preserving typed config metadata."""
+
+    runtime_logger = logger or RuntimeLogger()
+    started_at = perf_counter()
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.stream.started",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="started",
+        metadata={"message_count": len(messages)},
+    )
+
+    if not callable(getattr(harness.agent, "astream", None)):
+        yield await ainvoke_runtime(harness, messages, logger=runtime_logger)
+        return
+
+    try:
+        async for chunk in harness.agent.astream(
+            {"messages": list(messages)},
+            config=runtime_config(harness),
+            stream_mode=["messages", "values"],
+        ):
+            yield chunk
+    except AgentRuntimeError as exc:
+        runtime_logger.event(
+            context=harness.context,
+            event="runtime.stream.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(started_at),
+            error_code=exc.code,
+            retryable=exc.retryable,
+            safe_message=exc.safe_message,
+        )
+        raise
+    except Exception as exc:
+        runtime_logger.event(
+            context=harness.context,
+            event="runtime.stream.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(started_at),
+            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            retryable=True,
+            safe_message="Runtime streaming failed safely.",
+            metadata={"exception_type": type(exc).__name__},
+        )
+        raise AgentRuntimeError(
+            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            "Runtime streaming failed safely.",
+            retryable=True,
+            correlation_id=harness.context.trace_id,
+        ) from exc
+
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.stream.succeeded",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="succeeded",
+        duration_ms=_elapsed_ms(started_at),
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:

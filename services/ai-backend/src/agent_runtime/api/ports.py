@@ -50,6 +50,9 @@ class PersistencePort(Protocol):
     ) -> Sequence[MessageRecord]:
         """Return ordered conversation messages."""
 
+    def append_message(self, message: MessageRecord) -> MessageRecord:
+        """Append a message created outside the initial API run transaction."""
+
     def create_run_with_user_message(
         self,
         *,

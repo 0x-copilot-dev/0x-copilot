@@ -227,6 +227,8 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
         }:
             return Messages.Event.REASONING
+        if event_type is RuntimeApiEventType.MODEL_DELTA:
+            return Messages.Event.MODEL_DELTA
         if event_type is RuntimeApiEventType.FINAL_RESPONSE:
             return Messages.Event.FINAL_RESPONSE
         return None
@@ -259,6 +261,7 @@ class RuntimeEventPresentationProjector:
             return Values.Status.STARTED
         if event_type in {
             RuntimeApiEventType.PROGRESS,
+            RuntimeApiEventType.MODEL_DELTA,
             RuntimeApiEventType.REASONING_SUMMARY,
             RuntimeApiEventType.REASONING_SUMMARY_DELTA,
             RuntimeApiEventType.SUBAGENT_PROGRESS,
