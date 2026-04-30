@@ -104,8 +104,17 @@ The workspace now includes initial scaffolding for `apps/frontend`, `services/ba
 
 ## Development Setup
 
-Use one virtual environment per Python service and the npm workspace environment
-at the repository root. Do not reuse a sibling service `.venv`.
+Use the root `Makefile` for the default workflow:
+
+```bash
+cd enterprise-search
+make setup
+```
+
+`make setup` installs npm dependencies and creates one virtual environment per
+Python service. Do not reuse a sibling service `.venv`.
+
+Equivalent manual setup:
 
 ```bash
 cd enterprise-search
@@ -143,7 +152,24 @@ images install the package during build.
 
 ## Run Locally
 
-Start each component in its own terminal from the paths shown below.
+Run the local end-to-end stack with one command:
+
+```bash
+cd enterprise-search
+make dev
+```
+
+This starts:
+
+- `services/backend` on `http://127.0.0.1:8100`
+- `services/ai-backend` on `http://127.0.0.1:8000`
+- `services/backend-facade` on `http://127.0.0.1:8200`
+- `apps/frontend` on `http://127.0.0.1:5173`
+
+Open `http://127.0.0.1:5173`. The Vite dev server proxies `/v1/*` to
+`backend-facade`.
+
+Manual process commands, if you want separate terminals:
 
 ```bash
 cd services/backend
@@ -180,9 +206,6 @@ PYTHONPATH=src:../../packages/service-contracts/src \
 cd enterprise-search
 npm run dev --workspace @enterprise-search/frontend -- --host 127.0.0.1
 ```
-
-Open `http://127.0.0.1:5173`. The Vite dev server proxies `/v1/*` to
-`backend-facade`.
 
 ## Auth In Development
 
@@ -246,7 +269,7 @@ Build and run the full local stack through Docker:
 
 ```bash
 cd enterprise-search
-OPENAI_API_KEY=$OPENAI_API_KEY docker compose -f docker-compose.dev.yml up --build
+OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
 ```
 
 Open `http://127.0.0.1:8080`. The `dev-gateway` container serves the frontend and
@@ -263,12 +286,32 @@ docker compose -f docker-compose.dev.yml logs -f ai-backend
 Stop the stack:
 
 ```bash
-docker compose -f docker-compose.dev.yml down
+make docker-dev-down
 ```
 
 The older `services/ai-backend/docker-compose.yml` is scoped to production-style
 AI API and worker execution with Postgres. Use `docker-compose.dev.yml` when you
 want frontend, facade, backend, and AI backend together.
+
+## Production Build
+
+`make prod` builds production artifacts and refuses to run with dev auth enabled
+or missing required secrets:
+
+```bash
+cd enterprise-search
+ENTERPRISE_AUTH_SECRET=... \
+ENTERPRISE_SERVICE_TOKEN=... \
+MCP_TOKEN_VAULT_SECRET=... \
+OPENAI_API_KEY=... \
+make prod
+```
+
+`make prod` does not enable `DEV_AUTH_BYPASS` and does not hardcode a JWT or
+service token. Deploy the built images with your production orchestrator and
+managed secret store. The backend production runtime still requires a persistent
+MCP registry store and managed token-vault adapter before it can serve production
+traffic.
 
 Start there for architecture details:
 
