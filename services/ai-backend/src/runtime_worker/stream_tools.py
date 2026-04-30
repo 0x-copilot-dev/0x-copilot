@@ -6,9 +6,14 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from agent_runtime.api.constants import Keys, Values
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.observability.tracing import TraceContext
-from runtime_api.schemas import RunRecord, RuntimeApiEventType
+from runtime_api.schemas import (
+    RunRecord,
+    RuntimeApiEventType,
+    RuntimeEventVisibility,
+)
 from runtime_worker.stream_messages import StreamMessageParser
 from runtime_worker.stream_parts import StreamNamespace
 
@@ -31,6 +36,8 @@ class ToolCallStreamState:
 
 class ToolEventProjector(StreamMessageParser):
     """Project provider tool-call chunks and tool-result messages."""
+
+    internal_tool_names = frozenset({Values.Tool.WRITE_TODOS})
 
     _tool_call_states: dict[tuple[str, tuple[str, ...], str], ToolCallStreamState]
     _tool_call_ids: dict[tuple[str, str], ToolCallStreamState]
@@ -96,6 +103,7 @@ class ToolEventProjector(StreamMessageParser):
         summary = cls.text(payload.get("summary"))
         if summary is not None:
             result["summary"] = summary
+        cls.apply_tool_visibility(result)
         return result
 
     def tool_call_state(
@@ -178,6 +186,7 @@ class ToolEventProjector(StreamMessageParser):
         }
         if state.summary is not None:
             payload["summary"] = state.summary
+        cls.apply_tool_visibility(payload)
         return payload
 
     @classmethod
@@ -214,12 +223,14 @@ class ToolEventProjector(StreamMessageParser):
             "status",
         }
         output = {key: value for key, value in payload.items() if key not in excluded}
-        return {
+        result: JsonObject = {
             "tool_name": tool_name,
             "call_id": call_id,
             "status": payload.get("status", "completed"),
             "output": output or payload,
         }
+        cls.apply_tool_visibility(result)
+        return result
 
     def tool_result_payload_with_state(
         self, run_id: str, payload: JsonObject
@@ -231,7 +242,8 @@ class ToolEventProjector(StreamMessageParser):
         if state is None:
             return payload
         if payload.get("tool_name") == "unknown_tool" and state.tool_name is not None:
-            return {**payload, "tool_name": state.tool_name}
+            payload = {**payload, "tool_name": state.tool_name}
+        self.apply_tool_visibility(payload)
         return payload
 
     def tool_call_state_for_payload(
@@ -243,3 +255,12 @@ class ToolEventProjector(StreamMessageParser):
         if call_id is None:
             return None
         return self._tool_call_ids.get((run_id, call_id))
+
+    @classmethod
+    def apply_tool_visibility(cls, payload: JsonObject) -> None:
+        if cls.is_internal_tool_name(cls.text(payload.get("tool_name"))):
+            payload[Keys.Field.VISIBILITY] = RuntimeEventVisibility.INTERNAL.value
+
+    @classmethod
+    def is_internal_tool_name(cls, tool_name: str | None) -> bool:
+        return tool_name in cls.internal_tool_names

@@ -406,6 +406,9 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
+  if (event.visibility === "internal") {
+    return event.parent_task_id ? "Subagent working..." : null;
+  }
   if (event.event_type === "run_started") {
     return "Working...";
   }

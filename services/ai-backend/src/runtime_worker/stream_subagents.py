@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
+from agent_runtime.api.constants import Keys, Messages
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.stream_parts import StreamNamespace
@@ -94,6 +95,8 @@ class SubagentEventProjector(ToolEventProjector):
             return emitted
 
         payload = self.safe_activity_payload(data)
+        if not has_user_visible_progress(payload):
+            return True
         payload.setdefault("task_id", namespace.subagent_task_id)
         payload.setdefault("status", "running")
         self.event_producer.append_api_event(  # type: ignore[attr-defined]
@@ -204,3 +207,31 @@ class SubagentEventProjector(ToolEventProjector):
                 cls.task_tool_result_payload({"call_id": call_id, **payload})
             )
         return tuple(payloads)
+
+
+def has_user_visible_progress(payload: Mapping[str, object]) -> bool:
+    if is_internal_progress_text(payload):
+        return False
+    return any(
+        isinstance(payload.get(key), str) and str(payload[key]).strip()
+        for key in (
+            "message",
+            "summary",
+            "display_title",
+            "subagent_name",
+            "subagent_id",
+        )
+    )
+
+
+def is_internal_progress_text(payload: Mapping[str, object]) -> bool:
+    text = (
+        text_value(payload.get(Keys.Payload.MESSAGE))
+        or text_value(payload.get(Keys.Field.SUMMARY))
+        or ""
+    )
+    return text.startswith(Messages.Event.INTERNAL_TODO_PROGRESS_PREFIX)
+
+
+def text_value(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None

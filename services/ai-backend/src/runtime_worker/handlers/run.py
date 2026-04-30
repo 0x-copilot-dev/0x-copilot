@@ -168,21 +168,48 @@ class RuntimeRunHandler:
         messages: Sequence[object],
     ) -> object:
         final_result: object | None = None
-        deltas: list[str] = []
+        response_deltas: list[str] = []
+        subagent_summaries: list[str] = []
+        active_subagent_tasks: set[str] = set()
+        completed_subagent_tasks: set[str] = set()
+        saw_task_subagent = False
         async with asyncio.timeout(
             command.runtime_context.model_profile.timeout_seconds
         ):
             async for chunk in self.runtime_streamer(harness, messages):
+                latest_before = self.event_store.get_latest_sequence(run_id=run.run_id)
                 candidate = self.stream_event_mapper.stream_result_candidate(chunk)
-                if candidate is not None:
+                if candidate is not None and not active_subagent_tasks:
                     final_result = candidate
                 delta = self.stream_event_mapper.stream_delta(chunk)
                 self.stream_event_mapper.append_activity_events(
                     run=run, chunk=chunk, delta=delta
                 )
+                new_events = self.event_store.list_events_after(
+                    org_id=command.org_id,
+                    run_id=run.run_id,
+                    after_sequence=latest_before,
+                )
+                for event in new_events:
+                    if (
+                        event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
+                        and event.task_id is not None
+                    ):
+                        active_subagent_tasks.add(event.task_id)
+                        saw_task_subagent = True
+                    if (
+                        event.event_type == RuntimeApiEventType.SUBAGENT_COMPLETED
+                        and event.task_id is not None
+                    ):
+                        active_subagent_tasks.discard(event.task_id)
+                        if event.task_id not in completed_subagent_tasks:
+                            completed_subagent_tasks.add(event.task_id)
+                            if event.summary:
+                                subagent_summaries.append(event.summary)
                 if delta is None:
                     continue
-                deltas.append(delta)
+                if not active_subagent_tasks:
+                    response_deltas.append(delta)
                 self._append_lifecycle(
                     run,
                     RuntimeApiEventType.MODEL_DELTA,
@@ -190,10 +217,12 @@ class RuntimeRunHandler:
                     source=StreamEventSource.MODEL,
                     payload={"delta": delta, "message": delta},
                 )
-        if deltas:
-            return {"content": "".join(deltas)}
         if final_result is not None:
             return final_result
+        if response_deltas:
+            return {"content": "".join(response_deltas)}
+        if saw_task_subagent and subagent_summaries:
+            return {"content": "\n\n".join(subagent_summaries)}
         return None
 
     def _append_lifecycle(

@@ -171,6 +171,9 @@ export function applyRuntimeEvent(
     }
     return finalizeAssistantMessage(withActivity, event.run_id, text);
   }
+  if (event.event_type === "run_completed") {
+    return removeRunActivity(items, event.run_id);
+  }
   if (isActivityEvent(event)) {
     return upsertRunActivity(items, event);
   }
@@ -189,6 +192,9 @@ export function applyRuntimeEvent(
 }
 
 function isActivityEvent(event: RuntimeEventEnvelope): boolean {
+  if (event.visibility === "internal") {
+    return false;
+  }
   return ["run", "tool", "subagent", "reasoning", "approval", "event"].includes(
     event.activity_kind,
   );
@@ -218,12 +224,16 @@ function upsertRunActivity(
   );
 }
 
+function removeRunActivity(items: ChatItem[], runId: string): ChatItem[] {
+  return items.filter((item) => item.id !== `activity-${runId}`);
+}
+
 function createRunActivity(event: RuntimeEventEnvelope): RunActivity {
   return {
     runId: event.run_id,
-    status: statusFromEvent(event),
-    title: event.display_title ?? "Agent activity",
-    summary: event.summary ?? undefined,
+    status: runStatusFromEvent(event),
+    title: runTitleForEvent(event),
+    summary: runSummaryForEvent(event),
     reasoning: [],
     events: [],
     tools: [],
@@ -237,9 +247,9 @@ function applyActivityEvent(
 ): RunActivity {
   let next: RunActivity = {
     ...activity,
-    status: statusFromEvent(event, activity.status),
+    status: runStatusFromEvent(event, activity.status),
     title: runTitleForEvent(event, activity),
-    summary: event.summary ?? activity.summary,
+    summary: runSummaryForEvent(event) ?? activity.summary,
     reasoning: [...activity.reasoning],
     events: [...activity.events],
     tools: [...activity.tools],
@@ -261,6 +271,12 @@ function applyActivityEvent(
     return upsertTool(next, event);
   }
   if (event.activity_kind === "subagent") {
+    if (
+      isInternalSubagentProgress(event) &&
+      subagentKeyForActivity(next, event) === null
+    ) {
+      return next;
+    }
     return upsertSubagent(next, event);
   }
   if (event.activity_kind !== "message") {
@@ -277,7 +293,7 @@ function appendReasoning(
   if (!text) {
     return activity;
   }
-  const subagentKey = subagentKeyForEvent(event);
+  const subagentKey = subagentKeyForActivity(activity, event);
   if (subagentKey) {
     const withSubagent = ensureSubagent(activity, event, subagentKey);
     return {
@@ -302,8 +318,11 @@ function upsertTool(
   activity: RunActivity,
   event: RuntimeEventEnvelope,
 ): RunActivity {
+  if (isInternalEvent(event)) {
+    return activity;
+  }
   const tool = toolFromEvent(event);
-  const subagentKey = subagentKeyForEvent(event);
+  const subagentKey = subagentKeyForActivity(activity, event);
   if (subagentKey) {
     const withSubagent = ensureSubagent(activity, event, subagentKey);
     return {
@@ -325,7 +344,10 @@ function upsertSubagent(
   activity: RunActivity,
   event: RuntimeEventEnvelope,
 ): RunActivity {
-  const key = subagentKeyForEvent(event) ?? event.event_id;
+  const key = subagentKeyForActivity(activity, event);
+  if (key === null) {
+    return appendActivityRow(activity, event);
+  }
   const withSubagent = ensureSubagent(activity, event, key);
   return {
     ...withSubagent,
@@ -340,7 +362,9 @@ function upsertSubagent(
           event.summary ??
           payloadString(event.payload, "summary") ??
           subagent.summary,
-        events: upsertEvent(subagent.events, event),
+        events: isInternalSubagentProgress(event)
+          ? subagent.events
+          : upsertEvent(subagent.events, event),
       };
     }),
   };
@@ -350,7 +374,7 @@ function appendActivityRow(
   activity: RunActivity,
   event: RuntimeEventEnvelope,
 ): RunActivity {
-  const subagentKey = subagentKeyForEvent(event);
+  const subagentKey = subagentKeyForActivity(activity, event);
   if (subagentKey) {
     const withSubagent = ensureSubagent(activity, event, subagentKey);
     return {
@@ -373,10 +397,7 @@ function ensureSubagent(
   if (activity.subagents.some((subagent) => subagent.id === key)) {
     return activity;
   }
-  const payloadName = isSubagentActivityPayload(event.payload)
-    ? (event.payload.subagent_name ?? event.payload.subagent_id)
-    : undefined;
-  const name = event.subagent_id ?? payloadName ?? "subagent";
+  const name = subagentNameForEvent(event) ?? "Subagent";
   return {
     ...activity,
     subagents: [
@@ -428,17 +449,13 @@ function toolFromEvent(event: RuntimeEventEnvelope): ToolCallActivity {
   const payload = event.payload;
   const fallbackId = event.span_id ?? event.event_id;
   const name = toolName(payload) ?? event.display_title ?? "tool";
-  const deltas: ActivityText[] =
-    isToolCallDeltaPayload(payload) && typeof payload.delta === "string"
-      ? [{ id: event.event_id, text: payload.delta }]
-      : [];
   return {
     id: toolCallId(payload) ?? fallbackId,
     name,
     status: statusFromEvent(event),
     summary: event.summary ?? payloadString(payload, "summary") ?? undefined,
     result: toolResultText(payload),
-    deltas,
+    deltas: [],
   };
 }
 
@@ -482,7 +499,63 @@ function reasoningText(event: RuntimeEventEnvelope): string | null {
 }
 
 function subagentKeyForEvent(event: RuntimeEventEnvelope): string | null {
-  return event.task_id ?? event.parent_task_id ?? event.subagent_id ?? null;
+  const name = subagentNameForEvent(event);
+  if (isSubagentActivityPayload(event.payload) && name !== null) {
+    return event.payload.task_id;
+  }
+  if (name !== null) {
+    return event.task_id ?? event.parent_task_id ?? event.subagent_id ?? null;
+  }
+  return null;
+}
+
+function subagentKeyForActivity(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): string | null {
+  return (
+    subagentKeyForEvent(event) ?? existingSubagentKeyForEvent(activity, event)
+  );
+}
+
+function existingSubagentKeyForEvent(
+  activity: RunActivity,
+  event: RuntimeEventEnvelope,
+): string | null {
+  const candidates = [
+    isSubagentActivityPayload(event.payload) ? event.payload.task_id : null,
+    event.task_id ?? null,
+    event.parent_task_id ?? null,
+    event.subagent_id ?? null,
+  ];
+  return (
+    candidates.find((candidate) =>
+      activity.subagents.some((subagent) => subagent.id === candidate),
+    ) ?? null
+  );
+}
+
+function subagentNameForEvent(event: RuntimeEventEnvelope): string | null {
+  const payloadName = isSubagentActivityPayload(event.payload)
+    ? (event.payload.subagent_name ?? event.payload.subagent_id)
+    : undefined;
+  return (
+    meaningfulSubagentName(payloadName) ??
+    meaningfulSubagentName(event.subagent_id)
+  );
+}
+
+function meaningfulSubagentName(
+  value: string | null | undefined,
+): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "subagent") {
+    return null;
+  }
+  return trimmed;
 }
 
 function upsertEvent(
@@ -500,6 +573,22 @@ function upsertEvent(
       undefined,
     status: statusFromEvent(event),
   });
+}
+
+function isInternalSubagentProgress(event: RuntimeEventEnvelope): boolean {
+  if (isInternalEvent(event)) {
+    return true;
+  }
+  const text =
+    payloadString(event.payload, "message") ??
+    payloadString(event.payload, "summary") ??
+    event.summary ??
+    "";
+  return event.event_type === "subagent_progress" && !text;
+}
+
+function isInternalEvent(event: RuntimeEventEnvelope): boolean {
+  return event.visibility === "internal";
 }
 
 function upsertText(
@@ -531,9 +620,14 @@ function upsertByKey<T extends { id: string }>(
   return items.map((item) => (item.id === id ? next : item));
 }
 
+function runTitleForEvent(event: RuntimeEventEnvelope): string;
 function runTitleForEvent(
   event: RuntimeEventEnvelope,
   activity: RunActivity,
+): string;
+function runTitleForEvent(
+  event: RuntimeEventEnvelope,
+  activity?: RunActivity,
 ): string {
   if (event.event_type === "run_completed") {
     return "Run completed";
@@ -544,9 +638,26 @@ function runTitleForEvent(
   if (event.event_type === "run_cancelled") {
     return "Run cancelled";
   }
-  return activity.title === "Agent activity"
-    ? (event.display_title ?? "Agent activity")
-    : activity.title;
+  if (event.activity_kind === "run") {
+    return event.display_title ?? titleForEvent(event.event_type);
+  }
+  return activity?.title ?? "Agent activity";
+}
+
+function runSummaryForEvent(event: RuntimeEventEnvelope): string | undefined {
+  return event.activity_kind === "run"
+    ? (event.summary ?? undefined)
+    : undefined;
+}
+
+function runStatusFromEvent(
+  event: RuntimeEventEnvelope,
+  fallback: ActivityStatus = "running",
+): ActivityStatus {
+  if (event.activity_kind === "run" || event.event_type === "final_response") {
+    return statusFromEvent(event, fallback);
+  }
+  return fallback;
 }
 
 function statusFromEvent(

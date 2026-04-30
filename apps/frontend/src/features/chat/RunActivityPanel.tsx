@@ -50,10 +50,12 @@ export function RunActivityPanel({
           className="run-activity-panel__body"
           aria-label="Run activity overview"
         >
-          <ReasoningSummaryStream
-            items={activity.reasoning}
-            emptyText="Waiting for reasoning updates..."
-          />
+          {shouldShowReasoning(activity.reasoning.length) ? (
+            <ReasoningSummaryStream
+              items={activity.reasoning}
+              emptyText="Waiting for reasoning updates..."
+            />
+          ) : null}
           <ActivityRows events={activity.events} tools={activity.tools} />
         </section>
       )}
@@ -119,7 +121,7 @@ export function SubagentTabStrip({
           onClick={() => onSelect(subagent.id)}
         >
           <StatusDot status={subagent.status} />
-          {subagent.name}
+          {tabLabel(subagent, subagents)}
         </button>
       ))}
     </div>
@@ -140,16 +142,20 @@ export function SubagentActivityPanel({
         <div>
           <span className="app-eyebrow">Subagent</span>
           <h3>{subagent.name}</h3>
-          {subagent.summary ? <p>{subagent.summary}</p> : null}
+          {subagent.summary ? (
+            <p title={subagent.summary}>{compactText(subagent.summary)}</p>
+          ) : null}
         </div>
         <Badge tone={badgeTone(subagent.status)}>
           {labelForStatus(subagent.status)}
         </Badge>
       </header>
-      <ReasoningSummaryStream
-        items={subagent.reasoning}
-        emptyText="No reasoning summaries yet."
-      />
+      {shouldShowReasoning(subagent.reasoning.length) ? (
+        <ReasoningSummaryStream
+          items={subagent.reasoning}
+          emptyText="No reasoning summaries yet."
+        />
+      ) : null}
       <ActivityRows events={subagent.events} tools={subagent.tools} />
     </section>
   );
@@ -198,9 +204,6 @@ export function ToolCallRow({
       <div>
         <strong>{tool.name}</strong>
         {tool.summary ? <p>{tool.summary}</p> : null}
-        {tool.deltas.map((delta) => (
-          <p key={delta.id}>{delta.text}</p>
-        ))}
         {tool.result ? (
           <p className="tool-call-row__result">{tool.result}</p>
         ) : null}
@@ -233,7 +236,10 @@ function ActivityRows({
   events: ActivityEvent[];
   tools: ToolCallActivity[];
 }): ReactElement {
-  if (events.length === 0 && tools.length === 0) {
+  const visibleEvents = events.filter(
+    (event) => !isInternalActivityEvent(event),
+  );
+  if (visibleEvents.length === 0 && tools.length === 0) {
     return (
       <div className="activity-event-row">
         <StatusDot status="running" />
@@ -243,7 +249,7 @@ function ActivityRows({
   }
   return (
     <section className="activity-rows" aria-label="Activity rows">
-      {events.map((event) => (
+      {visibleEvents.map((event) => (
         <ActivityEventRow key={event.id} event={event} />
       ))}
       {tools.map((tool) => (
@@ -251,6 +257,10 @@ function ActivityRows({
       ))}
     </section>
   );
+}
+
+function isInternalActivityEvent(event: ActivityEvent): boolean {
+  return event.eventType === "subagent_progress" && !event.summary;
 }
 
 function StatusDot({ status }: { status: ActivityStatus }): ReactElement {
@@ -278,6 +288,31 @@ function footerSummary(activity: RunActivity): string {
     return `${runningSubagents} subagent${runningSubagents === 1 ? "" : "s"} running`;
   }
   return `${completedSubagents}/${activity.subagents.length} subagents completed`;
+}
+
+function shouldShowReasoning(itemCount: number): boolean {
+  return itemCount > 0;
+}
+
+function tabLabel(
+  subagent: SubagentActivity,
+  subagents: SubagentActivity[],
+): string {
+  const matching = subagents.filter(
+    (candidate) => candidate.name === subagent.name,
+  );
+  if (matching.length === 1) {
+    return subagent.name;
+  }
+  return `${subagent.name} ${matching.indexOf(subagent) + 1}`;
+}
+
+function compactText(text: string, maxLength = 160): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}...`;
 }
 
 function badgeTone(

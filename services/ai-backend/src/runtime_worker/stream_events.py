@@ -135,15 +135,17 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                 metadata=metadata,
                 parent_task_id=parent_task_id,
             )
+            completed_payload = {
+                "tool_name": payload["tool_name"],
+                "call_id": payload["call_id"],
+                "status": "completed",
+            }
+            self.apply_tool_visibility(completed_payload)
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
                 event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
-                payload={
-                    "tool_name": payload["tool_name"],
-                    "call_id": payload["call_id"],
-                    "status": "completed",
-                },
+                payload=completed_payload,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
             )
@@ -163,7 +165,11 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
     @classmethod
     def stream_result_candidate(cls, chunk: object) -> object | None:
         part = cls.stream_part(chunk)
-        if part is not None and cls.stream_type(part) == "values":
+        if (
+            part is not None
+            and cls.stream_type(part) == "values"
+            and not cls.namespace_for(part).is_subagent
+        ):
             return part["data"]
         return None
 

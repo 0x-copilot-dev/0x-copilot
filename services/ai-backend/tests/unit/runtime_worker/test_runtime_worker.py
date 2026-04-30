@@ -257,6 +257,88 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     assert assistant_messages[0].content_text == "Hello\n there"
 
 
+def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    class FakeChunk:
+        def __init__(self, content: object) -> None:
+            self.content = content
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("draft text "), {}),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("that should be reconciled"), {}),
+        }
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "assistant", "content": "Clean final."}]},
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    model_delta_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "model_delta"
+    ]
+    assert [event.payload["delta"] for event in model_delta_events] == [
+        "draft text ",
+        "that should be reconciled",
+    ]
+    final_response = next(
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "final_response"
+    )
+    assert final_response.payload == {"message": "Clean final."}
+    assistant_messages = [
+        message for message in store.messages.values() if message.role == "assistant"
+    ]
+    assert assistant_messages[0].content_text == "Clean final."
+
+
 def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings()
@@ -338,6 +420,123 @@ def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> 
         message for message in store.messages.values() if message.role == "assistant"
     ]
     assert assistant_messages[0].content_text == "Main answer done."
+
+
+def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    class FakeChunk:
+        def __init__(self, content: object) -> None:
+            self.content = content
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "task",
+                            "id": "task_abc",
+                            "args": {
+                                "description": "Write prime code.",
+                                "subagent_type": "coder",
+                            },
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("interleaved subagent text"), {}),
+        }
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "interleaved subagent text",
+                    }
+                ]
+            },
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "type": "tool",
+                    "name": "task",
+                    "tool_call_id": "task_abc",
+                    "content": "Subagent answer.",
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk("Clean final."), {}),
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    model_delta_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "model_delta"
+    ]
+    assert [event.payload["delta"] for event in model_delta_events] == [
+        "interleaved subagent text",
+        "Clean final.",
+    ]
+    final_response = next(
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "final_response"
+    )
+    assert final_response.payload == {"message": "Clean final."}
 
 
 def test_runtime_worker_persists_mcp_auth_required_event() -> None:
@@ -608,12 +807,12 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
         if event.event_type == "subagent_started" and event.task_id == "task_abc"
     )
     assert task_started.subagent_id == "researcher"
-    task_progress = next(
+    task_progress = [
         event
         for event in events
         if event.event_type == "subagent_progress" and event.task_id == "task_abc"
-    )
-    assert task_progress.parent_task_id == "task_abc"
+    ]
+    assert task_progress == []
     task_completed = next(
         event
         for event in events

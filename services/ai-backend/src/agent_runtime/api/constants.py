@@ -97,6 +97,9 @@ class Values:
         STARTED = "started"
         WAITING = "waiting"
 
+    class Tool:
+        WRITE_TODOS = "write_todos"
+
 
 class Patterns:
     """Compiled validators for API IDs and slugs."""
@@ -120,6 +123,7 @@ class Messages:
         APPROVAL_RESOLVED = "Approval decision was recorded."
         FINAL_RESPONSE = "Final response"
         HEARTBEAT = "Runtime stream heartbeat."
+        INTERNAL_TODO_PROGRESS_PREFIX = "Updated todo list"
         MCP_AUTH_REQUIRED = "MCP authentication required"
         MODEL_DELTA = "Model response"
         REASONING = "Thinking"
