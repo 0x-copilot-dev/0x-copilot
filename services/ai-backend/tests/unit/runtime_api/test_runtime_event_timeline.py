@@ -176,8 +176,16 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         adapter = RuntimeStreamPartAdapter(service.event_producer)
 
         for chunk in (
-            {"name": "write_todos", "id": self.Values.CALL_ID, "index": 0, "args": {"delta": ""}},
-            {"index": 0, "args": {"delta": '{"todos":[{"content":"check prime helper"'}},
+            {
+                "name": "write_todos",
+                "id": self.Values.CALL_ID,
+                "index": 0,
+                "args": {"delta": ""},
+            },
+            {
+                "index": 0,
+                "args": {"delta": '{"todos":[{"content":"check prime helper"'},
+            },
             {"index": 0, "args": {"delta": ',"status":"pending"}]}'}},
         ):
             adapter.append_activity_events(
@@ -227,8 +235,12 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
         ]
         assert {event.payload["tool_name"] for event in tool_events} == {"write_todos"}
-        assert {event.payload["call_id"] for event in tool_events} == {self.Values.CALL_ID}
-        assert "unknown_tool" not in store.events_by_run[run.run_id][-1].model_dump_json()
+        assert {event.payload["call_id"] for event in tool_events} == {
+            self.Values.CALL_ID
+        }
+        assert (
+            "unknown_tool" not in store.events_by_run[run.run_id][-1].model_dump_json()
+        )
 
     def test_incremental_task_tool_chunks_project_to_subagent_lifecycle(
         self,
@@ -238,7 +250,12 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         adapter = RuntimeStreamPartAdapter(service.event_producer)
 
         for chunk in (
-            {"name": "task", "id": self.Values.TASK_ID, "index": 0, "args": {"delta": ""}},
+            {
+                "name": "task",
+                "id": self.Values.TASK_ID,
+                "index": 0,
+                "args": {"delta": ""},
+            },
             {"index": 0, "args": {"delta": "{"}},
             {
                 "index": 0,
@@ -341,12 +358,12 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         assert subagent_completed.task_id == self.Values.TASK_ID
         assert subagent_completed.subagent_id == "coder"
         assert subagent_completed.status == "completed"
-        assert [
-            event.event_type for event in activity_events
-        ].count(RuntimeApiEventType.SUBAGENT_STARTED) == 1
-        assert [
-            event.event_type for event in activity_events
-        ].count(RuntimeApiEventType.SUBAGENT_COMPLETED) == 1
+        assert [event.event_type for event in activity_events].count(
+            RuntimeApiEventType.SUBAGENT_STARTED
+        ) == 1
+        assert [event.event_type for event in activity_events].count(
+            RuntimeApiEventType.SUBAGENT_COMPLETED
+        ) == 1
 
     def test_reasoning_summary_event_does_not_expose_raw_thought_payload(
         self,

@@ -589,7 +589,9 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
                     "tool_call_chunks": (
                         {
                             "index": 0,
-                            "args": {"delta": '{"todos":[{"content":"check prime helper"'},
+                            "args": {
+                                "delta": '{"todos":[{"content":"check prime helper"'
+                            },
                         },
                     )
                 },
@@ -671,7 +673,11 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
                 {},
             ),
         }
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "assistant", "content": "Done."}]}}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "assistant", "content": "Done."}]},
+        }
 
     worker = RuntimeWorker(
         persistence=store,
@@ -695,7 +701,12 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
         event
         for event in events
         if event.event_type
-        in {"tool_call_started", "tool_call_delta", "tool_result", "tool_call_completed"}
+        in {
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_result",
+            "tool_call_completed",
+        }
     ]
     assert {event.payload["tool_name"] for event in tool_events} == {"write_todos"}
     assert {event.payload["call_id"] for event in tool_events} == {"call_123"}

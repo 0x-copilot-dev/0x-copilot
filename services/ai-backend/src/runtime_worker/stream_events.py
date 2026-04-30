@@ -69,9 +69,7 @@ class RuntimeStreamPartAdapter:
             tuple[str, tuple[str, ...], str], ToolCallStreamState
         ] = {}
         self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
-        self._subagent_lifecycle_keys: set[
-            tuple[str, RuntimeApiEventType, str]
-        ] = set()
+        self._subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]] = set()
 
     def append_activity_events(
         self,
@@ -172,7 +170,9 @@ class RuntimeStreamPartAdapter:
                     event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                     payload=self.task_tool_result_payload(
                         payload,
-                        subagent_name=state.subagent_name if state is not None else None,
+                        subagent_name=state.subagent_name
+                        if state is not None
+                        else None,
                     ),
                     metadata=metadata,
                 )
@@ -497,7 +497,9 @@ class RuntimeStreamPartAdapter:
         tool_call: object,
     ) -> ToolCallStreamState:
         payload = self.payload_mapping(tool_call)
-        tool_name = self.text(payload.get("name")) or self.text(payload.get("tool_name"))
+        tool_name = self.text(payload.get("name")) or self.text(
+            payload.get("tool_name")
+        )
         call_id = self.text(payload.get("id")) or self.text(payload.get("call_id"))
         key = self.tool_call_state_key(run_id, namespace, payload, call_id)
         state_key = (run_id, namespace.parts, key)
@@ -737,7 +739,9 @@ class RuntimeStreamPartAdapter:
             )
             if call_id is None:
                 continue
-            payloads.append(cls.task_tool_result_payload({"call_id": call_id, **payload}))
+            payloads.append(
+                cls.task_tool_result_payload({"call_id": call_id, **payload})
+            )
         return tuple(payloads)
 
     @classmethod
