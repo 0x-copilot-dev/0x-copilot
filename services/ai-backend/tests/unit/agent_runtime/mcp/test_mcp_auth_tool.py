@@ -4,6 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+
+from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool, McpAuthSession
@@ -59,3 +62,16 @@ def test_auth_mcp_tool_returns_safe_auth_card_payload(
     assert result["display_name"] == "Drive MCP"
     assert "auth.example.com" in result["auth_url"]
     assert "token" not in str(result)
+
+
+def test_backend_mcp_service_auth_includes_trusted_scope_headers(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
+
+    headers = BackendMcpServiceAuth.headers(runtime_context_admin)
+
+    assert headers[SERVICE_TOKEN_HEADER] == "service-token"
+    assert headers[ORG_HEADER] == runtime_context_admin.org_id
+    assert headers[USER_HEADER] == runtime_context_admin.user_id

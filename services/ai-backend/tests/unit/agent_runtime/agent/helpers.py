@@ -29,6 +29,15 @@ class FakeDeepAgentsModule:
         return {"agent": "fake"}
 
 
+@dataclass
+class FakeSystemPromptDeepAgentsModule:
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def create_deep_agent(self, *, system_prompt: str, **kwargs: Any) -> object:
+        self.calls.append({"system_prompt": system_prompt, **kwargs})
+        return {"agent": "fake"}
+
+
 class SkillsRuntimeFactoryTestMixin:
     class Paths:
         SKILLS = Keys.DeepAgents.SKILLS

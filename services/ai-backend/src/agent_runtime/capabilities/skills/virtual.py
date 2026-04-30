@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Protocol
 
-from enterprise_service_contracts.headers import SERVICE_TOKEN_HEADER
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 import httpx
 from pydantic import Field, ValidationError
 
@@ -64,7 +64,7 @@ class BackendSkillProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
-            headers=BackendSkillServiceAuth.headers(),
+            headers=BackendSkillServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -75,7 +75,7 @@ class BackendSkillProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
-            headers=BackendSkillServiceAuth.headers(),
+            headers=BackendSkillServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -185,6 +185,12 @@ class BackendSkillServiceAuth:
     """Service-auth header construction for backend Skill calls."""
 
     @staticmethod
-    def headers() -> dict[str, str]:
+    def headers(runtime_context: AgentRuntimeContext) -> dict[str, str]:
         token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
-        return {SERVICE_TOKEN_HEADER: token} if token else {}
+        if not token:
+            return {}
+        return {
+            SERVICE_TOKEN_HEADER: token,
+            ORG_HEADER: runtime_context.org_id,
+            USER_HEADER: runtime_context.user_id,
+        }

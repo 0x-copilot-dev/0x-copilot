@@ -21,7 +21,7 @@ from agent_runtime.context.memory import (
     VersionedMemoryStore,
 )
 from agent_runtime.context.memory.policy import MemoryPolicyAuthorizer
-from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
+from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule, FakeSystemPromptDeepAgentsModule
 
 
 class FakeConcreteMemoryBackend:
@@ -252,6 +252,24 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     assert agent == {"agent": "fake"}
     assert fake_deepagents.calls[0]["backend"] is memory_backend
     assert fake_deepagents.calls[0]["memory"] == ["/memories/"]
+
+
+def test_deep_agent_builder_uses_supported_prompt_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+    model_config: ModelConfig,
+) -> None:
+    fake_deepagents = FakeSystemPromptDeepAgentsModule()
+    monkeypatch.setattr(factory_module, "import_module", lambda _: fake_deepagents)
+
+    agent = factory_module._build_deep_agent(
+        tools=("doc_search",),
+        model_config=model_config,
+        instructions="Follow policy.",
+    )
+
+    assert agent == {"agent": "fake"}
+    assert fake_deepagents.calls[0]["system_prompt"] == "Follow policy."
+    assert "instructions" not in fake_deepagents.calls[0]
 
 
 def test_deep_agent_builder_does_not_treat_route_plan_as_backend(

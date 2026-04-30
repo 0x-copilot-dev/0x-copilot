@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+
 from agent_runtime.capabilities.skills.middleware import LoadSkillTool
 from agent_runtime.capabilities.skills.virtual import (
+    BackendSkillServiceAuth,
     VirtualSkillBundle,
     VirtualSkillCard,
     VirtualSkillRegistry,
 )
+from agent_runtime.execution.contracts import AgentRuntimeContext
 
 
 class FakeSkillProvider:
@@ -54,3 +58,16 @@ def test_load_skill_tool_returns_markdown_from_virtual_registry() -> None:
     assert first["markdown"].startswith("---")
     assert second["markdown"] == first["markdown"]
     assert provider.load_calls == 1
+
+
+def test_backend_skill_service_auth_includes_trusted_scope_headers(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "service-token")
+
+    headers = BackendSkillServiceAuth.headers(runtime_context_admin)
+
+    assert headers[SERVICE_TOKEN_HEADER] == "service-token"
+    assert headers[ORG_HEADER] == runtime_context_admin.org_id
+    assert headers[USER_HEADER] == runtime_context_admin.user_id

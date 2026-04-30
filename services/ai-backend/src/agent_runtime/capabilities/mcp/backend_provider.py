@@ -7,7 +7,7 @@ from datetime import datetime
 import os
 from typing import Any
 
-from enterprise_service_contracts.headers import SERVICE_TOKEN_HEADER
+from enterprise_service_contracts.headers import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 import httpx
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
@@ -35,7 +35,7 @@ class BackendMcpProvider:
         response = httpx.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
             params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
-            headers=BackendMcpServiceAuth.headers(),
+            headers=BackendMcpServiceAuth.headers(self.runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -63,7 +63,7 @@ class BackendMcpProvider:
                 "user_id": runtime_context.user_id,
                 "redirect_uri": self.auth_redirect_uri,
             },
-            headers=BackendMcpServiceAuth.headers(),
+            headers=BackendMcpServiceAuth.headers(runtime_context),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -112,7 +112,7 @@ class BackendMcpClient:
             response = await client.post(
                 f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
                 params={"org_id": self.runtime_context.org_id, "user_id": self.runtime_context.user_id},
-                headers=BackendMcpServiceAuth.headers(),
+                headers=BackendMcpServiceAuth.headers(self.runtime_context),
             )
         response.raise_for_status()
         payload = response.json()
@@ -152,6 +152,12 @@ class BackendMcpServiceAuth:
     """Service-auth header construction for backend MCP calls."""
 
     @staticmethod
-    def headers() -> dict[str, str]:
+    def headers(runtime_context: AgentRuntimeContext) -> dict[str, str]:
         token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
-        return {SERVICE_TOKEN_HEADER: token} if token else {}
+        if not token:
+            return {}
+        return {
+            SERVICE_TOKEN_HEADER: token,
+            ORG_HEADER: runtime_context.org_id,
+            USER_HEADER: runtime_context.user_id,
+        }

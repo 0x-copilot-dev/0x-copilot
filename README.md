@@ -102,7 +102,175 @@ Starting CI/CD model:
 
 The workspace now includes initial scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, `packages/api-types`, and `packages/design-system`.
 
-Start there:
+## Development Setup
+
+Use one virtual environment per Python service and the npm workspace environment
+at the repository root. Do not reuse a sibling service `.venv`.
+
+```bash
+cd enterprise-search
+npm install
+
+cd services/backend
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+
+cd ../backend-facade
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+
+cd ../ai-backend
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+cp env_example .env
+```
+
+Set at least one model provider key in `services/ai-backend/.env` or in your
+shell before sending chat messages:
+
+```bash
+OPENAI_API_KEY=...
+# or ANTHROPIC_API_KEY=...
+# or GOOGLE_API_KEY=...
+```
+
+The local Python commands include `packages/service-contracts/src` on
+`PYTHONPATH` because the services share constants from that package. Docker
+images install the package during build.
+
+## Run Locally
+
+Start each component in its own terminal from the paths shown below.
+
+```bash
+cd services/backend
+BACKEND_ENVIRONMENT=development \
+MCP_TOKEN_VAULT_PROVIDER=local \
+PYTHONPATH=src:../../packages/service-contracts/src \
+.venv/bin/python -m uvicorn backend_app.app:app --host 127.0.0.1 --port 8100
+```
+
+```bash
+cd services/ai-backend
+RUNTIME_ENVIRONMENT=development \
+RUNTIME_STORE_BACKEND=in_memory \
+RUNTIME_START_IN_PROCESS_WORKER=true \
+MCP_BACKEND_REGISTRY_URL=http://127.0.0.1:8100 \
+SKILLS_BACKEND_REGISTRY_URL=http://127.0.0.1:8100 \
+PYTHONPATH=src:../../packages/service-contracts/src \
+.venv/bin/python -m uvicorn runtime_api.app:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+cd services/backend-facade
+FACADE_ENVIRONMENT=development \
+DEV_AUTH_BYPASS=true \
+FACADE_DEV_ORG_ID=org_123 \
+FACADE_DEV_USER_ID=user_123 \
+BACKEND_URL=http://127.0.0.1:8100 \
+AI_BACKEND_URL=http://127.0.0.1:8000 \
+PYTHONPATH=src:../../packages/service-contracts/src \
+.venv/bin/python -m uvicorn backend_facade.app:app --host 127.0.0.1 --port 8200
+```
+
+```bash
+cd enterprise-search
+npm run dev --workspace @enterprise-search/frontend -- --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:5173`. The Vite dev server proxies `/v1/*` to
+`backend-facade`.
+
+## Auth In Development
+
+Local browser auth bypass is explicit. It only works when both conditions are
+true:
+
+- `FACADE_ENVIRONMENT=development`
+- `DEV_AUTH_BYPASS=true`
+
+In that mode, the facade uses `FACADE_DEV_ORG_ID` and `FACADE_DEV_USER_ID` as the
+local identity. Do not hardcode JWTs or service tokens in source, Dockerfiles,
+README examples, or committed `.env` files.
+
+Leave `ENTERPRISE_SERVICE_TOKEN` unset for the default local stack. That keeps
+service-to-service calls in local query/body-scope mode. To test service-auth
+behavior, set `ENTERPRISE_SERVICE_TOKEN` in all relevant service environments;
+internal callers must also send `x-enterprise-org-id` and
+`x-enterprise-user-id`.
+
+Production and staging must not use `DEV_AUTH_BYPASS`. In production, missing
+`ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` fails closed.
+
+## Smoke Test
+
+After the four local processes are running, this should produce an assistant
+answer:
+
+```bash
+python3 - <<'PY'
+import json
+import urllib.request
+
+base = "http://127.0.0.1:8200"
+
+def request(method, path, body=None):
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        base + path,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+conversation = request("POST", "/v1/agent/conversations", {"title": "Local smoke"})
+run = request(
+    "POST",
+    "/v1/agent/runs",
+    {"conversation_id": conversation["conversation_id"], "user_input": "Hi"},
+)
+print(run["stream_url"])
+PY
+```
+
+You can also send `Hi` from the UI composer.
+
+## Docker Development
+
+Build and run the full local stack through Docker:
+
+```bash
+cd enterprise-search
+OPENAI_API_KEY=$OPENAI_API_KEY docker compose -f docker-compose.dev.yml up --build
+```
+
+Open `http://127.0.0.1:8080`. The `dev-gateway` container serves the frontend and
+proxies `/v1/*` to `backend-facade`, matching the route shape the browser uses.
+
+Useful Docker checks:
+
+```bash
+curl http://127.0.0.1:8080/v1/session
+curl http://127.0.0.1:8200/v1/mcp/servers
+docker compose -f docker-compose.dev.yml logs -f ai-backend
+```
+
+Stop the stack:
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+The older `services/ai-backend/docker-compose.yml` is scoped to production-style
+AI API and worker execution with Postgres. Use `docker-compose.dev.yml` when you
+want frontend, facade, backend, and AI backend together.
+
+Start there for architecture details:
 
 - `apps/README.md`
 - `packages/README.md`

@@ -67,7 +67,7 @@ class FacadeAuthenticator:
 
         header = request.headers.get(AUTH_HEADER, "")
         if not header.lower().startswith("bearer "):
-            if cls._environment() == "development":
+            if cls._is_dev_auth_bypass_enabled():
                 return cls._development_identity()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         token = header.split(" ", maxsplit=1)[1].strip()
@@ -129,8 +129,8 @@ class FacadeAuthenticator:
         value = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
         if value:
             return value
-        if cls._environment() == "development":
-            return "local-dev-service-token"
+        if cls._environment() != "production":
+            return ""
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENTERPRISE_SERVICE_TOKEN is not configured")
 
     @classmethod
@@ -146,6 +146,10 @@ class FacadeAuthenticator:
     @staticmethod
     def _environment() -> str:
         return os.environ.get("FACADE_ENVIRONMENT", "development").strip().lower()
+
+    @classmethod
+    def _is_dev_auth_bypass_enabled(cls) -> bool:
+        return cls._environment() == "development" and os.environ.get("DEV_AUTH_BYPASS", "").strip().lower() == "true"
 
     @classmethod
     def _required_secret(cls, name: str) -> str:

@@ -102,7 +102,21 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_123"}
 
-    def test_facade_uses_default_development_identity_without_bearer_token(self, monkeypatch) -> None:
+    def test_facade_rejects_missing_bearer_token_when_dev_bypass_is_disabled(self, monkeypatch) -> None:
+        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
+        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
+        monkeypatch.delenv("DEV_AUTH_BYPASS", raising=False)
+        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.post(
+            "/v1/agent/conversations",
+            json={"org_id": "forged_org", "user_id": "forged_user"},
+        )
+
+        assert response.status_code == 401
+
+    def test_facade_uses_default_development_identity_with_explicit_dev_bypass(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
             assert args[2] == "/v1/agent/conversations"
@@ -114,6 +128,7 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
         monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
         monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
         client = TestClient(create_app(FacadeSettings()))
 
@@ -125,7 +140,7 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_dev"}
 
-    def test_facade_uses_configured_development_identity_without_bearer_token(self, monkeypatch) -> None:
+    def test_facade_uses_configured_development_identity_with_explicit_dev_bypass(self, monkeypatch) -> None:
         async def fake_forward_json_to_ai(*args, **kwargs):
             assert args[1] == "POST"
             assert args[2] == "/v1/agent/runs"
@@ -137,6 +152,7 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
         monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
         monkeypatch.setenv("FACADE_DEV_ORG_ID", "org_dev")
         monkeypatch.setenv("FACADE_DEV_USER_ID", "user_dev")
         monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
@@ -155,8 +171,27 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"run_id": "run_dev"}
 
+    def test_facade_does_not_send_default_service_token_in_dev_bypass(self, monkeypatch) -> None:
+        async def fake_forward_json(*args, **kwargs):
+            assert kwargs["headers"]["x-enterprise-service-token"] == ""
+            assert kwargs["headers"]["x-enterprise-org-id"] == "org_123"
+            assert kwargs["headers"]["x-enterprise-user-id"] == "user_123"
+            return {"skills": []}
+
+        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
+        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
+        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
+        monkeypatch.setattr(facade_app, "_forward_json", fake_forward_json)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get("/v1/skills")
+
+        assert response.status_code == 200
+
     def test_facade_rejects_missing_bearer_token_outside_development(self, monkeypatch) -> None:
         monkeypatch.setenv("FACADE_ENVIRONMENT", "staging")
+        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills")

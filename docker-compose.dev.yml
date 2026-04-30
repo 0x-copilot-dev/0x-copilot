@@ -1,0 +1,64 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: services/backend/Dockerfile
+    environment:
+      BACKEND_ENVIRONMENT: development
+      MCP_TOKEN_VAULT_PROVIDER: local
+    ports:
+      - "8100:8100"
+
+  ai-backend:
+    build:
+      context: .
+      dockerfile: services/ai-backend/Dockerfile
+    environment:
+      RUNTIME_ENVIRONMENT: development
+      RUNTIME_STORE_BACKEND: in_memory
+      RUNTIME_START_IN_PROCESS_WORKER: "true"
+      MCP_BACKEND_REGISTRY_URL: http://backend:8100
+      SKILLS_BACKEND_REGISTRY_URL: http://backend:8100
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - backend
+
+  backend-facade:
+    build:
+      context: .
+      dockerfile: services/backend-facade/Dockerfile
+    environment:
+      FACADE_ENVIRONMENT: development
+      DEV_AUTH_BYPASS: "true"
+      FACADE_DEV_ORG_ID: org_123
+      FACADE_DEV_USER_ID: user_123
+      BACKEND_URL: http://backend:8100
+      AI_BACKEND_URL: http://ai-backend:8000
+    ports:
+      - "8200:8200"
+    depends_on:
+      - backend
+      - ai-backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    expose:
+      - "8080"
+    depends_on:
+      - backend-facade
+
+  dev-gateway:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./infra/docker/dev-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - frontend
+      - backend-facade

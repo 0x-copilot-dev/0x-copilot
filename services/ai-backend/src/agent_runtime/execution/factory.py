@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib import import_module
+import inspect
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -149,8 +150,8 @@ def _build_deep_agent(
     create_kwargs: dict[str, object] = {
         "tools": list(tools),
         "model": model_name,
-        "instructions": instructions,
     }
+    create_kwargs[_deepagents_prompt_key(create_deep_agent)] = instructions
     if skills:
         create_kwargs[SkillKeys.DeepAgents.SKILLS] = list(skills)
     if _is_deepagents_backend(memory_backend):
@@ -159,6 +160,13 @@ def _build_deep_agent(
         if memory_paths:
             create_kwargs["memory"] = list(memory_paths)
     return create_deep_agent(**create_kwargs)
+
+
+def _deepagents_prompt_key(create_deep_agent: Callable[..., object]) -> str:
+    signature = inspect.signature(create_deep_agent)
+    if "system_prompt" in signature.parameters:
+        return "system_prompt"
+    return "instructions"
 
 
 def _model_visible_tools(
