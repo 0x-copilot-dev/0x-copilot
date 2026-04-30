@@ -4,7 +4,7 @@
 
 Document the implemented runtime event producer, replay, streaming, and queue contracts that separate HTTP request handling from long-running agent execution.
 
-The current implementation provides the FastAPI producer in `runtime_api`, typed command queue port in `agent_runtime`, deterministic in-memory queue in `runtime_adapters`, event envelope projection, replay endpoint, and SSE adapter. A production worker process and external broker adapter can be added behind the same ports.
+The current implementation provides the FastAPI producer in `runtime_api`, typed command queue port in `agent_runtime`, deterministic in-memory queue in `runtime_adapters`, event envelope projection, replay endpoint, SSE adapter, and the first async worker loop in `runtime_worker`. A production external broker adapter can be added behind the same ports.
 
 ## Event Envelope
 
@@ -24,12 +24,13 @@ Required semantics:
 
 `RuntimeApiService.create_run` is the implemented producer path:
 
-1. Validate `CreateRunRequest` and embedded `AgentRuntimeContext`.
-2. Load the conversation by `org_id`, `user_id`, and `conversation_id`.
-3. Create the user message and queued run through `PersistencePort`.
-4. Append a `run_queued` event through `RuntimeEventProducer`.
-5. Enqueue `RuntimeRunCommand` through `RuntimeQueuePort`.
-6. Return `run_id`, `events_url`, and `stream_url`.
+1. Validate `CreateRunRequest`.
+2. Build `AgentRuntimeContext` from `org_id`, `user_id`, request context, and env-backed model settings when the request does not include a full internal context.
+3. Load the conversation by `org_id`, `user_id`, and `conversation_id`.
+4. Create the user message and queued run through `PersistencePort`.
+5. Append a `run_queued` event through `RuntimeEventProducer`.
+6. Enqueue `RuntimeRunCommand` through `RuntimeQueuePort`.
+7. Return `run_id`, `events_url`, and `stream_url`.
 
 The producer does not invoke the runtime inline.
 
@@ -44,15 +45,17 @@ Runtime consumers must satisfy `RuntimeQueuePort`:
 
 Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult`. The in-memory implementation supports lock-aware claiming, retry availability, completion, and dead-letter transitions for deterministic unit tests.
 
-Production workers should:
+`RuntimeWorker` now implements the first consumer slice:
 
 - Claim queued commands with lock expiration.
-- Re-check current run state before starting.
-- Build `AgentRuntimeContext` and runtime dependencies from persisted/request-scoped data.
+- Limit concurrent command handling with `RUNTIME_MAX_PARALLEL_RUNS`.
+- Retry retryable failures up to `RUNTIME_MAX_RETRIES`, then dead-letter.
+- Re-check current run state before starting run execution.
 - Load conversation history through the persistence port.
-- Normalize runtime stream chunks through `LangGraphStreamNormalizer`.
-- Append ordered `RuntimeEventEnvelope` records.
-- Observe cancellation and approval state.
+- Build no-op local runtime dependencies until production connector adapters exist.
+- Invoke `ainvoke_runtime()` through `create_agent_runtime()`.
+- Append ordered lifecycle events for queued, started, completed, cancelled, failed, and approval-resolution paths.
+- Observe cancellation and approval commands.
 - Mark terminal run state exactly once.
 
 ## Streaming And Replay
@@ -89,4 +92,4 @@ Implemented API event types include:
 
 ## Test Coverage
 
-Unit tests cover ordered event envelopes, replay from sequence checkpoints, SSE output, heartbeats, cancellation events, approval resolution events, queue claim/retry/dead-letter behavior, and an acceptance-style multi-turn run lifecycle.
+Unit tests cover ordered event envelopes, replay from sequence checkpoints, SSE output, heartbeats, cancellation events, approval resolution events, queue claim/retry/dead-letter behavior, async worker execution, retry limits, parallelism limits, and an acceptance-style multi-turn run lifecycle.

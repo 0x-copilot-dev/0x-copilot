@@ -11,8 +11,14 @@ dependencies = [
   "deepagents",
   "fastapi",
   "langchain",
+  "langchain-openai",
+  "langchain-anthropic",
+  "langchain-google-genai",
   "langgraph",
+  "openai",
+  "anthropic",
   "pydantic>=2",
+  "python-dotenv",
 ]
 
 [project.optional-dependencies]

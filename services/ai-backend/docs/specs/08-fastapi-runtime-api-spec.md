@@ -16,6 +16,8 @@ Document the implemented FastAPI runtime API surface for conversations, runs, ev
 - `src/agent_runtime/api/service.py`: thin runtime producer orchestration over ports.
 - `src/agent_runtime/api/events.py`: runtime event projection and append helpers.
 - `src/agent_runtime/api/ports.py`: API persistence, event store, and runtime queue protocols.
+- `src/agent_runtime/settings.py`: env-backed runtime settings and provider credentials.
+- `src/agent_runtime/execution/models.py`: request model selection resolver.
 - `src/runtime_adapters/in_memory/`: deterministic in-memory persistence, event store, and queue adapter for tests/local development.
 
 The API layer depends on ports and typed runtime contracts. It does not import connector SDKs or execute long-running agent work inline.
@@ -72,14 +74,51 @@ Example later-turn sequence:
 
 The API treats each turn as a distinct run in the same conversation, with separate run IDs, event sequences, approval decisions, cancellation commands, and replay cursors.
 
+## Run Request Shape
+
+Normal clients submit compact run requests. The API builds the internal
+`AgentRuntimeContext` server-side using `RuntimeSettings.load()` and
+`ModelConfigResolver`; legacy tests and internal callers may still pass a full
+`runtime_context` directly.
+
+```json
+{
+  "conversation_id": "conversation_123",
+  "org_id": "org_123",
+  "user_id": "user_123",
+  "user_input": "Find launch risks.",
+  "model": {
+    "provider": "openai",
+    "model_name": "gpt-4.1-mini",
+    "temperature": 0
+  },
+  "request_context": {
+    "roles": ["employee"],
+    "permission_scopes": ["docs:read"],
+    "connector_scopes": {
+      "google-drive": ["docs:read"]
+    },
+    "trace_metadata": {
+      "surface": "runtime-api"
+    }
+  }
+}
+```
+
+Provider API keys are never accepted in request bodies. Supported provider
+selection values are `openai`, `anthropic`, `google`, and `gemini`; provider
+credentials come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and
+`GOOGLE_API_KEY`.
+
 ## Error And Security Rules
 
 - Every request is scoped by `org_id` and `user_id` where the route exposes user-owned state.
-- Runtime context must validate into `AgentRuntimeContext`.
+- Runtime context must validate into `AgentRuntimeContext`; simple requests are resolved into that context before persistence.
+- Model selection must resolve to a provider with a configured env key.
 - Metadata, request options, event payloads, and event metadata are redacted before persistence or streaming.
 - Safe API errors use `ApiErrorResponse` and must not expose raw database, queue, connector, or model provider exceptions.
 - Side-effecting actions must be represented by approval records and explicit decisions before workers resume the action.
 
 ## Test Coverage
 
-Unit tests cover conversation scope, idempotent run submission, message history, event replay, SSE formatting, cancellation, approval decisions, queue claim/retry/dead-letter behavior, safe error mapping, and a multi-turn acceptance flow across the API, event store, queue, and in-memory persistence ports.
+Unit tests cover conversation scope, idempotent run submission, simple request context construction, model selection, message history, event replay, SSE formatting, cancellation, approval decisions, queue claim/retry/dead-letter behavior, safe error mapping, and a multi-turn acceptance flow across the API, event store, queue, and in-memory persistence ports.

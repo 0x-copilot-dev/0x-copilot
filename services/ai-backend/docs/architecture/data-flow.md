@@ -7,7 +7,9 @@ Every request starts with typed context and compact capability discovery. The mo
 ```mermaid
 sequenceDiagram
   participant User
+  participant Env as RuntimeSettings
   participant API as FastAPI Runtime API
+  participant Resolver as ModelConfigResolver
   participant Store as Persistence/Event Ports
   participant Queue as Runtime Queue
   participant Worker as Runtime Worker
@@ -19,6 +21,8 @@ sequenceDiagram
   participant UI as Work surface UI
 
   User->>API: Natural-language request
+  API->>Env: Load provider keys and runtime defaults
+  API->>Resolver: Resolve request model selection
   API->>Store: Create conversation message and queued run
   API->>Store: Append run_queued event
   API->>Queue: Enqueue runtime command
@@ -34,6 +38,17 @@ sequenceDiagram
   Store-->>UI: Replayable RuntimeEventEnvelope updates
   Runtime-->>Worker: Final response or typed error envelope
 ```
+
+`RuntimeSettings.load()` reads `env_example`, `.env`, and process environment.
+Provider credentials stay outside request bodies and events. `ModelConfigResolver`
+validates provider selection against configured keys for OpenAI, Anthropic, and
+Gemini before the API persists a run.
+
+The worker path is async-first. `RuntimeWorker` claims queued commands with lock
+expiration, limits active run handling with `RUNTIME_MAX_PARALLEL_RUNS`, applies
+`RUNTIME_MAX_RETRIES`, loads conversation history, builds local runtime
+dependencies, and calls `ainvoke_runtime()` rather than running the model inline
+inside FastAPI.
 
 ## Dynamic Capability Loading
 

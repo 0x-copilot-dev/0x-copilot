@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from starlette import status
 
-from agent_runtime.agent.contracts import RuntimeErrorCode, StreamEventSource
+from agent_runtime.agent.contracts import AgentRuntimeContext, RuntimeErrorCode, StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.api.contracts import (
     AgentRunStatus,
@@ -32,6 +32,9 @@ from agent_runtime.api.contracts import (
 from agent_runtime.api.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
+from agent_runtime.settings import RuntimeSettings
 
 
 class RuntimeApiService:
@@ -52,10 +55,14 @@ class RuntimeApiService:
         persistence: PersistencePort,
         event_store: EventStorePort,
         queue: RuntimeQueuePort,
+        settings: RuntimeSettings | None = None,
+        model_resolver: ModelConfigResolver | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
         self.queue = queue
+        self.settings = settings or RuntimeSettings.load()
+        self.model_resolver = model_resolver or ModelConfigResolver(self.settings)
         self.event_producer = RuntimeEventProducer(
             persistence=persistence,
             event_store=event_store,
@@ -113,7 +120,15 @@ class RuntimeApiService:
     def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
         """Persist a queued run and enqueue worker execution without invoking runtime inline."""
 
+        request = self._request_with_runtime_context(request)
         context = request.runtime_context
+        if context is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Runtime context could not be created.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            )
         conversation = self._conversation_for_scope(
             org_id=context.org_id,
             user_id=context.user_id,
@@ -316,6 +331,45 @@ class RuntimeApiService:
             events_url=f"/v1/agent/runs/{run.run_id}/events?after_sequence=0",
             created_at=run.created_at,
         )
+
+    def _request_with_runtime_context(self, request: CreateRunRequest) -> CreateRunRequest:
+        if request.runtime_context is not None:
+            return request
+        try:
+            model = request.model
+            model_config = self.model_resolver.resolve(
+                ModelSelection(
+                    provider=model.provider if model is not None else None,
+                    model_name=model.model_name if model is not None else None,
+                    temperature=model.temperature if model is not None else None,
+                    timeout_seconds=model.timeout_seconds if model is not None else None,
+                    max_input_tokens=model.max_input_tokens if model is not None else None,
+                    supports_streaming=model.supports_streaming if model is not None else None,
+                )
+            )
+        except AgentRuntimeError as exc:
+            raise RuntimeApiError(
+                exc.code,
+                exc.safe_message,
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=exc.retryable,
+                correlation_id=exc.correlation_id,
+            ) from exc
+        context = request.request_context
+        trace_metadata = dict(context.trace_metadata)
+        if context.context:
+            trace_metadata["request_context"] = context.context
+        runtime_context = AgentRuntimeContext(
+            user_id=request.user_id,
+            org_id=request.org_id,
+            roles=context.roles,
+            permission_scopes=context.permission_scopes,
+            connector_scopes=context.connector_scopes,
+            model_profile=model_config,
+            trace_metadata=trace_metadata,
+            feature_flags=context.feature_flags,
+        )
+        return request.model_copy(update={"runtime_context": runtime_context})
 
     def _conversation_for_scope(
         self,

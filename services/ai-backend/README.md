@@ -100,6 +100,55 @@ Install project dependencies into that local environment:
 python -m pip install -r requirements.txt
 ```
 
+Configure provider keys and runtime defaults from the service-local env template:
+
+```bash
+cp env_example .env
+```
+
+Set at least one provider key in `.env` before submitting simple run requests:
+
+```bash
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+RUNTIME_DEFAULT_PROVIDER=openai
+RUNTIME_DEFAULT_MODEL=gpt-4.1-mini
+RUNTIME_DEFAULT_TEMPERATURE=0
+RUNTIME_DEFAULT_TIMEOUT_SECONDS=60
+RUNTIME_MAX_RETRIES=2
+RUNTIME_MAX_PARALLEL_RUNS=4
+RUNTIME_MAX_PARALLEL_SUBAGENTS=4
+```
+
+Run requests should not include API keys. Provider credentials are loaded by
+`RuntimeSettings.load()` from `env_example`, `.env`, and process environment.
+
+Example run request body:
+
+```json
+{
+  "conversation_id": "conversation_123",
+  "org_id": "org_123",
+  "user_id": "user_123",
+  "user_input": "Find launch risks.",
+  "model": {
+    "provider": "openai",
+    "model_name": "gpt-4.1-mini"
+  },
+  "request_context": {
+    "roles": ["employee"],
+    "permission_scopes": ["docs:read"],
+    "connector_scopes": {
+      "google-drive": ["docs:read"]
+    },
+    "trace_metadata": {
+      "surface": "local-dev"
+    }
+  }
+}
+```
+
 Run tests with the same service-local environment:
 
 ```bash

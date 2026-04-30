@@ -4,6 +4,12 @@
 langchain==1.2.16
 langgraph==1.1.10
 deepagents==0.5.5
+langchain-openai==1.2.1
+langchain-anthropic==1.4.2
+langchain-google-genai==4.2.2
+openai==2.33.0
+anthropic==0.97.0
+python-dotenv==1.2.2
 fastapi==0.136.1
 httpx==0.28.1
 pydantic==2.13.3

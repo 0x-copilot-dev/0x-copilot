@@ -24,7 +24,16 @@ from runtime_api.schemas.conversations import (
 )
 from runtime_api.schemas.errors import ApiErrorResponse
 from runtime_api.schemas.events import RuntimeEventDraft, RuntimeEventEnvelope, RuntimeEventPresentationProjector, RuntimeEventReplayResponse
-from runtime_api.schemas.runs import CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, RunRecord, RunStatusResponse
+from runtime_api.schemas.runs import (
+    CancelRunRequest,
+    CancelRunResponse,
+    CreateRunRequest,
+    CreateRunResponse,
+    ModelSelectionRequest,
+    RunRecord,
+    RunStatusResponse,
+    RuntimeRequestContext,
+)
 
 __all__ = [
     "ConversationStatus",
@@ -37,6 +46,8 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalStatus",
     "RuntimeApiValueNormalizer",
+    "ModelSelectionRequest",
+    "RuntimeRequestContext",
     "CreateConversationRequest",
     "ConversationRecord",
     "ConversationResponse",

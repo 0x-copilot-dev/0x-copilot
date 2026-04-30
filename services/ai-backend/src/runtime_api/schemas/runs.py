@@ -4,27 +4,73 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import Field, NonNegativeInt, ValidationInfo, field_validator
+from pydantic import Field, NonNegativeInt, ValidationInfo, field_validator, model_validator
 
 from agent_runtime.agent.contracts import AgentRuntimeContext, JsonObject, RuntimeContract, RuntimeErrorEnvelope
 from agent_runtime.api.constants import Keys, Values
 from runtime_api.schemas.common import AgentRunStatus, RuntimeApiValueNormalizer
 
 
+class ModelSelectionRequest(RuntimeContract):
+    """Request-level model selection and safe runtime overrides."""
+
+    provider: str | None = None
+    model_name: str | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    timeout_seconds: float | None = Field(default=None, gt=0, le=600)
+    max_input_tokens: int | None = Field(default=None, gt=0, le=2_000_000)
+    supports_streaming: bool | None = None
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: object) -> str | None:
+        return RuntimeApiValueNormalizer.normalize_optional_text(value, "provider")
+
+    @field_validator("model_name", mode="before")
+    @classmethod
+    def _normalize_model_name(cls, value: object) -> str | None:
+        return RuntimeApiValueNormalizer.normalize_optional_text(value, "model_name")
+
+
+class RuntimeRequestContext(RuntimeContract):
+    """Optional request context used to build an internal runtime context."""
+
+    roles: tuple[str, ...] = ("employee",)
+    permission_scopes: tuple[str, ...] = ()
+    connector_scopes: JsonObject = Field(default_factory=dict)
+    context: JsonObject = Field(default_factory=dict)
+    trace_metadata: JsonObject = Field(default_factory=dict)
+    feature_flags: tuple[str, ...] = ()
+
+    @field_validator("connector_scopes", "context", "trace_metadata", mode="before")
+    @classmethod
+    def _redact_json_fields(cls, value: object) -> JsonObject:
+        return RuntimeApiValueNormalizer.redact_json_object(value)
+
+
 class CreateRunRequest(RuntimeContract):
     """Request to create a queued runtime run for one user message."""
 
     conversation_id: str
+    org_id: str | None = None
+    user_id: str | None = None
     user_input: str
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
     idempotency_key: str | None = None
-    runtime_context: AgentRuntimeContext
+    model: ModelSelectionRequest | None = None
+    request_context: RuntimeRequestContext = Field(default_factory=RuntimeRequestContext)
+    runtime_context: AgentRuntimeContext | None = None
     request_options: JsonObject = Field(default_factory=dict)
 
     @field_validator(Keys.Field.CONVERSATION_ID)
     @classmethod
     def _normalize_conversation_id(cls, value: object) -> str:
         return RuntimeApiValueNormalizer.normalize_id(value, Keys.Field.CONVERSATION_ID)
+
+    @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, mode="before")
+    @classmethod
+    def _normalize_optional_identity(cls, value: object, info: ValidationInfo) -> str | None:
+        return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
 
     @field_validator(Keys.Field.USER_INPUT, "content_format")
     @classmethod
@@ -40,6 +86,14 @@ class CreateRunRequest(RuntimeContract):
     @classmethod
     def _redact_request_options(cls, value: object) -> JsonObject:
         return RuntimeApiValueNormalizer.redact_json_object(value)
+
+    @model_validator(mode="after")
+    def _require_identity_or_context(self) -> "CreateRunRequest":
+        if self.runtime_context is not None:
+            return self
+        if self.org_id is None or self.user_id is None:
+            raise ValueError("org_id and user_id are required when runtime_context is omitted")
+        return self
 
 
 

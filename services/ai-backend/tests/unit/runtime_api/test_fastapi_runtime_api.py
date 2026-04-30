@@ -16,6 +16,7 @@ from agent_runtime.api.events import RuntimeEventProducer
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.contracts import RuntimeWorkerResult
+from agent_runtime.settings import RuntimeSettings
 
 
 class FastApiRuntimeApiTestMixin:
@@ -131,6 +132,48 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert len(store.run_commands) == 1
         assert len(store.events_by_run[first["run_id"]]) == 1
         assert messages.json()["messages"][0]["content_text"] == self.Values.USER_INPUT
+
+    def test_simple_run_request_builds_runtime_context_from_model_selection(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+        )
+        app = RuntimeApiAppFactory.create_app(service)
+        client = TestClient(app)
+        conversation = client.post("/v1/agent/conversations", json=self.conversation_payload()).json()
+
+        response = client.post(
+            "/v1/agent/runs",
+            json={
+                "conversation_id": conversation["conversation_id"],
+                "org_id": self.Values.ORG_ID,
+                "user_id": self.Values.USER_ID,
+                "user_input": self.Values.USER_INPUT,
+                "model": {"provider": "openai", "model_name": "gpt-4.1-mini"},
+                "request_context": {
+                    "roles": ["employee"],
+                    "permission_scopes": ["docs:read"],
+                    "trace_metadata": {"source": "simple-request"},
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        run = store.runs[response.json()["run_id"]]
+        assert run.runtime_context.org_id == self.Values.ORG_ID
+        assert run.runtime_context.user_id == self.Values.USER_ID
+        assert run.runtime_context.model_profile.provider == "openai"
+        assert run.runtime_context.model_profile.model_name == "gpt-4.1-mini"
 
     def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
         client, _store = self.create_client()
