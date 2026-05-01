@@ -252,7 +252,6 @@ export function ThreadBody({
   connectorSuggestions: ReactNode;
   onMcpAuthConnect: (payload: {
     approvalId: string;
-    authUrl: string;
     serverId: string;
   }) => Promise<void>;
   onMcpAuthSkip: (payload: {
@@ -1055,7 +1054,6 @@ function AssistantMessage({
   };
   onMcpAuthConnect: (payload: {
     approvalId: string;
-    authUrl: string;
     serverId: string;
   }) => Promise<void>;
   onMcpAuthSkip: (payload: {
@@ -1709,7 +1707,6 @@ function ConnectorAuthTool({
 }: ToolCallMessagePartProps<Record<string, unknown>> & {
   onConnect: (payload: {
     approvalId: string;
-    authUrl: string;
     serverId: string;
   }) => Promise<void>;
   onSkip: (payload: { approvalId: string; serverId: string }) => Promise<void>;
@@ -1720,7 +1717,6 @@ function ConnectorAuthTool({
   const serverId = stringValue(args.server_id);
   const approvalId =
     stringValue(args.approval_id) ?? stringValue(args.action_id) ?? serverId;
-  const authUrl = stringValue(args.auth_url);
   const displayName =
     stringValue(args.display_name) ??
     stringValue(args.server_name) ??
@@ -1737,10 +1733,7 @@ function ConnectorAuthTool({
     setPendingAction(action);
     try {
       if (action === "connect") {
-        if (!authUrl) {
-          return;
-        }
-        await onConnect({ approvalId, authUrl, serverId });
+        await onConnect({ approvalId, serverId });
       } else {
         await onSkip({ approvalId, serverId });
         const result = {
@@ -1774,9 +1767,7 @@ function ConnectorAuthTool({
           <Button
             type="button"
             size="sm"
-            disabled={
-              !serverId || !approvalId || !authUrl || pendingAction !== null
-            }
+            disabled={!serverId || !approvalId || pendingAction !== null}
             title={`Connect ${displayName}`}
             onClick={() => void submit("connect")}
           >

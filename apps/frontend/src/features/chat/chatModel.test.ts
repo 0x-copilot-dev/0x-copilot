@@ -1,5 +1,6 @@
 import type {
   Message,
+  McpServer,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import type { ThreadMessageLike } from "@assistant-ui/react";
@@ -9,6 +10,7 @@ import {
   chatItemsToThreadMessages,
   messagesToChatItems,
   resolveApprovalDecision,
+  resolveAuthenticatedMcpServers,
   resolveMcpAuthSkip,
   type ChatItem,
 } from "./chatModel";
@@ -51,6 +53,24 @@ function message(overrides: Partial<Message>): Message {
     created_at: "2026-04-30T00:00:00Z",
     edited_at: null,
     deleted_at: null,
+    ...overrides,
+  };
+}
+
+function mcpServer(overrides: Partial<McpServer>): McpServer {
+  return {
+    server_id: "server_123",
+    name: "mcp_server",
+    display_name: "MCP Server",
+    url: "https://example.test/mcp",
+    transport: "http",
+    auth_mode: "oauth2",
+    auth_state: "unauthenticated",
+    health: "healthy",
+    enabled: true,
+    oauth_client_configured: true,
+    created_at: "2026-04-30T00:00:00Z",
+    updated_at: "2026-04-30T00:00:00Z",
     ...overrides,
   };
 }
@@ -884,6 +904,48 @@ describe("applyRuntimeEvent", () => {
       approval_id: "mcp_auth_123",
       server_id: "server_123",
       decision: "skipped",
+    });
+    expect(firstThreadMessage(items).status).toEqual({
+      type: "running",
+    });
+  });
+
+  it("resolves stale MCP auth cards when the connector becomes authenticated", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          server_id: "server_123",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          auth_url: "https://example.test/old-auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect ClickUp",
+        },
+      }),
+    );
+
+    items = resolveAuthenticatedMcpServers(items, [
+      mcpServer({
+        server_id: "server_123",
+        name: "mcp_clickup_com",
+        display_name: "ClickUp",
+        auth_state: "authenticated",
+      }),
+    ]);
+
+    expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
+      approval_id: "mcp_auth_123",
+      server_id: "server_123",
+      decision: "approved",
     });
     expect(firstThreadMessage(items).status).toEqual({
       type: "running",

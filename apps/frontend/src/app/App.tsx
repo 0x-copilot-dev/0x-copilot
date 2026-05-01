@@ -130,12 +130,17 @@ function EnterpriseSearchApp(): ReactElement {
         if (!cancelled) {
           const pendingAction = readPendingMcpAuthAction(server.server_id);
           if (pendingAction !== null) {
-            await decideApproval(
-              pendingAction.approvalId,
-              "approved",
-              currentIdentity,
-              "mcp_auth_completed",
-            );
+            try {
+              await decideApproval(
+                pendingAction.approvalId,
+                "approved",
+                currentIdentity,
+                "mcp_auth_completed",
+              );
+            } catch {
+              // The connector can still be authenticated if the approval record
+              // was lost during a backend restart.
+            }
             if (cancelled) {
               return;
             }
