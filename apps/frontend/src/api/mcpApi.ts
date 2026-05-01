@@ -1,6 +1,7 @@
 import type {
   CreateMcpServerRequest,
   McpAuthStartResponse,
+  McpOAuthClientConfigRequest,
   McpServer,
   McpServerListResponse,
   UpdateMcpServerRequest,
@@ -21,12 +22,16 @@ export async function listMcpServers(
 export async function createMcpServer(
   url: string,
   identity: RequestIdentity,
+  oauthClient?: McpOAuthClientConfigRequest,
 ): Promise<McpServer> {
   const payload: CreateMcpServerRequest = {
     org_id: identity.orgId,
     user_id: identity.userId,
     url,
   };
+  if (oauthClient !== undefined) {
+    payload.oauth_client = oauthClient;
+  }
   const response = await fetch("/v1/mcp/servers", {
     method: "POST",
     headers: jsonHeaders(),

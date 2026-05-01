@@ -271,6 +271,61 @@ def test_backend_mcp_client_loads_tools_through_json_rpc_proxy(
     assert calls[3]["json"]["payload"]["method"] == "tools/list"
 
 
+def test_backend_mcp_client_treats_missing_resources_as_empty(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    calls: list[dict[str, object]] = []
+    responses = [
+        FakeHttpResponse(
+            {
+                "server_id": "server_123",
+                "url": "https://mcp.example.com/mcp",
+                "transport": "http",
+                "auth_state": "authenticated",
+                "credential_ref": "credential_123",
+            }
+        ),
+        FakeHttpResponse({"payload": {"jsonrpc": "2.0", "id": 1, "result": {}}}),
+        FakeHttpResponse({"payload": {}}),
+        FakeHttpResponse(
+            {
+                "payload": {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "error": {"code": -32601, "message": "Method not found"},
+                }
+            }
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
+        lambda timeout: FakeAsyncClient(responses, calls),
+    )
+    card = McpServerCard(
+        server_id="server_123",
+        name="clickup",
+        display_name="ClickUp",
+        short_description="ClickUp MCP server.",
+        transport="http",
+        auth_mode="oauth2",
+        auth_state="authenticated",
+        health="healthy",
+        load_cost=1,
+    )
+    client = BackendMcpClient(
+        backend_url="http://backend.local",
+        runtime_context=runtime_context_admin,
+        card=card,
+    )
+
+    resources = asyncio.run(client.list_resources())
+
+    assert resources == ()
+    assert calls[3]["json"]["payload"]["method"] == "resources/list"
+
+
 def test_backend_mcp_client_calls_tool_through_json_rpc_proxy(
     monkeypatch,
     runtime_context_admin: AgentRuntimeContext,

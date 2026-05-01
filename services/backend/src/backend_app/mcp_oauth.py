@@ -91,6 +91,10 @@ class Values:
         CODE = "code"
         CODE_CHALLENGE_METHOD = "S256"
         DEFAULT_SCOPE = "mcp"
+        SETUP_REQUIRED = (
+            "MCP OAuth setup requires authorization-server metadata, dynamic client "
+            "registration, or a configured OAuth client for this server"
+        )
         TOKEN_TYPE = "Bearer"
         TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"
         TOKEN_ENDPOINT_AUTH_NONE = "none"
@@ -189,7 +193,7 @@ class RemoteMcpOAuthClient:
     def discover(self, record: McpServerRecord) -> dict[str, Any]:
         cached = record.last_discovery
         if self._has_required_metadata(cached):
-            return dict(cached)
+            return self._apply_configured_oauth_client(dict(cached), record)
 
         resource_metadata = self._fetch_first_json(
             self._protected_resource_metadata_urls(record.url)
@@ -198,9 +202,6 @@ class RemoteMcpOAuthClient:
         auth_metadata = self._fetch_first_json(
             self._authorization_server_metadata_urls(auth_server)
         )
-        if not auth_metadata:
-            auth_metadata = self._legacy_metadata(record.url)
-
         merged = {
             **dict(cached),
             Keys.OAuth.RESOURCE: resource_metadata.get(Keys.OAuth.RESOURCE, record.url),
@@ -218,12 +219,13 @@ class RemoteMcpOAuthClient:
                 Keys.OAuth.SCOPES_SUPPORTED, ()
             ),
             Keys.OAuth.REQUIRED_SCOPES: self._scopes_from_metadata(
-                resource_metadata, auth_metadata
+                resource_metadata, auth_metadata, record
             ),
             Keys.OAuth.DISCOVERED_AT: datetime.now(UTC).isoformat(),
         }
+        merged = self._apply_configured_oauth_client(merged, record)
         if not self._has_required_metadata(merged):
-            raise McpOAuthError("MCP OAuth discovery did not return required endpoints")
+            raise McpOAuthError(Values.OAuth.SETUP_REQUIRED)
         return merged
 
     def _ensure_client_registration(
@@ -262,15 +264,36 @@ class RemoteMcpOAuthClient:
                 )
             return {**discovery, Keys.OAuth.OAUTH_CLIENT: client_record}
 
-        return {
-            **discovery,
-            Keys.OAuth.OAUTH_CLIENT: {
-                Keys.OAuth.CLIENT_ID: Values.OAuth.CLIENT_ID,
-                Keys.OAuth.TOKEN_ENDPOINT_AUTH_METHOD: Values.OAuth.TOKEN_ENDPOINT_AUTH_NONE,
-                Keys.OAuth.REDIRECT_URIS: [redirect_uri],
-                Keys.OAuth.REGISTERED_AT: datetime.now(UTC).isoformat(),
-            },
+        raise McpOAuthError(Values.OAuth.SETUP_REQUIRED)
+
+    @classmethod
+    def _apply_configured_oauth_client(
+        cls, discovery: dict[str, Any], record: McpServerRecord
+    ) -> dict[str, Any]:
+        configured = record.oauth_client
+        if configured is None:
+            return discovery
+
+        client_record: dict[str, Any] = {
+            Keys.OAuth.CLIENT_ID: configured.client_id,
+            Keys.OAuth.TOKEN_ENDPOINT_AUTH_METHOD: (
+                configured.token_endpoint_auth_method
+            ),
+            Keys.OAuth.REGISTERED_AT: datetime.now(UTC).isoformat(),
         }
+        if configured.encrypted_client_secret is not None:
+            client_record[Keys.OAuth.ENCRYPTED_CLIENT_SECRET] = (
+                configured.encrypted_client_secret
+            )
+
+        merged = {**discovery, Keys.OAuth.OAUTH_CLIENT: client_record}
+        if configured.authorization_endpoint is not None:
+            merged[Keys.OAuth.AUTHORIZATION_ENDPOINT] = (
+                configured.authorization_endpoint
+            )
+        if configured.token_endpoint is not None:
+            merged[Keys.OAuth.TOKEN_ENDPOINT] = configured.token_endpoint
+        return merged
 
     def _register_client(
         self, registration_endpoint: str, redirect_uri: str
@@ -312,9 +335,19 @@ class RemoteMcpOAuthClient:
         token_vault: TokenVault,
     ) -> None:
         client = self._client(discovery)
+        auth_method = client.get(
+            Keys.OAuth.TOKEN_ENDPOINT_AUTH_METHOD,
+            Values.OAuth.TOKEN_ENDPOINT_AUTH_NONE,
+        )
+        if auth_method == Values.OAuth.TOKEN_ENDPOINT_AUTH_NONE:
+            return
+        if auth_method != Values.OAuth.TOKEN_ENDPOINT_AUTH_METHOD:
+            raise McpOAuthError("MCP OAuth token endpoint auth method is unsupported")
         encrypted_secret = client.get(Keys.OAuth.ENCRYPTED_CLIENT_SECRET)
         if isinstance(encrypted_secret, str) and encrypted_secret:
             body[Keys.OAuth.CLIENT_SECRET] = token_vault.decrypt(encrypted_secret)
+            return
+        raise McpOAuthError("MCP OAuth client secret is required")
 
     @classmethod
     def _validated_discovery(cls, record: McpServerRecord) -> dict[str, Any]:
@@ -347,7 +380,10 @@ class RemoteMcpOAuthClient:
 
     @classmethod
     def _scopes_from_metadata(
-        cls, resource_metadata: dict[str, Any], auth_metadata: dict[str, Any]
+        cls,
+        resource_metadata: dict[str, Any],
+        auth_metadata: dict[str, Any],
+        record: McpServerRecord,
     ) -> list[str]:
         for key in (
             Keys.OAuth.SCOPES_REQUIRED,
@@ -360,6 +396,9 @@ class RemoteMcpOAuthClient:
         value = auth_metadata.get(Keys.OAuth.SCOPES_SUPPORTED)
         if isinstance(value, list) and cls.DEFAULT_SCOPE in value:
             return [cls.DEFAULT_SCOPE]
+        configured = record.oauth_client
+        if configured is not None and configured.scope is not None:
+            return configured.scope.split()
         return [cls.DEFAULT_SCOPE]
 
     @classmethod
@@ -395,15 +434,6 @@ class RemoteMcpOAuthClient:
             urls.append(f"{origin}{Values.WellKnown.AUTHORIZATION_SERVER}{path}")
         urls.append(f"{origin}{Values.WellKnown.AUTHORIZATION_SERVER}")
         return tuple(urls)
-
-    @classmethod
-    def _legacy_metadata(cls, server_url: str) -> dict[str, str]:
-        base = server_url.rstrip("/")
-        return {
-            Keys.OAuth.ISSUER: base,
-            Keys.OAuth.AUTHORIZATION_ENDPOINT: f"{base}/oauth/authorize",
-            Keys.OAuth.TOKEN_ENDPOINT: f"{base}/oauth/token",
-        }
 
     def _fetch_first_json(self, urls: tuple[str, ...]) -> dict[str, Any]:
         for url in urls:

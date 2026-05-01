@@ -279,6 +279,34 @@ def test_mcp_update_disable_remove_flow() -> None:
     assert deleted.status_code == 204
 
 
+def test_mcp_server_response_hides_oauth_client_secret() -> None:
+    app = create_app(McpRegistryService(store=InMemoryMcpStore()))
+    client = TestClient(app)
+
+    created = client.post(
+        "/v1/mcp/servers",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "url": "https://mcp.example.com",
+            "display_name": "Generic MCP",
+            "oauth_client": {
+                "client_id": "configured_client",
+                "client_secret": "configured_secret",
+                "scope": "mcp",
+            },
+        },
+    ).json()
+    listed = client.get(
+        "/v1/mcp/servers",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()
+
+    assert created["oauth_client_configured"] is True
+    assert "configured_secret" not in str(created)
+    assert "configured_secret" not in str(listed)
+
+
 def test_internal_mcp_routes_use_service_header_scope_when_token_is_configured(
     monkeypatch,
 ) -> None:

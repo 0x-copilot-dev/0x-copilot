@@ -652,7 +652,11 @@ p {
   align-items: end;
   display: grid;
   gap: var(--space-md);
-  grid-template-columns: 1fr auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connector-add-form .ui-button {
+  justify-self: start;
 }
 
 .connector-settings-list {

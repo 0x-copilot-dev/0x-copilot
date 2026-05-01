@@ -23,8 +23,18 @@ export interface McpServer {
   auth_state: McpAuthState;
   health: McpServerHealth;
   enabled: boolean;
+  oauth_client_configured: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface McpOAuthClientConfigRequest {
+  client_id: string;
+  client_secret?: string;
+  token_endpoint_auth_method?: "none" | "client_secret_post" | string;
+  scope?: string;
+  authorization_endpoint?: string;
+  token_endpoint?: string;
 }
 
 export interface CreateMcpServerRequest {
@@ -34,11 +44,13 @@ export interface CreateMcpServerRequest {
   display_name?: string;
   transport?: McpTransport;
   auth_mode?: McpAuthMode;
+  oauth_client?: McpOAuthClientConfigRequest;
 }
 
 export interface UpdateMcpServerRequest {
   display_name?: string;
   enabled?: boolean;
+  oauth_client?: McpOAuthClientConfigRequest | null;
 }
 
 export interface McpServerListResponse {

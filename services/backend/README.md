@@ -40,6 +40,22 @@ Run the API:
 PYTHONPATH=src .venv/bin/python -m uvicorn backend_app.app:app --host 127.0.0.1 --port 8100
 ```
 
+## Generic MCP OAuth Setup
+
+When adding an OAuth-protected MCP server, the backend first uses standard MCP
+OAuth discovery and dynamic client registration. Some providers require a
+pre-registered OAuth app instead. For those servers, provide the optional
+per-server OAuth client fields when creating or updating the MCP registration:
+
+- `client_id`
+- `client_secret`, when the provider requires a confidential client
+- `scope`, when the provider requires scopes beyond the default `mcp`
+- `authorization_endpoint` and `token_endpoint`, only when the server does not
+  advertise OAuth metadata
+
+Client secrets are stored through the backend token vault and are not returned in
+public MCP server responses.
+
 Build the service image from this directory:
 
 ```bash

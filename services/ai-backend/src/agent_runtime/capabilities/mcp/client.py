@@ -34,6 +34,10 @@ class McpTimeoutError(McpClientError):
     """The MCP server exceeded the loader timeout budget."""
 
 
+class McpUnsupportedMethodError(McpClientError):
+    """The MCP server does not implement an optional JSON-RPC method."""
+
+
 @runtime_checkable
 class McpClient(Protocol):
     """Async-ready MCP client boundary used by the dynamic loader."""

@@ -30,6 +30,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpClient,
     McpConnectionError,
     McpTimeoutError,
+    McpUnsupportedMethodError,
     RawMcpConnectionMetadata,
 )
 from agent_runtime.capabilities.mcp.constants import Keys, Values
@@ -171,7 +172,10 @@ class BackendMcpClient:
     async def list_resources(
         self,
     ) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
-        result = await self._rpc_result(Values.JsonRpcMethod.LIST_RESOURCES)
+        try:
+            result = await self._rpc_result(Values.JsonRpcMethod.LIST_RESOURCES)
+        except McpUnsupportedMethodError:
+            return ()
         resources = result.get(Keys.Field.RESOURCES, ())
         if not isinstance(resources, list):
             return ()
@@ -233,11 +237,25 @@ class BackendMcpClient:
         response = await self._rpc(payload)
         error = response.get(Keys.JsonRpc.ERROR)
         if isinstance(error, dict):
+            if self._is_method_not_found(error):
+                raise McpUnsupportedMethodError("MCP JSON-RPC method is not supported.")
             raise McpConnectionError("MCP JSON-RPC request failed.")
         result = response.get(Keys.JsonRpc.RESULT)
         if not isinstance(result, dict):
             return {}
         return result
+
+    @staticmethod
+    def _is_method_not_found(error: dict[str, Any]) -> bool:
+        code = error.get(Keys.Field.CODE)
+        if isinstance(code, int):
+            return code == Values.JsonRpcError.METHOD_NOT_FOUND
+        if isinstance(code, str):
+            try:
+                return int(code) == Values.JsonRpcError.METHOD_NOT_FOUND
+            except ValueError:
+                return False
+        return False
 
     async def _rpc(self, payload: dict[str, Any]) -> dict[str, Any]:
         server_id = self.card.server_id or self.card.name

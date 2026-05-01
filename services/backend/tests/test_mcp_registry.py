@@ -9,7 +9,7 @@ from backend_app.contracts import (
     OAuthTokenRequest,
     UpdateMcpServerRequest,
 )
-from backend_app.mcp_oauth import McpAuthorization
+from backend_app.mcp_oauth import McpAuthorization, RemoteMcpOAuthClient
 from backend_app.service import McpRegistryService
 from backend_app.store import InMemoryMcpStore
 from backend_app.token_vault import LocalTokenVault, TokenVaultFactory
@@ -40,6 +40,33 @@ class FakeOAuthClient:
 
     def refresh_token(self, **kwargs) -> OAuthTokenRequest:
         return OAuthTokenRequest(access_token="refreshed-access-token")
+
+
+class FakeRemoteMcpOAuthClient(RemoteMcpOAuthClient):
+    def __init__(
+        self,
+        *,
+        get_json,
+        post_json=None,
+        post_form=None,
+    ) -> None:
+        super().__init__()
+        self.get_json = get_json
+        self.post_json = post_json
+        self.post_form = post_form
+
+    def _get_json(self, url: str) -> dict[str, object]:
+        return self.get_json(url)
+
+    def _post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
+        if self.post_json is None:
+            return {}
+        return self.post_json(url, payload)
+
+    def _post_form(self, url: str, body: dict[str, str]) -> dict[str, object]:
+        if self.post_form is None:
+            return {"access_token": "access-token"}
+        return self.post_form(url, body)
 
 
 def test_mcp_registration_skip_and_internal_cards() -> None:
@@ -211,6 +238,170 @@ def test_oauth_start_caches_discovery_and_required_scopes() -> None:
     assert record.last_discovery["authorization_endpoint"] == (
         "https://auth.example.com/authorize"
     )
+
+
+def test_oauth_discovery_uses_dynamic_client_registration() -> None:
+    captured: dict[str, object] = {}
+    vault = LocalTokenVault(secret="unit-test-secret-value-at-least-32-chars")
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        if "oauth-protected-resource" in url:
+            return {
+                "resource": "https://mcp.example.com/mcp",
+                "authorization_servers": ["https://auth.example.com"],
+                "scopes_required": ["tasks:read"],
+            }
+        if "oauth-authorization-server" in url:
+            return {
+                "authorization_endpoint": "https://auth.example.com/authorize",
+                "token_endpoint": "https://auth.example.com/token",
+                "registration_endpoint": "https://auth.example.com/register",
+            }
+        return {}
+
+    def fake_post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+        captured["registration_url"] = url
+        captured["registration_payload"] = payload
+        return {
+            "client_id": "registered_client",
+            "client_secret": "registered_secret",
+            "token_endpoint_auth_method": "client_secret_post",
+            "redirect_uris": payload["redirect_uris"],
+        }
+
+    oauth_client = FakeRemoteMcpOAuthClient(
+        get_json=fake_get_json,
+        post_json=fake_post_json,
+    )
+    service = McpRegistryService(
+        store=InMemoryMcpStore(),
+        token_vault=vault,
+        oauth_client=oauth_client,
+    )
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://mcp.example.com/mcp",
+            display_name="Tasks MCP",
+        )
+    )
+
+    auth = service.start_auth(
+        server_id=created.server_id,
+        request=McpAuthStartRequest(
+            org_id="org_123",
+            user_id="user_123",
+            redirect_uri="http://localhost:5173/mcp/oauth/callback",
+        ),
+    )
+    record = service.store.get_server(org_id="org_123", server_id=created.server_id)
+
+    assert captured["registration_url"] == "https://auth.example.com/register"
+    assert "client_id=registered_client" in auth.auth_url
+    assert "scope=tasks%3Aread" in auth.auth_url
+    assert "/mcp/oauth/authorize" not in auth.auth_url
+    assert record is not None
+    encrypted_secret = record.last_discovery["oauth_client"]["encrypted_client_secret"]
+    assert encrypted_secret != "registered_secret"
+    assert vault.decrypt(encrypted_secret) == "registered_secret"
+
+
+def test_oauth_flow_uses_per_server_configured_client() -> None:
+    captured: dict[str, object] = {}
+    vault = LocalTokenVault(secret="unit-test-secret-value-at-least-32-chars")
+
+    def fake_post_form(url: str, body: dict[str, str]) -> dict[str, object]:
+        captured["token_url"] = url
+        captured["token_body"] = body
+        return {
+            "access_token": "configured-access-token",
+            "refresh_token": "configured-refresh-token",
+        }
+
+    oauth_client = FakeRemoteMcpOAuthClient(
+        get_json=lambda url: {},
+        post_form=fake_post_form,
+    )
+    service = McpRegistryService(
+        store=InMemoryMcpStore(),
+        token_vault=vault,
+        token_exchanger=oauth_client,
+        oauth_client=oauth_client,
+    )
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://mcp.example.com/v2/mcp",
+            display_name="Generic MCP",
+            oauth_client={
+                "client_id": "configured_client",
+                "client_secret": "configured_secret",
+                "scope": "mcp tasks:read",
+                "authorization_endpoint": "https://auth.example.com/authorize",
+                "token_endpoint": "https://auth.example.com/token",
+            },
+        )
+    )
+
+    auth = service.start_auth(
+        server_id=created.server_id,
+        request=McpAuthStartRequest(
+            org_id="org_123",
+            user_id="user_123",
+            redirect_uri="http://localhost:5173/mcp/oauth/callback",
+        ),
+    )
+    state = next(iter(service.store.auth_sessions.keys()))
+    completed = service.complete_auth(
+        McpAuthCallbackRequest(state=state, code="oauth_code")
+    )
+
+    assert auth.auth_url.startswith("https://auth.example.com/authorize?")
+    assert "client_id=configured_client" in auth.auth_url
+    assert "scope=mcp+tasks%3Aread" in auth.auth_url
+    assert completed.auth_state == McpAuthState.AUTHENTICATED
+    assert captured["token_url"] == "https://auth.example.com/token"
+    assert captured["token_body"]["client_secret"] == "configured_secret"
+    assert "configured_secret" not in str(
+        service.store.get_server(org_id="org_123", server_id=created.server_id)
+    )
+
+
+def test_oauth_start_fails_safely_without_metadata_or_client_config() -> None:
+    store = InMemoryMcpStore()
+    service = McpRegistryService(
+        store=store,
+        oauth_client=FakeRemoteMcpOAuthClient(get_json=lambda url: {}),
+    )
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://mcp.example.com/v2/mcp",
+            display_name="Generic MCP",
+        )
+    )
+
+    try:
+        service.start_auth(
+            server_id=created.server_id,
+            request=McpAuthStartRequest(
+                org_id="org_123",
+                user_id="user_123",
+                redirect_uri="http://localhost:5173/mcp/oauth/callback",
+            ),
+        )
+    except ValueError as exc:
+        assert "MCP OAuth setup requires" in str(exc)
+    else:
+        raise AssertionError("OAuth start should require metadata or client config")
+
+    record = store.get_server(org_id="org_123", server_id=created.server_id)
+    assert record is not None
+    assert record.auth_state == McpAuthState.UNAUTHENTICATED
+    assert store.auth_sessions == {}
 
 
 def test_url_validation_rejects_localhost() -> None:

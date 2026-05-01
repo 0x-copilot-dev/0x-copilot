@@ -60,6 +60,75 @@ class SkillSourceType(StrEnum):
     PRELOADED = "preloaded"
 
 
+class McpOAuthClientConfig(BackendContract):
+    client_id: str
+    encrypted_client_secret: str | None = None
+    token_endpoint_auth_method: str = "none"
+    scope: str | None = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
+
+    @field_validator("client_id", "token_endpoint_auth_method")
+    @classmethod
+    def _normalize_required_text(cls, value: object) -> str:
+        return normalize_text(value)
+
+    @field_validator("scope")
+    @classmethod
+    def _normalize_scope(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        scopes = normalize_text(value).split()
+        if not scopes:
+            return None
+        return " ".join(scopes)
+
+    @field_validator("authorization_endpoint", "token_endpoint")
+    @classmethod
+    def _validate_optional_endpoint(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return validate_public_mcp_url(value)
+
+
+class McpOAuthClientRequest(BackendContract):
+    client_id: str
+    client_secret: str | None = None
+    token_endpoint_auth_method: str | None = None
+    scope: str | None = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
+
+    @field_validator("client_id")
+    @classmethod
+    def _normalize_client_id(cls, value: object) -> str:
+        return normalize_text(value)
+
+    @field_validator("client_secret", "token_endpoint_auth_method")
+    @classmethod
+    def _normalize_optional_text(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return normalize_text(value)
+
+    @field_validator("scope")
+    @classmethod
+    def _normalize_scope(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        scopes = normalize_text(value).split()
+        if not scopes:
+            return None
+        return " ".join(scopes)
+
+    @field_validator("authorization_endpoint", "token_endpoint")
+    @classmethod
+    def _validate_optional_endpoint(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return validate_public_mcp_url(value)
+
+
 class McpServerRecord(BackendContract):
     server_id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: str
@@ -74,6 +143,7 @@ class McpServerRecord(BackendContract):
     enabled: bool = True
     required_scopes: tuple[str, ...] = ()
     last_discovery: dict[str, Any] = Field(default_factory=dict)
+    oauth_client: McpOAuthClientConfig | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -282,6 +352,7 @@ class CreateMcpServerRequest(BackendContract):
     display_name: str | None = None
     transport: McpTransport = McpTransport.HTTP
     auth_mode: McpAuthMode = McpAuthMode.OAUTH2
+    oauth_client: McpOAuthClientRequest | None = None
 
     @field_validator("org_id", "user_id")
     @classmethod
@@ -297,6 +368,7 @@ class CreateMcpServerRequest(BackendContract):
 class UpdateMcpServerRequest(BackendContract):
     display_name: str | None = None
     enabled: bool | None = None
+    oauth_client: McpOAuthClientRequest | None = None
 
     @field_validator("display_name")
     @classmethod
@@ -316,6 +388,7 @@ class McpServerResponse(BackendContract):
     auth_state: McpAuthState
     health: McpServerHealth
     enabled: bool
+    oauth_client_configured: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -331,6 +404,7 @@ class McpServerResponse(BackendContract):
             auth_state=record.auth_state,
             health=record.health,
             enabled=record.enabled,
+            oauth_client_configured=record.oauth_client is not None,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

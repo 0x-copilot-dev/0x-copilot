@@ -32,6 +32,8 @@ from backend_app.contracts import (
     McpAuthStartRequest,
     McpAuthStartResponse,
     McpAuthState,
+    McpOAuthClientConfig,
+    McpOAuthClientRequest,
     McpServerHealth,
     McpServerListResponse,
     McpServerRecord,
@@ -174,6 +176,7 @@ class McpRegistryService:
                 else McpAuthState.UNAUTHENTICATED
             ),
             health=McpServerHealth.HEALTHY,
+            oauth_client=self._oauth_client_config(request.oauth_client),
         )
         self.store.create_server(record)
         self._audit(record, "mcp_server_created")
@@ -212,6 +215,8 @@ class McpRegistryService:
         changes: dict[str, object] = {}
         if request.display_name is not None:
             changes["display_name"] = request.display_name
+        if "oauth_client" in request.model_fields_set:
+            changes["oauth_client"] = self._oauth_client_config(request.oauth_client)
         if request.enabled is not None:
             changes["enabled"] = request.enabled
             if not request.enabled:
@@ -421,6 +426,30 @@ class McpRegistryService:
     ) -> McpServerRecord:
         updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         return self.store.update_server(updated)
+
+    def _oauth_client_config(
+        self, request: McpOAuthClientRequest | None
+    ) -> McpOAuthClientConfig | None:
+        if request is None:
+            return None
+        token_endpoint_auth_method = request.token_endpoint_auth_method
+        if token_endpoint_auth_method is None:
+            token_endpoint_auth_method = (
+                "client_secret_post" if request.client_secret else "none"
+            )
+        encrypted_secret = (
+            self.token_vault.encrypt(request.client_secret)
+            if request.client_secret is not None
+            else None
+        )
+        return McpOAuthClientConfig(
+            client_id=request.client_id,
+            encrypted_client_secret=encrypted_secret,
+            token_endpoint_auth_method=token_endpoint_auth_method,
+            scope=request.scope,
+            authorization_endpoint=request.authorization_endpoint,
+            token_endpoint=request.token_endpoint,
+        )
 
     def _require_valid_token(self, record: McpServerRecord) -> TokenEnvelope:
         token = self.store.get_token(server_id=record.server_id)

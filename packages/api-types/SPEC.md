@@ -52,6 +52,15 @@ run status enum constants between the Python server and this package.
 - Enum additions need UI fallback behavior before rollout.
 - Enum removals or renames are breaking and require a versioned migration.
 
+## MCP OAuth Client Configuration
+
+`CreateMcpServerRequest.oauth_client` and
+`UpdateMcpServerRequest.oauth_client` are optional advanced fields for generic
+MCP servers that require a pre-registered OAuth client instead of dynamic client
+registration. Public `McpServer` responses expose only
+`oauth_client_configured`; raw or encrypted client secrets are backend-owned and
+must never appear in app-facing payloads.
+
 ## Future Generation
 
 If OpenAPI or another contract generator becomes canonical, generated files

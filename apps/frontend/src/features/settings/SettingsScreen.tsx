@@ -1,4 +1,7 @@
-import type { McpServer } from "@enterprise-search/api-types";
+import type {
+  McpOAuthClientConfigRequest,
+  McpServer,
+} from "@enterprise-search/api-types";
 import {
   Badge,
   Button,
@@ -133,6 +136,12 @@ function ConnectorsSettings({
   connectors: ConnectorState;
 }): ReactElement {
   const [url, setUrl] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scope, setScope] = useState("");
+  const [authorizationEndpoint, setAuthorizationEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -141,9 +150,26 @@ function ConnectorsSettings({
       return;
     }
     try {
+      const oauthClient = oauthClientFromForm({
+        clientId,
+        clientSecret,
+        scope,
+        authorizationEndpoint,
+        tokenEndpoint,
+      });
+      setFormError(null);
       setSubmitting(true);
-      await connectors.addServer(url.trim());
+      await connectors.addServer(url.trim(), oauthClient);
       setUrl("");
+      setClientId("");
+      setClientSecret("");
+      setScope("");
+      setAuthorizationEndpoint("");
+      setTokenEndpoint("");
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Could not add connector.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -173,17 +199,60 @@ function ConnectorsSettings({
           className="connector-add-form"
           onSubmit={(event) => void onSubmit(event)}
         >
-          <Field label="Add custom connector">
+          <Field
+            label="Add custom connector"
+            hint="For OAuth MCP servers without dynamic client registration, add a pre-registered OAuth client below."
+          >
             <TextInput
               value={url}
               onChange={(event) => setUrl(event.target.value)}
               placeholder="https://mcp.example.com"
             />
           </Field>
+          <Field label="OAuth client ID">
+            <TextInput
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+              placeholder="Optional client_id"
+            />
+          </Field>
+          <Field label="OAuth client secret">
+            <TextInput
+              type="password"
+              value={clientSecret}
+              onChange={(event) => setClientSecret(event.target.value)}
+              placeholder="Optional client_secret"
+            />
+          </Field>
+          <Field label="OAuth scope">
+            <TextInput
+              value={scope}
+              onChange={(event) => setScope(event.target.value)}
+              placeholder="Optional, for example: mcp"
+            />
+          </Field>
+          <Field
+            label="Authorization endpoint"
+            hint="Optional advanced override when the server does not advertise OAuth metadata."
+          >
+            <TextInput
+              value={authorizationEndpoint}
+              onChange={(event) => setAuthorizationEndpoint(event.target.value)}
+              placeholder="https://auth.example.com/authorize"
+            />
+          </Field>
+          <Field label="Token endpoint" hint="Optional advanced override.">
+            <TextInput
+              value={tokenEndpoint}
+              onChange={(event) => setTokenEndpoint(event.target.value)}
+              placeholder="https://auth.example.com/token"
+            />
+          </Field>
           <Button type="submit" disabled={submitting}>
             Add connector
           </Button>
         </form>
+        {formError ? <p className="app-error">{formError}</p> : null}
         {connectors.error ? (
           <p className="app-error">{connectors.error}</p>
         ) : null}
@@ -210,6 +279,55 @@ function ConnectorsSettings({
       </div>
     </div>
   );
+}
+
+function oauthClientFromForm({
+  clientId,
+  clientSecret,
+  scope,
+  authorizationEndpoint,
+  tokenEndpoint,
+}: {
+  clientId: string;
+  clientSecret: string;
+  scope: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+}): McpOAuthClientConfigRequest | undefined {
+  const trimmedClientId = clientId.trim();
+  const trimmedClientSecret = clientSecret.trim();
+  const trimmedScope = scope.trim();
+  const trimmedAuthorizationEndpoint = authorizationEndpoint.trim();
+  const trimmedTokenEndpoint = tokenEndpoint.trim();
+  const hasOAuthConfig = [
+    trimmedClientId,
+    trimmedClientSecret,
+    trimmedScope,
+    trimmedAuthorizationEndpoint,
+    trimmedTokenEndpoint,
+  ].some(Boolean);
+  if (!hasOAuthConfig) {
+    return undefined;
+  }
+  if (!trimmedClientId) {
+    throw new Error(
+      "OAuth client ID is required when OAuth settings are provided.",
+    );
+  }
+  return {
+    client_id: trimmedClientId,
+    ...(trimmedClientSecret
+      ? {
+          client_secret: trimmedClientSecret,
+          token_endpoint_auth_method: "client_secret_post",
+        }
+      : { token_endpoint_auth_method: "none" }),
+    ...(trimmedScope ? { scope: trimmedScope } : {}),
+    ...(trimmedAuthorizationEndpoint
+      ? { authorization_endpoint: trimmedAuthorizationEndpoint }
+      : {}),
+    ...(trimmedTokenEndpoint ? { token_endpoint: trimmedTokenEndpoint } : {}),
+  };
 }
 
 function ConnectorSettingsRow({

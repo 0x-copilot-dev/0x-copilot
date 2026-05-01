@@ -1,4 +1,7 @@
-import type { McpServer } from "@enterprise-search/api-types";
+import type {
+  McpOAuthClientConfigRequest,
+  McpServer,
+} from "@enterprise-search/api-types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RequestIdentity } from "../../api/config";
 import {
@@ -15,7 +18,10 @@ export interface ConnectorState {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  addServer: (url: string) => Promise<void>;
+  addServer: (
+    url: string,
+    oauthClient?: McpOAuthClientConfigRequest,
+  ) => Promise<void>;
   removeServer: (serverId: string) => Promise<void>;
   setEnabled: (serverId: string, enabled: boolean) => Promise<void>;
   authenticate: (serverId: string) => Promise<void>;
@@ -52,9 +58,12 @@ export function useConnectors(
   const actions = useMemo(
     () => ({
       refresh,
-      async addServer(url: string): Promise<void> {
+      async addServer(
+        url: string,
+        oauthClient?: McpOAuthClientConfigRequest,
+      ): Promise<void> {
         const currentIdentity = requireIdentity(identity);
-        await createMcpServer(url, currentIdentity);
+        await createMcpServer(url, currentIdentity, oauthClient);
         await refresh();
       },
       async removeServer(serverId: string): Promise<void> {

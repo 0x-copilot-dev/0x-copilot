@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   required_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
   last_discovery JSONB NOT NULL DEFAULT '{}'::jsonb,
+  oauth_client JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );

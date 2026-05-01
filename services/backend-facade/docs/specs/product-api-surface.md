@@ -10,30 +10,30 @@ service routes and implementation modules are not part of the app contract.
 
 ## Route Families
 
-| Method and path                                          | Upstream owner        | Purpose                              |
-| -------------------------------------------------------- | --------------------- | ------------------------------------ |
-| `POST /v1/mcp/servers`                                   | `services/backend`    | Create an MCP server registration    |
-| `GET /v1/mcp/servers`                                    | `services/backend`    | List MCP servers for org/user scope  |
-| `PATCH /v1/mcp/servers/{server_id}`                      | `services/backend`    | Update display or enabled state      |
-| `DELETE /v1/mcp/servers/{server_id}`                     | `services/backend`    | Delete an MCP server                 |
-| `POST /v1/mcp/servers/{server_id}/auth/start`            | `services/backend`    | Start OAuth                          |
-| `POST /v1/mcp/servers/{server_id}/auth/skip`             | `services/backend`    | Mark auth as skipped                 |
-| `GET /v1/mcp/oauth/callback`                             | `services/backend`    | Complete OAuth callback              |
-| `POST /v1/skills`                                        | `services/backend`    | Create a skill                       |
-| `GET /v1/skills`                                         | `services/backend`    | List skills                          |
-| `GET /v1/skills/{skill_id}`                              | `services/backend`    | Fetch a skill                        |
-| `PUT /v1/skills/{skill_id}`                              | `services/backend`    | Replace a skill                      |
-| `DELETE /v1/skills/{skill_id}`                           | `services/backend`    | Delete a skill                       |
-| `POST /v1/agent/conversations`                           | `services/ai-backend` | Create or resume a conversation      |
-| `GET /v1/agent/conversations/{conversation_id}`          | `services/ai-backend` | Fetch conversation metadata          |
-| `GET /v1/agent/conversations/{conversation_id}/messages` | `services/ai-backend` | Fetch conversation messages          |
-| `POST /v1/agent/runs`                                    | `services/ai-backend` | Create a runtime run                 |
-| `GET /v1/agent/runs/{run_id}`                            | `services/ai-backend` | Fetch run state                      |
-| `GET /v1/agent/runs/{run_id}/events`                     | `services/ai-backend` | Replay persisted run events          |
-| `GET /v1/agent/runs/{run_id}/stream`                     | `services/ai-backend` | Stream run events as SSE             |
-| `POST /v1/agent/runs/{run_id}/cancel`                    | `services/ai-backend` | Request run cancellation             |
-| `POST /v1/agent/approvals/{approval_id}/decision`        | `services/ai-backend` | Resolve an approval                  |
-| `DELETE /v1/agent/history`                               | `services/ai-backend` | Tombstone user-visible agent history |
+| Method and path                                          | Upstream owner        | Purpose                                                                                  |
+| -------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| `POST /v1/mcp/servers`                                   | `services/backend`    | Create an MCP server registration, optionally with per-server OAuth client configuration |
+| `GET /v1/mcp/servers`                                    | `services/backend`    | List MCP servers for org/user scope                                                      |
+| `PATCH /v1/mcp/servers/{server_id}`                      | `services/backend`    | Update display or enabled state                                                          |
+| `DELETE /v1/mcp/servers/{server_id}`                     | `services/backend`    | Delete an MCP server                                                                     |
+| `POST /v1/mcp/servers/{server_id}/auth/start`            | `services/backend`    | Start OAuth                                                                              |
+| `POST /v1/mcp/servers/{server_id}/auth/skip`             | `services/backend`    | Mark auth as skipped                                                                     |
+| `GET /v1/mcp/oauth/callback`                             | `services/backend`    | Complete OAuth callback                                                                  |
+| `POST /v1/skills`                                        | `services/backend`    | Create a skill                                                                           |
+| `GET /v1/skills`                                         | `services/backend`    | List skills                                                                              |
+| `GET /v1/skills/{skill_id}`                              | `services/backend`    | Fetch a skill                                                                            |
+| `PUT /v1/skills/{skill_id}`                              | `services/backend`    | Replace a skill                                                                          |
+| `DELETE /v1/skills/{skill_id}`                           | `services/backend`    | Delete a skill                                                                           |
+| `POST /v1/agent/conversations`                           | `services/ai-backend` | Create or resume a conversation                                                          |
+| `GET /v1/agent/conversations/{conversation_id}`          | `services/ai-backend` | Fetch conversation metadata                                                              |
+| `GET /v1/agent/conversations/{conversation_id}/messages` | `services/ai-backend` | Fetch conversation messages                                                              |
+| `POST /v1/agent/runs`                                    | `services/ai-backend` | Create a runtime run                                                                     |
+| `GET /v1/agent/runs/{run_id}`                            | `services/ai-backend` | Fetch run state                                                                          |
+| `GET /v1/agent/runs/{run_id}/events`                     | `services/ai-backend` | Replay persisted run events                                                              |
+| `GET /v1/agent/runs/{run_id}/stream`                     | `services/ai-backend` | Stream run events as SSE                                                                 |
+| `POST /v1/agent/runs/{run_id}/cancel`                    | `services/ai-backend` | Request run cancellation                                                                 |
+| `POST /v1/agent/approvals/{approval_id}/decision`        | `services/ai-backend` | Resolve an approval                                                                      |
+| `DELETE /v1/agent/history`                               | `services/ai-backend` | Tombstone user-visible agent history                                                     |
 
 ## Non-Surface Routes
 

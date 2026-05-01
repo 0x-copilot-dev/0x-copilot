@@ -63,9 +63,11 @@ falling back to local crypto-shaped storage or in-memory registry state.
 
 Remote MCP OAuth is discovery-backed. The backend reads protected-resource and
 authorization-server metadata, performs dynamic client registration when the
-server advertises it, stores connector tokens in the vault, refreshes expiring
-tokens when possible, and attaches bearer credentials only inside backend-owned
-internal MCP JSON-RPC proxy calls.
+server advertises it, or uses per-server configured OAuth client details for MCP
+providers that require a pre-registered client. It stores connector tokens and
+client secrets in the vault, refreshes expiring tokens when possible, and
+attaches bearer credentials only inside backend-owned internal MCP JSON-RPC
+proxy calls.
 
 ## Request Flow
 

@@ -28,6 +28,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientFactory,
     McpConnectionError,
     McpTimeoutError,
+    McpUnsupportedMethodError,
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
@@ -67,5 +68,6 @@ __all__ = [
     "McpToolCallResult",
     "McpToolDescriptor",
     "McpTransport",
+    "McpUnsupportedMethodError",
     "McpWarningCode",
 ]

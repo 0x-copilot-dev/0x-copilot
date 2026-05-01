@@ -131,6 +131,9 @@ class Values:
     class JsonRpc:
         VERSION = "2.0"
 
+    class JsonRpcError:
+        METHOD_NOT_FOUND = -32601
+
     class JsonRpcMethod:
         INITIALIZE = "initialize"
         INITIALIZED = "notifications/initialized"
