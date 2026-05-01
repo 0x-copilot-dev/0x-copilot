@@ -118,8 +118,8 @@ export async function createRun(
   identity: RequestIdentity,
   options: {
     model?: ModelSelectionRequest | null;
-    content?: Array<Record<string, unknown>>;
-    attachments?: Array<Record<string, unknown>>;
+    content?: CreateRunRequest["content"];
+    attachments?: CreateRunRequest["attachments"];
     quote?: Record<string, unknown>;
     parentMessageId?: string | null;
     sourceMessageId?: string | null;
@@ -134,7 +134,7 @@ export async function createRun(
     user_input: userInput,
     model: options.model,
     content: options.content,
-    attachments: options.attachments as CreateRunRequest["attachments"],
+    attachments: options.attachments,
     quote: options.quote,
     parent_message_id: options.parentMessageId,
     source_message_id: options.sourceMessageId,

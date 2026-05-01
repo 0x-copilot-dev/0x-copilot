@@ -20,6 +20,16 @@ import {
   isToolResultPayload,
 } from "@enterprise-search/api-types";
 
+type ThreadMessageContentPart = Exclude<
+  ThreadMessageLike["content"],
+  string
+>[number];
+type ThreadToolCallPart = Extract<
+  ThreadMessageContentPart,
+  { type: "tool-call" }
+>;
+type ThreadToolCallArgs = NonNullable<ThreadToolCallPart["args"]>;
+
 export type ActivityStatus =
   | "queued"
   | "running"
@@ -144,6 +154,7 @@ export function chatItemsToThreadMessages(
       return [runActivityToThreadMessage(item.activity, activeRunId)];
     }
     if (item.kind === "approval") {
+      const args = jsonArgs(item.payload as Record<string, unknown>);
       return [
         {
           id: item.id,
@@ -153,7 +164,7 @@ export function chatItemsToThreadMessages(
               type: "tool-call",
               toolCallId: item.payload.approval_id,
               toolName: "approval_request",
-              args: item.payload,
+              args,
               argsText: JSON.stringify(item.payload, null, 2),
             },
           ],
@@ -162,6 +173,7 @@ export function chatItemsToThreadMessages(
       ];
     }
     if (item.kind === "mcp-auth") {
+      const args = jsonArgs({ ...item.payload });
       return [
         {
           id: item.id,
@@ -171,7 +183,7 @@ export function chatItemsToThreadMessages(
               type: "tool-call",
               toolCallId: item.payload.server_id,
               toolName: "mcp_auth_required",
-              args: item.payload,
+              args,
               argsText: JSON.stringify(item.payload, null, 2),
               result: item.payload.message,
             },
@@ -866,7 +878,7 @@ function runActivityToThreadMessage(
   activity: RunActivity,
   activeRunId: string | null,
 ): ThreadMessageLike {
-  const content: NonNullable<ThreadMessageLike["content"]> = [];
+  const content: ThreadMessageContentPart[] = [];
   for (const item of activity.reasoning) {
     content.push({
       type: "reasoning",
@@ -884,12 +896,12 @@ function runActivityToThreadMessage(
       type: "tool-call",
       toolCallId: event.id,
       toolName: "runtime_event",
-      args: {
+      args: jsonArgs({
         event_type: event.eventType,
         title: event.title,
         summary: event.summary ?? null,
         status: event.status,
-      },
+      }),
       argsText: event.summary ?? event.title,
       result: event.status,
     });
@@ -899,11 +911,11 @@ function runActivityToThreadMessage(
       type: "tool-call",
       toolCallId: activity.runId,
       toolName: "agent_run",
-      args: {
+      args: jsonArgs({
         title: activity.title,
         status: activity.status,
         summary: activity.summary ?? null,
-      },
+      }),
       argsText: activity.summary ?? activity.title,
       result: activity.status,
     });
@@ -923,15 +935,7 @@ function runActivityToThreadMessage(
   };
 }
 
-function toolToMessagePart(tool: ToolCallActivity): {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  argsText: string;
-  result?: unknown;
-  isError?: boolean;
-} {
+function toolToMessagePart(tool: ToolCallActivity): ThreadToolCallPart {
   const args = {
     summary: tool.summary ?? null,
     deltas: tool.deltas.map((item) => item.text),
@@ -941,22 +945,14 @@ function toolToMessagePart(tool: ToolCallActivity): {
     type: "tool-call",
     toolCallId: tool.id,
     toolName: tool.name,
-    args,
+    args: jsonArgs(args),
     argsText: JSON.stringify(args, null, 2),
     result: tool.result,
     isError: tool.status === "failed",
   };
 }
 
-function subagentToMessagePart(subagent: SubagentActivity): {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  argsText: string;
-  result?: unknown;
-  isError?: boolean;
-} {
+function subagentToMessagePart(subagent: SubagentActivity): ThreadToolCallPart {
   const args = {
     subagent_name: subagent.name,
     task_id: subagent.taskId,
@@ -979,11 +975,15 @@ function subagentToMessagePart(subagent: SubagentActivity): {
     type: "tool-call",
     toolCallId: subagent.id,
     toolName: "run_subagent",
-    args,
+    args: jsonArgs(args),
     argsText: JSON.stringify(args, null, 2),
     result: subagent.summary,
     isError: subagent.status === "failed",
   };
+}
+
+function jsonArgs(value: Record<string, unknown>): ThreadToolCallArgs {
+  return value as ThreadToolCallArgs;
 }
 
 function titleForEvent(eventType: string): string {

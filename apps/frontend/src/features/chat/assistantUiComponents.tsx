@@ -310,7 +310,9 @@ export function AssistantComposer(): ReactElement {
               ×
             </ComposerPrimitive.QuoteDismiss>
           </ComposerPrimitive.Quote>
-          <ComposerPrimitive.Attachments />
+          <ComposerPrimitive.Attachments>
+            {({ attachment }) => <AttachmentPill attachment={attachment} />}
+          </ComposerPrimitive.Attachments>
           <div className="aui-composer__input-row">
             <ComposerPrimitive.AddAttachment
               className="aui-icon-button"
@@ -417,6 +419,19 @@ function TriggerPopoverList(): ReactElement {
   );
 }
 
+function AttachmentPill({
+  attachment,
+}: {
+  attachment: { name: string; type: string };
+}): ReactElement {
+  return (
+    <span className="aui-attachment-pill">
+      <span>{attachment.name}</span>
+      <small>{attachment.type}</small>
+    </span>
+  );
+}
+
 function AssistantMessage(): ReactElement {
   return (
     <MessagePrimitive.Root className="aui-message aui-message--assistant">
@@ -451,7 +466,9 @@ function UserMessage(): ReactElement {
   return (
     <MessagePrimitive.Root className="aui-message aui-message--user">
       <div className="aui-message__body">
-        <MessagePrimitive.Attachments />
+        <MessagePrimitive.Attachments>
+          {({ attachment }) => <AttachmentPill attachment={attachment} />}
+        </MessagePrimitive.Attachments>
         <MessagePrimitive.Parts components={{ Text: PlainText }} />
         <UserActionBar />
         <MessageBranchPicker />
@@ -532,7 +549,7 @@ function ToolGroup({
 }: {
   startIndex: number;
   endIndex: number;
-  children: ReactNode;
+  children?: ReactNode;
 }): ReactElement {
   return (
     <details className="aui-tool-group" open>

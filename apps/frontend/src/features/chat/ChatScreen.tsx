@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   Conversation,
+  CreateRunRequest,
   ModelCatalogModel,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
@@ -650,13 +651,15 @@ function textFromAppendMessage(message: AppendMessage): string {
 
 function contentFromAppendMessage(
   message: AppendMessage,
-): Array<Record<string, unknown>> {
-  return message.content.map((part) => ({ ...part }));
+): NonNullable<CreateRunRequest["content"]> {
+  return message.content.map((part) => ({
+    ...part,
+  })) as NonNullable<CreateRunRequest["content"]>;
 }
 
 function attachmentsFromAppendMessage(
   message: AppendMessage,
-): Array<Record<string, unknown>> {
+): NonNullable<CreateRunRequest["attachments"]> {
   const attachments = message.attachments ?? [];
   return attachments.map((attachment: CompleteAttachment) => ({
     id: attachment.id,
