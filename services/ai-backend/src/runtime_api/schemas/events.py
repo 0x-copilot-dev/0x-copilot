@@ -98,6 +98,8 @@ class RuntimeEventPresentationProjector:
             )
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return cls._mcp_auth_required_payload(payload)
+        if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
+            return cls._approval_requested_payload(payload)
         return payload
 
     @classmethod
@@ -390,6 +392,37 @@ class RuntimeEventPresentationProjector:
             value = cls._text(payload.get(key))
             if value is not None:
                 safe_payload[key] = value
+        return safe_payload
+
+    @classmethod
+    def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        safe_payload: JsonObject = {}
+        for key in (
+            Keys.Field.APPROVAL_ID,
+            "approval_kind",
+            Keys.Field.SERVER_ID,
+            Keys.Field.SERVER_NAME,
+            "display_name",
+            Keys.Field.TOOL_NAME,
+            "risk_level",
+            Keys.Payload.MESSAGE,
+            Keys.Field.REASON,
+            Keys.Field.STATUS,
+        ):
+            value = cls._text(payload.get(key))
+            if value is not None:
+                safe_payload[key] = value
+        read_only = payload.get("read_only")
+        if isinstance(read_only, bool):
+            safe_payload["read_only"] = read_only
+        arguments = payload.get("arguments")
+        if isinstance(arguments, dict):
+            safe_payload["arguments"] = arguments
+        grant_options = payload.get("grant_options")
+        if isinstance(grant_options, list | tuple):
+            safe_payload["grant_options"] = [
+                option for option in grant_options if isinstance(option, str)
+            ]
         return safe_payload
 
     @classmethod

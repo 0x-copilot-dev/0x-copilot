@@ -348,6 +348,77 @@ class PostgresRuntimeApiStore:
             conn.commit()
         return record
 
+    def create_approval_request(
+        self,
+        *,
+        record: ApprovalRequestRecord,
+    ) -> ApprovalRequestRecord:
+        """Persist a pending approval request."""
+
+        risk_class = str(record.metadata.get("risk_level") or "low").lower()
+        if risk_class == "critical":
+            risk_class = "high"
+        if risk_class not in {"low", "medium", "high"}:
+            risk_class = "low"
+        action_summary = str(
+            record.metadata.get("message")
+            or record.metadata.get("reason")
+            or "Approve this runtime action."
+        )
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT a.*, r.conversation_id, r.user_id
+                FROM runtime_approval_requests a
+                JOIN agent_runs r ON r.id = a.run_id
+                WHERE a.id = %s AND a.org_id = %s
+                """,
+                (record.approval_id, record.org_id),
+            ).fetchone()
+            if existing is not None:
+                return ApprovalRequestRecord(
+                    approval_id=existing["id"],
+                    run_id=existing["run_id"],
+                    conversation_id=existing["conversation_id"],
+                    org_id=existing["org_id"],
+                    user_id=existing["user_id"],
+                    status=existing["status"],
+                    created_at=existing["created_at"],
+                    expires_at=existing["expires_at"],
+                    metadata=existing["request_payload_json_redacted"] or {},
+                )
+            conn.execute(
+                """
+                INSERT INTO runtime_approval_requests (
+                    id,
+                    run_id,
+                    org_id,
+                    requested_by_user_id,
+                    status,
+                    risk_class,
+                    action_summary,
+                    request_payload_json_redacted,
+                    expires_at,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    record.approval_id,
+                    record.run_id,
+                    record.org_id,
+                    record.user_id,
+                    record.status.value,
+                    risk_class,
+                    action_summary,
+                    Jsonb(record.metadata),
+                    record.expires_at,
+                    record.created_at,
+                ),
+            )
+            conn.commit()
+        return record
+
     def get_approval_request(
         self,
         *,
@@ -377,6 +448,7 @@ class PostgresRuntimeApiStore:
             status=row["status"],
             created_at=row["created_at"],
             expires_at=row["expires_at"],
+            metadata=row["request_payload_json_redacted"] or {},
         )
 
     def write_audit_log(self, *, event_type: str, record: object) -> None:

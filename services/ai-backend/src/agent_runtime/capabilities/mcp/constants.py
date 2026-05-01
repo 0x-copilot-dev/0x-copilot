@@ -100,6 +100,7 @@ class Values:
         CONNECTION_FAILED = "connection_failed"
         DUPLICATE_DESCRIPTOR_NAME = "duplicate_descriptor_name"
         DUPLICATE_SERVER_NAME = "duplicate_server_name"
+        INVALID_LOCAL_TOOL_NAMES = "invalid_local_tool_names"
         INVALID_SERVER_NAME = "invalid_server_name"
         LOAD_BUDGET_EXCEEDED = "load_budget_exceeded"
         LOCAL_TOOL_COLLISION = "local_tool_collision"
@@ -254,6 +255,7 @@ class Messages:
         LOCAL_TOOL_COLLISION = (
             "The MCP server returned a tool name that collides with a local tool."
         )
+        LOCAL_TOOL_NAMES_INVALID = "MCP local tool names are invalid."
         RESOURCE_BUDGET_EXCEEDED = (
             "The MCP server returned too many resources to load safely."
         )

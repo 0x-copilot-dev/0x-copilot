@@ -478,8 +478,18 @@ export interface ApprovalDecisionResponse {
 
 export interface ApprovalRequestedPayload {
   approval_id: string;
+  approval_kind?: "mcp_tool" | string;
+  server_id?: string;
+  server_name?: string;
+  display_name?: string;
+  tool_name?: string;
+  arguments?: Record<string, unknown>;
+  risk_level?: "low" | "medium" | "high" | "critical" | string;
+  read_only?: boolean;
+  grant_options?: string[];
   message?: string;
   reason?: string;
+  status?: string;
   [key: string]: unknown;
 }
 

@@ -550,6 +550,13 @@ describe("applyRuntimeEvent", () => {
         activity_kind: "approval",
         payload: {
           approval_id: "approval_123",
+          approval_kind: "mcp_tool",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          tool_name: "list_tasks",
+          arguments: { assignee: "me" },
+          risk_level: "low",
+          read_only: true,
           message: "Approve the tool call?",
         },
       }),
@@ -574,6 +581,14 @@ describe("applyRuntimeEvent", () => {
     expect(toolPart(items, "approval_request")?.toolCallId).toBe(
       "approval_123",
     );
+    expect(toolPart(items, "approval_request")?.args).toMatchObject({
+      approval_kind: "mcp_tool",
+      server_name: "mcp_clickup_com",
+      tool_name: "list_tasks",
+      arguments: { assignee: "me" },
+      risk_level: "low",
+      read_only: true,
+    });
     expect(toolPart(items, "mcp_auth_required")?.toolCallId).toBe("server_123");
     expect(firstThreadMessage(items).status).toEqual({
       type: "requires-action",

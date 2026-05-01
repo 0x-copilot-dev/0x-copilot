@@ -5,13 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp.cards import (
+    LoadedMcpServer,
     McpLoadError,
     McpLoadErrorCode,
+    McpRiskLevel,
+    McpToolDescriptor,
     McpToolCallRequest,
     McpToolCallResult,
 )
@@ -67,7 +71,8 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
-        if parsed_input.tool_name not in {tool.name for tool in loaded_server.tools}:
+        selected_tool = self._selected_tool(loaded_server, parsed_input.tool_name)
+        if selected_tool is None:
             return McpToolCallResult.fail(
                 McpLoadErrorCode.UNKNOWN_TOOL,
                 Messages.Registry.REQUESTED_TOOL_UNKNOWN,
@@ -75,6 +80,15 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
+
+        approval = McpToolApprovalPolicy.approval_payload(
+            runtime_context=self.runtime_context,
+            loaded_server=loaded_server,
+            tool=selected_tool,
+            arguments=parsed_input.arguments,
+        )
+        if approval is not None:
+            return approval
 
         resolution = self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
@@ -135,6 +149,16 @@ class CallMcpTool:
             output=output,
         ).model_dump(mode="json", exclude_none=True)
 
+    @staticmethod
+    def _selected_tool(
+        loaded_server: LoadedMcpServer,
+        tool_name: str,
+    ) -> McpToolDescriptor | None:
+        return next(
+            (tool for tool in loaded_server.tools if tool.name == tool_name),
+            None,
+        )
+
     async def __call__(
         self,
         raw_input: McpToolCallRequest | Mapping[str, Any],
@@ -161,3 +185,69 @@ class CallMcpToolInputParser:
                 Messages.Loader.STABLE_SERVER_NAME_REQUIRED,
                 correlation_id=correlation_id,
             )
+
+
+class McpToolApprovalPolicy:
+    """Build model-visible approval interrupts for MCP tool execution."""
+
+    @classmethod
+    def approval_payload(
+        cls,
+        *,
+        runtime_context: AgentRuntimeContext,
+        loaded_server: LoadedMcpServer,
+        tool: McpToolDescriptor,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if cls._has_runtime_grant(
+            runtime_context, loaded_server.server_card.name, tool
+        ):
+            return None
+
+        server = loaded_server.server_card
+        display_name = server.display_name or server.name
+        risk_level = cls._risk_value(tool.risk_level)
+        return {
+            "api_event_type": "approval_requested",
+            "event_type": "approval_requested",
+            "approval_id": uuid4().hex,
+            "approval_kind": "mcp_tool",
+            "server_name": server.name,
+            "server_id": server.server_id,
+            "display_name": display_name,
+            "tool_name": tool.name,
+            "arguments": dict(arguments),
+            "risk_level": risk_level,
+            "read_only": risk_level in {"low", "medium"},
+            "message": f"Approve {display_name} to run {tool.name}.",
+            "reason": tool.description,
+            "status": "pending",
+            "grant_options": list(cls._grant_options(tool)),
+        }
+
+    @classmethod
+    def _has_runtime_grant(
+        cls,
+        runtime_context: AgentRuntimeContext,
+        server_name: str,
+        tool: McpToolDescriptor,
+    ) -> bool:
+        grants = runtime_context.trace_metadata.get("mcp_approval_grants")
+        if not isinstance(grants, list):
+            return False
+        exact = f"{server_name}:{tool.name}"
+        server_wide = f"{server_name}:*"
+        return exact in grants or (
+            cls._risk_value(tool.risk_level) in {"low", "medium"}
+            and server_wide in grants
+        )
+
+    @classmethod
+    def _grant_options(cls, tool: McpToolDescriptor) -> tuple[str, ...]:
+        if tool.risk_level in {McpRiskLevel.HIGH, McpRiskLevel.CRITICAL}:
+            return ("allow_once",)
+        return ("allow_once", "always_allow_tool")
+
+    @staticmethod
+    def _risk_value(risk_level: McpRiskLevel | str) -> str:
+        return getattr(risk_level, "value", str(risk_level))

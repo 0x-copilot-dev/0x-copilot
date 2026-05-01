@@ -57,7 +57,6 @@ import {
 import {
   AssistantThread,
   AssistantThreadList,
-  McpExecutionApprovalCard,
   ThreadBody,
 } from "./assistantUiComponents";
 
@@ -65,15 +64,7 @@ type SubmitMessageOptions = {
   parentMessageId?: string | null;
   sourceMessageId?: string | null;
   branchId?: string | null;
-  runtimeUserInput?: string;
-  skipMcpApproval?: boolean;
   optimisticMessageId?: string;
-};
-
-type PendingMcpSubmission = {
-  message: AppendMessage;
-  options: SubmitMessageOptions;
-  servers: ConnectorState["servers"];
 };
 
 export function ChatScreen({
@@ -95,8 +86,6 @@ export function ChatScreen({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showConnectorSuggestions, setShowConnectorSuggestions] =
     useState(false);
-  const [pendingMcpSubmission, setPendingMcpSubmission] =
-    useState<PendingMcpSubmission | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [status, setStatus] = useState("Ready");
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -287,7 +276,7 @@ export function ChatScreen({
         options.optimisticMessageId ??
         appendMessageId(message) ??
         `local-${Date.now()}`;
-      const runtimeUserInput = options.runtimeUserInput ?? text;
+      const runtimeUserInput = text;
       const content = contentFromAppendMessage(message);
       const attachments = attachmentsFromAppendMessage(message);
       const quote = quoteFromAppendMessage(message);
@@ -295,35 +284,6 @@ export function ChatScreen({
         options.parentMessageId === undefined
           ? lastMessageId(items)
           : options.parentMessageId;
-      const mcpServers = mcpServersForPrompt(text, connectors.servers);
-      if (!options.skipMcpApproval && mcpServers.length > 0) {
-        setItems((current) => [
-          ...current,
-          optimisticUserMessage({
-            id: localMessageId,
-            text,
-            content: content as Exclude<ChatThreadMessage["content"], string>,
-            parentId: parentMessageId ?? null,
-            attachments: completeAttachmentsFromAppendMessage(message),
-            metadata: metadataFromAppendMessage(message),
-            sourceMessageId: options.sourceMessageId ?? null,
-            branchId: options.branchId ?? null,
-          }),
-        ]);
-        setPendingMcpSubmission({
-          message,
-          options: {
-            ...options,
-            optimisticMessageId: localMessageId,
-            parentMessageId,
-            skipMcpApproval: true,
-          },
-          servers: mcpServers,
-        });
-        setStatus("Waiting for MCP confirmation...");
-        return;
-      }
-
       let targetConversationId = conversationId;
       try {
         if (targetConversationId === null) {
@@ -401,7 +361,6 @@ export function ChatScreen({
     [
       activeRunId,
       conversationId,
-      connectors.servers,
       identity,
       items,
       refreshConversations,
@@ -454,7 +413,6 @@ export function ChatScreen({
     }
     setConversationId(null);
     setItems([]);
-    setPendingMcpSubmission(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
   }, [activeRunId]);
@@ -533,42 +491,6 @@ export function ChatScreen({
     },
     [connectors],
   );
-
-  const onApproveMcpExecution = useCallback((): void => {
-    const pending = pendingMcpSubmission;
-    if (pending === null) {
-      return;
-    }
-    setPendingMcpSubmission(null);
-    setStatus("Queued...");
-    void submitUserMessage(pending.message, {
-      ...pending.options,
-      skipMcpApproval: true,
-    });
-  }, [pendingMcpSubmission, submitUserMessage]);
-
-  const onDeclineMcpExecution = useCallback((): void => {
-    const pending = pendingMcpSubmission;
-    if (pending === null) {
-      return;
-    }
-    const text = textFromAppendMessage(pending.message).trim();
-    const declinedServers = pending.servers
-      .map((server) => server.display_name || server.name)
-      .join(", ");
-    const runtimeUserInput = [
-      text,
-      "",
-      `User declined MCP tool execution for ${declinedServers}. Do not load or call MCP tools for this request.`,
-    ].join("\n");
-    setPendingMcpSubmission(null);
-    setStatus("Continuing without MCP tools...");
-    void submitUserMessage(pending.message, {
-      ...pending.options,
-      runtimeUserInput,
-      skipMcpApproval: true,
-    });
-  }, [pendingMcpSubmission, submitUserMessage]);
 
   const threadMessages = useMemo<ChatThreadMessage[]>(
     () => chatItemsToThreadMessages(items, activeRunId),
@@ -745,13 +667,7 @@ export function ChatScreen({
             onOpenSkillsSettings={() => onOpenSettings("skills")}
             onShowConnectors={() => setShowConnectorSuggestions(true)}
             connectorSuggestions={
-              pendingMcpSubmission !== null ? (
-                <McpExecutionApprovalCard
-                  servers={pendingMcpSubmission.servers}
-                  onApprove={onApproveMcpExecution}
-                  onDecline={onDeclineMcpExecution}
-                />
-              ) : showConnectorSuggestions && suggestedServers.length > 0 ? (
+              showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
                   servers={suggestedServers}
                   onConnect={(serverId) => void onMcpAuthConnect(serverId)}
@@ -869,39 +785,6 @@ async function replayEventsForMessages(
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
-}
-
-function mcpServersForPrompt(
-  text: string,
-  servers: ConnectorState["servers"],
-): ConnectorState["servers"] {
-  const normalizedText = text.toLowerCase();
-  return servers.filter((server) => {
-    if (!server.enabled || server.auth_state !== "authenticated") {
-      return false;
-    }
-    return mcpServerSearchTerms(server).some((term) =>
-      normalizedText.includes(term),
-    );
-  });
-}
-
-function mcpServerSearchTerms(
-  server: ConnectorState["servers"][number],
-): string[] {
-  const values = [server.name, server.display_name].filter(
-    (value): value is string => Boolean(value),
-  );
-  const terms = values.flatMap((value) => {
-    const normalized = value.toLowerCase().replace(/[_-]+/g, " ").trim();
-    const withoutMcpAffixes = normalized
-      .replace(/^mcp\s+/, "")
-      .replace(/\s+mcp$/, "")
-      .replace(/\s+com$/, "")
-      .trim();
-    return [normalized, withoutMcpAffixes];
-  });
-  return Array.from(new Set(terms.filter(Boolean)));
 }
 
 function textFromAppendMessage(message: AppendMessage): string {

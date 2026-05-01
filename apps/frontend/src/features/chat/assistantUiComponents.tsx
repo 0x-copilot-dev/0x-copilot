@@ -405,52 +405,6 @@ function ActivityDetails({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-export function McpExecutionApprovalCard({
-  servers,
-  onApprove,
-  onDecline,
-}: {
-  servers: McpServer[];
-  onApprove: () => void;
-  onDecline: () => void;
-}): ReactElement {
-  const names = servers.map((server) => server.display_name || server.name);
-  return (
-    <ActivityCard
-      title={`${formatList(names)} access needed`}
-      status="waiting"
-      variant="approval"
-      description="Review before the agent loads connector tools for this message."
-      params={servers.map((server) => ({
-        label: "Server",
-        value: server.display_name
-          ? `${server.display_name} (${server.name})`
-          : server.name,
-      }))}
-    >
-      <div className="aui-tool-card__actions">
-        <Button
-          type="button"
-          size="sm"
-          title="Allow MCP tools for this request"
-          onClick={onApprove}
-        >
-          Execute
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          title="Decline MCP tools for this request"
-          onClick={onDecline}
-        >
-          Decline
-        </Button>
-      </div>
-    </ActivityCard>
-  );
-}
-
 function ThreadWelcome(): ReactElement {
   return (
     <section className="aui-welcome">
@@ -1386,10 +1340,12 @@ function ApprovalTool({
   const approvalId = String(args.approval_id ?? "");
   const toolName = stringValue(args.tool_name);
   const serverName = stringValue(args.server_name);
+  const displayName = stringValue(args.display_name) ?? serverName;
+  const riskLevel = stringValue(args.risk_level);
+  const readOnly = typeof args.read_only === "boolean" ? args.read_only : null;
   const isMcpApproval =
     stringValue(args.approval_kind) === "mcp_tool" ||
-    stringValue(args.kind) === "mcp_tool" ||
-    serverName !== null;
+    stringValue(args.kind) === "mcp_tool";
   const resolved = result !== undefined || status.type === "complete";
   const submit = (decision: ApprovalDecision): void => {
     addResult({ decision, approval_id: approvalId });
@@ -1406,7 +1362,20 @@ function ApprovalTool({
       description={String(args.message ?? args.reason ?? approvalId)}
       params={
         isMcpApproval
-          ? mcpActivityParams(serverName, toolName, args.arguments)
+          ? [
+              ...mcpActivityParams(displayName, toolName, args.arguments),
+              ...(riskLevel
+                ? [{ label: "Risk", value: <Badge>{riskLevel}</Badge> }]
+                : []),
+              ...(readOnly !== null
+                ? [
+                    {
+                      label: "Access",
+                      value: readOnly ? "Read-only" : "May change data",
+                    },
+                  ]
+                : []),
+            ]
           : []
       }
       details={toolDetailsContent(JSON.stringify(args, null, 2), result)}
@@ -1581,16 +1550,6 @@ function metricRows(
 function formatDateTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function formatList(values: string[]): string {
-  if (values.length === 0) {
-    return "MCP";
-  }
-  if (values.length === 1) {
-    return values[0];
-  }
-  return `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
 }
 
 function toolDetailsContent(

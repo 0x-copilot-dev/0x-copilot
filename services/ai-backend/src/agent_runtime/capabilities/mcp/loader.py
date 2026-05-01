@@ -242,7 +242,13 @@ class McpLoader:
                 runtime_context=runtime_context,
                 local_tool_names=local_tool_names,
             )
-        except ValidationError:
+        except ValidationError as exc:
+            if McpLoaderHelpers.validation_failed_for(exc, Keys.Field.LOCAL_TOOL_NAMES):
+                return McpLoadResult.fail(
+                    McpLoadErrorCode.INVALID_LOCAL_TOOL_NAMES,
+                    Messages.Loader.LOCAL_TOOL_NAMES_INVALID,
+                    server_name=McpLoaderHelpers.safe_server_name(server_name),
+                )
             return McpLoadResult.fail(
                 McpLoadErrorCode.INVALID_SERVER_NAME,
                 Messages.Loader.STABLE_SERVER_NAME_REQUIRED,
@@ -350,6 +356,10 @@ class McpLoaderHelpers:
             server_name=error.server_name,
             correlation_id=correlation_id,
         )
+
+    @classmethod
+    def validation_failed_for(cls, exc: ValidationError, field_name: str) -> bool:
+        return any(error.get("loc", ())[:1] == (field_name,) for error in exc.errors())
 
     @classmethod
     def safe_descriptor_message(cls, code: McpLoadErrorCode) -> str:

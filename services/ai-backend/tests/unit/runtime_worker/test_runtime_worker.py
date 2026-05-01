@@ -14,6 +14,7 @@ from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
+    AgentRunStatus,
     CreateConversationRequest,
     CreateRunRequest,
     MessageRecord,
@@ -1344,6 +1345,74 @@ def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> No
     assert {event.visibility for event in tool_events} == {"user"}
     assert tool_events[0].payload["args"]["server_name"] == "mcp_clickup_com"
     assert tool_events[1].payload["output"]["content"] == "ClickUp returned two tasks."
+
+
+def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "custom",
+            "ns": (),
+            "data": {
+                "api_event_type": "approval_requested",
+                "approval_id": "approval_mcp_123",
+                "approval_kind": "mcp_tool",
+                "server_name": "mcp_clickup_com",
+                "display_name": "ClickUp",
+                "tool_name": "list_tasks",
+                "arguments": {"assignee": "me"},
+                "risk_level": "low",
+                "read_only": True,
+                "message": "Approve ClickUp to run list_tasks.",
+            },
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
+    approval = store.get_approval_request(
+        org_id="org_123",
+        approval_id="approval_mcp_123",
+    )
+    assert approval is not None
+    assert approval.metadata["approval_kind"] == "mcp_tool"
+    assert approval.metadata["tool_name"] == "list_tasks"
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

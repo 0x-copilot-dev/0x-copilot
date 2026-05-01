@@ -412,6 +412,19 @@ class InMemoryRuntimeApiStore:
         )
         return record
 
+    def create_approval_request(
+        self,
+        *,
+        record: ApprovalRequestRecord,
+    ) -> ApprovalRequestRecord:
+        """Persist a pending approval request."""
+
+        existing = self.approval_requests.get(record.approval_id)
+        if existing is not None:
+            return existing
+        self.approval_requests[record.approval_id] = record
+        return record
+
     def get_approval_request(
         self,
         *,

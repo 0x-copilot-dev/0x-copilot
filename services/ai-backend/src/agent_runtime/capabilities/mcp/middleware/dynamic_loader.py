@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
 from pydantic import Field, ValidationError
@@ -18,7 +18,6 @@ class LoadMcpServerInput(RuntimeContract):
     """Input contract for the model-facing MCP load helper."""
 
     server_name: str = Field(min_length=1)
-    local_tool_names: frozenset[str] = Field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -27,6 +26,7 @@ class LoadMcpServerTool:
 
     loader: McpLoader
     runtime_context: AgentRuntimeContext
+    local_tool_names: frozenset[str] = dataclass_field(default_factory=frozenset)
     name: str = Values.ToolName.LOAD_MCP_SERVER
     description: str = Messages.Middleware.LOAD_MCP_SERVER_TOOL_DESCRIPTION
 
@@ -45,7 +45,7 @@ class LoadMcpServerTool:
         result = await self.loader.load_server_by_name(
             server_name=parsed_input.server_name,
             runtime_context=self.runtime_context,
-            local_tool_names=parsed_input.local_tool_names,
+            local_tool_names=self.local_tool_names,
         )
         return result.model_dump(mode="json", exclude_none=True)
 
@@ -69,6 +69,8 @@ class LoadMcpServerInputParser:
             return raw_input
         if isinstance(raw_input, str):
             raw_input = {Keys.Field.SERVER_NAME: raw_input}
+        elif isinstance(raw_input, Mapping):
+            raw_input = {Keys.Field.SERVER_NAME: raw_input.get(Keys.Field.SERVER_NAME)}
 
         try:
             return LoadMcpServerInput.model_validate(raw_input)

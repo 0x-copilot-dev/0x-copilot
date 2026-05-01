@@ -111,6 +111,12 @@ class RuntimeRunHandler:
                     timeout=command.runtime_context.model_profile.timeout_seconds,
                 )
                 metrics.record_usage_from(result)
+            if self._is_approval_interrupt(result):
+                self.persistence.update_run_status(
+                    run_id=command.run_id,
+                    status=AgentRunStatus.WAITING_FOR_APPROVAL,
+                )
+                return
             final_text = self._extract_final_text(result)
             if final_text is not None:
                 metrics_payload = metrics.to_payload(completed_at=datetime.now(UTC))
@@ -448,6 +454,8 @@ class RuntimeRunHandler:
                     after_sequence=latest_before,
                 )
                 for event in new_events:
+                    if event.event_type == RuntimeApiEventType.APPROVAL_REQUESTED:
+                        return {"approval_requested": True}
                     if (
                         event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
                         and event.task_id is not None
@@ -482,6 +490,10 @@ class RuntimeRunHandler:
         if saw_task_subagent and subagent_summaries:
             return {"content": "\n\n".join(subagent_summaries)}
         return None
+
+    @classmethod
+    def _is_approval_interrupt(cls, result: object) -> bool:
+        return isinstance(result, Mapping) and result.get("approval_requested") is True
 
     def _append_lifecycle(
         self,

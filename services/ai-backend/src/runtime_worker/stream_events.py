@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
-from runtime_api.schemas import RunRecord, RuntimeApiEventType
+from runtime_api.schemas import ApprovalRequestRecord, RunRecord, RuntimeApiEventType
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
 from runtime_worker.stream_subagents import SubagentEventProjector
 from runtime_worker.stream_tools import ToolCallStreamState
@@ -42,6 +42,8 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             event_type = self.api_event_type(payload)
             if event_type is None:
                 continue
+            if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
+                self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
                 run=run,
                 source=self.source_for_event(event_type, namespace),
@@ -162,6 +164,34 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             return None
         return cls.message_delta(message)
 
+    def create_approval_request(
+        self,
+        *,
+        run: RunRecord,
+        payload: dict[str, object],
+    ) -> None:
+        approval_id = self.text(payload.get("approval_id"))
+        if approval_id is None:
+            return
+        if (
+            self.event_producer.persistence.get_approval_request(
+                org_id=run.org_id,
+                approval_id=approval_id,
+            )
+            is not None
+        ):
+            return
+        self.event_producer.persistence.create_approval_request(
+            record=ApprovalRequestRecord(
+                approval_id=approval_id,
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                user_id=run.user_id,
+                metadata=payload,
+            )
+        )
+
     @classmethod
     def stream_result_candidate(cls, chunk: object) -> object | None:
         part = cls.stream_part(chunk)
@@ -181,6 +211,8 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
     ) -> StreamEventSource:
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return StreamEventSource.MCP
+        if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
+            return StreamEventSource.RUNTIME
         if event_type in {
             RuntimeApiEventType.TOOL_CALL,
             RuntimeApiEventType.TOOL_CALL_STARTED,

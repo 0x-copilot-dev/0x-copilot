@@ -83,6 +83,7 @@ class McpLoadErrorCode(StrEnum):
     """Typed dynamic MCP loading failures safe for public surfaces."""
 
     INVALID_SERVER_NAME = Values.ErrorCode.INVALID_SERVER_NAME
+    INVALID_LOCAL_TOOL_NAMES = Values.ErrorCode.INVALID_LOCAL_TOOL_NAMES
     UNKNOWN_SERVER = Values.ErrorCode.UNKNOWN_SERVER
     DUPLICATE_SERVER_NAME = Values.ErrorCode.DUPLICATE_SERVER_NAME
     SERVER_DISABLED = Values.ErrorCode.SERVER_DISABLED

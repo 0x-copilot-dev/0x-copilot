@@ -59,6 +59,7 @@ class RuntimeWorker:
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=persistence,
             event_store=event_store,
+            settings=self.settings,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

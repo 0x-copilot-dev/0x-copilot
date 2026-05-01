@@ -92,6 +92,13 @@ class PersistencePort(Protocol):
     ) -> ApprovalDecisionRecord:
         """Persist an approval decision."""
 
+    def create_approval_request(
+        self,
+        *,
+        record: ApprovalRequestRecord,
+    ) -> ApprovalRequestRecord:
+        """Persist a pending approval request."""
+
     def get_approval_request(
         self,
         *,

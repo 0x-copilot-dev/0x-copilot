@@ -25,6 +25,7 @@ from agent_runtime.capabilities.mcp import (
     McpTransport,
 )
 from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
+from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 
@@ -353,6 +354,52 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         assert result.error is not None
         assert result.error.code == McpLoadErrorCode.INVALID_SERVER_NAME
 
+    def test_loader_reports_invalid_local_tool_names(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        loader = self.make_loader(self.FakeMcpClient(tools=(), resources=()))
+
+        result = asyncio.run(
+            loader.load_server_by_name(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=runtime_context_admin,
+                local_tool_names={"*"},
+            )
+        )
+
+        assert result.error is not None
+        assert result.error.code == McpLoadErrorCode.INVALID_LOCAL_TOOL_NAMES
+
+    def test_load_mcp_server_tool_ignores_model_local_tool_names(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        loader = self.make_loader(
+            self.FakeMcpClient(
+                tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                resources=(),
+            )
+        )
+        tool = LoadMcpServerTool(
+            loader=loader,
+            runtime_context=runtime_context_admin,
+        )
+
+        result = asyncio.run(
+            tool.ainvoke(
+                {
+                    "server_name": self.TestValues.Names.DRIVE_MCP,
+                    "local_tool_names": ["*"],
+                }
+            )
+        )
+
+        assert (
+            result["loaded_server"]["server_card"]["name"]
+            == self.TestValues.Names.DRIVE_MCP
+        )
+
     def test_call_mcp_tool_invokes_selected_loaded_tool(
         self,
         runtime_context_admin: AgentRuntimeContext,
@@ -368,6 +415,53 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
                             "content": [{"type": "text", "text": "found tasks"}]
                         }
                     },
+                )
+            },
+        )
+        registry = DynamicMcpRegistry(providers=(provider,))
+        context_with_grant = runtime_context_admin.model_copy(
+            update={
+                "trace_metadata": {
+                    "mcp_approval_grants": [
+                        f"{self.TestValues.Names.DRIVE_MCP}:{self.TestValues.Names.DRIVE_SEARCH}"
+                    ]
+                }
+            }
+        )
+        tool = CallMcpTool(
+            registry=registry,
+            loader=McpLoader(registry),
+            runtime_context=context_with_grant,
+        )
+
+        result = asyncio.run(
+            tool.ainvoke(
+                {
+                    "server_name": self.TestValues.Names.DRIVE_MCP,
+                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "arguments": {"query": "tasks"},
+                }
+            )
+        )
+
+        assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
+        assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
+        assert result["output"]["content"][0]["text"] == "found tasks"
+        assert provider.created_clients == [
+            self.TestValues.Names.DRIVE_MCP,
+            self.TestValues.Names.DRIVE_MCP,
+        ]
+
+    def test_call_mcp_tool_requests_approval_without_grant(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        provider = self.FakeMcpProvider(
+            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            clients={
+                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
+                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                    resources=(),
                 )
             },
         )
@@ -388,13 +482,11 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             )
         )
 
+        assert result["api_event_type"] == "approval_requested"
+        assert result["approval_kind"] == "mcp_tool"
         assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
         assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
-        assert result["output"]["content"][0]["text"] == "found tasks"
-        assert provider.created_clients == [
-            self.TestValues.Names.DRIVE_MCP,
-            self.TestValues.Names.DRIVE_MCP,
-        ]
+        assert result["arguments"] == {"query": "tasks"}
 
     def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(
         self,

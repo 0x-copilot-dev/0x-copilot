@@ -22,6 +22,7 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
+from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
@@ -156,11 +157,23 @@ def _model_visible_tools(
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
+    auth_session_creator = _auth_session_creator(mcp_registry)
+    local_tool_names = _local_tool_names(
+        model_tools,
+        include_mcp_tools=callable(getattr(mcp_registry, "resolve_server", None)),
+        include_auth_mcp=auth_session_creator is not None,
+        include_skill_loader=skill_registry is not None
+        and callable(getattr(skill_registry, "load_skill_by_name", None)),
+    )
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
         model_tools.append(
             _structured_tool(
-                LoadMcpServerTool(loader=loader, runtime_context=runtime_context),
+                LoadMcpServerTool(
+                    loader=loader,
+                    runtime_context=runtime_context,
+                    local_tool_names=local_tool_names,
+                ),
                 LoadMcpServerInput,
             )
         )
@@ -174,7 +187,6 @@ def _model_visible_tools(
                 McpToolCallRequest,
             )
         )
-    auth_session_creator = _auth_session_creator(mcp_registry)
     if auth_session_creator is not None:
         model_tools.append(
             _structured_tool(
@@ -192,6 +204,30 @@ def _model_visible_tools(
             _structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput)
         )  # type: ignore[arg-type]
     return tuple(model_tools)
+
+
+def _local_tool_names(
+    tools: Sequence[object],
+    *,
+    include_mcp_tools: bool,
+    include_auth_mcp: bool,
+    include_skill_loader: bool,
+) -> frozenset[str]:
+    """Return trusted names already exposed to the model for collision checks."""
+
+    names = {name for tool in tools if (name := str(getattr(tool, "name", "")).strip())}
+    if include_mcp_tools:
+        names.update(
+            {
+                McpValues.ToolName.LOAD_MCP_SERVER,
+                McpValues.ToolName.CALL_MCP_TOOL,
+            }
+        )
+    if include_auth_mcp:
+        names.add(McpValues.ToolName.AUTH_MCP)
+    if include_skill_loader:
+        names.add("load_skill")
+    return frozenset(names)
 
 
 def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
