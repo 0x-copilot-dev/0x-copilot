@@ -747,7 +747,7 @@ function toolPart(
   }
   const name =
     toolName(payload) ?? existing?.toolName ?? event.display_title ?? "tool";
-  const result = toolResultText(payload) ?? existing?.result;
+  const result = toolResultValue(payload) ?? existing?.result;
   return {
     type: "tool-call",
     toolCallId: callId,
@@ -818,7 +818,7 @@ function subagentActivityRecord(
         payloadString(event.payload, "summary") ??
         stringValue(args.summary),
       input_summary: summarizeRecord(toolArgs(event.payload)),
-      result: part.result,
+      result: activityResultText(part.result, part.toolName),
       is_error: part.isError ?? false,
     };
   }
@@ -1009,12 +1009,25 @@ function toolArgsDelta(
   return {};
 }
 
-function toolResultText(payload: Record<string, unknown>): string | undefined {
+function toolResultValue(payload: Record<string, unknown>): unknown {
   if (!isToolResultPayload(payload)) {
     return payloadString(payload, "summary") ?? undefined;
   }
+  if (payload.output && Object.keys(payload.output).length > 0) {
+    return payload.output;
+  }
   return (
     payload.summary ?? payload.safe_message ?? objectSummary(payload.output)
+  );
+}
+
+function activityResultText(result: unknown, toolName: string): string | null {
+  if (typeof result === "string" && result.trim()) {
+    return result;
+  }
+  const summary = objectSummary(asRecord(result));
+  return (
+    summary ?? (result === undefined ? null : `${toolName} returned data.`)
   );
 }
 

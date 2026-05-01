@@ -120,6 +120,23 @@ def test_factory_instructs_model_not_to_load_when_no_mcp_cards(
     assert "Do not call load_mcp_server" in system_prompt
 
 
+def test_factory_instructs_model_to_return_fenced_code(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+
+    create_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=fake_dependencies,
+        agent_builder=builder,
+    )
+
+    system_prompt = builder.calls[0].system_prompt
+    assert "fenced Markdown code blocks" in system_prompt
+    assert "indentation and formatting are preserved" in system_prompt
+
+
 def test_factory_rejects_invalid_dependency_dict(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:

@@ -67,6 +67,7 @@ type SubmitMessageOptions = {
   branchId?: string | null;
   runtimeUserInput?: string;
   skipMcpApproval?: boolean;
+  optimisticMessageId?: string;
 };
 
 type PendingMcpSubmission = {
@@ -282,19 +283,10 @@ export function ChatScreen({
       if (!text || activeRunId !== null) {
         return;
       }
-      const mcpServers = mcpServersForPrompt(text, connectors.servers);
-      if (!options.skipMcpApproval && mcpServers.length > 0) {
-        setPendingMcpSubmission({
-          message,
-          options: { ...options, skipMcpApproval: true },
-          servers: mcpServers,
-        });
-        setStatus("Waiting for MCP confirmation...");
-        return;
-      }
-
-      let targetConversationId = conversationId;
-      const localMessageId = appendMessageId(message) ?? `local-${Date.now()}`;
+      const localMessageId =
+        options.optimisticMessageId ??
+        appendMessageId(message) ??
+        `local-${Date.now()}`;
       const runtimeUserInput = options.runtimeUserInput ?? text;
       const content = contentFromAppendMessage(message);
       const attachments = attachmentsFromAppendMessage(message);
@@ -303,19 +295,8 @@ export function ChatScreen({
         options.parentMessageId === undefined
           ? lastMessageId(items)
           : options.parentMessageId;
-      try {
-        if (targetConversationId === null) {
-          setStatus("Creating chat...");
-          const conversation = await createConversation(identity, {
-            title: titleFromPrompt(text),
-          });
-          targetConversationId = conversation.conversation_id;
-          setConversationId(targetConversationId);
-          setConversations((current) =>
-            upsertConversation(current, conversation),
-          );
-        }
-
+      const mcpServers = mcpServersForPrompt(text, connectors.servers);
+      if (!options.skipMcpApproval && mcpServers.length > 0) {
         setItems((current) => [
           ...current,
           optimisticUserMessage({
@@ -329,6 +310,49 @@ export function ChatScreen({
             branchId: options.branchId ?? null,
           }),
         ]);
+        setPendingMcpSubmission({
+          message,
+          options: {
+            ...options,
+            optimisticMessageId: localMessageId,
+            parentMessageId,
+            skipMcpApproval: true,
+          },
+          servers: mcpServers,
+        });
+        setStatus("Waiting for MCP confirmation...");
+        return;
+      }
+
+      let targetConversationId = conversationId;
+      try {
+        if (targetConversationId === null) {
+          setStatus("Creating chat...");
+          const conversation = await createConversation(identity, {
+            title: titleFromPrompt(text),
+          });
+          targetConversationId = conversation.conversation_id;
+          setConversationId(targetConversationId);
+          setConversations((current) =>
+            upsertConversation(current, conversation),
+          );
+        }
+
+        if (!options.optimisticMessageId) {
+          setItems((current) => [
+            ...current,
+            optimisticUserMessage({
+              id: localMessageId,
+              text,
+              content: content as Exclude<ChatThreadMessage["content"], string>,
+              parentId: parentMessageId ?? null,
+              attachments: completeAttachmentsFromAppendMessage(message),
+              metadata: metadataFromAppendMessage(message),
+              sourceMessageId: options.sourceMessageId ?? null,
+              branchId: options.branchId ?? null,
+            }),
+          ]);
+        }
         const run = await createRun(
           targetConversationId,
           runtimeUserInput,
@@ -430,6 +454,7 @@ export function ChatScreen({
     }
     setConversationId(null);
     setItems([]);
+    setPendingMcpSubmission(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
   }, [activeRunId]);
@@ -1147,6 +1172,8 @@ const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [
     description: "Fastest OpenAI model",
     configured: true,
     supports_streaming: true,
+    supports_reasoning: true,
+    reasoning: { enabled: true, effort: "medium", summary: "auto" },
   },
   {
     id: "gpt-5.4-mini",
@@ -1156,6 +1183,8 @@ const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [
     description: "Compact OpenAI model",
     configured: true,
     supports_streaming: true,
+    supports_reasoning: true,
+    reasoning: { enabled: true, effort: "medium", summary: "auto" },
   },
   {
     id: "anthropic/claude-haiku-4-5",

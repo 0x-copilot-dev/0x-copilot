@@ -22,6 +22,12 @@ import {
 import { Streamdown } from "streamdown";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Badge,
+  Button,
+  Card,
+  classNames,
+} from "@enterprise-search/design-system";
 import type {
   AssistantPerformanceMetrics,
   ApprovalDecision,
@@ -306,6 +312,99 @@ export function ThreadBody({
   );
 }
 
+type ActivityVariant =
+  | "tool"
+  | "mcp"
+  | "subagent"
+  | "approval"
+  | "connector"
+  | "progress";
+
+type ActivityParam = {
+  label: string;
+  value: ReactNode;
+  block?: boolean;
+};
+
+function ActivityCard({
+  title,
+  status,
+  variant = "tool",
+  description,
+  params = [],
+  result,
+  details,
+  children,
+  className,
+}: {
+  title: string;
+  status: string;
+  variant?: ActivityVariant;
+  description?: ReactNode;
+  params?: ActivityParam[];
+  result?: ReactNode;
+  details?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}): ReactElement {
+  return (
+    <Card
+      className={classNames(
+        "aui-tool-card",
+        "aui-activity-card",
+        `aui-activity-card--${variant}`,
+        className,
+      )}
+      data-status={status}
+    >
+      <header className="aui-activity-card__header">
+        <span className="aui-activity-card__status-dot" aria-hidden="true" />
+        <div className="aui-activity-card__heading">
+          <span className="aui-activity-card__title">{title}</span>
+          {description ? (
+            <p className="aui-activity-card__description">{description}</p>
+          ) : null}
+        </div>
+        <Badge tone={badgeToneForStatus(status)}>{status}</Badge>
+      </header>
+      {params.length > 0 ? <ActivityParams params={params} /> : null}
+      {result ? (
+        <div className="aui-activity-card__result">{result}</div>
+      ) : null}
+      {children}
+      {details ? <ActivityDetails>{details}</ActivityDetails> : null}
+    </Card>
+  );
+}
+
+function ActivityParams({ params }: { params: ActivityParam[] }): ReactElement {
+  return (
+    <dl className="aui-activity-card__params">
+      {params.map((param) => (
+        <div
+          className={classNames(
+            "aui-activity-card__param",
+            param.block ? "aui-activity-card__param--block" : undefined,
+          )}
+          key={param.label}
+        >
+          <dt>{param.label}</dt>
+          <dd>{param.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ActivityDetails({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <details className="aui-activity-card__details">
+      <summary>Inspect details</summary>
+      <div className="aui-activity-card__details-content">{children}</div>
+    </details>
+  );
+}
+
 export function McpExecutionApprovalCard({
   servers,
   onApprove,
@@ -317,40 +416,38 @@ export function McpExecutionApprovalCard({
 }): ReactElement {
   const names = servers.map((server) => server.display_name || server.name);
   return (
-    <div className="aui-tool-card aui-tool-card--approval">
-      <div className="aui-tool-card__header">
-        <strong>Use MCP tools?</strong>
-        <span>confirmation required</span>
-      </div>
-      <p>
-        This request appears to need {formatList(names)}. Review before the
-        agent loads or calls MCP tools for this message.
-      </p>
-      <dl className="aui-tool-card__fields">
-        {servers.map((server) => (
-          <div className="aui-tool-card__field" key={server.server_id}>
-            <dt>Server</dt>
-            <dd>{server.name}</dd>
-          </div>
-        ))}
-      </dl>
+    <ActivityCard
+      title={`${formatList(names)} access needed`}
+      status="waiting"
+      variant="approval"
+      description="Review before the agent loads connector tools for this message."
+      params={servers.map((server) => ({
+        label: "Server",
+        value: server.display_name
+          ? `${server.display_name} (${server.name})`
+          : server.name,
+      }))}
+    >
       <div className="aui-tool-card__actions">
-        <button
+        <Button
           type="button"
+          size="sm"
           title="Allow MCP tools for this request"
           onClick={onApprove}
         >
           Execute
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          size="sm"
+          variant="secondary"
           title="Decline MCP tools for this request"
           onClick={onDecline}
         >
           Decline
-        </button>
+        </Button>
       </div>
-    </div>
+    </ActivityCard>
   );
 }
 
@@ -1095,9 +1192,32 @@ function Reasoning({ text, status }: ReasoningMessagePartProps): ReactElement {
 function ReasoningGroup({ children }: ReasoningGroupProps): ReactElement {
   return (
     <details className="aui-reasoning-group" open>
-      <summary>Thinking</summary>
+      <summary>
+        <ThinkingIcon />
+        <span>Thinking</span>
+      </summary>
       <div className="aui-reasoning-group__content">{children}</div>
     </details>
+  );
+}
+
+function ThinkingIcon(): ReactElement {
+  return (
+    <svg
+      aria-hidden="true"
+      className="aui-reasoning-group__icon"
+      fill="none"
+      focusable="false"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="12" cy="12" r="9" strokeWidth="1.5" stroke="currentColor" />
+      <path
+        d="M9 12h6M12 9v6"
+        strokeWidth="1.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
@@ -1124,34 +1244,21 @@ function ToolFallback({
   const statusLabel = toolStatusLabel(status.type, isError);
   const largeResult = largeToolResultFromValue(result);
   return (
-    <details
-      className="aui-tool-card aui-tool-card--activity"
-      data-status={status.type}
-    >
-      <summary className="aui-tool-card__activity-summary">
-        <strong>
-          {toolActivityTitle(
-            toolName,
-            status.type,
-            isError,
-            result,
-            activitySummary,
-          )}
-        </strong>
-        <span>{statusLabel}</span>
-      </summary>
-      <div className="aui-tool-card__activity-content">
-        {activitySummary ? (
-          <p className="aui-tool-card__summary">{activitySummary}</p>
-        ) : null}
-        {largeResult ? (
-          <LargeToolResultNotice result={largeResult} />
+    <ActivityCard
+      title={toolActivityTitle(toolName, status.type, isError, result, null)}
+      status={statusLabel}
+      variant="tool"
+      description={activitySummary}
+      params={activityParams(argsText, args)}
+      result={
+        largeResult ? (
+          <LargeToolResultNotice result={largeResult} compact />
         ) : result !== undefined ? (
-          <p className="aui-tool-card__result">{summarizeToolValue(result)}</p>
-        ) : null}
-        <ToolDetails argsText={argsText} result={result} />
-      </div>
-    </details>
+          summarizeToolValue(result, toolName)
+        ) : undefined
+      }
+      details={toolDetailsContent(argsText, result)}
+    />
   );
 }
 
@@ -1167,41 +1274,26 @@ function McpTool({
   const requestedTool = stringValue(args.tool_name);
   const resultNotice = largeToolResultFromValue(result);
   return (
-    <div className="aui-tool-card aui-tool-card--mcp" data-status={status.type}>
-      <div className="aui-tool-card__header">
-        <strong>{mcpToolTitle(toolName, requestedTool)}</strong>
-        <span>{toolStatusLabel(status.type, isError)}</span>
-      </div>
-      <p className="aui-tool-card__summary">
-        {mcpToolSummary(toolName, status.type, serverName, requestedTool)}
-      </p>
-      <dl className="aui-tool-card__fields">
-        {serverName ? (
-          <div className="aui-tool-card__field">
-            <dt>Server</dt>
-            <dd>{serverName}</dd>
-          </div>
-        ) : null}
-        {requestedTool ? (
-          <div className="aui-tool-card__field">
-            <dt>Tool</dt>
-            <dd>{requestedTool}</dd>
-          </div>
-        ) : null}
-        {args.arguments !== undefined ? (
-          <div className="aui-tool-card__field">
-            <dt>Arguments</dt>
-            <dd>{formatDetailValue(args.arguments)}</dd>
-          </div>
-        ) : null}
-      </dl>
-      {resultNotice ? (
-        <LargeToolResultNotice result={resultNotice} />
-      ) : result !== undefined ? (
-        <p className="aui-tool-card__result">{summarizeToolValue(result)}</p>
-      ) : null}
-      <ToolDetails argsText={argsText} result={result} />
-    </div>
+    <ActivityCard
+      title={mcpToolTitle(toolName, requestedTool)}
+      status={toolStatusLabel(status.type, isError)}
+      variant="mcp"
+      description={mcpToolSummary(
+        toolName,
+        status.type,
+        serverName,
+        requestedTool,
+      )}
+      params={mcpActivityParams(serverName, requestedTool, args.arguments)}
+      result={
+        resultNotice ? (
+          <LargeToolResultNotice result={resultNotice} compact />
+        ) : result !== undefined ? (
+          summarizeMcpResult(result)
+        ) : undefined
+      }
+      details={toolDetailsContent(argsText, result)}
+    />
   );
 }
 
@@ -1214,45 +1306,46 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
   const activities = subagentActivityRecords(data.activities);
   const completed =
     props.status.type === "complete" || data.status === "completed";
+  const statusLabel = toolStatusLabel(props.status.type, props.isError);
   return (
-    <details className="aui-tool-card aui-tool-card--subagent">
-      <summary className="aui-tool-card__activity-summary">
-        <strong>{subagentTitle(subagentName, taskSummary)}</strong>
-        <span>{toolStatusLabel(props.status.type, props.isError)}</span>
-      </summary>
-      <div className="aui-tool-card__activity-content">
-        <p className="aui-tool-card__summary">
-          {completed
-            ? "Subagent returned a response."
-            : summary || "Subagent is working on this request."}
-        </p>
-        <SubagentActivityList activities={activities} />
-        {taskId ? (
-          <small className="aui-tool-card__meta">Task ID: {taskId}</small>
-        ) : null}
-      </div>
-    </details>
+    <ActivityCard
+      title={`Delegated to ${formatAgentName(subagentName)}`}
+      status={statusLabel}
+      variant="subagent"
+      description={taskSummary}
+      result={completed && summary ? summary : undefined}
+      details={taskId ? <small>Task ID: {taskId}</small> : undefined}
+    >
+      <SubagentActivityList
+        activities={activities}
+        emptyText={
+          completed
+            ? "No detailed activity was reported."
+            : "Waiting for subagent activity..."
+        }
+      />
+    </ActivityCard>
   );
 }
 
 function SubagentActivityList({
   activities,
+  emptyText = "No detailed activity was reported.",
 }: {
   activities: SubagentActivityRecord[];
+  emptyText?: string;
 }): ReactElement {
   if (activities.length === 0) {
-    return (
-      <p className="aui-tool-card__empty">
-        Detailed subagent activity will appear here when the runtime reports it.
-      </p>
-    );
+    return <p className="aui-tool-card__empty">{emptyText}</p>;
   }
   return (
     <div className="aui-tool-card__timeline">
       {activities.map((activity) => (
         <div className="aui-tool-card__timeline-item" key={activity.id}>
           <div>
-            <strong>{activityTitle(activity)}</strong>
+            <span className="aui-tool-card__timeline-title">
+              {activityTitle(activity)}
+            </span>
             {activity.summary ? <p>{activity.summary}</p> : null}
             {!activity.summary && activity.inputSummary ? (
               <p>{activity.inputSummary}</p>
@@ -1273,14 +1366,13 @@ function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
       ? data.status
       : toolStatusLabel(props.status.type, props.isError);
   return (
-    <div className="aui-tool-card" data-status={props.status.type}>
-      <div className="aui-tool-card__header">
-        <strong>{String(data.title ?? "Progress")}</strong>
-        <span>{status}</span>
-      </div>
-      {typeof data.summary === "string" ? <p>{data.summary}</p> : null}
-      <ToolDetails argsText={props.argsText} result={props.result} />
-    </div>
+    <ActivityCard
+      title={String(data.title ?? "Progress")}
+      status={status}
+      variant="progress"
+      description={typeof data.summary === "string" ? data.summary : undefined}
+      details={toolDetailsContent(props.argsText, props.result)}
+    />
   );
 }
 
@@ -1303,60 +1395,48 @@ function ApprovalTool({
     addResult({ decision, approval_id: approvalId });
     resume({ decision, approval_id: approvalId });
   };
+  const approvalStatus = resolved ? "resolved" : "waiting";
   return (
-    <div className="aui-tool-card aui-tool-card--approval">
-      <div className="aui-tool-card__header">
-        <strong>
-          {isMcpApproval ? "Run MCP tool?" : "Approval requested"}
-        </strong>
-        <span>{resolved ? "resolved" : "waiting"}</span>
-      </div>
-      <p>{String(args.message ?? args.reason ?? approvalId)}</p>
-      {isMcpApproval ? (
-        <dl className="aui-tool-card__fields">
-          {serverName ? (
-            <div className="aui-tool-card__field">
-              <dt>Server</dt>
-              <dd>{serverName}</dd>
-            </div>
-          ) : null}
-          {toolName ? (
-            <div className="aui-tool-card__field">
-              <dt>Tool</dt>
-              <dd>{toolName}</dd>
-            </div>
-          ) : null}
-          {args.arguments !== undefined ? (
-            <div className="aui-tool-card__field">
-              <dt>Arguments</dt>
-              <dd>{formatDetailValue(args.arguments)}</dd>
-            </div>
-          ) : null}
-        </dl>
-      ) : null}
+    <ActivityCard
+      title={
+        isMcpApproval ? "Connector action needs approval" : "Approval requested"
+      }
+      status={approvalStatus}
+      variant="approval"
+      description={String(args.message ?? args.reason ?? approvalId)}
+      params={
+        isMcpApproval
+          ? mcpActivityParams(serverName, toolName, args.arguments)
+          : []
+      }
+      details={toolDetailsContent(JSON.stringify(args, null, 2), result)}
+    >
       {!resolved ? (
         <div className="aui-tool-card__actions">
-          <button
+          <Button
             type="button"
+            size="sm"
             title={
               isMcpApproval ? "Execute this MCP tool" : "Approve this request"
             }
             onClick={() => submit("approved")}
           >
             {isMcpApproval ? "Execute" : "Approve"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
+            variant="secondary"
             title={
               isMcpApproval ? "Decline this MCP tool" : "Reject this request"
             }
             onClick={() => submit("rejected")}
           >
             {isMcpApproval ? "Decline" : "Reject"}
-          </button>
+          </Button>
         </div>
       ) : null}
-    </div>
+    </ActivityCard>
   );
 }
 
@@ -1400,36 +1480,42 @@ function ConnectorAuthTool({
   }
 
   return (
-    <div className="aui-tool-card aui-tool-card--connector">
-      <div className="aui-tool-card__header">
-        <strong>Connect {displayName}</strong>
-        <span>{resolved ? "resolved" : "action required"}</span>
-      </div>
-      <p>{message}</p>
-      {expiresAt ? (
-        <small>Link expires at {formatDateTime(expiresAt)}.</small>
-      ) : null}
+    <ActivityCard
+      title={`Connect ${displayName}`}
+      status={resolved ? "resolved" : "action required"}
+      variant="connector"
+      description={message}
+      params={
+        expiresAt
+          ? [{ label: "Link expires", value: formatDateTime(expiresAt) }]
+          : []
+      }
+      details={serverId ? <small>Server ID: {serverId}</small> : undefined}
+    >
       {!resolved ? (
         <div className="aui-tool-card__actions">
-          <button
+          <Button
             type="button"
+            size="sm"
             disabled={!serverId || pendingAction !== null}
             title={`Connect ${displayName}`}
             onClick={() => void submit("connect")}
           >
             {pendingAction === "connect" ? "Connecting..." : "Connect"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
+            variant="secondary"
             disabled={!serverId || pendingAction !== null}
             title={`Skip ${displayName} authentication`}
             onClick={() => void submit("skip")}
           >
             {pendingAction === "skip" ? "Skipping..." : "Not now"}
-          </button>
+          </Button>
         </div>
       ) : null}
-    </div>
+    </ActivityCard>
   );
 }
 
@@ -1507,19 +1593,15 @@ function formatList(values: string[]): string {
   return `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
 }
 
-function ToolDetails({
-  argsText,
-  result,
-}: {
-  argsText?: string;
-  result?: unknown;
-}): ReactElement | null {
+function toolDetailsContent(
+  argsText: string | undefined,
+  result: unknown,
+): ReactNode | null {
   if (!shouldShowToolDetails(argsText, result)) {
     return null;
   }
   return (
-    <details className="aui-tool-card__details">
-      <summary>Details</summary>
+    <>
       {argsText ? (
         <>
           <small>Raw input</small>
@@ -1532,7 +1614,7 @@ function ToolDetails({
           <pre>{formatToolValue(result)}</pre>
         </>
       ) : null}
-    </details>
+    </>
   );
 }
 
@@ -1619,18 +1701,56 @@ function summarizeArgs(value: unknown): string | null {
     .join(" · ");
 }
 
-function summarizeToolValue(value: unknown): string {
+function activityParams(
+  argsText: string | undefined,
+  args: Record<string, unknown>,
+): ActivityParam[] {
+  const parsed = argsText ? parseToolArgs(argsText) : null;
+  return visibleToolArgEntries(parsed ?? args)
+    .slice(0, 5)
+    .map(([key, value]) => ({
+      label: formatArgLabel(key),
+      value: formatInlineValue(value),
+      block: false,
+    }));
+}
+
+function mcpActivityParams(
+  serverName: string | null,
+  toolName: string | null,
+  args: unknown,
+): ActivityParam[] {
+  const params: ActivityParam[] = [];
+  if (serverName) {
+    params.push({ label: "Server", value: humanizeIdentifier(serverName) });
+  }
+  if (toolName) {
+    params.push({ label: "Tool", value: humanizeIdentifier(toolName) });
+  }
+  if (args !== undefined) {
+    params.push({
+      label: "Arguments",
+      value: formatDetailValue(args),
+      block: isComplexToolValue(args),
+    });
+  }
+  return params;
+}
+
+function summarizeToolValue(value: unknown, toolName?: string): string {
   const largeResult = largeToolResultFromValue(value);
   if (largeResult) {
     return `Large result saved to ${largeResult.path}`;
   }
   if (Array.isArray(value)) {
-    return value.length === 0 ? "No results" : `${value.length} results`;
+    return value.length === 0
+      ? emptyResultLabel(toolName)
+      : `${value.length} results`;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed === "[]") {
-      return "No results";
+      return emptyResultLabel(toolName);
     }
     return trimmed || "Completed";
   }
@@ -1644,6 +1764,100 @@ function summarizeToolValue(value: unknown): string {
   }
   const keys = Object.keys(record);
   return keys.length > 0 ? `${keys.length} fields returned` : "Completed";
+}
+
+function summarizeMcpResult(value: unknown): ReactNode {
+  const parsed = parseJsonObject(value);
+  const output = asRecord(parsed?.output ?? parsed ?? value);
+  const content = output.content;
+  const text = mcpContentText(content) ?? stringValue(output.text);
+  if (text) {
+    const parsedText = parseJsonObject(text);
+    const overview = stringValue(parsedText?.overview);
+    const results = Array.isArray(parsedText?.results)
+      ? parsedText.results
+      : null;
+    if (overview || results) {
+      return (
+        <div className="aui-mcp-result-preview">
+          {overview ? <p>{overview}</p> : null}
+          {results ? <McpResultList results={results} /> : null}
+        </div>
+      );
+    }
+    return summarizeInlineString(text);
+  }
+  return summarizeToolValue(value);
+}
+
+function McpResultList({ results }: { results: unknown[] }): ReactElement {
+  const rows = results.map(asRecord).slice(0, 3);
+  if (rows.length === 0) {
+    return <p>No results returned.</p>;
+  }
+  return (
+    <ul className="aui-mcp-result-preview__list">
+      {rows.map((row, index) => {
+        const name =
+          stringValue(row.name) ?? stringValue(row.title) ?? "Result";
+        const status = stringValue(row.status);
+        const url = stringValue(row.url);
+        return (
+          <li key={`${name}-${index}`}>
+            <span>{name}</span>
+            {status ? <Badge tone="neutral">{status}</Badge> : null}
+            {url ? (
+              <a href={url} target="_blank" rel="noreferrer">
+                Open
+              </a>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function mcpContentText(content: unknown): string | null {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  for (const item of content) {
+    const record = asRecord(item);
+    const text = stringValue(record.text);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    return asRecord(JSON.parse(value) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function emptyResultLabel(toolName?: string): string {
+  const normalized = toolName?.toLowerCase() ?? "";
+  if (normalized.includes("grep") || normalized.includes("search")) {
+    return "No matches found";
+  }
+  if (normalized.includes("ls") || normalized.includes("list")) {
+    return "No files found";
+  }
+  return "No results";
 }
 
 type SubagentActivityRecord = {
@@ -1696,25 +1910,22 @@ function activityTitle(activity: SubagentActivityRecord): string {
   return activity.title;
 }
 
-function subagentTitle(name: string, taskSummary: string | null): string {
-  if (!taskSummary) {
-    return name;
-  }
-  return `${name}: ${summarizeInlineString(taskSummary)}`;
-}
-
 function LargeToolResultNotice({
   result,
+  compact = false,
 }: {
   result: LargeToolResult;
+  compact?: boolean;
 }): ReactElement {
   return (
     <div className="aui-tool-card__notice">
-      <strong>Large result saved</strong>
-      <p>
-        The connector returned more data than fits in chat. The model can read
-        it in chunks from the saved result file when it needs details.
-      </p>
+      <span className="aui-tool-card__notice-title">Large result saved</span>
+      {compact ? null : (
+        <p>
+          The connector returned more data than fits in chat. The model can read
+          it in chunks from the saved result file when it needs details.
+        </p>
+      )}
       <dl className="aui-tool-card__fields">
         <div className="aui-tool-card__field">
           <dt>Path</dt>
@@ -1847,7 +2058,7 @@ function toolActivityTitle(
   status: string,
   isError: boolean | undefined,
   _result: unknown,
-  summary: string | null,
+  _summary: string | null,
 ): string {
   const displayName = toolDisplayName(toolName);
   if (isError || status === "incomplete") {
@@ -1856,14 +2067,28 @@ function toolActivityTitle(
   if (status === "requires-action") {
     return `${displayName} needs attention`;
   }
-  const prefix =
-    status === "running" ? `Calling ${displayName}` : `Called ${displayName}`;
-  return summary ? `${prefix}: ${summarizeInlineString(summary)}` : prefix;
+  return status === "running" ? `${displayName} running` : displayName;
 }
 
 function toolDisplayName(toolName: string): string {
-  const trimmed = toolName.trim() || "tool";
-  return /\btool$/i.test(trimmed) ? trimmed : `${trimmed} tool`;
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === "ls" || normalized === "list_files") {
+    return "List directory";
+  }
+  if (
+    normalized === "grep" ||
+    normalized === "rg" ||
+    normalized.includes("search")
+  ) {
+    return "Search files";
+  }
+  if (normalized === "read_file") {
+    return "Read file";
+  }
+  if (normalized === "shell") {
+    return "Run command";
+  }
+  return humanizeIdentifier(toolName || "tool");
 }
 
 function mcpToolTitle(toolName: string, requestedTool: string | null): string {
@@ -1873,7 +2098,7 @@ function mcpToolTitle(toolName: string, requestedTool: string | null): string {
   if (toolName === "auth_mcp") {
     return "Authenticate MCP server";
   }
-  return requestedTool ? `Call ${requestedTool}` : "Call MCP tool";
+  return requestedTool ? humanizeIdentifier(requestedTool) : "Call MCP tool";
 }
 
 function mcpToolSummary(
@@ -1910,4 +2135,43 @@ function toolStatusLabel(status: string, isError?: boolean): string {
     return "running";
   }
   return "complete";
+}
+
+function badgeToneForStatus(
+  status: string,
+): "neutral" | "success" | "warning" | "danger" | "accent" {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === "complete" ||
+    normalized === "completed" ||
+    normalized === "resolved"
+  ) {
+    return "success";
+  }
+  if (
+    normalized === "waiting" ||
+    normalized === "running" ||
+    normalized === "action required"
+  ) {
+    return "warning";
+  }
+  if (normalized === "error" || normalized === "failed") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+function humanizeIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Tool";
+  }
+  return trimmed
+    .replace(/^mcp[_-]/i, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatAgentName(value: string): string {
+  return humanizeIdentifier(value);
 }

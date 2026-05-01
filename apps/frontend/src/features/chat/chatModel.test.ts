@@ -168,6 +168,30 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
+  it("preserves fenced code formatting in final assistant text", () => {
+    const code = [
+      "```python",
+      "def is_prime(n: int) -> bool:",
+      "    if n <= 1:",
+      "        return False",
+      "    return True",
+      "```",
+    ].join("\n");
+
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "code_final_1",
+        event_type: "final_response",
+        activity_kind: "message",
+        status: "completed",
+        payload: { message: code },
+      }),
+    );
+
+    expect(textPart(items)).toBe(code);
+  });
+
   it("emits ordered reasoning, subagent, and tool parts", () => {
     let items: ChatItem[] = [];
 
@@ -576,6 +600,56 @@ describe("applyRuntimeEvent", () => {
     expect(firstThreadMessage(items).status).toEqual({
       type: "running",
     });
+  });
+
+  it("preserves structured MCP output for result previews", () => {
+    let items: ChatItem[] = [];
+    const output = {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            overview: "Found 1 result. Types include: task.",
+            results: [{ name: "Follow up", status: "to do" }],
+          }),
+        },
+      ],
+    };
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_mcp_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_123",
+          args: {
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_search",
+            arguments: { query: "pending tasks" },
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_result_1",
+        event_type: "tool_result",
+        activity_kind: "tool",
+        span_id: "call_mcp_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_123",
+          output,
+        },
+      }),
+    );
+
+    expect(toolPart(items, "call_mcp_tool")?.result).toEqual(output);
   });
 
   it("ignores heartbeat, internal, and unsupported message envelopes", () => {
