@@ -246,7 +246,17 @@ describe("applyRuntimeEvent", () => {
       assistantMessage(items).content.map((part) =>
         part.type === "tool-call" ? part.toolName : part.type,
       ),
-    ).toEqual(["reasoning", "run_subagent", "doc_search"]);
+    ).toEqual(["reasoning", "run_subagent"]);
+    expect(toolPart(items, "run_subagent")?.args).toMatchObject({
+      activities: [
+        {
+          id: "call_123",
+          kind: "tool",
+          title: "doc_search",
+          status: "running",
+        },
+      ],
+    });
     expect(
       assistantMessage(items).content.some(
         (part) => part.type === "tool-call" && part.toolName === "write_todos",

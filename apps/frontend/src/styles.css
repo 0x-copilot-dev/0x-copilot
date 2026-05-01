@@ -661,6 +661,38 @@ p {
   z-index: 80;
 }
 
+.aui-icon-button[data-tooltip-placement="bottom"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"]::after,
+.aui-send-button[data-tooltip-placement="bottom"]::after {
+  bottom: auto;
+  top: calc(100% + 0.375rem);
+  transform: translateX(-50%) translateY(-0.125rem);
+}
+
+.aui-icon-button[data-tooltip-align="start"]::after,
+.aui-footer-icon-button[data-tooltip-align="start"]::after,
+.aui-send-button[data-tooltip-align="start"]::after {
+  left: 0;
+  transform: translateY(0.125rem);
+}
+
+.aui-icon-button[data-tooltip-align="end"]::after,
+.aui-footer-icon-button[data-tooltip-align="end"]::after,
+.aui-send-button[data-tooltip-align="end"]::after {
+  left: auto;
+  right: 0;
+  transform: translateY(0.125rem);
+}
+
+.aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after,
+.aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after {
+  transform: translateY(-0.125rem);
+}
+
 .aui-icon-button[data-tooltip]:hover::after,
 .aui-icon-button[data-tooltip]:focus-visible::after,
 .aui-footer-icon-button[data-tooltip]:hover::after,
@@ -670,6 +702,21 @@ p {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
   visibility: visible;
+}
+
+.aui-icon-button[data-tooltip-align="start"]:hover::after,
+.aui-icon-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip-align="start"]:hover::after,
+.aui-footer-icon-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-send-button[data-tooltip-align="start"]:hover::after,
+.aui-send-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-icon-button[data-tooltip-align="end"]:hover::after,
+.aui-icon-button[data-tooltip-align="end"]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip-align="end"]:hover::after,
+.aui-footer-icon-button[data-tooltip-align="end"]:focus-visible::after,
+.aui-send-button[data-tooltip-align="end"]:hover::after,
+.aui-send-button[data-tooltip-align="end"]:focus-visible::after {
+  transform: translateY(0);
 }
 
 .aui-footer-icon-button__icon {
@@ -1147,6 +1194,10 @@ p {
   padding: 0;
 }
 
+.aui-tool-card--mcp {
+  border-color: var(--color-border-strong);
+}
+
 .aui-tool-card__header span {
   color: var(--color-text-subtle);
   font-size: 0.78rem;
@@ -1175,11 +1226,41 @@ p {
   color: var(--color-text);
 }
 
+.aui-tool-card__meta {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+}
+
+.aui-tool-card__notice {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+}
+
+.aui-tool-card__notice p {
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
 .aui-tool-card__details summary {
   color: var(--color-text-subtle);
   cursor: pointer;
   font-size: 0.82rem;
   width: max-content;
+}
+
+.aui-tool-card__details {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.aui-tool-card__details small {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .aui-tool-card__activity-summary {
@@ -1207,6 +1288,49 @@ p {
   color: var(--color-text-subtle);
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.aui-tool-card__empty {
+  color: var(--color-text-subtle);
+  margin: 0;
+}
+
+.aui-tool-card__timeline {
+  border-left: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-sm);
+  margin-left: var(--space-xs);
+  padding-left: var(--space-md);
+}
+
+.aui-tool-card__timeline-item {
+  align-items: start;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: 1fr auto;
+  position: relative;
+}
+
+.aui-tool-card__timeline-item::before {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+  content: "";
+  height: 0.45rem;
+  left: calc(-1 * var(--space-md) - 0.25rem);
+  position: absolute;
+  top: 0.4rem;
+  width: 0.45rem;
+}
+
+.aui-tool-card__timeline-item p {
+  color: var(--color-text-muted);
+  margin: var(--space-2xs) 0 0;
+}
+
+.aui-tool-card__timeline-item span {
+  color: var(--color-text-subtle);
+  font-size: 0.72rem;
+  text-transform: uppercase;
 }
 
 .aui-tool-card__fields {

@@ -209,6 +209,18 @@ export function applyRuntimeEvent(
       reason: "interrupt",
     });
   }
+  if (event.parent_task_id && event.activity_kind === "tool") {
+    const withNestedActivity = upsertSubagentActivity(items, event);
+    if (withNestedActivity !== items) {
+      return withNestedActivity;
+    }
+  }
+  if (event.parent_task_id && event.activity_kind === "reasoning") {
+    const withNestedActivity = upsertSubagentActivity(items, event);
+    if (withNestedActivity !== items) {
+      return withNestedActivity;
+    }
+  }
   if (
     event.event_type === "model_delta" &&
     isRuntimeTextPayload(event.payload)
@@ -612,6 +624,41 @@ function upsertSubagentPart(
   });
 }
 
+function upsertSubagentActivity(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
+  const parentTaskId = event.parent_task_id;
+  if (!parentTaskId) {
+    return items;
+  }
+  let foundParent = false;
+  const updated = updateAssistantContent(items, event, (content) =>
+    content.map((part) => {
+      if (
+        !isToolCallPart(part) ||
+        part.toolName !== "run_subagent" ||
+        part.toolCallId !== parentTaskId
+      ) {
+        return part;
+      }
+      foundParent = true;
+      const args = asRecord(part.args);
+      return {
+        ...part,
+        args: jsonArgs({
+          ...args,
+          activities: upsertActivityRecord(
+            recordArray(args.activities),
+            subagentActivityRecord(event),
+          ),
+        }),
+      };
+    }),
+  );
+  return foundParent ? updated : items;
+}
+
 function appendTextDelta(
   content: ThreadMessageContent,
   delta: string,
@@ -727,6 +774,10 @@ function subagentPart(
     payloadString(event.payload, "summary") ??
     payloadString(event.payload, "message") ??
     stringValue(existingArgs.summary);
+  const existingTaskSummary = stringValue(existingArgs.task_summary);
+  const taskSummary =
+    existingTaskSummary ??
+    (event.event_type === "subagent_completed" ? null : summary);
   if (!existing && event.event_type === "subagent_progress" && !summary) {
     return null;
   }
@@ -737,6 +788,7 @@ function subagentPart(
     task_id: key,
     status,
     summary: summary ?? null,
+    task_summary: taskSummary ?? null,
   };
   return {
     type: "tool-call",
@@ -747,6 +799,56 @@ function subagentPart(
     result: status === "completed" ? summary : existing?.result,
     isError: status === "failed",
   };
+}
+
+function subagentActivityRecord(
+  event: RuntimeEventEnvelope,
+): Record<string, unknown> {
+  if (event.activity_kind === "tool") {
+    const callId = toolCallId(event.payload) ?? event.span_id ?? event.event_id;
+    const part = toolPart(event, callId, undefined);
+    const args = asRecord(part.args);
+    return {
+      id: callId,
+      kind: "tool",
+      title: toolName(event.payload) ?? part.toolName,
+      status: stringValue(args.status) ?? statusFromEvent(event),
+      summary:
+        event.summary ??
+        payloadString(event.payload, "summary") ??
+        stringValue(args.summary),
+      input_summary: summarizeRecord(toolArgs(event.payload)),
+      result: part.result,
+      is_error: part.isError ?? false,
+    };
+  }
+  return {
+    id: event.event_id,
+    kind: "reasoning",
+    title: event.display_title ?? "Reasoning",
+    status: statusFromEvent(event),
+    summary: reasoningText(event),
+    is_error: false,
+  };
+}
+
+function upsertActivityRecord(
+  activities: Record<string, unknown>[],
+  next: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const nextId = stringValue(next.id);
+  if (!nextId) {
+    return [...activities, next];
+  }
+  const index = activities.findIndex((activity) => activity.id === nextId);
+  if (index === -1) {
+    return [...activities, next];
+  }
+  return activities.map((activity, currentIndex) =>
+    currentIndex === index
+      ? { ...activity, ...withoutNullishValues(next) }
+      : activity,
+  );
 }
 
 function progressPart(event: RuntimeEventEnvelope): ThreadToolCallPart {
@@ -1049,6 +1151,55 @@ function jsonArgs(value: Record<string, unknown>): ThreadToolCallArgs {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return isPlainRecord(value) ? value : {};
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isPlainRecord) : [];
+}
+
+function withoutNullishValues(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([, entry]) => entry !== null && entry !== undefined,
+    ),
+  );
+}
+
+function summarizeRecord(value: Record<string, unknown>): string | null {
+  const entries = Object.entries(value).filter(
+    ([, entry]) => entry !== null && entry !== undefined,
+  );
+  if (entries.length === 0) {
+    return null;
+  }
+  return entries
+    .slice(0, 3)
+    .map(
+      ([key, entry]) => `${key.replaceAll("_", " ")}: ${inlineSummary(entry)}`,
+    )
+    .join(" · ");
+}
+
+function inlineSummary(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "[]" : `${value.length} items`;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "empty";
+    }
+    return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value && typeof value === "object") {
+    return "{...}";
+  }
+  return String(value);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
