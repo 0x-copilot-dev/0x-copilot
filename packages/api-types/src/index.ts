@@ -64,12 +64,16 @@ export interface McpAuthStartResponse {
 }
 
 export interface McpAuthRequiredEventPayload {
+  approval_id?: string;
+  action_id?: string;
+  approval_kind?: "mcp_auth" | string;
   server_id: string;
   server_name: string;
   display_name: string;
   auth_url: string;
   expires_at: string;
   message: string;
+  source_tool_call_id?: string;
 }
 
 export type ConversationStatus = "active" | "archived";

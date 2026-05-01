@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -30,6 +30,7 @@ _WEB_HARNESS_PROFILE_KEYS = (
     "openai",
 )
 _web_harness_profiles_registered = False
+_runtime_checkpointer: object | None = None
 
 
 def _ensure_web_harness_profiles_registered() -> None:
@@ -78,6 +79,8 @@ class DeepAgentBuildRequest:
     memory_backend: DeepAgentsBackend | None = None
     memory_paths: tuple[str, ...] = ()
     skill_directories: tuple[str, ...] = ()
+    interrupt_on: Mapping[str, object] | None = None
+    checkpointer: object | None = None
 
     @property
     def model_name(self) -> str:
@@ -89,15 +92,34 @@ class DeepAgentBuildRequest:
 def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     """Build a Deep Agents graph with an explicit, version-pinned API call."""
 
-    return create_deep_agent(
-        model=build_chat_model(request.model_config),
-        tools=list(request.tools),
-        system_prompt=request.system_prompt,
-        subagents=list(request.subagents) or None,
-        skills=list(request.skill_directories) or None,
-        memory=list(request.memory_paths) or None,
-        backend=request.memory_backend,
-    )
+    kwargs: dict[str, object] = {
+        "model": build_chat_model(request.model_config),
+        "tools": list(request.tools),
+        "system_prompt": request.system_prompt,
+        "subagents": list(request.subagents) or None,
+        "skills": list(request.skill_directories) or None,
+        "memory": list(request.memory_paths) or None,
+        "backend": request.memory_backend,
+    }
+    if request.interrupt_on:
+        kwargs["interrupt_on"] = dict(request.interrupt_on)
+    if request.checkpointer is not None:
+        kwargs["checkpointer"] = request.checkpointer
+    return create_deep_agent(**kwargs)
+
+
+def runtime_checkpointer() -> object:
+    """Return the shared LangGraph checkpointer used for resumable HITL runs."""
+
+    global _runtime_checkpointer
+    if _runtime_checkpointer is None:
+        try:
+            from langgraph.checkpoint.memory import InMemorySaver
+        except ImportError:
+            from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
+
+        _runtime_checkpointer = InMemorySaver()
+    return _runtime_checkpointer
 
 
 def build_chat_model(model_config: ModelConfig) -> BaseChatModel:

@@ -54,6 +54,7 @@ import {
   type ChatItem,
   type ChatThreadMessage,
 } from "./chatModel";
+import { rememberPendingMcpAuthAction } from "./mcpAuthAction";
 import {
   AssistantThread,
   AssistantThreadList,
@@ -457,9 +458,18 @@ export function ChatScreen({
   }
 
   const onMcpAuthConnect = useCallback(
-    async (serverId: string): Promise<void> => {
+    async ({
+      approvalId,
+      authUrl,
+      serverId,
+    }: {
+      approvalId: string;
+      authUrl: string;
+      serverId: string;
+    }): Promise<void> => {
       try {
-        await connectors.authenticate(serverId);
+        rememberPendingMcpAuthAction({ approvalId, serverId });
+        window.location.href = authUrl;
       } catch (err) {
         setItems((current) => [
           ...current,
@@ -472,14 +482,18 @@ export function ChatScreen({
         ]);
       }
     },
-    [connectors],
+    [],
   );
 
   const onMcpAuthSkip = useCallback(
-    async (serverId: string): Promise<void> => {
+    async ({
+      serverId,
+    }: {
+      approvalId: string;
+      serverId: string;
+    }): Promise<void> => {
       try {
         await connectors.skipAuth(serverId);
-        setItems((current) => resolveMcpAuthSkip(current, serverId));
         setShowConnectorSuggestions(false);
       } catch (err) {
         setItems((current) => [
@@ -495,6 +509,28 @@ export function ChatScreen({
     },
     [connectors],
   );
+
+  async function onMcpAuthDecision(
+    approvalId: string,
+    decision: ApprovalDecision,
+  ): Promise<void> {
+    try {
+      await decideApproval(approvalId, decision, identity, "mcp_auth_resolved");
+      if (decision === "rejected") {
+        setItems((current) => resolveMcpAuthSkip(current, approvalId));
+      }
+    } catch (err) {
+      setItems((current) => [
+        ...current,
+        {
+          id: `mcp-auth-decision-error-${Date.now()}`,
+          kind: "status",
+          title: "Connector auth resolution failed",
+          text: errorMessage(err, "Could not resolve connector auth"),
+        },
+      ]);
+    }
+  }
 
   const threadMessages = useMemo<ChatThreadMessage[]>(
     () => chatItemsToThreadMessages(items, activeRunId),
@@ -602,9 +638,13 @@ export function ChatScreen({
       setStatus("Queued...");
       startEventStream(run.run_id, latestSequenceRef.current);
     },
-    onResumeToolCall: ({ toolCallId, payload }) => {
+    onResumeToolCall: ({ payload }) => {
+      if (isMcpAuthResumePayload(payload)) {
+        void onMcpAuthDecision(payload.approval_id, payload.decision);
+        return;
+      }
       if (isApprovalResumePayload(payload)) {
-        void onApprovalDecision(toolCallId, payload.decision);
+        void onApprovalDecision(payload.approval_id, payload.decision);
       }
     },
     onCancel,
@@ -655,8 +695,10 @@ export function ChatScreen({
               showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
                   servers={suggestedServers}
-                  onConnect={(serverId) => void onMcpAuthConnect(serverId)}
-                  onSkip={(serverId) => void onMcpAuthSkip(serverId)}
+                  onConnect={(serverId) =>
+                    void connectors.authenticate(serverId)
+                  }
+                  onSkip={(serverId) => void connectors.skipAuth(serverId)}
                   onNone={() => setShowConnectorSuggestions(false)}
                 />
               ) : null
@@ -971,7 +1013,25 @@ function isApprovalResumePayload(
     return false;
   }
   const record = payload as Record<string, unknown>;
-  return record.decision === "approved" || record.decision === "rejected";
+  return (
+    typeof record.approval_id === "string" &&
+    record.approval_kind !== "mcp_auth" &&
+    (record.decision === "approved" || record.decision === "rejected")
+  );
+}
+
+function isMcpAuthResumePayload(
+  payload: unknown,
+): payload is { decision: ApprovalDecision; approval_id: string } {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const record = payload as Record<string, unknown>;
+  return (
+    typeof record.approval_id === "string" &&
+    record.approval_kind === "mcp_auth" &&
+    (record.decision === "approved" || record.decision === "rejected")
+  );
 }
 
 function titleFromPrompt(prompt: string): string {

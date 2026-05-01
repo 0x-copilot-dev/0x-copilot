@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.schemas import (
     ApprovalRequestRecord,
@@ -49,19 +52,44 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             else None
         )
 
+        native_payloads = self.native_interrupt_payloads(run, data)
+        for payload in native_payloads:
+            event_type = self.api_event_type(payload)
+            if event_type is None:
+                continue
+            self.create_approval_request(run=run, payload=payload)
+            self.event_producer.append_api_event(
+                run=run,
+                source=self.source_for_event(event_type, namespace),
+                event_type=event_type,
+                payload=payload,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
+        if native_payloads:
+            return
+
         for payload in self.explicit_api_payloads(data):
             event_type = self.api_event_type(payload)
             if event_type is None:
                 continue
             if (
-                event_type is RuntimeApiEventType.APPROVAL_REQUESTED
+                event_type
+                in {
+                    RuntimeApiEventType.APPROVAL_REQUESTED,
+                    RuntimeApiEventType.MCP_AUTH_REQUIRED,
+                }
                 and source_tool_call_id is not None
             ):
                 payload = {
                     **payload,
                     Keys.Field.SOURCE_TOOL_CALL_ID: source_tool_call_id,
                 }
-            if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
+            if event_type in {
+                RuntimeApiEventType.APPROVAL_REQUESTED,
+                RuntimeApiEventType.MCP_AUTH_REQUIRED,
+            }:
+                payload = self.payload_with_action_id(event_type, payload)
                 self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
                 run=run,
@@ -214,7 +242,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         run: RunRecord,
         payload: dict[str, object],
     ) -> None:
-        approval_id = self.text(payload.get("approval_id"))
+        approval_id = self.text(payload.get(Keys.Field.APPROVAL_ID))
         if approval_id is None:
             return
         if (
@@ -235,6 +263,178 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                 metadata=payload,
             )
         )
+
+    @classmethod
+    def payload_with_action_id(
+        cls,
+        event_type: RuntimeApiEventType,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        approval_id = cls.text(payload.get(Keys.Field.APPROVAL_ID)) or cls.text(
+            payload.get("action_id")
+        )
+        if approval_id is None:
+            return payload
+        normalized = {
+            **payload,
+            Keys.Field.APPROVAL_ID: approval_id,
+            "action_id": cls.text(payload.get("action_id")) or approval_id,
+        }
+        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
+        return normalized
+
+    @classmethod
+    def native_interrupt_payloads(
+        cls,
+        run: RunRecord,
+        value: object,
+    ) -> tuple[dict[str, object], ...]:
+        payloads: list[dict[str, object]] = []
+        for interrupt_index, interrupt in enumerate(cls.native_interrupts(value)):
+            interrupt_id = cls.native_interrupt_id(
+                interrupt,
+                fallback=f"interrupt:{run.run_id}:{interrupt_index}",
+            )
+            interrupt_value = cls.native_interrupt_value(interrupt)
+            auth_payload = cls.native_auth_payload(interrupt_id, interrupt_value)
+            if auth_payload is not None:
+                payloads.append(auth_payload)
+                continue
+            payloads.extend(
+                cls.native_tool_approval_payloads(
+                    interrupt_id=interrupt_id,
+                    interrupt_value=interrupt_value,
+                )
+            )
+        return tuple(payloads)
+
+    @classmethod
+    def native_interrupts(cls, value: object) -> tuple[object, ...]:
+        raw = value.get("__interrupt__") if isinstance(value, Mapping) else None
+        if raw is None:
+            raw = cls.payload_mapping(value).get("__interrupt__")
+        if raw is None:
+            return ()
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+            return tuple(raw)
+        return (raw,)
+
+    @classmethod
+    def native_interrupt_value(cls, interrupt: object) -> object:
+        if isinstance(interrupt, Mapping):
+            return interrupt.get("value") or interrupt
+        return getattr(interrupt, "value", interrupt)
+
+    @classmethod
+    def native_interrupt_id(cls, interrupt: object, *, fallback: str) -> str:
+        if isinstance(interrupt, Mapping):
+            value = interrupt.get("id") or interrupt.get("interrupt_id")
+        else:
+            value = getattr(interrupt, "id", None)
+        return cls.text(value) or fallback
+
+    @classmethod
+    def native_auth_payload(
+        cls,
+        interrupt_id: str,
+        interrupt_value: object,
+    ) -> dict[str, object] | None:
+        payload = cls.payload_mapping(interrupt_value)
+        if cls.api_event_type(payload) is not RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return None
+        normalized = cls.payload_with_action_id(
+            RuntimeApiEventType.MCP_AUTH_REQUIRED,
+            {
+                **payload,
+                "native_interrupt_id": interrupt_id,
+                "action_id": cls.text(payload.get("action_id")) or interrupt_id,
+            },
+        )
+        normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
+        normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
+        return normalized
+
+    @classmethod
+    def native_tool_approval_payloads(
+        cls,
+        *,
+        interrupt_id: str,
+        interrupt_value: object,
+    ) -> tuple[dict[str, object], ...]:
+        payload = (
+            interrupt_value
+            if isinstance(interrupt_value, Mapping)
+            else cls.payload_mapping(interrupt_value)
+        )
+        action_requests = payload.get("action_requests")
+        if not isinstance(action_requests, Sequence) or isinstance(
+            action_requests, (str, bytes, bytearray)
+        ):
+            return ()
+        review_configs = cls.review_configs_by_action(payload.get("review_configs"))
+        approvals: list[dict[str, object]] = []
+        for index, raw_action in enumerate(action_requests):
+            if not isinstance(raw_action, Mapping):
+                continue
+            action = raw_action
+            action_name = cls.text(action.get("name"))
+            if action_name != McpValues.ToolName.CALL_MCP_TOOL:
+                continue
+            args = action.get("args")
+            if not isinstance(args, Mapping):
+                args = {}
+            server_name = cls.text(args.get("server_name")) or "MCP server"
+            tool_name = cls.text(args.get("tool_name")) or "MCP tool"
+            arguments = args.get("arguments")
+            approval_id = (
+                interrupt_id if len(action_requests) == 1 else f"{interrupt_id}:{index}"
+            )
+            allowed_decisions = review_configs.get(action_name, ())
+            approvals.append(
+                {
+                    "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+                    "event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+                    Keys.Field.APPROVAL_ID: approval_id,
+                    "action_id": approval_id,
+                    Keys.Field.APPROVAL_KIND: "mcp_tool",
+                    "native_interrupt_id": interrupt_id,
+                    "action_index": index,
+                    "action_count": len(action_requests),
+                    "server_name": server_name,
+                    "display_name": server_name,
+                    "tool_name": tool_name,
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                    "message": f"Approve {server_name} to run {tool_name}.",
+                    "status": "pending",
+                    "allowed_decisions": list(allowed_decisions),
+                    "grant_options": ["allow_once"],
+                }
+            )
+        return tuple(approvals)
+
+    @classmethod
+    def review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return {}
+        result: dict[str, tuple[str, ...]] = {}
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            action_name = cls.text(item.get("action_name"))
+            if action_name is None:
+                continue
+            allowed = item.get("allowed_decisions")
+            if isinstance(allowed, Sequence) and not isinstance(
+                allowed,
+                (str, bytes, bytearray),
+            ):
+                result[action_name] = tuple(
+                    decision for decision in allowed if isinstance(decision, str)
+                )
+        return result
 
     @classmethod
     def stream_result_candidate(cls, chunk: object) -> object | None:

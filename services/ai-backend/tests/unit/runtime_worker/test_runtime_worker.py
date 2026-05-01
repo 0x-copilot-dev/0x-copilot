@@ -17,6 +17,8 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
+    ApprovalDecisionRequest,
+    ApprovalRequestRecord,
     CreateConversationRequest,
     CreateRunRequest,
     MessageRecord,
@@ -819,6 +821,9 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
             "ns": (),
             "data": {
                 "api_event_type": "mcp_auth_required",
+                "approval_id": "mcp_auth_run_123_server_123",
+                "action_id": "mcp_auth_run_123_server_123",
+                "approval_kind": "mcp_auth",
                 "server_id": "server_123",
                 "server_name": "drive_mcp",
                 "display_name": "Drive MCP",
@@ -866,7 +871,81 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
     assert (
         auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
     )
+    assert auth_events[0].payload["approval_id"] == "mcp_auth_run_123_server_123"
+    approval = store.get_approval_request(
+        org_id="org_123",
+        approval_id="mcp_auth_run_123_server_123",
+    )
+    assert approval is not None
+    assert approval.metadata["approval_kind"] == "mcp_auth"
+    assert approval.metadata["server_id"] == "server_123"
     assert final_events == []
+
+
+def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+    run = store.update_run_status(
+        run_id=run_id,
+        status=AgentRunStatus.WAITING_FOR_APPROVAL,
+    )
+    approval_id = "mcp_auth_run_123_server_123"
+    store.create_approval_request(
+        record=ApprovalRequestRecord(
+            approval_id=approval_id,
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            metadata={
+                "approval_id": approval_id,
+                "approval_kind": "mcp_auth",
+                "server_id": "server_123",
+                "server_name": "drive_mcp",
+                "display_name": "Drive MCP",
+            },
+        )
+    )
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    service.record_approval_decision(
+        org_id=run.org_id,
+        approval_id=approval_id,
+        request=ApprovalDecisionRequest(
+            decision="approved",
+            decided_by_user_id=run.user_id,
+        ),
+    )
+
+    class NoopRunHandler:
+        async def handle(self, _command: RuntimeRunCommand) -> None:
+            return None
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=NoopRunHandler(),  # type: ignore[arg-type]
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 2
+    assert store.runs[run_id].status == AgentRunStatus.COMPLETED
+    assistant_messages = [
+        message for message in store.messages.values() if message.role == "assistant"
+    ]
+    assert assistant_messages[-1].content_text == "Drive MCP is connected."
+    event_types = [event.event_type for event in store.events_by_run[run_id]]
+    assert event_types.count("approval_resolved") == 1
+    assert event_types.count("final_response") == 1
+    assert event_types.count("run_completed") == 1
 
 
 def test_runtime_worker_persists_normalized_activity_stream_events() -> None:

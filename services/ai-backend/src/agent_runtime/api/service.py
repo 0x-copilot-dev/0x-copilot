@@ -465,7 +465,10 @@ class RuntimeApiService:
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
             payload={
                 Keys.Field.APPROVAL_ID: record.approval_id,
-                Keys.Field.STATUS: record.status,
+                Keys.Field.APPROVAL_KIND: approval.metadata.get(
+                    Keys.Field.APPROVAL_KIND
+                ),
+                Keys.Field.STATUS: record.status.value,
                 Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
             },
         )

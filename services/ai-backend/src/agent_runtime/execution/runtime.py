@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator, Sequence
 from time import perf_counter
 from typing import Any
 
+from langgraph.types import Command
+
 from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeRunHandle
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
@@ -260,6 +262,85 @@ async def ainvoke_runtime(
 
 
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+async def ainvoke_runtime_resume(
+    harness: RuntimeHarness,
+    resume: object,
+    *,
+    logger: RuntimeLogger | None = None,
+) -> Any:
+    """Resume a checkpointed runtime graph with a LangGraph HITL decision."""
+
+    runtime_logger = logger or RuntimeLogger()
+    started_at = perf_counter()
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.resume.started",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="started",
+    )
+
+    if not callable(getattr(harness.agent, "ainvoke", None)):
+        error = AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            "Runtime agent does not provide ainvoke().",
+            retryable=False,
+            correlation_id=harness.context.trace_id,
+        )
+        runtime_logger.event(
+            context=harness.context,
+            event="runtime.resume.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(started_at),
+            error_code=error.code,
+            retryable=error.retryable,
+            safe_message=error.safe_message,
+        )
+        raise error
+
+    try:
+        result = await harness.agent.ainvoke(
+            Command(resume=resume),
+            config=runtime_config(harness),
+        )
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        runtime_logger.event(
+            context=harness.context,
+            event="runtime.resume.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(started_at),
+            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            retryable=True,
+            safe_message="Runtime resume failed safely.",
+            metadata={"exception_type": type(exc).__name__},
+        )
+        raise AgentRuntimeError(
+            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            "Runtime resume failed safely.",
+            retryable=True,
+            correlation_id=harness.context.trace_id,
+        ) from exc
+
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.resume.succeeded",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="succeeded",
+        duration_ms=_elapsed_ms(started_at),
+    )
+    return result
+
+
+@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def astream_runtime(
     harness: RuntimeHarness,
     messages: Sequence[object],
@@ -328,6 +409,69 @@ async def astream_runtime(
     runtime_logger.event(
         context=harness.context,
         event="runtime.stream.succeeded",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="succeeded",
+        duration_ms=_elapsed_ms(started_at),
+    )
+
+
+@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+async def astream_runtime_resume(
+    harness: RuntimeHarness,
+    resume: object,
+    *,
+    logger: RuntimeLogger | None = None,
+) -> AsyncIterator[object]:
+    """Stream a checkpointed runtime graph after a LangGraph HITL decision."""
+
+    runtime_logger = logger or RuntimeLogger()
+    started_at = perf_counter()
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.resume_stream.started",
+        subsystem="runtime",
+        operation=TraceNames.RUNTIME_INVOKE,
+        status="started",
+    )
+
+    if not callable(getattr(harness.agent, "astream", None)):
+        yield await ainvoke_runtime_resume(harness, resume, logger=runtime_logger)
+        return
+
+    try:
+        async for chunk in harness.agent.astream(
+            Command(resume=resume),
+            config=runtime_config(harness),
+            **RuntimeStreamOptions.rich(),
+        ):
+            yield chunk
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        runtime_logger.event(
+            context=harness.context,
+            event="runtime.resume_stream.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(started_at),
+            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            retryable=True,
+            safe_message="Runtime resume streaming failed safely.",
+            metadata={"exception_type": type(exc).__name__},
+        )
+        raise AgentRuntimeError(
+            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            "Runtime resume streaming failed safely.",
+            retryable=True,
+            correlation_id=harness.context.trace_id,
+        ) from exc
+
+    runtime_logger.event(
+        context=harness.context,
+        event="runtime.resume_stream.succeeded",
         subsystem="runtime",
         operation=TraceNames.RUNTIME_INVOKE,
         status="succeeded",

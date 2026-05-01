@@ -1,4 +1,5 @@
 import type {
+  ApprovalDecision,
   AssistantPerformanceMetrics,
   Message,
   RuntimeEventEnvelope,
@@ -218,10 +219,7 @@ export function applyRuntimeEvent(
     event.activity_kind === "mcp_auth" &&
     isMcpAuthRequiredPayload(event.payload)
   ) {
-    return upsertAssistantPart(items, event, mcpAuthPart(event.payload), {
-      type: "requires-action",
-      reason: "interrupt",
-    });
+    return upsertMcpAuthPart(items, event, event.payload);
   }
   if (
     event.event_type === "approval_requested" &&
@@ -229,7 +227,10 @@ export function applyRuntimeEvent(
   ) {
     return upsertApprovalPart(items, event, event.payload);
   }
-  if (hasPendingApprovalForRun(items, event)) {
+  if (event.event_type === "approval_resolved") {
+    return resolveActionFromPayload(items, event.payload);
+  }
+  if (hasPendingActionForRun(items, event)) {
     return items;
   }
   if (event.parent_task_id && event.activity_kind === "tool") {
@@ -313,7 +314,7 @@ export function applyRuntimeEvent(
   return items;
 }
 
-function hasPendingApprovalForRun(
+function hasPendingActionForRun(
   items: ChatItem[],
   event: RuntimeEventEnvelope,
 ): boolean {
@@ -322,7 +323,7 @@ function hasPendingApprovalForRun(
     (item): item is Extract<ChatItem, { kind: "message" }> =>
       item.kind === "message" && item.id === id,
   );
-  return assistant ? hasPendingApproval(assistant.content) : false;
+  return assistant ? hasPendingAction(assistant.content) : false;
 }
 
 function messageToChatItem(message: Message): ChatItem {
@@ -515,7 +516,7 @@ function timingFromPerformanceMetrics(
 export function resolveApprovalDecision(
   items: ChatItem[],
   approvalId: string,
-  decision: "approved" | "rejected",
+  decision: ApprovalDecision,
 ): ChatItem[] {
   return items.map((item) => {
     if (item.kind !== "message") {
@@ -548,7 +549,16 @@ export function resolveApprovalDecision(
 
 export function resolveMcpAuthSkip(
   items: ChatItem[],
-  serverId: string,
+  actionId: string,
+): ChatItem[] {
+  return resolveMcpAuthDecision(items, actionId, "rejected", "skipped");
+}
+
+function resolveMcpAuthDecision(
+  items: ChatItem[],
+  actionId: string,
+  decision: ApprovalDecision,
+  resultDecision: ApprovalDecision | "skipped" = decision,
 ): ChatItem[] {
   return items.map((item) => {
     if (item.kind !== "message") {
@@ -558,20 +568,27 @@ export function resolveMcpAuthSkip(
     const content = item.content.map((part) => {
       if (
         !isToolCallPart(part) ||
-        part.toolCallId !== serverId ||
+        part.toolCallId !== actionId ||
         part.toolName !== "mcp_auth_required"
       ) {
         return part;
       }
+      const args = asRecord(part.args);
+      const serverId = stringValue(args.server_id);
       changed = true;
       return {
         ...part,
         args: jsonArgs({
-          ...asRecord(part.args),
+          ...args,
+          approval_id: actionId,
           server_id: serverId,
-          status: "skipped",
+          status: resultDecision,
         }),
-        result: { server_id: serverId, decision: "skipped" },
+        result: {
+          approval_id: actionId,
+          server_id: serverId,
+          decision: resultDecision,
+        },
       };
     });
     if (!changed) {
@@ -583,6 +600,31 @@ export function resolveMcpAuthSkip(
         : item.status;
     return { ...item, content, status };
   });
+}
+
+function resolveActionFromPayload(
+  items: ChatItem[],
+  payload: Record<string, unknown>,
+): ChatItem[] {
+  const approvalId = stringValue(payload.approval_id);
+  const status = stringValue(payload.status);
+  if (approvalId === null || (status !== "approved" && status !== "rejected")) {
+    return items;
+  }
+  const hasMcpAuthAction = items.some(
+    (item) =>
+      item.kind === "message" &&
+      item.content.some(
+        (part) =>
+          isToolCallPart(part) &&
+          part.toolName === "mcp_auth_required" &&
+          part.toolCallId === approvalId,
+      ),
+  );
+  if (hasMcpAuthAction) {
+    return resolveMcpAuthDecision(items, approvalId, status);
+  }
+  return resolveApprovalDecision(items, approvalId, status);
 }
 
 function updateAssistantContent(
@@ -666,6 +708,21 @@ function upsertApprovalPart(
     event,
     (content) =>
       replaceToolCallPart(content, sourceToolCallId, approvalPart(payload)),
+    { type: "requires-action", reason: "interrupt" },
+  );
+}
+
+function upsertMcpAuthPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+  payload: Record<string, unknown>,
+): ChatItem[] {
+  const sourceToolCallId = stringValue(payload.source_tool_call_id);
+  return updateAssistantContent(
+    items,
+    event,
+    (content) =>
+      replaceToolCallPart(content, sourceToolCallId, mcpAuthPart(payload)),
     { type: "requires-action", reason: "interrupt" },
   );
 }
@@ -1021,9 +1078,13 @@ function approvalPart(payload: Record<string, unknown>): ThreadToolCallPart {
 
 function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
   const args = jsonArgs({ ...payload, status: "waiting" });
+  const actionId =
+    stringValue(payload.approval_id) ??
+    stringValue(payload.action_id) ??
+    String(payload.server_id);
   return {
     type: "tool-call",
-    toolCallId: String(payload.server_id),
+    toolCallId: actionId,
     toolName: "mcp_auth_required",
     args,
     argsText: argsTextFromRecord(args, hiddenToolArgKeys),
@@ -1097,15 +1158,6 @@ function hasPendingAction(content: ThreadMessageContent): boolean {
       part.result === undefined
     );
   });
-}
-
-function hasPendingApproval(content: ThreadMessageContent): boolean {
-  return content.some(
-    (part) =>
-      isToolCallPart(part) &&
-      part.toolName === "approval_request" &&
-      part.result === undefined,
-  );
 }
 
 function reasoningText(event: RuntimeEventEnvelope): string | null {

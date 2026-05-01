@@ -175,14 +175,18 @@ export async function decideApproval(
   approvalId: string,
   decision: ApprovalDecisionRequest["decision"],
   identity: RequestIdentity,
+  reason?: string,
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
     decided_by_user_id: identity.userId,
   };
+  if (reason !== undefined) {
+    payload.reason = reason;
+  }
   const params = new URLSearchParams({ org_id: identity.orgId });
   const response = await fetch(
-    `/v1/agent/approvals/${approvalId}/decision?${params}`,
+    `/v1/agent/approvals/${encodeURIComponent(approvalId)}/decision?${params}`,
     {
       method: "POST",
       headers: jsonHeaders(),

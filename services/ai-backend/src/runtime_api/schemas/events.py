@@ -382,12 +382,17 @@ class RuntimeEventPresentationProjector:
     def _mcp_auth_required_payload(cls, payload: JsonObject) -> JsonObject:
         safe_payload: JsonObject = {}
         for key in (
+            Keys.Field.APPROVAL_ID,
+            "action_id",
+            Keys.Field.APPROVAL_KIND,
             Keys.Field.SERVER_ID,
             Keys.Field.SERVER_NAME,
             "display_name",
             Keys.Field.AUTH_URL,
             Keys.Field.EXPIRES_AT,
             Keys.Payload.MESSAGE,
+            Keys.Field.STATUS,
+            Keys.Field.SOURCE_TOOL_CALL_ID,
         ):
             value = cls._text(payload.get(key))
             if value is not None:

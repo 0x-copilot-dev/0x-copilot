@@ -250,8 +250,15 @@ export function ThreadBody({
     loading: boolean;
   };
   connectorSuggestions: ReactNode;
-  onMcpAuthConnect: (serverId: string) => Promise<void>;
-  onMcpAuthSkip: (serverId: string) => Promise<void>;
+  onMcpAuthConnect: (payload: {
+    approvalId: string;
+    authUrl: string;
+    serverId: string;
+  }) => Promise<void>;
+  onMcpAuthSkip: (payload: {
+    approvalId: string;
+    serverId: string;
+  }) => Promise<void>;
   onOpenMcpSettings: () => void;
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
@@ -1046,8 +1053,15 @@ function AssistantMessage({
     metadata?: ThreadMessageLike["metadata"];
     status?: ThreadMessageLike["status"];
   };
-  onMcpAuthConnect: (serverId: string) => Promise<void>;
-  onMcpAuthSkip: (serverId: string) => Promise<void>;
+  onMcpAuthConnect: (payload: {
+    approvalId: string;
+    authUrl: string;
+    serverId: string;
+  }) => Promise<void>;
+  onMcpAuthSkip: (payload: {
+    approvalId: string;
+    serverId: string;
+  }) => Promise<void>;
 }): ReactElement {
   const metrics = performanceMetricsFromMetadata(message.metadata);
   const showFooter = isTerminalAssistantStatus(message.status);
@@ -1613,7 +1627,6 @@ function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
 function ApprovalTool({
   args,
   result,
-  addResult,
   resume,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
   const approvalId = String(args.approval_id ?? "");
@@ -1627,7 +1640,6 @@ function ApprovalTool({
     stringValue(args.kind) === "mcp_tool";
   const resolved = result !== undefined;
   const submit = (decision: ApprovalDecision): void => {
-    addResult({ decision, approval_id: approvalId });
     resume({ decision, approval_id: approvalId });
   };
   const approvalStatus = resolved ? "resolved" : "waiting";
@@ -1693,14 +1705,22 @@ function ConnectorAuthTool({
   result,
   onConnect,
   onSkip,
+  resume,
 }: ToolCallMessagePartProps<Record<string, unknown>> & {
-  onConnect: (serverId: string) => Promise<void>;
-  onSkip: (serverId: string) => Promise<void>;
+  onConnect: (payload: {
+    approvalId: string;
+    authUrl: string;
+    serverId: string;
+  }) => Promise<void>;
+  onSkip: (payload: { approvalId: string; serverId: string }) => Promise<void>;
 }): ReactElement {
   const [pendingAction, setPendingAction] = useState<"connect" | "skip" | null>(
     null,
   );
   const serverId = stringValue(args.server_id);
+  const approvalId =
+    stringValue(args.approval_id) ?? stringValue(args.action_id) ?? serverId;
+  const authUrl = stringValue(args.auth_url);
   const displayName =
     stringValue(args.display_name) ??
     stringValue(args.server_name) ??
@@ -1711,15 +1731,25 @@ function ConnectorAuthTool({
   const resolved = result !== undefined;
 
   async function submit(action: "connect" | "skip"): Promise<void> {
-    if (!serverId || resolved || pendingAction !== null) {
+    if (!serverId || !approvalId || resolved || pendingAction !== null) {
       return;
     }
     setPendingAction(action);
     try {
       if (action === "connect") {
-        await onConnect(serverId);
+        if (!authUrl) {
+          return;
+        }
+        await onConnect({ approvalId, authUrl, serverId });
       } else {
-        await onSkip(serverId);
+        await onSkip({ approvalId, serverId });
+        const result = {
+          approval_id: approvalId,
+          approval_kind: "mcp_auth",
+          decision: "rejected",
+          server_id: serverId,
+        };
+        resume(result);
       }
     } finally {
       setPendingAction(null);
@@ -1744,7 +1774,9 @@ function ConnectorAuthTool({
           <Button
             type="button"
             size="sm"
-            disabled={!serverId || pendingAction !== null}
+            disabled={
+              !serverId || !approvalId || !authUrl || pendingAction !== null
+            }
             title={`Connect ${displayName}`}
             onClick={() => void submit("connect")}
           >
@@ -1754,7 +1786,7 @@ function ConnectorAuthTool({
             type="button"
             size="sm"
             variant="secondary"
-            disabled={!serverId || pendingAction !== null}
+            disabled={!serverId || !approvalId || pendingAction !== null}
             title={`Skip ${displayName} authentication`}
             onClick={() => void submit("skip")}
           >

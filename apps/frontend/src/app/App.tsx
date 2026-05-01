@@ -5,10 +5,15 @@ import { useEffect, useState } from "react";
 import "@enterprise-search/design-system/styles.css";
 import "streamdown/styles.css";
 import "../styles.css";
+import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";
 import { getSessionIdentity } from "../api/sessionApi";
 import { ChatScreen } from "../features/chat/ChatScreen";
+import {
+  clearPendingMcpAuthAction,
+  readPendingMcpAuthAction,
+} from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
 import {
   SettingsScreen,
@@ -89,9 +94,13 @@ function EnterpriseSearchApp(): ReactElement {
   }, []);
 
   useEffect(() => {
-    if (window.location.pathname !== "/mcp/oauth/callback") {
+    if (
+      window.location.pathname !== "/mcp/oauth/callback" ||
+      identity === null
+    ) {
       return;
     }
+    const currentIdentity = identity;
     const params = new URLSearchParams(window.location.search);
     const state = params.get("state");
     const code = params.get("code");
@@ -119,6 +128,16 @@ function EnterpriseSearchApp(): ReactElement {
           callbackErrorDescription,
         );
         if (!cancelled) {
+          const pendingAction = readPendingMcpAuthAction(server.server_id);
+          if (pendingAction !== null) {
+            await decideApproval(
+              pendingAction.approvalId,
+              "approved",
+              currentIdentity,
+              "mcp_auth_completed",
+            );
+            clearPendingMcpAuthAction();
+          }
           setOauthStatus(`${server.display_name} is connected.`);
           setSettingsSection("connectors");
           setScreen("settings");
@@ -141,7 +160,7 @@ function EnterpriseSearchApp(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [connectors.refresh]);
+  }, [connectors.refresh, identity]);
 
   if (sessionError !== null) {
     return (

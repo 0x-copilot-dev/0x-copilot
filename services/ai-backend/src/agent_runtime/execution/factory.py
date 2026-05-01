@@ -19,6 +19,7 @@ from agent_runtime.execution.deep_agent_builder import (
     DeepAgentBuildRequest,
     DeepAgentsBackend,
     build_deep_agent,
+    runtime_checkpointer,
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
@@ -118,6 +119,8 @@ def create_agent_runtime(
                 ),
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
+                interrupt_on=_native_interrupt_config(runtime_context),
+                checkpointer=runtime_checkpointer(),
             )
         )
     except AgentRuntimeError:
@@ -198,6 +201,18 @@ def _model_visible_tools(
             _structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput)
         )  # type: ignore[arg-type]
     return tuple(model_tools)
+
+
+def _native_interrupt_config(
+    _runtime_context: AgentRuntimeContext,
+) -> dict[str, object]:
+    """Return DeepAgents HITL policies for model-visible gated tools."""
+
+    return {
+        McpValues.ToolName.CALL_MCP_TOOL: {
+            "allowed_decisions": ["approve", "edit", "reject"],
+        },
+    }
 
 
 def _local_tool_names(

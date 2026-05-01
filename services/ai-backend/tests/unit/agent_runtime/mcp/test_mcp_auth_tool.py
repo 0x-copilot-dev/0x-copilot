@@ -70,6 +70,11 @@ def test_auth_mcp_tool_returns_safe_auth_card_payload(
     )
 
     assert result["api_event_type"] == "mcp_auth_required"
+    assert result["approval_id"] == (
+        f"mcp_auth:{runtime_context_admin.run_id}:server_123"
+    )
+    assert result["action_id"] == result["approval_id"]
+    assert result["approval_kind"] == "mcp_auth"
     assert result["server_id"] == "server_123"
     assert result["display_name"] == "Drive MCP"
     assert "auth.example.com" in result["auth_url"]

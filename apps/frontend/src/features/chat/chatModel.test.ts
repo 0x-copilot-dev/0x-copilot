@@ -817,6 +817,9 @@ describe("applyRuntimeEvent", () => {
         event_type: "mcp_auth_required",
         activity_kind: "mcp_auth",
         payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
           server_id: "server_123",
           server_name: "github",
           display_name: "GitHub",
@@ -838,7 +841,9 @@ describe("applyRuntimeEvent", () => {
       risk_level: "low",
       read_only: true,
     });
-    expect(toolPart(items, "mcp_auth_required")?.toolCallId).toBe("server_123");
+    expect(toolPart(items, "mcp_auth_required")?.toolCallId).toBe(
+      "mcp_auth_123",
+    );
     expect(firstThreadMessage(items).status).toEqual({
       type: "requires-action",
       reason: "interrupt",
@@ -873,9 +878,10 @@ describe("applyRuntimeEvent", () => {
       reason: "interrupt",
     });
 
-    items = resolveMcpAuthSkip(items, "server_123");
+    items = resolveMcpAuthSkip(items, "mcp_auth_123");
 
     expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
+      approval_id: "mcp_auth_123",
       server_id: "server_123",
       decision: "skipped",
     });
@@ -1008,7 +1014,77 @@ describe("applyRuntimeEvent", () => {
     ).toEqual(["text", "approval_request", "text"]);
   });
 
-  it("does not append new activity while approval is pending", () => {
+  it("replaces MCP auth wrapper calls in place", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "before_auth",
+        sequence_no: 1,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "I need connector access." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_auth_call_1",
+        sequence_no: 2,
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_auth_mcp_123",
+        payload: {
+          tool_name: "auth_mcp",
+          call_id: "call_auth_mcp_123",
+          args: {
+            server_name: "drive_mcp",
+            server_id: "server_123",
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "after_wrapper",
+        sequence_no: 3,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Waiting for authentication." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "auth_from_tool_1",
+        sequence_no: 4,
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          source_tool_call_id: "call_auth_mcp_123",
+          server_id: "server_123",
+          server_name: "drive_mcp",
+          display_name: "Drive MCP",
+          auth_url: "https://example.test/auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect Drive MCP",
+        },
+      }),
+    );
+
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["text", "mcp_auth_required", "text"]);
+  });
+
+  it("does not append new activity while any action is pending", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -1073,6 +1149,130 @@ describe("applyRuntimeEvent", () => {
     );
 
     expect(textParts(items)).toEqual(["Approved text."]);
+  });
+
+  it("does not append new activity while MCP auth is pending", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_auth_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          server_id: "server_123",
+          server_name: "drive_mcp",
+          display_name: "Drive MCP",
+          auth_url: "https://example.test/auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect Drive MCP",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "late_tool",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "late_call",
+        payload: {
+          tool_name: "read_file",
+          call_id: "late_call",
+          status: "running",
+          args: { path: "README.md" },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "late_delta",
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Late text." },
+      }),
+    );
+
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["mcp_auth_required"]);
+
+    items = resolveMcpAuthSkip(items, "mcp_auth_123");
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "after_auth",
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Skipped auth." },
+      }),
+    );
+
+    expect(textParts(items)).toEqual(["Skipped auth."]);
+  });
+
+  it("resolves pending MCP auth from approval resolved events", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_auth_1",
+        sequence_no: 1,
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          server_id: "server_123",
+          server_name: "drive_mcp",
+          display_name: "Drive MCP",
+          auth_url: "https://example.test/auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect Drive MCP",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "auth_resolved_1",
+        sequence_no: 2,
+        event_type: "approval_resolved",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          status: "approved",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "final_after_auth",
+        sequence_no: 3,
+        event_type: "final_response",
+        activity_kind: "message",
+        status: "completed",
+        payload: { message: "Drive MCP is connected." },
+      }),
+    );
+
+    expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
+      approval_id: "mcp_auth_123",
+      server_id: "server_123",
+      decision: "approved",
+    });
+    expect(textParts(items)).toEqual(["Drive MCP is connected."]);
   });
 
   it("does not expose streamed tool arg deltas in display text", () => {
