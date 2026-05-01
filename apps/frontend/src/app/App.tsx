@@ -10,7 +10,11 @@ import { completeMcpOAuth } from "../api/mcpApi";
 import { getSessionIdentity } from "../api/sessionApi";
 import { ChatScreen } from "../features/chat/ChatScreen";
 import { useConnectors } from "../features/connectors/useConnectors";
-import { SettingsScreen } from "../features/settings/SettingsScreen";
+import {
+  SettingsScreen,
+  type SettingsSection,
+} from "../features/settings/SettingsScreen";
+import { useSkills } from "../features/skills/useSkills";
 
 type Screen = "chat" | "settings";
 
@@ -52,7 +56,10 @@ function EnterpriseSearchApp(): ReactElement {
   const [identity, setIdentity] = useState<RequestIdentity | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const connectors = useConnectors(identity);
+  const skills = useSkills(identity);
   const [screen, setScreen] = useState<Screen>("chat");
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>("general");
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -113,6 +120,7 @@ function EnterpriseSearchApp(): ReactElement {
         );
         if (!cancelled) {
           setOauthStatus(`${server.display_name} is connected.`);
+          setSettingsSection("connectors");
           setScreen("settings");
           await connectors.refresh();
         }
@@ -155,6 +163,8 @@ function EnterpriseSearchApp(): ReactElement {
     return (
       <SettingsScreen
         connectors={connectors}
+        skills={skills}
+        initialSection={settingsSection}
         onBackToChat={() => setScreen("chat")}
       />
     );
@@ -163,8 +173,12 @@ function EnterpriseSearchApp(): ReactElement {
   return (
     <ChatScreen
       connectors={connectors}
+      skills={skills}
       identity={identity}
-      onOpenSettings={() => setScreen("settings")}
+      onOpenSettings={(section = "general") => {
+        setSettingsSection(section);
+        setScreen("settings");
+      }}
       oauthStatus={oauthStatus}
     />
   );

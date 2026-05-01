@@ -13,10 +13,10 @@ from backend_app.store import InMemorySkillStore
 
 
 SKILL_MARKDOWN = """---
-name: incident-review
+name: support-incident-review
 description: Summarize incidents with timeline and owners.
 ---
-# Incident Review
+# Support Incident Review
 Use for incident postmortems.
 """
 
@@ -43,7 +43,7 @@ def test_public_and_internal_skill_flow() -> None:
         params={"org_id": "org_123", "user_id": "user_123"},
     ).json()
     bundle = client.get(
-        "/internal/v1/skills/by-name/incident_review",
+        "/internal/v1/skills/by-name/support_incident_review",
         params={"org_id": "org_123", "user_id": "user_123"},
     ).json()
     updated = client.put(
@@ -56,11 +56,13 @@ def test_public_and_internal_skill_flow() -> None:
         params={"org_id": "org_123", "user_id": "user_123"},
     ).json()
 
-    assert listed["skills"][0]["skill_id"] == skill_id
-    assert cards["skills"][0]["name"] == "incident_review"
+    assert any(skill["skill_id"] == skill_id for skill in listed["skills"])
+    assert any(skill["name"] == "support_incident_review" for skill in cards["skills"])
     assert bundle["markdown"] == SKILL_MARKDOWN
     assert updated["enabled"] is False
-    assert disabled_cards["skills"] == []
+    assert all(
+        skill["name"] != "support_incident_review" for skill in disabled_cards["skills"]
+    )
 
 
 def test_internal_skill_routes_use_service_header_scope_when_token_is_configured(
@@ -90,4 +92,4 @@ def test_internal_skill_routes_use_service_header_scope_when_token_is_configured
         params={"org_id": "forged_org", "user_id": "forged_user"},
     ).json()
 
-    assert created["skill_id"] == cards["skills"][0]["skill_id"]
+    assert any(skill["skill_id"] == created["skill_id"] for skill in cards["skills"])

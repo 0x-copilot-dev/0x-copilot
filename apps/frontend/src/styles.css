@@ -960,6 +960,36 @@ p {
   justify-self: start;
 }
 
+.skill-editor-form {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.skill-editor-form__row,
+.skill-row-actions,
+.skill-source-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.skill-editor-form__row > * {
+  flex: 1 1 16rem;
+}
+
+.skill-markdown-editor {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font: 0.88rem/1.5 var(--font-mono);
+  min-height: 18rem;
+  padding: var(--space-md);
+  resize: vertical;
+  width: 100%;
+}
+
 .connector-settings-list {
   display: grid;
   gap: var(--space-md);

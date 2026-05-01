@@ -6,11 +6,11 @@ from backend_app.store import InMemorySkillStore
 
 
 SKILL_MARKDOWN = """---
-name: launch-risk-review
+name: launch-checklist
 description: Review launch plans and summarize top risks.
 allowed_tools: [doc_search]
 ---
-# Launch Risk Review
+# Launch Checklist
 Use when the user asks about launch readiness.
 """
 
@@ -34,12 +34,16 @@ def test_skill_registry_create_update_internal_cards_and_audit() -> None:
     )
     cards = service.list_internal_cards(org_id="org_123", user_id="user_123")
 
-    assert created.name == "launch_risk_review"
+    assert created.name == "launch_checklist"
     assert created.allowed_tools == ("doc_search",)
-    assert created.virtual_path.endswith("/launch_risk_review/SKILL.md")
+    assert created.virtual_path.endswith("/launch_checklist/SKILL.md")
     assert updated.enabled is False
-    assert cards.skills == ()
-    assert [event.action for event in store.audit_events] == [
+    assert all(card.name != "launch_checklist" for card in cards.skills)
+    assert [
+        event.action
+        for event in store.audit_events
+        if event.skill_id == created.skill_id
+    ] == [
         "skill_created",
         "skill_updated",
     ]
@@ -93,3 +97,43 @@ def test_skill_registry_enforces_scope_visibility() -> None:
         assert "not found" in str(exc)
     else:
         raise AssertionError("User-scoped Skills should not be visible to other users")
+
+
+def test_skill_registry_seeds_preloaded_skills_as_read_only() -> None:
+    service = SkillRegistryService(store=InMemorySkillStore())
+
+    listed = service.list_skills(org_id="org_123", user_id="user_123")
+    preloaded = [skill for skill in listed.skills if skill.source_type == "preloaded"]
+    status_report = next(
+        skill for skill in preloaded if skill.name == "generate_status_report"
+    )
+    cards = service.list_internal_cards(org_id="org_123", user_id="user_123")
+
+    assert len(preloaded) >= 5
+    assert status_report.enabled is True
+    assert (
+        status_report.virtual_path
+        == "/skills/preloaded/generate_status_report/SKILL.md"
+    )
+    assert any(card.name == "generate_status_report" for card in cards.skills)
+
+    disabled = service.update_skill(
+        org_id="org_123",
+        user_id="user_123",
+        skill_id=status_report.skill_id,
+        request=UpdateSkillRequest(enabled=False),
+    )
+
+    assert disabled.enabled is False
+
+    try:
+        service.update_skill(
+            org_id="org_123",
+            user_id="user_123",
+            skill_id=status_report.skill_id,
+            request=UpdateSkillRequest(display_name="Edited"),
+        )
+    except ValueError as exc:
+        assert "Preloaded skills" in str(exc)
+    else:
+        raise AssertionError("Preloaded Skills should be read-only")

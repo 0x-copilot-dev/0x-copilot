@@ -44,12 +44,14 @@ from backend_app.contracts import (
     SkillManifestFields,
     SkillRecord,
     SkillResponse,
+    SkillSourceType,
     UpdateMcpServerRequest,
     UpdateSkillRequest,
     TokenEnvelope,
     normalize_skill_slug,
 )
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
+from backend_app.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 
@@ -606,6 +608,7 @@ class SkillRegistryService:
         self.store = store or self._default_store()
 
     def create_skill(self, request: CreateSkillRequest) -> SkillResponse:
+        self._ensure_preloaded_skills(org_id=request.org_id, user_id=request.user_id)
         manifest = SkillMarkdownParser.parse_manifest(request.markdown)
         if self.store.get_skill_by_name(
             org_id=request.org_id,
@@ -637,6 +640,7 @@ class SkillRegistryService:
         return SkillResponse.from_record(record)
 
     def list_skills(self, *, org_id: str, user_id: str) -> SkillListResponse:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         return SkillListResponse(
             skills=tuple(
                 SkillResponse.from_record(record)
@@ -645,6 +649,7 @@ class SkillRegistryService:
         )
 
     def get_skill(self, *, org_id: str, user_id: str, skill_id: str) -> SkillResponse:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         return SkillResponse.from_record(
             self._require_visible_skill(
                 org_id=org_id, user_id=user_id, skill_id=skill_id
@@ -659,9 +664,15 @@ class SkillRegistryService:
         skill_id: str,
         request: UpdateSkillRequest,
     ) -> SkillResponse:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         record = self._require_owned_skill(
             org_id=org_id, user_id=user_id, skill_id=skill_id
         )
+        if record.source_type is SkillSourceType.PRELOADED and any(
+            value is not None
+            for value in (request.markdown, request.display_name, request.scope)
+        ):
+            raise ValueError("Preloaded skills can only be enabled or disabled")
         changes: dict[str, object] = {"updated_at": datetime.now(UTC)}
         if request.markdown is not None:
             manifest = SkillMarkdownParser.parse_manifest(request.markdown)
@@ -689,9 +700,12 @@ class SkillRegistryService:
         return SkillResponse.from_record(updated)
 
     def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         record = self._require_owned_skill(
             org_id=org_id, user_id=user_id, skill_id=skill_id
         )
+        if record.source_type is SkillSourceType.PRELOADED:
+            raise ValueError("Preloaded skills cannot be deleted")
         deleted = self.store.delete_skill(
             org_id=org_id, user_id=user_id, skill_id=skill_id
         )
@@ -702,6 +716,7 @@ class SkillRegistryService:
     def list_internal_cards(
         self, *, org_id: str, user_id: str
     ) -> InternalSkillListResponse:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         return InternalSkillListResponse(
             skills=tuple(
                 InternalSkillCard(
@@ -731,6 +746,7 @@ class SkillRegistryService:
         user_id: str,
         skill_id: str,
     ) -> InternalSkillBundle:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         record = self._require_visible_skill(
             org_id=org_id, user_id=user_id, skill_id=skill_id
         )
@@ -755,6 +771,7 @@ class SkillRegistryService:
         user_id: str,
         name: str,
     ) -> InternalSkillBundle:
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
         record = self.store.get_skill_by_name(
             org_id=org_id,
             user_id=user_id,
@@ -765,6 +782,54 @@ class SkillRegistryService:
         return self.get_internal_bundle(
             org_id=org_id, user_id=user_id, skill_id=record.skill_id
         )
+
+    def _ensure_preloaded_skills(self, *, org_id: str, user_id: str) -> None:
+        for markdown in PRELOADED_SKILL_MARKDOWNS:
+            manifest = SkillMarkdownParser.parse_manifest(markdown)
+            existing = self.store.get_skill_by_name(
+                org_id=org_id,
+                user_id=user_id,
+                name=manifest.name,
+            )
+            if existing is None:
+                record = SkillRecord(
+                    skill_id=self._preloaded_skill_id(
+                        org_id=org_id,
+                        user_id=user_id,
+                        name=manifest.name,
+                    ),
+                    org_id=org_id,
+                    user_id=user_id,
+                    name=manifest.name,
+                    display_name=self._display_name_from_slug(manifest.name),
+                    description=manifest.description,
+                    markdown=markdown,
+                    virtual_path=self._preloaded_virtual_path(manifest.name),
+                    source_type=SkillSourceType.PRELOADED,
+                    allowed_tools=manifest.allowed_tools,
+                    compatibility=manifest.compatibility,
+                    metadata=manifest.metadata,
+                )
+                self.store.create_skill(record)
+                self._audit(record, "skill_preloaded")
+                continue
+            if existing.source_type is not SkillSourceType.PRELOADED:
+                continue
+            changes: dict[str, object] = {}
+            if existing.markdown != markdown:
+                changes["markdown"] = markdown
+                changes["version"] = existing.version + 1
+            if existing.description != manifest.description:
+                changes["description"] = manifest.description
+            if existing.allowed_tools != manifest.allowed_tools:
+                changes["allowed_tools"] = manifest.allowed_tools
+            if existing.compatibility != manifest.compatibility:
+                changes["compatibility"] = manifest.compatibility
+            if existing.metadata != manifest.metadata:
+                changes["metadata"] = manifest.metadata
+            if changes:
+                changes["updated_at"] = datetime.now(UTC)
+                self.store.update_skill(existing.model_copy(update=changes))
 
     def _require_visible_skill(
         self, *, org_id: str, user_id: str, skill_id: str
@@ -800,6 +865,14 @@ class SkillRegistryService:
     @classmethod
     def _virtual_path(cls, *, org_id: str, user_id: str, name: str) -> str:
         return f"/skills/org/{org_id}/user/{user_id}/{name}/SKILL.md"
+
+    @classmethod
+    def _preloaded_virtual_path(cls, name: str) -> str:
+        return f"/skills/preloaded/{name}/SKILL.md"
+
+    @classmethod
+    def _preloaded_skill_id(cls, *, org_id: str, user_id: str, name: str) -> str:
+        return f"preloaded:{org_id}:{user_id}:{name}"
 
     @classmethod
     def _default_store(cls) -> InMemorySkillStore | PostgresSkillStore:
