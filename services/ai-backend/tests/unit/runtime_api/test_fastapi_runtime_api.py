@@ -41,7 +41,7 @@ class FastApiRuntimeApiTestMixin:
             environ={
                 "OPENAI_API_KEY": "sk-test",
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
                 "RUNTIME_MAX_PARALLEL_TASKS": "4",
             }
         )
@@ -97,7 +97,7 @@ class FastApiRuntimeApiTestMixin:
             "user_input": self.Values.USER_INPUT,
             "content_format": "text",
             "idempotency_key": self.Values.IDEMPOTENCY_KEY,
-            "model": {"provider": "openai", "model_name": "gpt-4.1-mini"},
+            "model": {"provider": "openai", "model_name": "gpt-5.4-mini"},
             "request_context": {
                 "roles": ["employee"],
                 "permission_scopes": ["search:read", "docs:read"],
@@ -218,7 +218,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             environ={
                 "OPENAI_API_KEY": "sk-test",
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
                 "RUNTIME_MAX_PARALLEL_TASKS": "4",
             }
         )
@@ -241,7 +241,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
                 "org_id": self.Values.ORG_ID,
                 "user_id": self.Values.USER_ID,
                 "user_input": self.Values.USER_INPUT,
-                "model": {"provider": "openai", "model_name": "gpt-4.1-mini"},
+                "model": {"provider": "openai", "model_name": "gpt-5.4-mini"},
                 "request_context": {
                     "roles": ["employee"],
                     "permission_scopes": ["docs:read"],
@@ -255,7 +255,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert run.runtime_context.org_id == self.Values.ORG_ID
         assert run.runtime_context.user_id == self.Values.USER_ID
         assert run.runtime_context.model_profile.provider == "openai"
-        assert run.runtime_context.model_profile.model_name == "gpt-4.1-mini"
+        assert run.runtime_context.model_profile.model_name == "gpt-5.4-mini"
         assert run.runtime_context.max_parallel_tasks == 4
 
     def test_run_submission_round_trips_composer_metadata(self) -> None:

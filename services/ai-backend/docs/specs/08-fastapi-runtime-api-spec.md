@@ -98,7 +98,7 @@ Normal clients submit compact run requests. The API builds the internal
   "user_input": "Find launch risks.",
   "model": {
     "provider": "openai",
-    "model_name": "gpt-4.1-mini",
+    "model_name": "gpt-5.4-mini",
     "temperature": 0
   },
   "request_context": {

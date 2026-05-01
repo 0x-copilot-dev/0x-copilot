@@ -3,9 +3,47 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from agent_runtime.execution.contracts import AgentRuntimeContext
+from runtime_api.schemas import RunRecord
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_worker.stream_events import RuntimeStreamPartAdapter
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
+
+
+class RecordingEventProducer:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def append_api_event(self, **kwargs: object) -> None:
+        self.events.append(kwargs)
+
+
+def run_record() -> RunRecord:
+    return RunRecord(
+        run_id="run_123",
+        conversation_id="conversation_123",
+        org_id="org_123",
+        user_id="user_123",
+        user_message_id="message_123",
+        trace_id="trace_123",
+        model_provider="openai",
+        model_name="gpt-5.4-mini",
+        runtime_context=AgentRuntimeContext(
+            user_id="user_123",
+            org_id="org_123",
+            roles=["employee"],
+            model_profile={
+                "provider": "openai",
+                "model_name": "gpt-5.4-mini",
+                "max_input_tokens": 128000,
+                "timeout_seconds": 30,
+                "temperature": 0,
+                "supports_streaming": True,
+            },
+            run_id="run_123",
+            trace_id="trace_123",
+        ),
+    )
 
 
 def test_stream_part_parser_normalizes_namespace_metadata() -> None:
@@ -212,6 +250,90 @@ def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
     )
 
     assert payload["visibility"] == "internal"
+
+
+def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
+    producer = RecordingEventProducer()
+    adapter = RuntimeStreamPartAdapter(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = run_record()
+
+    adapter.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "read_file",
+            "id": "call_large",
+            "index": 0,
+            "args": {"delta": ""},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    adapter.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "index": 0,
+            "args": {
+                "delta": json.dumps(
+                    {
+                        "file_path": "/large_tool_results/call_mcp_result",
+                        "offset": 0,
+                        "limit": 120,
+                    }
+                )
+            },
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+
+    assert len(producer.events) == 1
+    event = producer.events[0]
+    assert event["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    assert event["payload"]["visibility"] == "internal"
+    assert event["payload"]["call_id"] == "call_large"
+    assert event["payload"]["args"]["file_path"] == (
+        "/large_tool_results/call_mcp_result"
+    )
+
+
+def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> None:
+    producer = RecordingEventProducer()
+    adapter = RuntimeStreamPartAdapter(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = run_record()
+
+    adapter.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "read_file",
+            "id": "call_project",
+            "index": 0,
+            "args": {"delta": ""},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    adapter.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "index": 0,
+            "args": {"delta": json.dumps({"file_path": "src/app.ts"})},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+
+    assert len(producer.events) == 1
+    event = producer.events[0]
+    assert event["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    assert "visibility" not in event["payload"]
+    assert event["payload"]["call_id"] == "call_project"
+    assert event["payload"]["args"]["file_path"] == "src/app.ts"
 
 
 def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:

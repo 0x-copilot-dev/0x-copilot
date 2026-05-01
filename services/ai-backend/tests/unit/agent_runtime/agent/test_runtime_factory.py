@@ -100,6 +100,25 @@ def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
     assert "answer directly from these cards" in builder.calls[0].system_prompt
 
 
+def test_factory_wraps_prior_tool_result_loader_as_langchain_tool(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+    dependencies = fake_dependencies.model_copy(
+        update={"prior_tool_result_loader": object()}
+    )
+
+    create_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=dependencies,
+        agent_builder=builder,
+    )
+
+    tool_names = {getattr(tool, "name", "") for tool in builder.calls[0].tools}
+    assert "load_prior_tool_result" in tool_names
+
+
 def test_factory_instructs_model_not_to_load_when_no_mcp_cards(
     runtime_context_admin: AgentRuntimeContext,
     fake_dependencies: RuntimeDependencies,

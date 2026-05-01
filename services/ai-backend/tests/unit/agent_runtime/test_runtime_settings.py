@@ -24,7 +24,7 @@ def test_runtime_settings_loads_template_env_and_process_overrides(
         "\n".join(
             (
                 "RUNTIME_DEFAULT_PROVIDER=openai",
-                "RUNTIME_DEFAULT_MODEL=gpt-4.1-mini",
+                "RUNTIME_DEFAULT_MODEL=gpt-5.4-mini",
                 "RUNTIME_DEFAULT_TEMPERATURE=0",
                 "RUNTIME_DEFAULT_TIMEOUT_SECONDS=60",
                 "RUNTIME_MAX_RETRIES=2",
@@ -93,7 +93,7 @@ def test_model_resolver_validates_provider_keys_and_applies_defaults() -> None:
     )
     resolver = ModelConfigResolver(settings)
 
-    openai = resolver.resolve(ModelSelection(model_name="gpt-4.1-mini"))
+    openai = resolver.resolve(ModelSelection(model_name="gpt-5.4-mini"))
     anthropic = resolver.resolve(
         ModelSelection(provider="anthropic", model_name="claude-sonnet-4")
     )

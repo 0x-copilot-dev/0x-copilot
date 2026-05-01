@@ -31,7 +31,7 @@ class RuntimeEventTimelineTestMixin:
             environ={
                 "OPENAI_API_KEY": "sk-test",
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
         service = RuntimeApiService(
@@ -53,7 +53,7 @@ class RuntimeEventTimelineTestMixin:
                 org_id=runtime_context_admin.org_id,
                 user_id=runtime_context_admin.user_id,
                 user_input=self.Values.USER_INPUT,
-                model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
                 request_context={
                     "roles": sorted(runtime_context_admin.roles),
                     "permission_scopes": sorted(

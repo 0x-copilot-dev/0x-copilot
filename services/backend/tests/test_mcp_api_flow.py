@@ -7,7 +7,7 @@ from enterprise_service_contracts.headers import (
     SERVICE_TOKEN_HEADER,
     USER_HEADER,
 )
-from backend_app.contracts import OAuthTokenRequest
+from backend_app.contracts import McpAuthState, OAuthTokenRequest
 from backend_app.mcp_oauth import McpAuthorization
 from backend_app.app import create_app
 from backend_app.service import McpRegistryService
@@ -85,6 +85,57 @@ def test_public_and_internal_mcp_auth_flow() -> None:
     assert cards_before_auth["servers"][0]["auth_state"] == "unauthenticated"
     assert "state=" in auth["auth_url"]
     assert completed["auth_state"] == "authenticated"
+    assert session["credential_ref"]
+
+
+def test_restarting_mcp_auth_keeps_existing_token_runtime_loadable() -> None:
+    store = InMemoryMcpStore()
+    app = create_app(
+        McpRegistryService(
+            store=store,
+            token_exchanger=FakeOAuthTokenExchanger(),
+            oauth_client=FakeOAuthClient(),
+        )
+    )
+    client = TestClient(app)
+
+    created = client.post(
+        "/v1/mcp/servers",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "url": "https://mcp.example.com",
+            "display_name": "Drive MCP",
+        },
+    ).json()
+    server_id = created["server_id"]
+    auth_payload = {
+        "org_id": "org_123",
+        "user_id": "user_123",
+        "redirect_uri": "http://localhost:5173/mcp/oauth/callback",
+    }
+    client.post(f"/internal/v1/mcp/servers/{server_id}/auth/start", json=auth_payload)
+    state = next(iter(store.auth_sessions.keys()))
+    client.get("/v1/mcp/oauth/callback", params={"state": state, "code": "oauth_code"})
+
+    client.post(f"/internal/v1/mcp/servers/{server_id}/auth/start", json=auth_payload)
+    record = store.get_server(org_id="org_123", server_id=server_id)
+    assert record is not None
+    assert record.auth_state == McpAuthState.AUTHENTICATED
+    store.update_server(
+        record.model_copy(update={"auth_state": McpAuthState.AUTH_PENDING})
+    )
+    cards = client.get(
+        "/internal/v1/mcp/cards",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()
+    session = client.post(
+        f"/internal/v1/mcp/servers/{server_id}/client-session",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()
+
+    assert cards["servers"][0]["auth_state"] == "authenticated"
+    assert session["auth_state"] == "authenticated"
     assert session["credential_ref"]
 
 

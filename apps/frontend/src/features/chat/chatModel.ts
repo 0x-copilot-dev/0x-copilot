@@ -2,6 +2,7 @@ import type {
   ApprovalDecision,
   AssistantPerformanceMetrics,
   Message,
+  McpServer,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import type {
@@ -554,6 +555,64 @@ export function resolveMcpAuthSkip(
   return resolveMcpAuthDecision(items, actionId, "rejected", "skipped");
 }
 
+export function resolveAuthenticatedMcpServers(
+  items: ChatItem[],
+  servers: readonly McpServer[],
+): ChatItem[] {
+  const authenticated = servers.filter(
+    (server) => server.auth_state === "authenticated",
+  );
+  if (authenticated.length === 0) {
+    return items;
+  }
+  return items.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    let changed = false;
+    const content = item.content.map((part) => {
+      if (
+        !isToolCallPart(part) ||
+        part.toolName !== "mcp_auth_required" ||
+        part.result !== undefined
+      ) {
+        return part;
+      }
+      const args = asRecord(part.args);
+      const server = authenticated.find((candidate) =>
+        mcpAuthPartMatchesServer(args, candidate),
+      );
+      if (server === undefined) {
+        return part;
+      }
+      changed = true;
+      const approvalId = stringValue(args.approval_id) ?? part.toolCallId;
+      return {
+        ...part,
+        args: jsonArgs({
+          ...args,
+          approval_id: approvalId,
+          server_id: server.server_id,
+          status: "approved",
+        }),
+        result: {
+          approval_id: approvalId,
+          server_id: server.server_id,
+          decision: "approved",
+        },
+      };
+    });
+    if (!changed) {
+      return item;
+    }
+    const status =
+      item.status?.type === "requires-action" && !hasPendingAction(content)
+        ? ({ type: "running" } satisfies AssistantMessageStatus)
+        : item.status;
+    return { ...item, content, status };
+  });
+}
+
 function resolveMcpAuthDecision(
   items: ChatItem[],
   actionId: string,
@@ -600,6 +659,22 @@ function resolveMcpAuthDecision(
         : item.status;
     return { ...item, content, status };
   });
+}
+
+function mcpAuthPartMatchesServer(
+  args: Record<string, unknown>,
+  server: McpServer,
+): boolean {
+  const serverId = stringValue(args.server_id);
+  if (serverId !== null && serverId === server.server_id) {
+    return true;
+  }
+  const serverName = stringValue(args.server_name);
+  if (serverName !== null && serverName === server.name) {
+    return true;
+  }
+  const displayName = stringValue(args.display_name);
+  return displayName !== null && displayName === server.display_name;
 }
 
 function resolveActionFromPayload(

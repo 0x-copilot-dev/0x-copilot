@@ -65,7 +65,8 @@ the facade's dev identity, but the browser API clients do not carry hidden
 
 The connector OAuth callback is a frontend route state, not a separate backend
 entry point. It should complete by calling the facade-backed MCP APIs and then
-return control to the connectors UI.
+return control to the originating UI: chat auth approvals return to chat, while
+connector settings auth returns to the connectors UI.
 
 ## Engineering Invariants
 

@@ -136,11 +136,17 @@ function EnterpriseSearchApp(): ReactElement {
               currentIdentity,
               "mcp_auth_completed",
             );
+            if (cancelled) {
+              return;
+            }
             clearPendingMcpAuthAction();
+            setOauthStatus(`${server.display_name} is connected.`);
+            setScreen("chat");
+          } else {
+            setOauthStatus(`${server.display_name} is connected.`);
+            setSettingsSection("connectors");
+            setScreen("settings");
           }
-          setOauthStatus(`${server.display_name} is connected.`);
-          setSettingsSection("connectors");
-          setScreen("settings");
           await connectors.refresh();
         }
       } catch (err) {

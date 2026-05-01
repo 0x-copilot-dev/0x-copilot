@@ -33,6 +33,7 @@ class ToolCallStreamState:
     subagent_name: str | None = None
     short_summary: str | None = None
     started_emitted: bool = False
+    pending_start: bool = False
 
 
 class ToolEventProjector(StreamMessageParser):
@@ -70,6 +71,9 @@ class ToolEventProjector(StreamMessageParser):
             return
         if state.tool_name is None or state.call_id is None:
             return
+        if not state.started_emitted and not self.tool_call_state_ready_to_emit(state):
+            state.pending_start = True
+            return
         payload = self.tool_call_payload_from_state(state)
         event_type = (
             RuntimeApiEventType.TOOL_CALL_STARTED
@@ -78,6 +82,8 @@ class ToolEventProjector(StreamMessageParser):
         )
         if event_type is RuntimeApiEventType.TOOL_CALL_DELTA:
             payload[Keys.Field.STATUS] = Values.Status.RUNNING
+        elif state.pending_start:
+            state.pending_start = False
         self.event_producer.append_api_event(  # type: ignore[attr-defined]
             run=run,
             source=StreamEventSource.TOOL,
@@ -206,6 +212,20 @@ class ToolEventProjector(StreamMessageParser):
         return payload
 
     @classmethod
+    def tool_call_state_ready_to_emit(cls, state: ToolCallStreamState) -> bool:
+        if not cls.is_path_classified_artifact_tool_name(state.tool_name):
+            return True
+        args = state.args or cls.parse_args_text(state.args_text)
+        if not args:
+            return False
+        if cls.text(state.tool_name) != Values.Tool.READ_FILE:
+            return True
+        return (
+            cls.text(args.get(Keys.Field.FILE_PATH)) is not None
+            or cls.text(args.get(Keys.Field.PATH)) is not None
+        )
+
+    @classmethod
     def parse_args_text(cls, value: str) -> JsonObject:
         if not value.strip():
             return {}
@@ -325,3 +345,9 @@ class ToolEventProjector(StreamMessageParser):
         return (
             normalized in cls.large_result_artifact_tool_names or "search" in normalized
         )
+
+    @classmethod
+    def is_path_classified_artifact_tool_name(cls, tool_name: str | None) -> bool:
+        if tool_name is None:
+            return False
+        return tool_name.strip().lower() in cls.large_result_artifact_tool_names

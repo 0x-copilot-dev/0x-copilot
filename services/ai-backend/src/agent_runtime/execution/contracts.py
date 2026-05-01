@@ -355,6 +355,7 @@ class RuntimeDependencies(RuntimeContract):
     mcp_registry: McpRegistry
     skill_source_config: SkillSourceConfig
     skill_registry: object | None = None
+    prior_tool_result_loader: object | None = None
     memory_backend_factory: MemoryBackendFactory
     subagent_catalog: SubagentCatalog
 

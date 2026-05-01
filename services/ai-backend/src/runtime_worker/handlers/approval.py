@@ -82,7 +82,8 @@ class RuntimeApprovalHandler:
                 retryable=False,
             )
         metadata = approval.metadata
-        if metadata.get("native_interrupt_id") is None:
+        approval_kind = self._text(metadata.get("approval_kind"))
+        if metadata.get("native_interrupt_id") is None and approval_kind != "mcp_auth":
             return
 
         resume = self._resume_payload(command, metadata)

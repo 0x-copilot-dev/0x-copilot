@@ -36,7 +36,7 @@ def test_postgres_adapter_processes_run_and_persists_final_response() -> None:
         environ={
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             "RUNTIME_STORE_BACKEND": "postgres",
             "DATABASE_URL": os.environ["TEST_DATABASE_URL"],
             "RUNTIME_MAX_RETRIES": "1",
@@ -62,7 +62,7 @@ def test_postgres_adapter_processes_run_and_persists_final_response() -> None:
             org_id=conversation.org_id,
             user_id=conversation.user_id,
             user_input="hi",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -131,7 +131,7 @@ def test_postgres_adapter_resolves_live_assistant_parent_id() -> None:
         environ={
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             "RUNTIME_STORE_BACKEND": "postgres",
             "DATABASE_URL": os.environ["TEST_DATABASE_URL"],
         }
@@ -155,7 +155,7 @@ def test_postgres_adapter_resolves_live_assistant_parent_id() -> None:
             org_id=conversation.org_id,
             user_id=conversation.user_id,
             user_input="Remember this Postgres detail.",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     assistant = store.append_message(
@@ -177,7 +177,7 @@ def test_postgres_adapter_resolves_live_assistant_parent_id() -> None:
             user_id=conversation.user_id,
             user_input="What detail did I ask you to remember?",
             parent_message_id=f"assistant-{first.run_id}",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     messages = service.list_messages(

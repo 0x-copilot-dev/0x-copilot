@@ -8,6 +8,7 @@ from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
     RuntimeErrorCode,
+    StreamEventSource,
 )
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -22,6 +23,9 @@ from runtime_api.schemas import (
     CreateRunRequest,
     MessageRecord,
     MessageRole,
+    RuntimeApiEventType,
+    RuntimeEventRedactionState,
+    RuntimeEventVisibility,
     RuntimeRunCommand,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
@@ -35,7 +39,7 @@ def _settings(*, max_retries: int = 1, max_parallel_runs: int = 2) -> RuntimeSet
         environ={
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             "RUNTIME_MAX_RETRIES": str(max_retries),
             "RUNTIME_MAX_PARALLEL_RUNS": str(max_parallel_runs),
         }
@@ -49,7 +53,7 @@ def _runtime_context(run_id: str) -> AgentRuntimeContext:
         roles=["employee"],
         model_profile={
             "provider": "openai",
-            "model_name": "gpt-4.1-mini",
+            "model_name": "gpt-5.4-mini",
             "max_input_tokens": 128000,
             "timeout_seconds": 30,
             "temperature": 0,
@@ -82,10 +86,60 @@ def _create_queued_run(
             org_id="org_123",
             user_id="user_123",
             user_input="Summarize launch risks.",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     return response.run_id
+
+
+def _append_tool_observation(
+    service: RuntimeApiService,
+    store: InMemoryRuntimeApiStore,
+    *,
+    run_id: str,
+    tool_name: str = "jira_search",
+    call_id: str = "call_123",
+    args: dict[str, object] | None = None,
+    output: dict[str, object] | None = None,
+    visibility: RuntimeEventVisibility | None = None,
+    redaction_state: RuntimeEventRedactionState | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "tool_name": tool_name,
+        "call_id": call_id,
+        "args": args or {"assignee": "me", "status": "open"},
+    }
+    if visibility is not None:
+        payload["visibility"] = visibility.value
+    if redaction_state is not None:
+        payload["redaction_state"] = redaction_state.value
+    service.event_producer.append_api_event(
+        run=store.runs[run_id],
+        source=StreamEventSource.TOOL,
+        event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
+        payload=payload,
+    )
+    result_payload: dict[str, object] = {
+        "tool_name": tool_name,
+        "call_id": call_id,
+        "output": output
+        or {
+            "issues": [
+                {"key": "AUTH-123", "priority": "P0"},
+                {"key": "PAY-88", "priority": "P1"},
+            ]
+        },
+    }
+    if visibility is not None:
+        result_payload["visibility"] = visibility.value
+    if redaction_state is not None:
+        result_payload["redaction_state"] = redaction_state.value
+    service.event_producer.append_api_event(
+        run=store.runs[run_id],
+        source=StreamEventSource.TOOL,
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload=result_payload,
+    )
 
 
 def test_stream_namespace_parses_documented_deep_agents_subagent_segments() -> None:
@@ -183,7 +237,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             org_id="org_123",
             user_id="user_123",
             user_input="Original question",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     assistant = store.append_message(
@@ -216,7 +270,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             parent_message_id=assistant.message_id,
             source_message_id="sibling_user",
             branch_id="branch_edit",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -261,7 +315,7 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
             org_id="org_123",
             user_id="user_123",
             user_input="Remember that the launch is on Tuesday.",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     assistant = store.append_message(
@@ -283,7 +337,7 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
             user_id="user_123",
             user_input="What day is the launch?",
             parent_message_id=f"assistant-{first.run_id}",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -304,6 +358,361 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         "Got it. The launch is on Tuesday.",
         "What day is the launch?",
     ]
+
+
+def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What are my open Jira blockers?",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(service, store, run_id=first.run_id)
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_with_jira_answer",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="AUTH-123 is the highest priority blocker.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Which one is highest priority?",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    messages = handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
+    )
+
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "system",
+        "user",
+    ]
+    context = messages[-2]["content"]
+    assert "Prior tool observations from earlier turns" in context
+    assert "load_prior_tool_result" in context
+    assert "jira_search" in context
+    assert "AUTH-123" in context
+    assert "Which one is highest priority?" == messages[-1]["content"]
+
+
+def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Find blockers.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(service, store, run_id=first.run_id)
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_with_prior_tool",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="I found two blockers.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Show full details for the first result.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    command = store.run_commands[-1]
+    run = store.runs[follow_up.run_id]
+    index = handler._tool_observation_index(command, run)
+    dependencies = handler._dependencies_for_run(command, index)
+
+    assert dependencies.prior_tool_result_loader is not None
+    observation_id = index.observations[0].observation_id
+    result = dependencies.prior_tool_result_loader.load_prior_tool_result(
+        observation_id=observation_id,
+        runtime_context=command.runtime_context,
+    )
+    missing = dependencies.prior_tool_result_loader.load_prior_tool_result(
+        observation_id="obs_missing",
+        runtime_context=command.runtime_context,
+    )
+
+    assert result["ok"] is True
+    assert result["tool_name"] == "jira_search"
+    assert result["result"]["output"]["issues"][0]["key"] == "AUTH-123"
+    assert missing["ok"] is False
+    assert missing["error_code"] == "observation_not_found"
+
+
+def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Find blockers.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(
+        service,
+        store,
+        run_id=first.run_id,
+        output={"issues": [{"key": "AUTH-123"}]},
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_branch_root",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="AUTH-123 is blocking launch.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    sibling = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Different branch question.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(
+        service,
+        store,
+        run_id=sibling.run_id,
+        call_id="call_sibling",
+        output={"issues": [{"key": "SIBLING-999"}]},
+    )
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Continue from the original answer.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    messages = handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
+    )
+    context = messages[-2]["content"]
+
+    assert "AUTH-123" in context
+    assert "SIBLING-999" not in context
+
+
+def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Search sensitive logs.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(
+        service,
+        store,
+        run_id=first.run_id,
+        visibility=RuntimeEventVisibility.INTERNAL,
+        output={"secret": "internal-only"},
+    )
+    _append_tool_observation(
+        service,
+        store,
+        run_id=first.run_id,
+        call_id="call_offloaded",
+        redaction_state=RuntimeEventRedactionState.OFFLOADED,
+        output={"payload_ref": "/large_tool_results/result_1"},
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_sensitive",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="I checked the logs.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What did the logs say?",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    messages = handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
+    )
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+    assert "Prior tool observations" not in "\n".join(
+        message["content"] for message in messages
+    )
+
+
+def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    current = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Search now.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        )
+    )
+    _append_tool_observation(
+        service,
+        store,
+        run_id=current.run_id,
+        output={"issues": [{"key": "CURRENT-1"}]},
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    messages = handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[current.run_id],
+    )
+
+    assert messages == ({"role": "user", "content": "Search now."},)
 
 
 def test_runtime_worker_includes_structured_composer_context() -> None:
@@ -350,7 +759,7 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
             quote={"text": "quoted selection", "source": "assistant_1"},
             branch_id="branch_edit",
             branch={"replace_from_message_id": "assistant_old"},
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -901,7 +1310,6 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
             metadata={
                 "approval_id": approval_id,
                 "approval_kind": "mcp_auth",
-                "native_interrupt_id": approval_id,
                 "server_id": "server_123",
                 "server_name": "drive_mcp",
                 "display_name": "Drive MCP",

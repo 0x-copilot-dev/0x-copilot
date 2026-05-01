@@ -32,6 +32,10 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
 )
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
+from agent_runtime.capabilities.tools.prior_results import (
+    LoadPriorToolResultInput,
+    LoadPriorToolResultTool,
+)
 from agent_runtime.prompts.runtime import (
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -97,6 +101,7 @@ def create_agent_runtime(
             tools=tools,
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
+            prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
             runtime_context=runtime_context,
         )
         model_instructions = _instructions_with_skill_cards(
@@ -151,6 +156,7 @@ def _model_visible_tools(
     tools: Sequence[object],
     mcp_registry: object,
     skill_registry: object | None,
+    prior_tool_result_loader: object | None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -200,6 +206,16 @@ def _model_visible_tools(
         model_tools.append(
             _structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput)
         )  # type: ignore[arg-type]
+    if prior_tool_result_loader is not None:
+        model_tools.append(
+            _structured_tool(
+                LoadPriorToolResultTool(
+                    loader=prior_tool_result_loader,
+                    runtime_context=runtime_context,
+                ),
+                LoadPriorToolResultInput,
+            )
+        )
     return tuple(model_tools)
 
 

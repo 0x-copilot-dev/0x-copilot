@@ -49,6 +49,7 @@ import {
   messagesToChatItems,
   optimisticUserMessage,
   resolveApprovalDecision,
+  resolveAuthenticatedMcpServers,
   resolveMcpAuthSkip,
   threadMessagesToChatItems,
   type ChatItem,
@@ -100,6 +101,7 @@ export function ChatScreen({
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());
+  const pendingApprovalDecisionsRef = useRef<Set<string>>(new Set());
 
   const suggestedServers = useMemo(
     () =>
@@ -177,6 +179,12 @@ export function ChatScreen({
       streamRef.current?.close();
     };
   }, [identity, loadHistoryItems]);
+
+  useEffect(() => {
+    setItems((current) =>
+      resolveAuthenticatedMcpServers(current, connectors.servers),
+    );
+  }, [connectors.servers]);
 
   const handleEvent = useCallback(
     (event: RuntimeEventEnvelope) => {
@@ -439,6 +447,10 @@ export function ChatScreen({
     approvalId: string,
     decision: ApprovalDecision,
   ): Promise<void> {
+    if (pendingApprovalDecisionsRef.current.has(approvalId)) {
+      return;
+    }
+    pendingApprovalDecisionsRef.current.add(approvalId);
     try {
       await decideApproval(approvalId, decision, identity);
       setItems((current) =>
@@ -454,22 +466,22 @@ export function ChatScreen({
           text: errorMessage(err, "Could not submit approval decision"),
         },
       ]);
+    } finally {
+      pendingApprovalDecisionsRef.current.delete(approvalId);
     }
   }
 
   const onMcpAuthConnect = useCallback(
     async ({
       approvalId,
-      authUrl,
       serverId,
     }: {
       approvalId: string;
-      authUrl: string;
       serverId: string;
     }): Promise<void> => {
       try {
         rememberPendingMcpAuthAction({ approvalId, serverId });
-        window.location.href = authUrl;
+        await connectors.authenticate(serverId);
       } catch (err) {
         setItems((current) => [
           ...current,
@@ -482,7 +494,7 @@ export function ChatScreen({
         ]);
       }
     },
-    [],
+    [connectors],
   );
 
   const onMcpAuthSkip = useCallback(
@@ -514,6 +526,10 @@ export function ChatScreen({
     approvalId: string,
     decision: ApprovalDecision,
   ): Promise<void> {
+    if (pendingApprovalDecisionsRef.current.has(approvalId)) {
+      return;
+    }
+    pendingApprovalDecisionsRef.current.add(approvalId);
     try {
       await decideApproval(approvalId, decision, identity, "mcp_auth_resolved");
       if (decision === "rejected") {
@@ -529,6 +545,8 @@ export function ChatScreen({
           text: errorMessage(err, "Could not resolve connector auth"),
         },
       ]);
+    } finally {
+      pendingApprovalDecisionsRef.current.delete(approvalId);
     }
   }
 

@@ -95,7 +95,7 @@ def test_in_memory_regenerate_reuses_parent_user_message() -> None:
             environ={
                 "OPENAI_API_KEY": "sk-test",
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         ),
     )
@@ -112,7 +112,7 @@ def test_in_memory_regenerate_reuses_parent_user_message() -> None:
             org_id="org_123",
             user_id="user_123",
             user_input="Original question",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     assistant = store.append_message(
@@ -135,7 +135,7 @@ def test_in_memory_regenerate_reuses_parent_user_message() -> None:
             user_input="Regenerate",
             regenerate_from_message_id=assistant.message_id,
             branch_id="branch_retry",
-            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 

@@ -63,6 +63,10 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 - Append `model_delta` events from `messages` token chunks while the model is running.
 - Project `messages`, `updates`, and `custom` parts into replayable reasoning, tool, observation, and subagent events through `RuntimeEventProducer`.
 - Persist the final assistant output as both an assistant message and a `final_response` event.
+- Build a branch-scoped prior tool observation index from user-visible
+  `tool_result` events for later turns. The next run receives only compact
+  summaries in prompt context; the model may call `load_prior_tool_result` to
+  read one full persisted, redacted prior result by observation id.
 - Observe cancellation and approval commands.
 - Mark terminal run state exactly once.
 
@@ -97,6 +101,10 @@ Implemented API event types include:
 - Tools: `tool_call`, `tool_call_started`, `tool_call_delta`, `tool_result`, `tool_call_completed`.
   Tool results remain visible as result events; completion events are emitted when
   source data indicates the tool call finished.
+  User-visible prior results may also be summarized into later-turn prompt
+  context for the same selected message branch. This replay is context-only:
+  original tools are not memoized or skipped, and fresh/current requests should
+  still call the underlying tool again.
 - Subagents: `subagent_update`, `subagent_started`, `subagent_progress`, `subagent_completed`.
 - Approvals: `approval_requested`, `approval_resolved`.
 - Transport/system: `heartbeat`, `error`.

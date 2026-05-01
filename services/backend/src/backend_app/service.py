@@ -187,7 +187,7 @@ class McpRegistryService:
     def list_servers(self, *, org_id: str, user_id: str) -> McpServerListResponse:
         return McpServerListResponse(
             servers=tuple(
-                McpServerResponse.from_record(record)
+                self._response_from_record(record)
                 for record in self.store.list_servers(org_id=org_id, user_id=user_id)
             )
         )
@@ -280,9 +280,14 @@ class McpRegistryService:
         )
         session = session.model_copy(update={"auth_url": authorization.auth_url})
         self.store.create_auth_session(session)
+        next_auth_state = (
+            McpAuthState.AUTHENTICATED
+            if self._has_usable_token(record)
+            else McpAuthState.AUTH_PENDING
+        )
         updated = self._update_record(
             record,
-            auth_state=McpAuthState.AUTH_PENDING,
+            auth_state=next_auth_state,
             last_discovery=authorization.discovery,
             required_scopes=authorization.required_scopes,
         )
@@ -341,15 +346,19 @@ class McpRegistryService:
         for record in self.store.list_servers(org_id=org_id, user_id=user_id):
             if not record.enabled:
                 continue
+            auth_state = self._effective_auth_state(record)
             cards.append(
                 InternalMcpServerCard(
                     server_id=record.server_id,
                     name=record.name,
                     display_name=record.display_name,
-                    short_description=self._card_description(record),
+                    short_description=self._card_description(
+                        record,
+                        auth_state=auth_state,
+                    ),
                     transport=record.transport,
                     auth_mode=record.auth_mode,
-                    auth_state=record.auth_state,
+                    auth_state=auth_state,
                     required_scopes=record.required_scopes,
                     health=record.health,
                     enabled=record.enabled,
@@ -373,7 +382,7 @@ class McpRegistryService:
             server_id=record.server_id,
             url=record.url,
             transport=record.transport,
-            auth_state=record.auth_state,
+            auth_state=self._effective_auth_state(record),
             credential_ref=credential_ref,
         )
 
@@ -428,6 +437,29 @@ class McpRegistryService:
     ) -> McpServerRecord:
         updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
         return self.store.update_server(updated)
+
+    def _response_from_record(self, record: McpServerRecord) -> McpServerResponse:
+        effective_record = record.model_copy(
+            update={"auth_state": self._effective_auth_state(record)}
+        )
+        return McpServerResponse.from_record(effective_record)
+
+    def _effective_auth_state(self, record: McpServerRecord) -> McpAuthState:
+        if record.auth_state == McpAuthState.AUTHENTICATED:
+            return record.auth_state
+        if self._has_usable_token(record):
+            return McpAuthState.AUTHENTICATED
+        return record.auth_state
+
+    def _has_usable_token(self, record: McpServerRecord) -> bool:
+        token = self.store.get_token(server_id=record.server_id)
+        if token is None:
+            return False
+        if token.expires_at is None:
+            return True
+        if token.expires_at > datetime.now(UTC) + timedelta(seconds=60):
+            return True
+        return token.encrypted_refresh_token is not None
 
     def _oauth_client_config(
         self, request: McpOAuthClientRequest | None
@@ -588,8 +620,17 @@ class McpRegistryService:
         ).strip("_")
 
     @classmethod
-    def _card_description(cls, record: McpServerRecord) -> str:
-        if record.auth_state in {McpAuthState.AUTHENTICATED, McpAuthState.AUTH_SKIPPED}:
+    def _card_description(
+        cls,
+        record: McpServerRecord,
+        *,
+        auth_state: McpAuthState | None = None,
+    ) -> str:
+        visible_auth_state = auth_state or record.auth_state
+        if visible_auth_state in {
+            McpAuthState.AUTHENTICATED,
+            McpAuthState.AUTH_SKIPPED,
+        }:
             return f"{record.display_name} MCP server."
         return f"{record.display_name} MCP server requires authentication before tools can load."
 

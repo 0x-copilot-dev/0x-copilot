@@ -29,6 +29,11 @@ from runtime_api.schemas import (
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import RuntimeStreamPartAdapter
+from runtime_worker.tool_observations import (
+    PriorToolResultLoader,
+    ToolObservationIndex,
+    ToolObservationIndexBuilder,
+)
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 AgentFactory = Callable[..., RuntimeHarness]
@@ -93,11 +98,19 @@ class RuntimeRunHandler:
         metrics = AssistantRunMetrics.from_run(run)
 
         try:
+            tool_observation_index = self._tool_observation_index(command, run)
             harness = self.agent_factory(
                 context=command.runtime_context,
-                dependencies=self.dependencies_factory(command.runtime_context),
+                dependencies=self._dependencies_for_run(
+                    command,
+                    tool_observation_index,
+                ),
             )
-            messages = self._messages_for_run(command, run)
+            messages = self._messages_for_run(
+                command,
+                run,
+                tool_observation_index=tool_observation_index,
+            )
             if command.runtime_context.model_profile.supports_streaming and (
                 self._runtime_streamer_explicit
                 or callable(getattr(harness.agent, "astream", None))
@@ -200,7 +213,11 @@ class RuntimeRunHandler:
         )
 
     def _messages_for_run(
-        self, command: RuntimeRunCommand, run: RunRecord
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+        *,
+        tool_observation_index: ToolObservationIndex | None = None,
     ) -> tuple[dict[str, str], ...]:
         records = self.persistence.list_messages(
             org_id=command.org_id,
@@ -208,7 +225,7 @@ class RuntimeRunHandler:
             limit=200,
         )
         selected = self._selected_message_chain(records, run.user_message_id)
-        return tuple(
+        messages = [
             {
                 "role": message.role.value,
                 "content": self._message_content_for_runtime(message),
@@ -216,6 +233,77 @@ class RuntimeRunHandler:
             for message in selected
             if message.role
             in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
+        ]
+        observations = (
+            tool_observation_index
+            or self._tool_observation_index_from_selected(
+                command,
+                run,
+                selected,
+            )
+        )
+        if observations.prompt_context is not None:
+            self._insert_prior_tool_context(messages, observations.prompt_context)
+        return tuple(messages)
+
+    def _dependencies_for_run(
+        self,
+        command: RuntimeRunCommand,
+        tool_observation_index: ToolObservationIndex,
+    ) -> RuntimeDependencies:
+        dependencies = self.dependencies_factory(command.runtime_context)
+        if not tool_observation_index.has_observations:
+            return dependencies
+        return dependencies.model_copy(
+            update={
+                "prior_tool_result_loader": PriorToolResultLoader(
+                    tool_observation_index
+                )
+            }
+        )
+
+    def _tool_observation_index(
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+    ) -> ToolObservationIndex:
+        records = self.persistence.list_messages(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            limit=200,
+        )
+        selected = self._selected_message_chain(records, run.user_message_id)
+        return self._tool_observation_index_from_selected(command, run, selected)
+
+    def _tool_observation_index_from_selected(
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+        selected: Sequence[MessageRecord],
+    ) -> ToolObservationIndex:
+        return ToolObservationIndexBuilder(self.event_store).build(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            current_run_id=run.run_id,
+            selected_messages=selected,
+        )
+
+    @staticmethod
+    def _insert_prior_tool_context(
+        messages: list[dict[str, str]],
+        prompt_context: str,
+    ) -> None:
+        insert_at = len(messages)
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index]["role"] == MessageRole.USER.value:
+                insert_at = index
+                break
+        messages.insert(
+            insert_at,
+            {
+                "role": MessageRole.SYSTEM.value,
+                "content": prompt_context,
+            },
         )
 
     @classmethod

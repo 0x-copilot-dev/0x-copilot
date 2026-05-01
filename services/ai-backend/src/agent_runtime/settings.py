@@ -122,7 +122,7 @@ class RuntimeSettings(RuntimeContract):
         default_timeout = cls._float(values, "RUNTIME_DEFAULT_TIMEOUT_SECONDS", 60)
         default_model = ModelConfig(
             provider=default_provider,
-            model_name=cls._get(values, "RUNTIME_DEFAULT_MODEL", "gpt-4.1-mini"),
+            model_name=cls._get(values, "RUNTIME_DEFAULT_MODEL", "gpt-5.4-mini"),
             max_input_tokens=cls._int(
                 values, "RUNTIME_DEFAULT_MAX_INPUT_TOKENS", 128000
             ),
