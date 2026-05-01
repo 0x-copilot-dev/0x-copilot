@@ -29,6 +29,13 @@ class FacadeRunRequest(BaseModel):
     user_input: str
     assistant_id: str | None = None
     model: dict[str, object] | None = None
+    content: list[dict[str, object]] | None = None
+    attachments: list[dict[str, object]] | None = None
+    quote: dict[str, object] | None = None
+    parent_message_id: str | None = None
+    source_message_id: str | None = None
+    regenerate_from_message_id: str | None = None
+    branch_id: str | None = None
     idempotency_key: str | None = None
     request_context: dict[str, object] = Field(default_factory=dict)
 
@@ -215,6 +222,17 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             params=identity.scoped_params(
                 {"limit": limit, "include_deleted": include_deleted}
             ),
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/models")
+    async def list_models(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/agent/models",
+            params=identity.scoped_params(),
             identity=identity,
         )
 

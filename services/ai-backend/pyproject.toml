@@ -6,28 +6,28 @@ build-backend = "setuptools.build_meta"
 name = "agent-runtime"
 version = "0.1.0"
 description = "Agent runtime foundation for the enterprise work surface"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
   "deepagents==0.5.5",
-  "fastapi",
-  "langchain",
-  "langchain-openai",
-  "langchain-anthropic",
-  "langchain-google-genai",
-  "langgraph",
-  "openai",
-  "anthropic",
-  "pydantic>=2",
-  "python-dotenv",
-  "uvicorn",
-  "gunicorn",
-  "httpx",
-  "psycopg[binary]",
+  "fastapi==0.136.1",
+  "langchain==1.2.16",
+  "langchain-openai==1.2.1",
+  "langchain-anthropic==1.4.2",
+  "langchain-google-genai==4.2.2",
+  "langgraph==1.1.10",
+  "openai==2.33.0",
+  "anthropic==0.97.0",
+  "pydantic==2.13.3",
+  "python-dotenv==1.2.2",
+  "uvicorn==0.46.0",
+  "gunicorn==25.3.0",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.3.3",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
+  "pytest==9.0.3",
 ]
 
 [tool.setuptools.packages.find]

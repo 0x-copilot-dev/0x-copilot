@@ -6,18 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "enterprise-search-backend-facade"
 version = "0.1.0"
 description = "Product-facing API facade for Enterprise Search"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
-  "fastapi",
-  "httpx",
-  "pydantic>=2",
-  "python-dotenv",
-  "uvicorn",
+  "fastapi==0.136.1",
+  "httpx==0.28.1",
+  "pydantic==2.13.3",
+  "python-dotenv==1.2.2",
+  "uvicorn==0.46.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
+  "pytest==9.0.3",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,31 +1,35 @@
 import type {
   ApprovalDecision,
   Conversation,
+  ModelCatalogModel,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import {
   AssistantRuntimeProvider,
-  ComposerPrimitive,
-  ThreadPrimitive,
+  CompositeAttachmentAdapter,
+  SimpleImageAttachmentAdapter,
+  SimpleTextAttachmentAdapter,
+  Suggestions,
+  WebSpeechDictationAdapter,
+  WebSpeechSynthesisAdapter,
+  useAui,
   useExternalStoreRuntime,
   type AppendMessage,
+  type CompleteAttachment,
+  type ExternalStoreThreadData,
   type ExternalStoreThreadListAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
-  Badge,
   Button,
   Card,
-  DropdownMenu,
   Field,
-  IconButton,
   Select,
   useTheme,
   type ThemeScheme,
 } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Streamdown } from "streamdown";
 import {
   cancelRun,
   createConversation,
@@ -33,22 +37,25 @@ import {
   decideApproval,
   getConversation,
   listConversations,
+  listModels,
   listMessages,
   streamRunEvents,
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
-import {
-  ConnectorConsentCard,
-  ConnectorSuggestionCard,
-} from "../connectors/ConnectorConsentCard";
+import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import {
   applyRuntimeEvent,
+  chatItemsToThreadMessages,
   messagesToChatItems,
   optimisticUserMessage,
   type ChatItem,
 } from "./chatModel";
-import { RunActivityPanel } from "./RunActivityPanel";
+import {
+  AssistantThread,
+  AssistantThreadList,
+  ThreadBody,
+} from "./assistantUiComponents";
 
 export function ChatScreen({
   connectors,
@@ -64,7 +71,6 @@ export function ChatScreen({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [items, setItems] = useState<ChatItem[]>([]);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showConnectorSuggestions, setShowConnectorSuggestions] =
     useState(false);
@@ -72,6 +78,8 @@ export function ChatScreen({
   const [status, setStatus] = useState("Ready");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelCatalogModel[]>(fallbackModels);
+  const [selectedModelId, setSelectedModelId] = useState(fallbackModels[0].id);
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -136,6 +144,35 @@ export function ChatScreen({
         reconnectTimeoutRef.current = null;
       }
       streamRef.current?.close();
+    };
+  }, [identity]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadModelCatalog(): Promise<void> {
+      try {
+        const response = await listModels(identity);
+        if (cancelled) {
+          return;
+        }
+        setModels(
+          response.models.length > 0 ? response.models : fallbackModels,
+        );
+        setSelectedModelId(
+          response.default_model_id ??
+            response.models[0]?.id ??
+            fallbackModels[0].id,
+        );
+      } catch {
+        if (!cancelled) {
+          setModels(fallbackModels);
+          setSelectedModelId(fallbackModels[0].id);
+        }
+      }
+    }
+    void loadModelCatalog();
+    return () => {
+      cancelled = true;
     };
   }, [identity]);
 
@@ -244,7 +281,12 @@ export function ChatScreen({
         }
 
         setItems((current) => [...current, optimisticUserMessage(text)]);
-        const run = await createRun(targetConversationId, text, identity);
+        const run = await createRun(targetConversationId, text, identity, {
+          model: modelSelectionForId(models, selectedModelId),
+          attachments: attachmentsFromAppendMessage(message),
+          content: contentFromAppendMessage(message),
+          quote: quoteFromAppendMessage(message),
+        });
         latestSequenceRef.current = 0;
         setActiveRunId(run.run_id);
         setStatus("Queued...");
@@ -267,7 +309,9 @@ export function ChatScreen({
       activeRunId,
       conversationId,
       identity,
+      models,
       refreshConversations,
+      selectedModelId,
       startEventStream,
     ],
   );
@@ -329,210 +373,156 @@ export function ChatScreen({
   }
 
   const threadMessages = useMemo<ThreadMessageLike[]>(
-    () =>
-      items
-        .filter((item): item is Extract<ChatItem, { kind: "message" }> => {
-          return item.kind === "message";
-        })
-        .map((item) => {
-          const message = {
-            id: item.id,
-            role: item.role,
-            content: [{ type: "text" as const, text: item.text }],
-          };
-          if (
-            item.role === "assistant" &&
-            item.id === `assistant-${activeRunId}`
-          ) {
-            return { ...message, status: { type: "running" as const } };
-          }
-          return message;
-        }),
+    () => chatItemsToThreadMessages(items, activeRunId),
     [activeRunId, items],
   );
 
-  const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(
-    () => ({
-      threadId: conversationId ?? "new-chat",
+  const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(() => {
+    const threads: ExternalStoreThreadData<"regular">[] = [];
+    const archivedThreads: ExternalStoreThreadData<"archived">[] = [];
+
+    for (const conversation of conversations) {
+      const thread = {
+        id: conversation.conversation_id,
+        remoteId: conversation.conversation_id,
+        title: conversation.title ?? "Untitled chat",
+      };
+      if (conversation.status === "archived") {
+        archivedThreads.push({ ...thread, status: "archived" });
+      } else {
+        threads.push({ ...thread, status: "regular" });
+      }
+    }
+
+    if (
+      conversationId !== null &&
+      !threads.some((thread) => thread.id === conversationId) &&
+      !archivedThreads.some((thread) => thread.id === conversationId)
+    ) {
+      threads.unshift({
+        status: "regular",
+        id: conversationId,
+        remoteId: conversationId,
+        title: currentTitle(conversations, conversationId),
+      });
+    }
+
+    return {
+      threadId: conversationId ?? undefined,
       isLoading: historyLoading,
-      threads: conversations
-        .filter((conversation) => conversation.status !== "archived")
-        .map((conversation) => ({
-          status: "regular",
-          id: conversation.conversation_id,
-          remoteId: conversation.conversation_id,
-          title: conversation.title ?? "Untitled chat",
-        })),
-      archivedThreads: conversations
-        .filter((conversation) => conversation.status === "archived")
-        .map((conversation) => ({
-          status: "archived",
-          id: conversation.conversation_id,
-          remoteId: conversation.conversation_id,
-          title: conversation.title ?? "Untitled chat",
-        })),
+      threads,
+      archivedThreads,
       onSwitchToNewThread: onStartNewChat,
       onSwitchToThread: loadConversationById,
-    }),
-    [
-      conversationId,
-      conversations,
-      historyLoading,
-      loadConversationById,
-      onStartNewChat,
-    ],
+    };
+  }, [
+    conversationId,
+    conversations,
+    historyLoading,
+    loadConversationById,
+    onStartNewChat,
+  ]);
+
+  const attachmentAdapter = useMemo(
+    () =>
+      new CompositeAttachmentAdapter([
+        new SimpleImageAttachmentAdapter(),
+        new SimpleTextAttachmentAdapter(),
+      ]),
+    [],
   );
+  const dictationAdapter = useMemo(
+    () =>
+      typeof window !== "undefined" && WebSpeechDictationAdapter.isSupported()
+        ? new WebSpeechDictationAdapter()
+        : undefined,
+    [],
+  );
+  const speechAdapter = useMemo(() => new WebSpeechSynthesisAdapter(), []);
+  const aui = useAui({
+    suggestions: Suggestions([
+      {
+        title: "Search connectors",
+        label: "Find context across connected apps",
+        prompt:
+          "Search connected apps for relevant context and summarize the findings.",
+      },
+      {
+        title: "Think through risks",
+        label: "Show reasoning and tool usage",
+        prompt:
+          "Think through the main risks, use available tools, and explain the recommendation.",
+      },
+      {
+        title: "Call a subagent",
+        label: "Delegate research",
+        prompt:
+          "Call a research subagent to investigate this and report back with sources.",
+      },
+    ]),
+  });
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages: threadMessages,
     convertMessage: (message) => message,
     isRunning: activeRunId !== null,
     onNew,
+    onEdit: onNew,
+    onReload: async (parentId) => {
+      if (activeRunId !== null || conversationId === null) {
+        return;
+      }
+      const run = await createRun(
+        conversationId,
+        "Regenerate the previous response.",
+        identity,
+        {
+          model: modelSelectionForId(models, selectedModelId),
+          regenerateFromMessageId: parentId ?? undefined,
+        },
+      );
+      latestSequenceRef.current = 0;
+      setActiveRunId(run.run_id);
+      setStatus("Queued...");
+      startEventStream(run.run_id, latestSequenceRef.current);
+    },
+    onResumeToolCall: ({ toolCallId, payload }) => {
+      if (isApprovalResumePayload(payload)) {
+        void onApprovalDecision(toolCallId, payload.decision);
+      }
+    },
     onCancel,
     adapters: {
+      attachments: attachmentAdapter,
+      dictation: dictationAdapter,
+      speech: speechAdapter,
       threadList: threadListAdapter,
     },
   });
 
-  function renderItem(item: ChatItem): ReactElement {
-    if (item.kind === "message") {
-      const isStreamingAssistant =
-        item.role === "assistant" && item.id === `assistant-${activeRunId}`;
-      return (
-        <article
-          key={item.id}
-          className={`chat-message chat-message--${item.role}`}
-        >
-          <div className="chat-message__meta">
-            {item.role === "assistant"
-              ? "Enterprise Search"
-              : item.role === "user"
-                ? "You"
-                : "System"}
-          </div>
-          <div className="chat-message__content">
-            {item.role === "assistant" ? (
-              <Streamdown
-                className="assistant-markdown"
-                mode={isStreamingAssistant ? "streaming" : "static"}
-              >
-                {item.text}
-              </Streamdown>
-            ) : (
-              item.text
-            )}
-          </div>
-        </article>
-      );
-    }
-    if (item.kind === "run-activity") {
-      return <RunActivityPanel key={item.id} activity={item.activity} />;
-    }
-    if (item.kind === "mcp-auth") {
-      return (
-        <ConnectorConsentCard
-          key={item.id}
-          payload={item.payload}
-          onSkip={(serverId) => void connectors.skipAuth(serverId)}
-        />
-      );
-    }
-    if (item.kind === "approval") {
-      return (
-        <Card key={item.id} tone="accent" className="approval-card">
-          <strong>Approval requested</strong>
-          <p>
-            {item.payload.message ??
-              item.payload.reason ??
-              item.payload.approval_id}
-          </p>
-          <div className="approval-actions">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() =>
-                void onApprovalDecision(item.payload.approval_id, "approved")
-              }
-            >
-              Approve
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              onClick={() =>
-                void onApprovalDecision(item.payload.approval_id, "rejected")
-              }
-            >
-              Reject
-            </Button>
-          </div>
-        </Card>
-      );
-    }
-    return (
-      <article key={item.id} className="chat-message chat-message--system">
-        <strong>{item.title}</strong>
-        {item.text ? `\n${item.text}` : ""}
-      </article>
-    );
-  }
-
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <main className="chat-workspace">
-        <HistorySidebar
+    <AssistantRuntimeProvider runtime={runtime} aui={aui}>
+      <main className="aui-workspace">
+        <AssistantThreadList
           activeRunId={activeRunId}
           conversations={conversations}
-          currentConversationId={conversationId}
-          error={historyError}
           loading={historyLoading}
-          onNewChat={onStartNewChat}
           onRefresh={() => void refreshConversations()}
-          onSelect={(nextConversationId) =>
-            void loadConversationById(nextConversationId)
-          }
         />
-        <section className="assistant-chat-shell">
-          <header className="chat-header">
-            <div>
-              <span className="app-eyebrow">AI work surface</span>
-              <h1>{currentTitle(conversations, conversationId)}</h1>
-            </div>
-            <div className="chat-header__actions">
-              <Badge tone={activeRunId ? "accent" : "neutral"}>{status}</Badge>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setSettingsOpen(true)}
-              >
-                Chat settings
-              </Button>
-            </div>
-          </header>
-
-          <ThreadPrimitive.Root className="assistant-thread">
-            <ThreadPrimitive.Viewport className="assistant-thread__viewport">
-              {oauthStatus ? (
-                <article className="chat-message chat-message--system">
-                  {oauthStatus}
-                </article>
-              ) : null}
-
-              {items.length === 0 ? (
-                <section className="chat-empty">
-                  <span className="app-eyebrow">Ready when you are</span>
-                  <h2>What should Enterprise Search help with?</h2>
-                  <p>
-                    Ask the agent to search, reason, or use connectors. Thinking
-                    updates, tool calls, and approvals will stay visible in the
-                    thread.
-                  </p>
-                </section>
-              ) : (
-                items.map(renderItem)
-              )}
-
-              {showConnectorSuggestions && suggestedServers.length > 0 ? (
+        <AssistantThread
+          title={currentTitle(conversations, conversationId)}
+          status={historyError ?? status}
+          models={models}
+          selectedModel={selectedModelId}
+          onModelChange={setSelectedModelId}
+          modelDisabled={activeRunId !== null}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onShowConnectors={() => setShowConnectorSuggestions(true)}
+        >
+          <ThreadBody
+            oauthStatus={oauthStatus}
+            connectorSuggestions={
+              showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
                   servers={suggestedServers}
                   onConnect={(serverId) =>
@@ -541,72 +531,10 @@ export function ChatScreen({
                   onSkip={(serverId) => void connectors.skipAuth(serverId)}
                   onNone={() => setShowConnectorSuggestions(false)}
                 />
-              ) : null}
-              <ThreadPrimitive.ViewportFooter />
-            </ThreadPrimitive.Viewport>
-          </ThreadPrimitive.Root>
-
-          <ComposerPrimitive.Root className="assistant-composer">
-            <DropdownMenu
-              open={menuOpen}
-              trigger={
-                <IconButton
-                  label="Open composer actions"
-                  type="button"
-                  onClick={() => setMenuOpen((open) => !open)}
-                >
-                  +
-                </IconButton>
-              }
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setShowConnectorSuggestions(true);
-                  setMenuOpen(false);
-                }}
-              >
-                Choose connectors
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingsOpen(true);
-                  setMenuOpen(false);
-                }}
-              >
-                Chat settings
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenSettings();
-                  setMenuOpen(false);
-                }}
-              >
-                Full settings
-              </button>
-            </DropdownMenu>
-            <ComposerPrimitive.Input
-              aria-label="Message"
-              className="assistant-composer__input"
-              maxRows={8}
-              minRows={1}
-              placeholder="Message Enterprise Search..."
-              submitMode="enter"
-            />
-            {activeRunId ? (
-              <ComposerPrimitive.Cancel className="ui-button ui-button--secondary ui-button--md">
-                Stop
-              </ComposerPrimitive.Cancel>
-            ) : (
-              <ComposerPrimitive.Send className="ui-button ui-button--primary ui-button--md">
-                Send
-              </ComposerPrimitive.Send>
-            )}
-            <div className="composer-status">{status}</div>
-          </ComposerPrimitive.Root>
-        </section>
+              ) : null
+            }
+          />
+        </AssistantThread>
 
         {settingsOpen ? (
           <ChatSettingsPanel
@@ -621,79 +549,6 @@ export function ChatScreen({
         ) : null}
       </main>
     </AssistantRuntimeProvider>
-  );
-}
-
-function HistorySidebar({
-  activeRunId,
-  conversations,
-  currentConversationId,
-  error,
-  loading,
-  onNewChat,
-  onRefresh,
-  onSelect,
-}: {
-  activeRunId: string | null;
-  conversations: Conversation[];
-  currentConversationId: string | null;
-  error: string | null;
-  loading: boolean;
-  onNewChat: () => void;
-  onRefresh: () => void;
-  onSelect: (conversationId: string) => void;
-}): ReactElement {
-  const disabled = activeRunId !== null;
-  return (
-    <aside className="history-sidebar" aria-label="Conversation history">
-      <div className="history-sidebar__top">
-        <div>
-          <span className="app-eyebrow">History</span>
-          <h2>Chats</h2>
-        </div>
-        <IconButton
-          label="Refresh conversations"
-          type="button"
-          onClick={onRefresh}
-        >
-          R
-        </IconButton>
-      </div>
-      <Button
-        type="button"
-        variant="secondary"
-        className="history-sidebar__new"
-        disabled={disabled}
-        onClick={onNewChat}
-      >
-        New chat
-      </Button>
-      {loading ? (
-        <p className="history-sidebar__note">Loading history...</p>
-      ) : null}
-      {error ? <p className="app-error">{error}</p> : null}
-      <nav className="history-list" aria-label="Previous chats">
-        {conversations.length === 0 && !loading ? (
-          <p className="history-sidebar__note">No chats yet.</p>
-        ) : null}
-        {conversations.map((conversation) => (
-          <button
-            key={conversation.conversation_id}
-            type="button"
-            className={
-              conversation.conversation_id === currentConversationId
-                ? "history-list__item is-active"
-                : "history-list__item"
-            }
-            disabled={disabled}
-            onClick={() => onSelect(conversation.conversation_id)}
-          >
-            <strong>{conversation.title ?? "Untitled chat"}</strong>
-            <span>{formatHistoryDate(conversation.updated_at)}</span>
-          </button>
-        ))}
-      </nav>
-    </aside>
   );
 }
 
@@ -723,9 +578,14 @@ function ChatSettingsPanel({
           <span className="app-eyebrow">Settings</span>
           <h2>Chat controls</h2>
         </div>
-        <IconButton label="Close chat settings" type="button" onClick={onClose}>
+        <button
+          className="aui-icon-button"
+          aria-label="Close chat settings"
+          type="button"
+          onClick={onClose}
+        >
           x
-        </IconButton>
+        </button>
       </header>
       <Card>
         <Field label="Theme" hint="Applies across chat and settings.">
@@ -788,6 +648,63 @@ function textFromAppendMessage(message: AppendMessage): string {
   return textParts.join("\n");
 }
 
+function contentFromAppendMessage(
+  message: AppendMessage,
+): Array<Record<string, unknown>> {
+  return message.content.map((part) => ({ ...part }));
+}
+
+function attachmentsFromAppendMessage(
+  message: AppendMessage,
+): Array<Record<string, unknown>> {
+  const attachments = message.attachments ?? [];
+  return attachments.map((attachment: CompleteAttachment) => ({
+    id: attachment.id,
+    type: attachment.type,
+    name: attachment.name,
+    content_type: attachment.contentType ?? null,
+    content: attachment.content,
+  }));
+}
+
+function quoteFromAppendMessage(
+  message: AppendMessage,
+): Record<string, unknown> | undefined {
+  const quote = message.metadata.custom.quote;
+  return quote && typeof quote === "object"
+    ? (quote as Record<string, unknown>)
+    : undefined;
+}
+
+function modelSelectionForId(
+  models: ModelCatalogModel[],
+  modelId: string,
+): {
+  provider?: string | null;
+  model_name?: string | null;
+  reasoning?: Record<string, unknown> | null;
+} {
+  const model = models.find((candidate) => candidate.id === modelId);
+  if (!model) {
+    return { model_name: modelId };
+  }
+  return {
+    provider: model.provider,
+    model_name: model.model_name,
+    reasoning: model.reasoning ?? null,
+  };
+}
+
+function isApprovalResumePayload(
+  payload: unknown,
+): payload is { decision: ApprovalDecision; approval_id: string } {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const record = payload as Record<string, unknown>;
+  return record.decision === "approved" || record.decision === "rejected";
+}
+
 function titleFromPrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   if (normalized.length <= 44) {
@@ -822,19 +739,6 @@ function upsertConversation(
       new Date(right.updated_at).getTime() -
       new Date(left.updated_at).getTime(),
   );
-}
-
-function formatHistoryDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "Recently";
-  }
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
@@ -891,3 +795,30 @@ function stringPayload(
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value : null;
 }
+
+const fallbackModels: ModelCatalogModel[] = [
+  {
+    id: "gpt-4.1-mini",
+    provider: "openai",
+    model_name: "gpt-4.1-mini",
+    name: "GPT-4.1 Mini",
+    description: "Default fast OpenAI model",
+    configured: true,
+  },
+  {
+    id: "claude-opus-4-7",
+    provider: "anthropic",
+    model_name: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    description: "Anthropic reasoning model",
+    configured: false,
+  },
+  {
+    id: "gemini-2.5-pro",
+    provider: "gemini",
+    model_name: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    description: "Google long-context model",
+    configured: false,
+  },
+];

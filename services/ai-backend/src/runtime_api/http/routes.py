@@ -20,6 +20,7 @@ from runtime_api.schemas import (
     CreateRunResponse,
     HistoryDeletionResponse,
     MessageListResponse,
+    ModelCatalogResponse,
     RuntimeRequestContext,
     RuntimeEventReplayResponse,
     RunStatusResponse,
@@ -93,6 +94,16 @@ class RuntimeApiRoutes:
             limit=limit,
             include_deleted=include_deleted,
         )
+
+    @classmethod
+    def list_models(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ModelCatalogResponse:
+        cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return cls.service(request).list_models()
 
     @classmethod
     def create_run(
@@ -281,6 +292,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=MessageListResponse,
             name=Keys.RouteName.GET_MESSAGES,
+        )
+        router.add_api_route(
+            "/models",
+            RuntimeApiRoutes.list_models,
+            methods=["GET"],
+            response_model=ModelCatalogResponse,
+            name="list_models",
         )
         router.add_api_route(
             "/runs",

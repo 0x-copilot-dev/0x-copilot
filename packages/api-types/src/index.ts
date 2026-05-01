@@ -270,6 +270,44 @@ export interface ModelSelectionRequest {
   timeout_seconds?: number | null;
   max_input_tokens?: number | null;
   supports_streaming?: boolean | null;
+  reasoning?: Record<string, unknown> | null;
+}
+
+export interface ModelCatalogModel {
+  id: string;
+  provider: string;
+  model_name: string;
+  name: string;
+  description?: string | null;
+  configured: boolean;
+  supports_streaming?: boolean;
+  supports_attachments?: boolean;
+  supports_reasoning?: boolean;
+  reasoning?: Record<string, unknown> | null;
+}
+
+export interface ModelCatalogResponse {
+  default_model_id: string;
+  models: ModelCatalogModel[];
+}
+
+export interface RunContentPart {
+  type: string;
+  text?: string;
+  image?: string;
+  data?: string;
+  mime_type?: string;
+  filename?: string;
+  name?: string;
+  content?: unknown;
+}
+
+export interface RunAttachmentRequest {
+  id: string;
+  type: string;
+  name: string;
+  content_type?: string | null;
+  content: unknown[];
 }
 
 export interface RuntimeRequestContext {
@@ -289,6 +327,13 @@ export interface CreateRunRequest {
   content_format?: string;
   idempotency_key?: string | null;
   model?: ModelSelectionRequest | null;
+  content?: RunContentPart[];
+  attachments?: RunAttachmentRequest[];
+  quote?: Record<string, unknown> | null;
+  parent_message_id?: string | null;
+  source_message_id?: string | null;
+  regenerate_from_message_id?: string | null;
+  branch_id?: string | null;
   request_context?: RuntimeRequestContext;
   request_options?: Record<string, unknown>;
 }

@@ -45,6 +45,51 @@ class ModelSelectionRequest(RuntimeContract):
         return RuntimeApiValueNormalizer.normalize_optional_text(value, "model_name")
 
 
+class ModelCatalogItem(RuntimeContract):
+    """Frontend-selectable model metadata."""
+
+    id: str
+    provider: str
+    model_name: str
+    name: str
+    description: str | None = None
+    configured: bool
+    supports_streaming: bool = True
+    supports_attachments: bool = False
+    supports_reasoning: bool = False
+    reasoning: JsonObject | None = None
+
+
+class ModelCatalogResponse(RuntimeContract):
+    """Available model profiles for the chat model selector."""
+
+    default_model_id: str
+    models: tuple[ModelCatalogItem, ...]
+
+
+class RunContentPartRequest(RuntimeContract):
+    """Assistant UI content part sent with a run submission."""
+
+    type: str
+    text: str | None = None
+    image: str | None = None
+    data: str | None = None
+    mime_type: str | None = None
+    filename: str | None = None
+    name: str | None = None
+    content: object | None = None
+
+
+class RunAttachmentRequest(RuntimeContract):
+    """Attachment metadata and serialized content sent from the composer."""
+
+    id: str
+    type: str
+    name: str
+    content_type: str | None = None
+    content: tuple[JsonObject, ...] = ()
+
+
 class RuntimeRequestContext(RuntimeContract):
     """Optional request context used to build an internal runtime context."""
 
@@ -71,6 +116,13 @@ class CreateRunRequest(RuntimeContract):
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
     idempotency_key: str | None = None
     model: ModelSelectionRequest | None = None
+    content: tuple[RunContentPartRequest, ...] = ()
+    attachments: tuple[RunAttachmentRequest, ...] = ()
+    quote: JsonObject | None = None
+    parent_message_id: str | None = None
+    source_message_id: str | None = None
+    regenerate_from_message_id: str | None = None
+    branch_id: str | None = None
     request_context: RuntimeRequestContext = Field(
         default_factory=RuntimeRequestContext
     )

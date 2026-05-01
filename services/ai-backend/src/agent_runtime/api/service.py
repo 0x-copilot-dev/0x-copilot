@@ -27,6 +27,8 @@ from runtime_api.schemas import (
     CreateRunResponse,
     HistoryDeletionResponse,
     MessageListResponse,
+    ModelCatalogItem,
+    ModelCatalogResponse,
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
@@ -72,6 +74,66 @@ class RuntimeApiService:
         self.event_producer = RuntimeEventProducer(
             persistence=persistence,
             event_store=event_store,
+        )
+
+    def list_models(self) -> ModelCatalogResponse:
+        """Return selectable chat models and credential availability."""
+
+        default = self.settings.default_model
+        configured = {
+            "openai": self.settings.openai.is_configured,
+            "anthropic": self.settings.anthropic.is_configured,
+            "gemini": self.settings.gemini.is_configured,
+        }
+        models = [
+            ModelCatalogItem(
+                id=default.model_name,
+                provider=default.provider,
+                model_name=default.model_name,
+                name=_display_model_name(default.model_name),
+                description="Runtime default model",
+                configured=configured.get(default.provider, False),
+                supports_streaming=default.supports_streaming,
+                supports_reasoning=default.reasoning is not None,
+                reasoning=default.reasoning.model_dump(mode="json")
+                if default.reasoning is not None
+                else None,
+            ),
+            ModelCatalogItem(
+                id="gpt-4.1-mini",
+                provider="openai",
+                model_name="gpt-4.1-mini",
+                name="GPT-4.1 Mini",
+                description="Fast OpenAI model",
+                configured=configured["openai"],
+                supports_streaming=True,
+                supports_attachments=True,
+            ),
+            ModelCatalogItem(
+                id="claude-opus-4-7",
+                provider="anthropic",
+                model_name="claude-opus-4-7",
+                name="Claude Opus 4.7",
+                description="Anthropic reasoning model",
+                configured=configured["anthropic"],
+                supports_streaming=True,
+                supports_reasoning=True,
+            ),
+            ModelCatalogItem(
+                id="gemini-2.5-pro",
+                provider="gemini",
+                model_name="gemini-2.5-pro",
+                name="Gemini 2.5 Pro",
+                description="Google long-context model",
+                configured=configured["gemini"],
+                supports_streaming=True,
+                supports_attachments=True,
+            ),
+        ]
+        unique_models = {model.id: model for model in models}
+        return ModelCatalogResponse(
+            default_model_id=default.model_name,
+            models=tuple(unique_models.values()),
         )
 
     def create_conversation(
@@ -483,6 +545,24 @@ class RuntimeApiService:
         trace_metadata = dict(context.trace_metadata)
         if context.context:
             trace_metadata["request_context"] = context.context
+        if request.quote is not None:
+            trace_metadata["quote"] = request.quote
+        if request.attachments:
+            trace_metadata["attachments"] = [
+                attachment.model_dump(mode="json") for attachment in request.attachments
+            ]
+        if request.content:
+            trace_metadata["content_parts"] = [
+                part.model_dump(mode="json") for part in request.content
+            ]
+        if request.regenerate_from_message_id is not None:
+            trace_metadata["regenerate_from_message_id"] = (
+                request.regenerate_from_message_id
+            )
+        if request.source_message_id is not None:
+            trace_metadata["source_message_id"] = request.source_message_id
+        if request.parent_message_id is not None:
+            trace_metadata["parent_message_id"] = request.parent_message_id
         runtime_context = AgentRuntimeContext(
             user_id=request.user_id,
             org_id=request.org_id,
@@ -526,3 +606,10 @@ class RuntimeApiService:
                 retryable=False,
             )
         return run
+
+
+def _display_model_name(model_name: str) -> str:
+    parts = model_name.replace("_", "-").split("-")
+    return " ".join(
+        part.upper() if part in {"gpt"} else part.capitalize() for part in parts
+    )

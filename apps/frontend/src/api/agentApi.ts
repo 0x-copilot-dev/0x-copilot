@@ -9,6 +9,8 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   MessageListResponse,
+  ModelCatalogResponse,
+  ModelSelectionRequest,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
@@ -102,16 +104,42 @@ export async function listMessages(
   return (await response.json()) as MessageListResponse;
 }
 
+export async function listModels(
+  identity: RequestIdentity,
+): Promise<ModelCatalogResponse> {
+  const response = await fetch(`/v1/agent/models?${identityParams(identity)}`);
+  await assertOk(response);
+  return (await response.json()) as ModelCatalogResponse;
+}
+
 export async function createRun(
   conversationId: string,
   userInput: string,
   identity: RequestIdentity,
+  options: {
+    model?: ModelSelectionRequest | null;
+    content?: Array<Record<string, unknown>>;
+    attachments?: Array<Record<string, unknown>>;
+    quote?: Record<string, unknown>;
+    parentMessageId?: string | null;
+    sourceMessageId?: string | null;
+    regenerateFromMessageId?: string | null;
+    branchId?: string | null;
+  } = {},
 ): Promise<CreateRunResponse> {
   const payload: CreateRunRequest = {
     conversation_id: conversationId,
     org_id: identity.orgId,
     user_id: identity.userId,
     user_input: userInput,
+    model: options.model,
+    content: options.content,
+    attachments: options.attachments as CreateRunRequest["attachments"],
+    quote: options.quote,
+    parent_message_id: options.parentMessageId,
+    source_message_id: options.sourceMessageId,
+    regenerate_from_message_id: options.regenerateFromMessageId,
+    branch_id: options.branchId,
   };
   const response = await fetch("/v1/agent/runs", {
     method: "POST",

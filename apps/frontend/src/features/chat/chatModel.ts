@@ -4,6 +4,10 @@ import type {
   Message,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
+import type {
+  MessageStatus as AssistantMessageStatus,
+  ThreadMessageLike,
+} from "@assistant-ui/react";
 import {
   isApprovalRequestedPayload,
   isMcpAuthRequiredPayload,
@@ -119,6 +123,76 @@ export function optimisticUserMessage(text: string): ChatItem {
     role: "user",
     text,
   };
+}
+
+export function chatItemsToThreadMessages(
+  items: ChatItem[],
+  activeRunId: string | null,
+): ThreadMessageLike[] {
+  return items.flatMap((item): ThreadMessageLike[] => {
+    if (item.kind === "message") {
+      return [
+        {
+          id: item.id,
+          role: item.role,
+          content: [{ type: "text", text: item.text }],
+          status: statusForMessage(item, activeRunId),
+        },
+      ];
+    }
+    if (item.kind === "run-activity") {
+      return [runActivityToThreadMessage(item.activity, activeRunId)];
+    }
+    if (item.kind === "approval") {
+      return [
+        {
+          id: item.id,
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: item.payload.approval_id,
+              toolName: "approval_request",
+              args: item.payload,
+              argsText: JSON.stringify(item.payload, null, 2),
+            },
+          ],
+          status: { type: "requires-action", reason: "interrupt" },
+        },
+      ];
+    }
+    if (item.kind === "mcp-auth") {
+      return [
+        {
+          id: item.id,
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: item.payload.server_id,
+              toolName: "mcp_auth_required",
+              args: item.payload,
+              argsText: JSON.stringify(item.payload, null, 2),
+              result: item.payload.message,
+            },
+          ],
+          status: { type: "requires-action", reason: "interrupt" },
+        },
+      ];
+    }
+    return [
+      {
+        id: item.id,
+        role: "system",
+        content: [
+          {
+            type: "text",
+            text: item.text ? `${item.title}\n${item.text}` : item.title,
+          },
+        ],
+      },
+    ];
+  });
 }
 
 export function applyRuntimeEvent(
@@ -773,6 +847,143 @@ function objectSummary(
   }
   const keys = Object.keys(value);
   return keys.length > 0 ? `${keys.length} fields returned` : undefined;
+}
+
+function statusForMessage(
+  item: Extract<ChatItem, { kind: "message" }>,
+  activeRunId: string | null,
+): AssistantMessageStatus | undefined {
+  if (item.role !== "assistant") {
+    return undefined;
+  }
+  if (activeRunId !== null && item.id === `assistant-${activeRunId}`) {
+    return { type: "running" };
+  }
+  return { type: "complete", reason: "stop" };
+}
+
+function runActivityToThreadMessage(
+  activity: RunActivity,
+  activeRunId: string | null,
+): ThreadMessageLike {
+  const content: NonNullable<ThreadMessageLike["content"]> = [];
+  for (const item of activity.reasoning) {
+    content.push({
+      type: "reasoning",
+      text: item.text,
+    });
+  }
+  for (const tool of activity.tools) {
+    content.push(toolToMessagePart(tool));
+  }
+  for (const subagent of activity.subagents) {
+    content.push(subagentToMessagePart(subagent));
+  }
+  for (const event of activity.events) {
+    content.push({
+      type: "tool-call",
+      toolCallId: event.id,
+      toolName: "runtime_event",
+      args: {
+        event_type: event.eventType,
+        title: event.title,
+        summary: event.summary ?? null,
+        status: event.status,
+      },
+      argsText: event.summary ?? event.title,
+      result: event.status,
+    });
+  }
+  if (content.length === 0) {
+    content.push({
+      type: "tool-call",
+      toolCallId: activity.runId,
+      toolName: "agent_run",
+      args: {
+        title: activity.title,
+        status: activity.status,
+        summary: activity.summary ?? null,
+      },
+      argsText: activity.summary ?? activity.title,
+      result: activity.status,
+    });
+  }
+  return {
+    id: `activity-${activity.runId}`,
+    role: "assistant",
+    content,
+    status:
+      activeRunId === activity.runId || activity.status === "running"
+        ? { type: "running" }
+        : activity.status === "failed"
+          ? { type: "incomplete", reason: "error" }
+          : activity.status === "cancelled"
+            ? { type: "incomplete", reason: "cancelled" }
+            : { type: "complete", reason: "stop" },
+  };
+}
+
+function toolToMessagePart(tool: ToolCallActivity): {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  argsText: string;
+  result?: unknown;
+  isError?: boolean;
+} {
+  const args = {
+    summary: tool.summary ?? null,
+    deltas: tool.deltas.map((item) => item.text),
+    status: tool.status,
+  };
+  return {
+    type: "tool-call",
+    toolCallId: tool.id,
+    toolName: tool.name,
+    args,
+    argsText: JSON.stringify(args, null, 2),
+    result: tool.result,
+    isError: tool.status === "failed",
+  };
+}
+
+function subagentToMessagePart(subagent: SubagentActivity): {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  argsText: string;
+  result?: unknown;
+  isError?: boolean;
+} {
+  const args = {
+    subagent_name: subagent.name,
+    task_id: subagent.taskId,
+    summary: subagent.summary ?? null,
+    status: subagent.status,
+    reasoning: subagent.reasoning.map((item) => item.text),
+    events: subagent.events.map((event) => ({
+      title: event.title,
+      summary: event.summary ?? null,
+      status: event.status,
+    })),
+    tools: subagent.tools.map((tool) => ({
+      name: tool.name,
+      summary: tool.summary ?? null,
+      status: tool.status,
+      result: tool.result ?? null,
+    })),
+  };
+  return {
+    type: "tool-call",
+    toolCallId: subagent.id,
+    toolName: "run_subagent",
+    args,
+    argsText: JSON.stringify(args, null, 2),
+    result: subagent.summary,
+    isError: subagent.status === "failed",
+  };
 }
 
 function titleForEvent(eventType: string): string {
