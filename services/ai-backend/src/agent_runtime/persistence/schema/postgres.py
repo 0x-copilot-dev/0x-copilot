@@ -60,7 +60,13 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system')),
     content_text TEXT NOT NULL,
     content_format TEXT NOT NULL,
+    content_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    quote_json JSONB,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     parent_message_id TEXT REFERENCES agent_messages(id),
+    source_message_id TEXT,
+    branch_id TEXT,
     token_count INTEGER CHECK (token_count IS NULL OR token_count >= 0),
     trace_id TEXT,
     status TEXT NOT NULL CHECK (status IN ('created', 'deleted')),
@@ -72,6 +78,18 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_org_conversation_created
     ON agent_messages (org_id, conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_org_run
     ON agent_messages (org_id, run_id);
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS content_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS quote_json JSONB;
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS source_message_id TEXT;
+ALTER TABLE agent_messages
+    ADD COLUMN IF NOT EXISTS branch_id TEXT;
 
 CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,

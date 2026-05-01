@@ -563,6 +563,8 @@ class RuntimeApiService:
             trace_metadata["source_message_id"] = request.source_message_id
         if request.parent_message_id is not None:
             trace_metadata["parent_message_id"] = request.parent_message_id
+        if request.branch_id is not None:
+            trace_metadata["branch_id"] = request.branch_id
         runtime_context = AgentRuntimeContext(
             user_id=request.user_id,
             org_id=request.org_id,

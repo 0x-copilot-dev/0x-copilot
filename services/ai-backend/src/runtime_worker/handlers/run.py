@@ -86,7 +86,7 @@ class RuntimeRunHandler:
                 context=command.runtime_context,
                 dependencies=self.dependencies_factory(command.runtime_context),
             )
-            messages = self._messages_for_run(command)
+            messages = self._messages_for_run(command, run)
             if command.runtime_context.model_profile.supports_streaming and (
                 self._runtime_streamer_explicit
                 or callable(getattr(harness.agent, "astream", None))
@@ -109,6 +109,10 @@ class RuntimeRunHandler:
                         run_id=command.run_id,
                         role=MessageRole.ASSISTANT,
                         content_text=final_text,
+                        parent_message_id=run.user_message_id,
+                        branch_id=self._trace_text(
+                            command.runtime_context, "branch_id"
+                        ),
                         trace_id=command.trace_id,
                     )
                 )
@@ -146,18 +150,48 @@ class RuntimeRunHandler:
         )
 
     def _messages_for_run(
-        self, command: RuntimeRunCommand
+        self, command: RuntimeRunCommand, run: RunRecord
     ) -> tuple[dict[str, str], ...]:
         records = self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
             limit=200,
         )
+        selected = self._selected_message_chain(records, run.user_message_id)
         return tuple(
             {"role": message.role.value, "content": message.content_text}
-            for message in records
+            for message in selected
             if message.role
             in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
+        )
+
+    @classmethod
+    def _selected_message_chain(
+        cls,
+        records: Sequence[MessageRecord],
+        user_message_id: str,
+    ) -> tuple[MessageRecord, ...]:
+        run_user = next(
+            (message for message in records if message.message_id == user_message_id),
+            None,
+        )
+        if run_user is None:
+            return tuple(records)
+        by_id = {message.message_id: message for message in records}
+        selected_ids: set[str] = set()
+        current: MessageRecord | None = run_user
+        while current is not None:
+            selected_ids.add(current.message_id)
+            parent_id = current.parent_message_id
+            current = by_id.get(parent_id) if parent_id is not None else None
+        if run_user.parent_message_id is None:
+            return tuple(
+                message
+                for message in records
+                if message.created_at <= run_user.created_at
+            )
+        return tuple(
+            message for message in records if message.message_id in selected_ids
         )
 
     async def _stream_runtime(
@@ -296,3 +330,8 @@ class RuntimeRunHandler:
         if not isinstance(value, str):
             return None
         return value.strip() or None
+
+    @classmethod
+    def _trace_text(cls, context: AgentRuntimeContext, key: str) -> str | None:
+        value = context.trace_metadata.get(key)
+        return value if isinstance(value, str) and value.strip() else None

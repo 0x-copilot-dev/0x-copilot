@@ -265,13 +265,18 @@ describe("applyRuntimeEvent", () => {
           role: "assistant",
           run_id: "run_123",
           content_text: "Final answer.",
+          parent_message_id: "user_1",
         }),
       ],
       new Map([["run_123", replayEvents]]),
     );
 
     expect(hydrated).toHaveLength(2);
-    expect(hydrated[1]).toEqual(liveItems[0]);
+    expect(hydrated[1]).toMatchObject({
+      ...liveItems[0],
+      id: "assistant_row_1",
+      parentId: "user_1",
+    });
   });
 
   it("falls back to stored assistant text when replay is unavailable", () => {
@@ -284,15 +289,52 @@ describe("applyRuntimeEvent", () => {
       }),
     ]);
 
-    expect(items).toEqual([
-      {
-        id: "assistant_row_1",
-        kind: "message",
-        role: "assistant",
-        runId: "run_123",
-        content: [{ type: "text", text: "Stored final answer." }],
-      },
+    expect(items[0]).toMatchObject({
+      id: "assistant_row_1",
+      kind: "message",
+      role: "assistant",
+      runId: "run_123",
+      content: [{ type: "text", text: "Stored final answer." }],
+    });
+  });
+
+  it("hydrates parent links, attachments, quote metadata, and branch fields", () => {
+    const [item] = messagesToChatItems([
+      message({
+        message_id: "user_2",
+        role: "user",
+        content_text: "Use this file",
+        content: [{ type: "text", text: "Use this file" }],
+        attachments: [
+          {
+            id: "attachment_1",
+            type: "document",
+            name: "brief.txt",
+            content_type: "text/plain",
+            content: [{ type: "text", text: "brief" }],
+          },
+        ],
+        quote: { text: "quoted selection" },
+        metadata: { source: "composer" },
+        parent_message_id: "assistant_1",
+        source_message_id: "user_1",
+        branch_id: "branch_1",
+      }),
     ]);
+    const [threadMessage] = chatItemsToThreadMessages([item], null);
+
+    expect(threadMessage.parentId).toBe("assistant_1");
+    expect(threadMessage.attachments?.[0]).toMatchObject({
+      id: "attachment_1",
+      name: "brief.txt",
+      contentType: "text/plain",
+    });
+    expect(threadMessage.metadata?.custom).toMatchObject({
+      source: "composer",
+      quote: { text: "quoted selection" },
+      source_message_id: "user_1",
+      branch_id: "branch_1",
+    });
   });
 
   it("updates subagent parts without creating empty namespace progress", () => {

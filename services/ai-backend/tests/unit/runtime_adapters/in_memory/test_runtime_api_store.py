@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_api.schemas import RuntimeRunCommand
+from runtime_api.schemas import (
+    CreateConversationRequest,
+    CreateRunRequest,
+    MessageRole,
+    RuntimeRunCommand,
+)
 from agent_runtime.persistence.records import RuntimeWorkerResult
 
 
@@ -75,4 +82,71 @@ def test_in_memory_runtime_queue_claim_retry_and_dead_letter() -> None:
             lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
         )
         is None
+    )
+
+
+def test_in_memory_regenerate_reuses_parent_user_message() -> None:
+    store = InMemoryRuntimeApiStore()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            }
+        ),
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Original question",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+    assistant = store.append_message(
+        store.messages[first.user_message_id].model_copy(
+            update={
+                "message_id": "assistant_123",
+                "run_id": first.run_id,
+                "role": MessageRole.ASSISTANT,
+                "content_text": "Original answer",
+                "parent_message_id": first.user_message_id,
+            }
+        )
+    )
+
+    regenerated = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Regenerate",
+            regenerate_from_message_id=assistant.message_id,
+            branch_id="branch_retry",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+
+    user_messages = [
+        message
+        for message in store.messages.values()
+        if message.role == MessageRole.USER
+    ]
+    assert len(user_messages) == 1
+    assert regenerated.user_message_id == first.user_message_id
+    assert (
+        store.runs[regenerated.run_id].runtime_context.trace_metadata["branch_id"]
+        == "branch_retry"
     )

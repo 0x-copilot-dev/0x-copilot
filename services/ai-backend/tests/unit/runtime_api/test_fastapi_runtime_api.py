@@ -255,6 +255,44 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert run.runtime_context.model_profile.provider == "openai"
         assert run.runtime_context.model_profile.model_name == "gpt-4.1-mini"
 
+    def test_run_submission_round_trips_composer_metadata(self) -> None:
+        client, store = self.create_client()
+        conversation = self.create_conversation(client)
+        payload = self.run_payload(conversation["conversation_id"])
+        payload["idempotency_key"] = "idem_composer_metadata"
+        payload["content"] = [{"type": "text", "text": self.Values.USER_INPUT}]
+        payload["attachments"] = [
+            {
+                "id": "attachment_1",
+                "type": "document",
+                "name": "brief.txt",
+                "content_type": "text/plain",
+                "content": [{"type": "text", "text": "brief"}],
+            }
+        ]
+        payload["quote"] = {"text": "quoted selection"}
+        payload["source_message_id"] = "message_source"
+        payload["branch_id"] = "branch_1"
+
+        run_response = client.post("/v1/agent/runs", json=payload)
+        messages = client.get(
+            f"/v1/agent/conversations/{conversation['conversation_id']}/messages",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+
+        assert run_response.status_code == 200
+        message_payload = messages.json()["messages"][0]
+        assert message_payload["content"] == payload["content"]
+        assert message_payload["attachments"] == payload["attachments"]
+        assert message_payload["quote"] == payload["quote"]
+        assert message_payload["source_message_id"] == "message_source"
+        assert message_payload["branch_id"] == "branch_1"
+        run = store.runs[run_response.json()["run_id"]]
+        assert (
+            run.runtime_context.trace_metadata["attachments"] == payload["attachments"]
+        )
+        assert run.runtime_context.trace_metadata["branch_id"] == "branch_1"
+
     def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
         client, _store = self.create_client()
         conversation = self.create_conversation(client)

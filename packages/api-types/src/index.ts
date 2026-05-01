@@ -247,7 +247,13 @@ export interface Message {
   role: MessageRole;
   content_text: string;
   content_format: string;
+  content?: RunContentPart[];
+  attachments?: RunAttachmentRequest[];
+  quote?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
   parent_message_id: string | null;
+  source_message_id?: string | null;
+  branch_id?: string | null;
   token_count: number | null;
   trace_id: string | null;
   status: MessageStatus;

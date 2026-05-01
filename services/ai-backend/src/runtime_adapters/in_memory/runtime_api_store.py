@@ -192,14 +192,9 @@ class InMemoryRuntimeApiStore:
                 run = self.runs[existing_run_id]
                 return run, self.messages[run.user_message_id], False
 
-        user_message = MessageRecord(
-            conversation_id=conversation.conversation_id,
-            org_id=conversation.org_id,
-            run_id=context.run_id,
-            role=MessageRole.USER,
-            content_text=request.user_input,
-            content_format=request.content_format,
-            trace_id=context.trace_id,
+        user_message = self._message_for_run_request(
+            request=request,
+            conversation=conversation,
         )
         run = RunRecord(
             run_id=context.run_id,
@@ -214,10 +209,11 @@ class InMemoryRuntimeApiStore:
             runtime_context=context,
             request_options=request.request_options,
         )
-        self.messages[user_message.message_id] = user_message
+        if user_message.message_id not in self.messages:
+            self.messages[user_message.message_id] = user_message
         self.runs[run.run_id] = run
         self.conversations[conversation.conversation_id] = conversation.model_copy(
-            update={"updated_at": user_message.created_at}
+            update={"updated_at": run.created_at}
         )
         self.events_by_run.setdefault(run.run_id, [])
         if request.idempotency_key is not None:
@@ -228,6 +224,82 @@ class InMemoryRuntimeApiStore:
                 request.user_input,
             )
         return run, user_message, True
+
+    def _message_for_run_request(
+        self,
+        *,
+        request: CreateRunRequest,
+        conversation: ConversationRecord,
+    ) -> MessageRecord:
+        """Return the existing or newly created user message for a run request."""
+
+        context = request.runtime_context
+        if request.regenerate_from_message_id is not None:
+            regenerated = self._regenerated_user_message(
+                request.regenerate_from_message_id
+            )
+            if regenerated is not None:
+                return regenerated
+        parent_message_id = request.parent_message_id or self._latest_message_id(
+            org_id=conversation.org_id,
+            conversation_id=conversation.conversation_id,
+        )
+        return MessageRecord(
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            run_id=context.run_id,
+            role=MessageRole.USER,
+            content_text=request.user_input,
+            content_format=request.content_format,
+            content=tuple(
+                part.model_dump(mode="json", exclude_none=True)
+                for part in request.content
+            ),
+            attachments=tuple(
+                attachment.model_dump(mode="json", exclude_none=True)
+                for attachment in request.attachments
+            ),
+            quote=request.quote,
+            metadata=self._message_metadata(request),
+            parent_message_id=parent_message_id,
+            source_message_id=request.source_message_id,
+            branch_id=request.branch_id,
+            trace_id=context.trace_id,
+        )
+
+    def _regenerated_user_message(self, message_id: str) -> MessageRecord | None:
+        message = self.messages.get(message_id)
+        if message is None:
+            return None
+        if message.role == MessageRole.USER:
+            return message
+        if message.parent_message_id is None:
+            return None
+        parent = self.messages.get(message.parent_message_id)
+        if parent is None or parent.role != MessageRole.USER:
+            return None
+        return parent
+
+    def _latest_message_id(self, *, org_id: str, conversation_id: str) -> str | None:
+        messages = self.list_messages(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            limit=1_000,
+        )
+        return messages[-1].message_id if messages else None
+
+    @staticmethod
+    def _message_metadata(request: CreateRunRequest) -> dict[str, object]:
+        metadata: dict[str, object] = {}
+        if request.quote is not None:
+            metadata["quote"] = request.quote
+        if request.source_message_id is not None:
+            metadata["source_message_id"] = request.source_message_id
+        if request.branch_id is not None:
+            metadata["branch_id"] = request.branch_id
+        if request.regenerate_from_message_id is not None:
+            metadata["regenerate_from_message_id"] = request.regenerate_from_message_id
+        return metadata
 
     def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""

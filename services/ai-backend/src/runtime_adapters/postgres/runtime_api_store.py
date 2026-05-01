@@ -232,14 +232,10 @@ class PostgresRuntimeApiStore:
                     ).fetchone()
                     return run, self._message_record(message_row), False
 
-            user_message = MessageRecord(
-                conversation_id=conversation.conversation_id,
-                org_id=conversation.org_id,
-                run_id=None,
-                role=MessageRole.USER,
-                content_text=request.user_input,
-                content_format=request.content_format,
-                trace_id=context.trace_id,
+            user_message = self._message_for_run_request(
+                conn=conn,
+                request=request,
+                conversation=conversation,
             )
             run = RunRecord(
                 run_id=context.run_id,
@@ -254,18 +250,22 @@ class PostgresRuntimeApiStore:
                 runtime_context=context,
                 request_options=request.request_options,
             )
-            self._insert_message(conn, user_message)
+            if request.regenerate_from_message_id is None:
+                self._insert_message(conn, user_message)
             self._insert_run(conn, run)
-            conn.execute(
-                "UPDATE agent_messages SET run_id = %s WHERE id = %s",
-                (run.run_id, user_message.message_id),
-            )
+            if request.regenerate_from_message_id is None:
+                conn.execute(
+                    "UPDATE agent_messages SET run_id = %s WHERE id = %s",
+                    (run.run_id, user_message.message_id),
+                )
             conn.execute(
                 "UPDATE agent_conversations SET updated_at = %s WHERE id = %s",
-                (user_message.created_at, conversation.conversation_id),
+                (run.created_at, conversation.conversation_id),
             )
             conn.commit()
-            return run, user_message.model_copy(update={"run_id": run.run_id}), True
+            if request.regenerate_from_message_id is None:
+                user_message = user_message.model_copy(update={"run_id": run.run_id})
+            return run, user_message, True
 
     def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
@@ -781,6 +781,108 @@ class PostgresRuntimeApiStore:
 
         self._mark_outbox(result=result, status_value=OutboxStatus.DEAD_LETTER)
 
+    def _message_for_run_request(
+        self,
+        *,
+        conn: psycopg.Connection,
+        request: CreateRunRequest,
+        conversation: ConversationRecord,
+    ) -> MessageRecord:
+        """Return the existing or newly created user message for a run request."""
+
+        context = request.runtime_context
+        if request.regenerate_from_message_id is not None:
+            regenerated = self._regenerated_user_message(
+                conn=conn,
+                message_id=request.regenerate_from_message_id,
+            )
+            if regenerated is not None:
+                return regenerated
+        parent_message_id = request.parent_message_id or self._latest_message_id(
+            conn=conn,
+            org_id=conversation.org_id,
+            conversation_id=conversation.conversation_id,
+        )
+        return MessageRecord(
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            run_id=None,
+            role=MessageRole.USER,
+            content_text=request.user_input,
+            content_format=request.content_format,
+            content=tuple(
+                part.model_dump(mode="json", exclude_none=True)
+                for part in request.content
+            ),
+            attachments=tuple(
+                attachment.model_dump(mode="json", exclude_none=True)
+                for attachment in request.attachments
+            ),
+            quote=request.quote,
+            metadata=self._message_metadata(request),
+            parent_message_id=parent_message_id,
+            source_message_id=request.source_message_id,
+            branch_id=request.branch_id,
+            trace_id=context.trace_id,
+        )
+
+    def _regenerated_user_message(
+        self,
+        *,
+        conn: psycopg.Connection,
+        message_id: str,
+    ) -> MessageRecord | None:
+        row = conn.execute(
+            "SELECT * FROM agent_messages WHERE id = %s",
+            (message_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        message = self._message_record(row)
+        if message.role == MessageRole.USER:
+            return message
+        if message.parent_message_id is None:
+            return None
+        parent_row = conn.execute(
+            "SELECT * FROM agent_messages WHERE id = %s",
+            (message.parent_message_id,),
+        ).fetchone()
+        if parent_row is None:
+            return None
+        parent = self._message_record(parent_row)
+        return parent if parent.role == MessageRole.USER else None
+
+    @staticmethod
+    def _latest_message_id(
+        *,
+        conn: psycopg.Connection,
+        org_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        row = conn.execute(
+            """
+            SELECT id FROM agent_messages
+            WHERE org_id = %s AND conversation_id = %s AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (org_id, conversation_id),
+        ).fetchone()
+        return row["id"] if row is not None else None
+
+    @staticmethod
+    def _message_metadata(request: CreateRunRequest) -> dict[str, object]:
+        metadata: dict[str, object] = {}
+        if request.quote is not None:
+            metadata["quote"] = request.quote
+        if request.source_message_id is not None:
+            metadata["source_message_id"] = request.source_message_id
+        if request.branch_id is not None:
+            metadata["branch_id"] = request.branch_id
+        if request.regenerate_from_message_id is not None:
+            metadata["regenerate_from_message_id"] = request.regenerate_from_message_id
+        return metadata
+
     def _connect(self) -> psycopg.Connection:
         return psycopg.connect(self.database_url, row_factory=dict_row)
 
@@ -859,7 +961,15 @@ class PostgresRuntimeApiStore:
             role=row["role"],
             content_text=row["content_text"],
             content_format=row["content_format"],
+            content=tuple(dict(part) for part in row["content_json"]),
+            attachments=tuple(
+                dict(attachment) for attachment in row["attachments_json"]
+            ),
+            quote=dict(row["quote_json"]) if row["quote_json"] is not None else None,
+            metadata=dict(row["metadata_json"]),
             parent_message_id=row["parent_message_id"],
+            source_message_id=row["source_message_id"],
+            branch_id=row["branch_id"],
             token_count=row["token_count"],
             trace_id=row["trace_id"],
             status=row["status"],
@@ -935,9 +1045,14 @@ class PostgresRuntimeApiStore:
             """
             INSERT INTO agent_messages (
                 id, conversation_id, org_id, run_id, role, content_text, content_format,
-                parent_message_id, token_count, trace_id, status, created_at, edited_at, deleted_at
+                content_json, attachments_json, quote_json, metadata_json,
+                parent_message_id, source_message_id, branch_id, token_count, trace_id,
+                status, created_at, edited_at, deleted_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s
+            )
             """,
             (
                 message.message_id,
@@ -947,7 +1062,13 @@ class PostgresRuntimeApiStore:
                 message.role.value,
                 message.content_text,
                 message.content_format,
+                Jsonb(message.content),
+                Jsonb(message.attachments),
+                Jsonb(message.quote) if message.quote is not None else None,
+                Jsonb(message.metadata),
                 message.parent_message_id,
+                message.source_message_id,
+                message.branch_id,
                 message.token_count,
                 message.trace_id,
                 message.status.value,

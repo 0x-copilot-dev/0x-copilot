@@ -16,6 +16,8 @@ from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
+    MessageRecord,
+    MessageRole,
     RuntimeRunCommand,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
@@ -152,6 +154,80 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
         message for message in store.messages.values() if message.role == "assistant"
     ]
     assert assistant_messages[0].content_text == "Hello from the worker."
+
+
+def test_runtime_worker_builds_history_from_selected_branch() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Original question",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_1",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="Original answer",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    store.append_message(
+        MessageRecord(
+            message_id="sibling_user",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            role=MessageRole.USER,
+            content_text="Sibling branch that should not leak",
+            parent_message_id=assistant.message_id,
+        )
+    )
+    edited = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Edited question",
+            parent_message_id=assistant.message_id,
+            source_message_id="sibling_user",
+            branch_id="branch_edit",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    command = store.run_commands[-1]
+    messages = handler._messages_for_run(command, store.runs[edited.run_id])
+
+    assert [message["content"] for message in messages] == [
+        "Original question",
+        "Original answer",
+        "Edited question",
+    ]
 
 
 def test_runtime_worker_streams_model_deltas_before_final_response() -> None:

@@ -54,7 +54,9 @@ import {
   optimisticUserMessage,
   resolveApprovalDecision,
   resolveMcpAuthSkip,
+  threadMessagesToChatItems,
   type ChatItem,
+  type ChatThreadMessage,
 } from "./chatModel";
 import {
   AssistantThread,
@@ -88,6 +90,7 @@ export function ChatScreen({
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());
 
   const suggestedServers = useMemo(
     () =>
@@ -201,7 +204,13 @@ export function ChatScreen({
         latestSequenceRef.current,
         event.sequence_no,
       );
-      setItems((current) => applyRuntimeEvent(current, event));
+      setItems((current) =>
+        withAssistantParent(
+          applyRuntimeEvent(current, event),
+          event.run_id,
+          activeRunUserMessageIdsRef.current.get(event.run_id) ?? null,
+        ),
+      );
       const liveStatus = statusForRuntimeEvent(event);
       if (liveStatus) {
         setStatus(liveStatus);
@@ -218,6 +227,7 @@ export function ChatScreen({
         streamRef.current?.close();
         streamRef.current = null;
         setActiveRunId(null);
+        activeRunUserMessageIdsRef.current.delete(event.run_id);
         setStatus(event.event_type === "run_completed" ? "Ready" : "Stopped");
         void refreshConversations();
       }
@@ -278,14 +288,29 @@ export function ChatScreen({
     [activeRunId, identity, loadHistoryItems],
   );
 
-  const onNew = useCallback(
-    async (message: AppendMessage): Promise<void> => {
+  const submitUserMessage = useCallback(
+    async (
+      message: AppendMessage,
+      options: {
+        parentMessageId?: string | null;
+        sourceMessageId?: string | null;
+        branchId?: string | null;
+      } = {},
+    ): Promise<void> => {
       const text = textFromAppendMessage(message).trim();
       if (!text || activeRunId !== null) {
         return;
       }
 
       let targetConversationId = conversationId;
+      const localMessageId = appendMessageId(message) ?? `local-${Date.now()}`;
+      const content = contentFromAppendMessage(message);
+      const attachments = attachmentsFromAppendMessage(message);
+      const quote = quoteFromAppendMessage(message);
+      const parentMessageId =
+        options.parentMessageId === undefined
+          ? lastMessageId(items)
+          : options.parentMessageId;
       try {
         if (targetConversationId === null) {
           setStatus("Creating chat...");
@@ -299,13 +324,41 @@ export function ChatScreen({
           );
         }
 
-        setItems((current) => [...current, optimisticUserMessage(text)]);
+        setItems((current) => [
+          ...current,
+          optimisticUserMessage({
+            id: localMessageId,
+            text,
+            content: content as Exclude<ChatThreadMessage["content"], string>,
+            parentId: parentMessageId ?? null,
+            attachments: completeAttachmentsFromAppendMessage(message),
+            metadata: metadataFromAppendMessage(message),
+            sourceMessageId: options.sourceMessageId ?? null,
+            branchId: options.branchId ?? null,
+          }),
+        ]);
         const run = await createRun(targetConversationId, text, identity, {
           model: modelSelectionForId(models, selectedModelId),
-          attachments: attachmentsFromAppendMessage(message),
-          content: contentFromAppendMessage(message),
-          quote: quoteFromAppendMessage(message),
+          attachments,
+          content,
+          quote,
+          parentMessageId,
+          sourceMessageId: options.sourceMessageId,
+          branchId: options.branchId,
         });
+        activeRunUserMessageIdsRef.current.set(run.run_id, run.user_message_id);
+        setItems((current) =>
+          current.map((item) =>
+            item.kind === "message" && item.id === localMessageId
+              ? {
+                  ...item,
+                  id: run.user_message_id,
+                  runId: run.run_id,
+                  parentId: parentMessageId ?? null,
+                }
+              : item,
+          ),
+        );
         latestSequenceRef.current = 0;
         setActiveRunId(run.run_id);
         setStatus("Queued...");
@@ -328,11 +381,35 @@ export function ChatScreen({
       activeRunId,
       conversationId,
       identity,
+      items,
       models,
       refreshConversations,
       selectedModelId,
       startEventStream,
     ],
+  );
+
+  const onNew = useCallback(
+    async (message: AppendMessage): Promise<void> => {
+      await submitUserMessage(message);
+    },
+    [submitUserMessage],
+  );
+
+  const onEdit = useCallback(
+    async (message: AppendMessage): Promise<void> => {
+      const parentMessageId = appendMessageParentId(message);
+      await submitUserMessage(message, {
+        parentMessageId,
+        sourceMessageId: sourceMessageIdForEdit(
+          items,
+          message,
+          parentMessageId,
+        ),
+        branchId: nextBranchId(),
+      });
+    },
+    [items, submitUserMessage],
   );
 
   const onCancel = useCallback(async (): Promise<void> => {
@@ -422,7 +499,7 @@ export function ChatScreen({
     [connectors],
   );
 
-  const threadMessages = useMemo<ThreadMessageLike[]>(
+  const threadMessages = useMemo<ChatThreadMessage[]>(
     () => chatItemsToThreadMessages(items, activeRunId),
     [activeRunId, items],
   );
@@ -512,25 +589,36 @@ export function ChatScreen({
     ]),
   });
 
-  const runtime = useExternalStoreRuntime<ThreadMessageLike>({
+  const runtime = useExternalStoreRuntime<ChatThreadMessage>({
     messages: threadMessages,
     convertMessage: (message) => message,
+    setMessages: (messages) => setItems(threadMessagesToChatItems(messages)),
     isRunning: activeRunId !== null,
     onNew,
-    onEdit: onNew,
+    onEdit,
     onReload: async (parentId) => {
       if (activeRunId !== null || conversationId === null) {
         return;
       }
+      const parentMessageId = parentId ?? lastUserMessageId(items);
+      if (!parentMessageId) {
+        return;
+      }
+      const sourceMessageId = latestAssistantChildId(items, parentMessageId);
       const run = await createRun(
         conversationId,
-        "Regenerate the previous response.",
+        userTextForMessage(items, parentMessageId) ??
+          "Regenerate the previous response.",
         identity,
         {
           model: modelSelectionForId(models, selectedModelId),
-          regenerateFromMessageId: parentId ?? undefined,
+          parentMessageId,
+          sourceMessageId,
+          regenerateFromMessageId: sourceMessageId ?? parentMessageId,
+          branchId: nextBranchId(),
         },
       );
+      activeRunUserMessageIdsRef.current.set(run.run_id, run.user_message_id);
       latestSequenceRef.current = 0;
       setActiveRunId(run.run_id);
       setStatus("Queued...");
@@ -735,6 +823,14 @@ function contentFromAppendMessage(
   })) as NonNullable<CreateRunRequest["content"]>;
 }
 
+function completeAttachmentsFromAppendMessage(
+  message: AppendMessage,
+): ChatThreadMessage["attachments"] {
+  return message.attachments && message.attachments.length > 0
+    ? (message.attachments as ChatThreadMessage["attachments"])
+    : undefined;
+}
+
 function attachmentsFromAppendMessage(
   message: AppendMessage,
 ): NonNullable<CreateRunRequest["attachments"]> {
@@ -751,10 +847,122 @@ function attachmentsFromAppendMessage(
 function quoteFromAppendMessage(
   message: AppendMessage,
 ): Record<string, unknown> | undefined {
-  const quote = message.metadata.custom.quote;
+  const quote = message.metadata?.custom?.quote;
   return quote && typeof quote === "object"
     ? (quote as Record<string, unknown>)
     : undefined;
+}
+
+function metadataFromAppendMessage(
+  message: AppendMessage,
+): ThreadMessageLike["metadata"] {
+  const custom = message.metadata?.custom;
+  return custom && Object.keys(custom).length > 0 ? { custom } : undefined;
+}
+
+function appendMessageParentId(message: AppendMessage): string | null {
+  const parentId = (message as { parentId?: unknown }).parentId;
+  return typeof parentId === "string" && parentId.trim() ? parentId : null;
+}
+
+function appendMessageId(message: AppendMessage): string | null {
+  const id = (message as { id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id : null;
+}
+
+function lastMessageId(items: ChatItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "message") {
+      return item.id;
+    }
+  }
+  return null;
+}
+
+function lastUserMessageId(items: ChatItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "message" && item.role === "user") {
+      return item.id;
+    }
+  }
+  return null;
+}
+
+function sourceMessageIdForEdit(
+  items: ChatItem[],
+  message: AppendMessage,
+  parentMessageId: string | null,
+): string | null {
+  const messageId = appendMessageId(message);
+  if (
+    messageId &&
+    items.some((item) => item.kind === "message" && item.id === messageId)
+  ) {
+    return messageId;
+  }
+  const siblings = items.filter(
+    (item) =>
+      item.kind === "message" &&
+      item.role === "user" &&
+      (item.parentId ?? null) === parentMessageId,
+  );
+  return siblings.at(-1)?.id ?? null;
+}
+
+function latestAssistantChildId(
+  items: ChatItem[],
+  parentMessageId: string,
+): string | null {
+  const children = items.filter(
+    (item) =>
+      item.kind === "message" &&
+      item.role === "assistant" &&
+      item.parentId === parentMessageId,
+  );
+  return children.at(-1)?.id ?? null;
+}
+
+function userTextForMessage(
+  items: ChatItem[],
+  messageId: string,
+): string | null {
+  const item = items.find(
+    (candidate) =>
+      candidate.kind === "message" &&
+      candidate.role === "user" &&
+      candidate.id === messageId,
+  );
+  if (!item || item.kind !== "message") {
+    return null;
+  }
+  return item.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim();
+}
+
+function withAssistantParent(
+  items: ChatItem[],
+  runId: string,
+  parentMessageId: string | null,
+): ChatItem[] {
+  if (parentMessageId === null) {
+    return items;
+  }
+  return items.map((item) =>
+    item.kind === "message" &&
+    item.role === "assistant" &&
+    item.runId === runId &&
+    !item.parentId
+      ? { ...item, parentId: parentMessageId }
+      : item,
+  );
+}
+
+function nextBranchId(): string {
+  return `branch-${Date.now()}`;
 }
 
 function modelSelectionForId(

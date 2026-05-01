@@ -137,7 +137,13 @@ class MessageRecord(RuntimeContract):
     role: MessageRole
     content_text: str
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
+    content: tuple[JsonObject, ...] = ()
+    attachments: tuple[JsonObject, ...] = ()
+    quote: JsonObject | None = None
+    metadata: JsonObject = Field(default_factory=dict)
     parent_message_id: str | None = None
+    source_message_id: str | None = None
+    branch_id: str | None = None
     token_count: NonNegativeInt | None = None
     trace_id: str | None = None
     status: MessageStatus = MessageStatus.CREATED
@@ -156,11 +162,21 @@ class MessageRecord(RuntimeContract):
         return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(
-        Keys.Field.RUN_ID, "parent_message_id", Keys.Field.TRACE_ID, mode="before"
+        Keys.Field.RUN_ID,
+        "parent_message_id",
+        "source_message_id",
+        "branch_id",
+        Keys.Field.TRACE_ID,
+        mode="before",
     )
     @classmethod
     def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
         return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _redact_metadata(cls, value: object) -> JsonObject:
+        return RuntimeApiValueNormalizer.redact_json_object(value)
 
     @field_validator("content_text", "content_format")
     @classmethod
@@ -180,7 +196,13 @@ class MessageRecord(RuntimeContract):
             role=self.role,
             content_text=self.content_text,
             content_format=self.content_format,
+            content=self.content,
+            attachments=self.attachments,
+            quote=self.quote,
+            metadata=self.metadata,
             parent_message_id=self.parent_message_id,
+            source_message_id=self.source_message_id,
+            branch_id=self.branch_id,
             token_count=self.token_count,
             trace_id=self.trace_id,
             status=self.status,
@@ -200,7 +222,13 @@ class MessageResponse(RuntimeContract):
     role: MessageRole
     content_text: str
     content_format: str
+    content: tuple[JsonObject, ...] = ()
+    attachments: tuple[JsonObject, ...] = ()
+    quote: JsonObject | None = None
+    metadata: JsonObject = Field(default_factory=dict)
     parent_message_id: str | None = None
+    source_message_id: str | None = None
+    branch_id: str | None = None
     token_count: NonNegativeInt | None = None
     trace_id: str | None = None
     status: MessageStatus
