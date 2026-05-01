@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: agent-runtime
+Version: 0.1.0
+Summary: Agent runtime foundation for the enterprise work surface
+Requires-Python: >=3.11
+Requires-Dist: deepagents==0.5.5
+Requires-Dist: fastapi
+Requires-Dist: langchain
+Requires-Dist: langchain-openai
+Requires-Dist: langchain-anthropic
+Requires-Dist: langchain-google-genai
+Requires-Dist: langgraph
+Requires-Dist: openai
+Requires-Dist: anthropic
+Requires-Dist: pydantic>=2
+Requires-Dist: python-dotenv
+Requires-Dist: uvicorn
+Requires-Dist: gunicorn
+Requires-Dist: httpx
+Requires-Dist: psycopg[binary]
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

@@ -4,6 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from agent_runtime.execution.contracts import (
+    ModelReasoningConfig,
+    ModelReasoningDisplay,
+    ModelReasoningEffort,
+    ModelReasoningSummary,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.settings import RuntimeSettings
@@ -55,6 +61,25 @@ def test_runtime_settings_loads_template_env_and_process_overrides(
     assert "api_key" not in settings.model_dump()["openai"]
 
 
+def test_runtime_settings_loads_default_reasoning_config() -> None:
+    settings = RuntimeSettings.load(
+        environ={
+            "OPENAI_API_KEY": "sk-test",
+            "RUNTIME_DEFAULT_PROVIDER": "openai",
+            "RUNTIME_DEFAULT_MODEL": "gpt-5.4",
+            "RUNTIME_DEFAULT_REASONING_EFFORT": "medium",
+            "RUNTIME_DEFAULT_REASONING_SUMMARY": "auto",
+            "RUNTIME_DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT": "true",
+        }
+    )
+
+    reasoning = settings.default_model.reasoning
+    assert reasoning is not None
+    assert reasoning.effort is ModelReasoningEffort.MEDIUM
+    assert reasoning.summary is ModelReasoningSummary.AUTO
+    assert reasoning.include_encrypted_content is True
+
+
 def test_model_resolver_validates_provider_keys_and_applies_defaults() -> None:
     settings = RuntimeSettings.load(
         environ={
@@ -77,6 +102,33 @@ def test_model_resolver_validates_provider_keys_and_applies_defaults() -> None:
     assert openai.provider == "openai"
     assert anthropic.provider == "anthropic"
     assert gemini.provider == "gemini"
+
+
+def test_model_resolver_applies_request_reasoning_override() -> None:
+    settings = RuntimeSettings.load(
+        environ={
+            "ANTHROPIC_API_KEY": "sk-anthropic",
+            "RUNTIME_DEFAULT_PROVIDER": "anthropic",
+            "RUNTIME_DEFAULT_MODEL": "claude-opus-4-7",
+            "RUNTIME_DEFAULT_REASONING_DISPLAY": "omitted",
+        }
+    )
+    resolver = ModelConfigResolver(settings)
+
+    resolved = resolver.resolve(
+        ModelSelection(
+            model_name="claude-opus-4-7",
+            reasoning=ModelReasoningConfig(
+                effort=ModelReasoningEffort.HIGH,
+                display=ModelReasoningDisplay.SUMMARIZED,
+            ),
+        )
+    )
+
+    assert resolved.provider == "anthropic"
+    assert resolved.reasoning is not None
+    assert resolved.reasoning.effort is ModelReasoningEffort.HIGH
+    assert resolved.reasoning.display is ModelReasoningDisplay.SUMMARIZED
 
 
 def test_model_resolver_rejects_missing_provider_key() -> None:

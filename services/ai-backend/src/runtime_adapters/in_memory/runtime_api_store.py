@@ -115,6 +115,33 @@ class InMemoryRuntimeApiStore:
             return None
         return conversation
 
+    def list_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        include_archived: bool = False,
+    ) -> Sequence[ConversationRecord]:
+        """Return scoped conversations ordered by latest update."""
+
+        records = [
+            conversation
+            for conversation in self.conversations.values()
+            if conversation.org_id == org_id and conversation.user_id == user_id
+        ]
+        if not include_archived:
+            records = [
+                conversation
+                for conversation in records
+                if conversation.status != ConversationStatus.ARCHIVED
+            ]
+        return tuple(
+            sorted(
+                records, key=lambda conversation: conversation.updated_at, reverse=True
+            )[:limit]
+        )
+
     def list_messages(
         self,
         *,
@@ -138,6 +165,11 @@ class InMemoryRuntimeApiStore:
         """Append a runtime-created message."""
 
         self.messages[message.message_id] = message
+        conversation = self.conversations.get(message.conversation_id)
+        if conversation is not None:
+            self.conversations[message.conversation_id] = conversation.model_copy(
+                update={"updated_at": message.created_at}
+            )
         return message
 
     def create_run_with_user_message(
@@ -184,6 +216,9 @@ class InMemoryRuntimeApiStore:
         )
         self.messages[user_message.message_id] = user_message
         self.runs[run.run_id] = run
+        self.conversations[conversation.conversation_id] = conversation.model_copy(
+            update={"updated_at": user_message.created_at}
+        )
         self.events_by_run.setdefault(run.run_id, [])
         if request.idempotency_key is not None:
             key = (context.org_id, context.user_id, request.idempotency_key)

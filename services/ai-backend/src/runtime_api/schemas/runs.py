@@ -15,6 +15,7 @@ from pydantic import (
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     JsonObject,
+    ModelReasoningConfig,
     RuntimeContract,
     RuntimeErrorEnvelope,
 )
@@ -31,6 +32,7 @@ class ModelSelectionRequest(RuntimeContract):
     timeout_seconds: float | None = Field(default=None, gt=0, le=600)
     max_input_tokens: int | None = Field(default=None, gt=0, le=2_000_000)
     supports_streaming: bool | None = None
+    reasoning: ModelReasoningConfig | None = None
 
     @field_validator("provider", mode="before")
     @classmethod

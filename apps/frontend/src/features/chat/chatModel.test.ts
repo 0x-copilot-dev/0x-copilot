@@ -61,7 +61,7 @@ describe("applyRuntimeEvent", () => {
     expect(messageText(items, "assistant-run_123")).toBe("Final answer.");
   });
 
-  it("removes completed run activity so live chat matches refreshed history", () => {
+  it("keeps completed run activity in the live thread", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -99,7 +99,10 @@ describe("applyRuntimeEvent", () => {
     );
 
     expect(messageText(items, "assistant-run_123")).toBe("Hello!");
-    expect(items.some((item) => item.kind === "run-activity")).toBe(false);
+    const activity = items.find((item) => item.kind === "run-activity");
+    expect(activity?.kind === "run-activity" && activity.activity.status).toBe(
+      "completed",
+    );
   });
 
   it("projects tool, subagent, and reasoning events into run activity", () => {

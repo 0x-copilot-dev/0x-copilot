@@ -48,6 +48,14 @@ class FakeConcreteMemoryBackend:
         return None
 
 
+def _patch_chat_model_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        builder_module,
+        "init_chat_model",
+        lambda model, **_: model,
+    )
+
+
 def test_memory_routes_isolate_user_memory_by_user_id(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
@@ -258,12 +266,13 @@ def test_deep_agent_builder_receives_backend_and_memory_paths(
     monkeypatch.setattr(
         builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
     )
+    _patch_chat_model_builder(monkeypatch)
     memory_backend = FakeConcreteMemoryBackend()
 
     agent = build_deep_agent(
         DeepAgentBuildRequest(
             tools=("doc_search",),
-            model_name=model_config.model_name,
+            model_config=model_config,
             system_prompt="Follow policy.",
             memory_backend=memory_backend,
             memory_paths=memory_backend.memory_paths,
@@ -283,11 +292,12 @@ def test_deep_agent_builder_passes_explicit_runtime_inputs(
     monkeypatch.setattr(
         builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
     )
+    _patch_chat_model_builder(monkeypatch)
 
     agent = build_deep_agent(
         DeepAgentBuildRequest(
             tools=("doc_search",),
-            model_name=model_config.model_name,
+            model_config=model_config,
             system_prompt="Follow policy.",
             subagents=("researcher",),
             skill_directories=("/skills/",),
@@ -310,11 +320,12 @@ def test_deep_agent_builder_omits_memory_for_route_plan(
     monkeypatch.setattr(
         builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
     )
+    _patch_chat_model_builder(monkeypatch)
 
     agent = build_deep_agent(
         DeepAgentBuildRequest(
             tools=("doc_search",),
-            model_name=model_config.model_name,
+            model_config=model_config,
             system_prompt="Follow policy.",
             memory_backend=None,
         )

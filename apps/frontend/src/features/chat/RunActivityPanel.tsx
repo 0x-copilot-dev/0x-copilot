@@ -1,4 +1,4 @@
-import { Badge, Card } from "@enterprise-search/design-system";
+import { Badge } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
@@ -18,6 +18,7 @@ export function RunActivityPanel({
   activity: RunActivity;
 }): ReactElement {
   const [activeTab, setActiveTab] = useState<ActivityTab>("overview");
+  const [expanded, setExpanded] = useState(activity.status !== "completed");
   const activeSubagent = useMemo(
     () =>
       activity.subagents.find((subagent) => subagent.id === activeTab) ?? null,
@@ -33,36 +34,57 @@ export function RunActivityPanel({
     }
   }, [activeTab, activity.subagents]);
 
+  useEffect(() => {
+    if (activity.status === "running" || activity.status === "queued") {
+      setExpanded(true);
+    }
+  }, [activity.status]);
+
   return (
-    <Card tone="muted" className="run-activity-panel">
-      <RunStatusHeader activity={activity} />
-      {activity.subagents.length > 0 ? (
-        <SubagentTabStrip
-          subagents={activity.subagents}
-          activeTab={activeTab}
-          onSelect={setActiveTab}
-        />
-      ) : null}
-      {activeSubagent ? (
-        <SubagentActivityPanel subagent={activeSubagent} />
-      ) : (
-        <section
-          className="run-activity-panel__body"
-          aria-label="Run activity overview"
+    <section className="run-activity-panel" data-status={activity.status}>
+      <div className="run-activity-panel__top">
+        <RunStatusHeader activity={activity} />
+        <button
+          type="button"
+          className="run-activity-panel__toggle"
+          onClick={() => setExpanded((current) => !current)}
         >
-          {shouldShowReasoning(activity.reasoning.length) ? (
-            <ReasoningSummaryStream
-              items={activity.reasoning}
-              emptyText="Waiting for reasoning updates..."
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+      </div>
+      {expanded ? (
+        <>
+          {activity.subagents.length > 0 ? (
+            <SubagentTabStrip
+              subagents={activity.subagents}
+              activeTab={activeTab}
+              onSelect={setActiveTab}
             />
           ) : null}
-          <ActivityRows events={activity.events} tools={activity.tools} />
-        </section>
+          {activeSubagent ? (
+            <SubagentActivityPanel subagent={activeSubagent} />
+          ) : (
+            <section
+              className="run-activity-panel__body"
+              aria-label="Run activity overview"
+            >
+              {shouldShowReasoning(activity.reasoning.length) ? (
+                <ReasoningSummaryStream
+                  items={activity.reasoning}
+                  emptyText="Waiting for reasoning updates..."
+                />
+              ) : null}
+              <ActivityRows events={activity.events} tools={activity.tools} />
+            </section>
+          )}
+        </>
+      ) : (
+        <CompactActivitySummary activity={activity} />
       )}
       <footer className="run-activity-panel__footer">
         {footerSummary(activity)}
       </footer>
-    </Card>
+    </section>
   );
 }
 
@@ -256,6 +278,36 @@ function ActivityRows({
         <ToolCallRow key={tool.id} tool={tool} />
       ))}
     </section>
+  );
+}
+
+function CompactActivitySummary({
+  activity,
+}: {
+  activity: RunActivity;
+}): ReactElement {
+  const toolCount = activity.tools.length;
+  const reasoningCount = activity.reasoning.length;
+  const subagentCount = activity.subagents.length;
+  const eventCount = activity.events.filter(
+    (event) => !isInternalActivityEvent(event),
+  ).length;
+
+  return (
+    <div className="run-activity-compact" aria-label="Collapsed run activity">
+      <span>
+        {reasoningCount} thinking update{reasoningCount === 1 ? "" : "s"}
+      </span>
+      <span>
+        {toolCount} tool call{toolCount === 1 ? "" : "s"}
+      </span>
+      <span>
+        {subagentCount} subagent{subagentCount === 1 ? "" : "s"}
+      </span>
+      <span>
+        {eventCount} event{eventCount === 1 ? "" : "s"}
+      </span>
+    </div>
   );
 }
 

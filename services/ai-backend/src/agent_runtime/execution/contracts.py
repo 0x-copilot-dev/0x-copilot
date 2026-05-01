@@ -16,6 +16,7 @@ from pydantic import (
     PositiveInt,
     ValidationInfo,
     field_validator,
+    model_validator,
 )
 
 from agent_runtime.execution.ports import (
@@ -111,6 +112,61 @@ class StreamEventType(StrEnum):
 StreamSource = StreamEventSource
 
 
+class ModelReasoningEffort(StrEnum):
+    """Provider-neutral reasoning effort controls."""
+
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
+class ModelReasoningSummary(StrEnum):
+    """OpenAI reasoning summary output controls."""
+
+    AUTO = "auto"
+    CONCISE = "concise"
+    DETAILED = "detailed"
+
+
+class ModelReasoningDisplay(StrEnum):
+    """Anthropic thinking display controls."""
+
+    OMITTED = "omitted"
+    SUMMARIZED = "summarized"
+
+
+class ModelThinkingMode(StrEnum):
+    """Anthropic thinking mode controls."""
+
+    ENABLED = "enabled"
+    ADAPTIVE = "adaptive"
+
+
+class ModelReasoningConfig(RuntimeContract):
+    """Provider-neutral reasoning and thinking controls."""
+
+    enabled: bool = True
+    effort: ModelReasoningEffort | None = None
+    summary: ModelReasoningSummary | None = None
+    display: ModelReasoningDisplay | None = None
+    budget_tokens: PositiveInt | None = Field(default=None, le=2_000_000)
+    include_encrypted_content: bool = False
+    thinking_mode: ModelThinkingMode | None = None
+
+    @model_validator(mode="after")
+    def _validate_thinking_budget(self) -> "ModelReasoningConfig":
+        if (
+            self.thinking_mode is ModelThinkingMode.ADAPTIVE
+            and self.budget_tokens is not None
+        ):
+            msg = "budget_tokens cannot be set when thinking_mode is adaptive"
+            raise ValueError(msg)
+        return self
+
+
 class ModelConfig(RuntimeContract):
     """Model settings selected before the runtime is constructed."""
 
@@ -120,6 +176,7 @@ class ModelConfig(RuntimeContract):
     timeout_seconds: float = Field(gt=0, le=600)
     temperature: float = Field(ge=0, le=2)
     supports_streaming: bool = True
+    reasoning: ModelReasoningConfig | None = None
 
     @field_validator("provider")
     @classmethod

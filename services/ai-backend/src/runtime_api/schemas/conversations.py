@@ -119,6 +119,14 @@ class ConversationResponse(RuntimeContract):
     schema_version: PositiveInt
 
 
+class ConversationListResponse(RuntimeContract):
+    """Paginated conversation metadata for a caller scope."""
+
+    conversations: tuple[ConversationResponse, ...]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
 class MessageRecord(RuntimeContract):
     """Persisted conversation message."""
 

@@ -72,6 +72,7 @@ class Keys:
         CREATE_RUN = "create_run"
         GET_CONVERSATION = "get_conversation"
         GET_EVENTS = "get_events"
+        LIST_CONVERSATIONS = "list_conversations"
         GET_MESSAGES = "get_messages"
         GET_RUN = "get_run"
         STREAM_RUN = "stream_run"
@@ -84,6 +85,7 @@ class Values:
     SCHEMA_VERSION = 1
     DEFAULT_ASSISTANT_ID = "default"
     DEFAULT_CONTENT_FORMAT = "text"
+    DEFAULT_CONVERSATION_LIMIT = 30
     DEFAULT_MESSAGE_LIMIT = 50
     MAX_MESSAGE_LIMIT = 200
     SSE_EVENT_NAME = "runtime_event"

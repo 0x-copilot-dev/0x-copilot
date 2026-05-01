@@ -9,7 +9,15 @@ from pathlib import Path
 
 from pydantic import Field
 
-from agent_runtime.execution.contracts import ModelConfig, RuntimeContract
+from agent_runtime.execution.contracts import (
+    ModelConfig,
+    ModelReasoningConfig,
+    ModelReasoningDisplay,
+    ModelReasoningEffort,
+    ModelReasoningSummary,
+    ModelThinkingMode,
+    RuntimeContract,
+)
 
 
 class RuntimeEnvironment(StrEnum):
@@ -122,6 +130,7 @@ class RuntimeSettings(RuntimeContract):
             supports_streaming=cls._bool(
                 values, "RUNTIME_DEFAULT_SUPPORTS_STREAMING", True
             ),
+            reasoning=cls._default_reasoning_config(values),
         )
         return cls(
             environment=RuntimeEnvironment(
@@ -252,3 +261,58 @@ class RuntimeSettings(RuntimeContract):
     def _bool(cls, values: Mapping[str, str], key: str, default: bool) -> bool:
         value = cls._get(values, key, "true" if default else "false").lower()
         return value in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _optional_bool(cls, values: Mapping[str, str], key: str) -> bool | None:
+        value = cls._optional(values, key)
+        if value is None:
+            return None
+        return value.lower() in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _optional_int(cls, values: Mapping[str, str], key: str) -> int | None:
+        value = cls._optional(values, key)
+        if value is None:
+            return None
+        return int(value)
+
+    @classmethod
+    def _default_reasoning_config(
+        cls, values: Mapping[str, str]
+    ) -> ModelReasoningConfig | None:
+        enabled = cls._optional_bool(values, "RUNTIME_DEFAULT_REASONING_ENABLED")
+        effort = cls._optional(values, "RUNTIME_DEFAULT_REASONING_EFFORT")
+        summary = cls._optional(values, "RUNTIME_DEFAULT_REASONING_SUMMARY")
+        display = cls._optional(values, "RUNTIME_DEFAULT_REASONING_DISPLAY")
+        budget_tokens = cls._optional_int(
+            values, "RUNTIME_DEFAULT_REASONING_BUDGET_TOKENS"
+        )
+        include_encrypted_content = cls._optional_bool(
+            values, "RUNTIME_DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT"
+        )
+        thinking_mode = cls._optional(values, "RUNTIME_DEFAULT_THINKING_MODE")
+        if (
+            enabled is None
+            and effort is None
+            and summary is None
+            and display is None
+            and budget_tokens is None
+            and include_encrypted_content is None
+            and thinking_mode is None
+        ):
+            return None
+        return ModelReasoningConfig(
+            enabled=True if enabled is None else enabled,
+            effort=ModelReasoningEffort(effort.lower()) if effort is not None else None,
+            summary=ModelReasoningSummary(summary.lower())
+            if summary is not None
+            else None,
+            display=ModelReasoningDisplay(display.lower())
+            if display is not None
+            else None,
+            budget_tokens=budget_tokens,
+            include_encrypted_content=bool(include_encrypted_content),
+            thinking_mode=ModelThinkingMode(thinking_mode.lower())
+            if thinking_mode is not None
+            else None,
+        )

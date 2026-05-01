@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_runtime.execution.contracts import ModelConfig, RuntimeErrorCode
+from agent_runtime.execution.contracts import (
+    ModelConfig,
+    ModelReasoningConfig,
+    RuntimeErrorCode,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
 
@@ -19,6 +23,7 @@ class ModelSelection:
     timeout_seconds: float | None = None
     max_input_tokens: int | None = None
     supports_streaming: bool | None = None
+    reasoning: ModelReasoningConfig | None = None
 
 
 class ModelConfigResolver:
@@ -65,6 +70,11 @@ class ModelConfigResolver:
                 if selected.supports_streaming is not None
                 else default_model.supports_streaming
             ),
+            reasoning=(
+                selected.reasoning
+                if selected.reasoning is not None
+                else default_model.reasoning
+            ),
         )
 
     @classmethod
@@ -90,7 +100,7 @@ class ModelConfigResolver:
     def _infer_provider(cls, model_name: str | None) -> str | None:
         if model_name is None:
             return None
-        normalized = model_name.lower()
+        normalized = model_name.lower().replace(" ", "-").replace("_", "-")
         if normalized.startswith(("gpt-", "o1", "o3", "o4")):
             return "openai"
         if normalized.startswith("claude"):

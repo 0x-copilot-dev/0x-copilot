@@ -233,6 +233,12 @@ export interface Conversation {
   schema_version: number;
 }
 
+export interface ConversationListResponse {
+  conversations: Conversation[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;

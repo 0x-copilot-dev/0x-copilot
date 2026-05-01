@@ -20,6 +20,7 @@ from runtime_api.schemas import (
     ApprovalStatus,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationListResponse,
     ConversationResponse,
     CreateConversationRequest,
     CreateRunRequest,
@@ -105,6 +106,28 @@ class RuntimeApiService:
             user_id=user_id,
             conversation_id=conversation_id,
         ).to_response()
+
+    def list_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int = Values.DEFAULT_CONVERSATION_LIMIT,
+        include_archived: bool = False,
+    ) -> ConversationListResponse:
+        """Return scoped conversation metadata newest first."""
+
+        bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
+        records = self.persistence.list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=bounded_limit,
+            include_archived=include_archived,
+        )
+        return ConversationListResponse(
+            conversations=tuple(record.to_response() for record in records),
+            has_more=len(records) == bounded_limit,
+        )
 
     def list_messages(
         self,
@@ -445,6 +468,7 @@ class RuntimeApiService:
                     supports_streaming=model.supports_streaming
                     if model is not None
                     else None,
+                    reasoning=model.reasoning if model is not None else None,
                 )
             )
         except AgentRuntimeError as exc:

@@ -127,6 +127,29 @@ class PostgresRuntimeApiStore:
             ).fetchone()
         return self._conversation_record(row) if row is not None else None
 
+    def list_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        include_archived: bool = False,
+    ) -> Sequence[ConversationRecord]:
+        """Return scoped conversations ordered by latest update."""
+
+        archived_filter = "" if include_archived else "AND status <> 'archived'"
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM agent_conversations
+                WHERE org_id = %s AND user_id = %s {archived_filter}
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (org_id, user_id, limit),
+            ).fetchall()
+        return tuple(self._conversation_record(row) for row in rows)
+
     def list_messages(
         self,
         *,
@@ -155,6 +178,10 @@ class PostgresRuntimeApiStore:
 
         with self._connect() as conn:
             self._insert_message(conn, message)
+            conn.execute(
+                "UPDATE agent_conversations SET updated_at = %s WHERE id = %s",
+                (message.created_at, message.conversation_id),
+            )
             conn.commit()
         return message
 
@@ -232,6 +259,10 @@ class PostgresRuntimeApiStore:
             conn.execute(
                 "UPDATE agent_messages SET run_id = %s WHERE id = %s",
                 (run.run_id, user_message.message_id),
+            )
+            conn.execute(
+                "UPDATE agent_conversations SET updated_at = %s WHERE id = %s",
+                (user_message.created_at, conversation.conversation_id),
             )
             conn.commit()
             return run, user_message.model_copy(update={"run_id": run.run_id}), True

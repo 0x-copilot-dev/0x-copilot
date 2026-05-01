@@ -106,7 +106,7 @@ def create_agent_runtime(
         agent = builder(
             DeepAgentBuildRequest(
                 tools=model_tools,
-                model_name=runtime_context.model_profile.model_name,
+                model_config=runtime_context.model_profile,
                 system_prompt=model_instructions,
                 subagents=subagents,
                 memory_backend=(

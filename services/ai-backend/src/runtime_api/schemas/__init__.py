@@ -25,6 +25,7 @@ from runtime_api.schemas.common import (
     RuntimeEventVisibility,
 )
 from runtime_api.schemas.conversations import (
+    ConversationListResponse,
     ConversationRecord,
     ConversationResponse,
     CreateConversationRequest,
@@ -66,6 +67,7 @@ __all__ = [
     "ModelSelectionRequest",
     "RuntimeRequestContext",
     "CreateConversationRequest",
+    "ConversationListResponse",
     "ConversationRecord",
     "ConversationResponse",
     "MessageRecord",

@@ -172,7 +172,7 @@ export function applyRuntimeEvent(
     return finalizeAssistantMessage(withActivity, event.run_id, text);
   }
   if (event.event_type === "run_completed") {
-    return removeRunActivity(items, event.run_id);
+    return upsertRunActivity(items, event);
   }
   if (isActivityEvent(event)) {
     return upsertRunActivity(items, event);
@@ -222,10 +222,6 @@ function upsertRunActivity(
       ? { ...item, activity }
       : item,
   );
-}
-
-function removeRunActivity(items: ChatItem[], runId: string): ChatItem[] {
-  return items.filter((item) => item.id !== `activity-${runId}`);
 }
 
 function createRunActivity(event: RuntimeEventEnvelope): RunActivity {

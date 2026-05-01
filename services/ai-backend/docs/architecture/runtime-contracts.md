@@ -9,6 +9,7 @@ Use Pydantic for every boundary where data enters, leaves, or crosses a subsyste
 The implemented contracts live under `src/agent_runtime/`:
 
 - `AgentRuntimeContext`: user ID, organization ID, roles, permission scopes, connector scopes, model profile, trace ID, and feature flags.
+- `ModelConfig` and `ModelReasoningConfig`: provider, model name, execution limits, streaming support, and provider-neutral reasoning/thinking controls. The runtime translates these primitives into LangChain provider kwargs at the Deep Agents boundary.
 - `RuntimeDependencies`: injected ports for tool registry, MCP registry, skill source config, memory backend factory, and subagent catalog.
 - `RuntimeErrorEnvelope`: typed, retryable, correlation-aware errors safe for product surfaces.
 - `ToolCard`: compact, model-visible tool summary with name, connector, scopes, risk, tags, and load cost.

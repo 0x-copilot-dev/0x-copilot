@@ -13,6 +13,7 @@ from runtime_api.schemas import (
     ApprovalDecisionResponse,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationListResponse,
     ConversationResponse,
     CreateConversationRequest,
     CreateRunRequest,
@@ -41,6 +42,23 @@ class RuntimeApiRoutes:
                 update={"org_id": identity.org_id, "user_id": identity.user_id}
             )
         return cls.service(request).create_conversation(payload)
+
+    @classmethod
+    def list_conversations(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        limit: int = Query(30, ge=1, le=200),
+        include_archived: bool = False,
+    ) -> ConversationListResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return cls.service(request).list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=limit,
+            include_archived=include_archived,
+        )
 
     @classmethod
     def get_conversation(
@@ -242,6 +260,13 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=ConversationResponse,
             name=Keys.RouteName.CREATE_CONVERSATION,
+        )
+        router.add_api_route(
+            "/conversations",
+            RuntimeApiRoutes.list_conversations,
+            methods=["GET"],
+            response_model=ConversationListResponse,
+            name=Keys.RouteName.LIST_CONVERSATIONS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}",

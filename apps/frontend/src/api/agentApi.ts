@@ -4,6 +4,7 @@ import type {
   CancelRunRequest,
   CancelRunResponse,
   Conversation,
+  ConversationListResponse,
   CreateConversationRequest,
   CreateRunRequest,
   CreateRunResponse,
@@ -39,13 +40,21 @@ export class RuntimeStreamProtocolError extends Error {
 
 export async function createConversation(
   identity: RequestIdentity,
+  options: {
+    title?: string | null;
+    idempotencyKey?: string | null;
+    metadata?: Record<string, unknown>;
+  } = {},
 ): Promise<Conversation> {
   const payload: CreateConversationRequest = {
     org_id: identity.orgId,
     user_id: identity.userId,
-    title: "Current task review",
-    idempotency_key: `web-${identity.orgId}-${identity.userId}`,
+    title: options.title ?? "New chat",
+    metadata: options.metadata ?? {},
   };
+  if (options.idempotencyKey !== undefined) {
+    payload.idempotency_key = options.idempotencyKey;
+  }
   const response = await fetch("/v1/agent/conversations", {
     method: "POST",
     headers: jsonHeaders(),
@@ -53,6 +62,31 @@ export async function createConversation(
   });
   await assertOk(response);
   return (await response.json()) as Conversation;
+}
+
+export async function getConversation(
+  conversationId: string,
+  identity: RequestIdentity,
+): Promise<Conversation> {
+  const response = await fetch(
+    `/v1/agent/conversations/${conversationId}?${identityParams(identity)}`,
+  );
+  await assertOk(response);
+  return (await response.json()) as Conversation;
+}
+
+export async function listConversations(
+  identity: RequestIdentity,
+  options: { limit?: number; includeArchived?: boolean } = {},
+): Promise<ConversationListResponse> {
+  const params = identityParams(identity);
+  params.set("limit", String(options.limit ?? 30));
+  if (options.includeArchived) {
+    params.set("include_archived", "true");
+  }
+  const response = await fetch(`/v1/agent/conversations?${params}`);
+  await assertOk(response);
+  return (await response.json()) as ConversationListResponse;
 }
 
 export async function listMessages(

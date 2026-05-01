@@ -162,6 +162,31 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert messages.status_code == 200
         assert messages.json()["messages"] == []
 
+    def test_list_conversations_returns_scoped_recent_conversations(self) -> None:
+        client, _store = self.create_client()
+
+        first = self.create_conversation(client)
+        second_payload = {
+            **self.conversation_payload(),
+            "title": "Follow-up review",
+            "idempotency_key": "idem_follow_up",
+        }
+        second_response = client.post("/v1/agent/conversations", json=second_payload)
+
+        response = client.get(
+            "/v1/agent/conversations",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+
+        assert second_response.status_code == 200
+        assert response.status_code == 200
+        conversations = response.json()["conversations"]
+        assert {item["conversation_id"] for item in conversations} == {
+            first["conversation_id"],
+            second_response.json()["conversation_id"],
+        }
+        assert all(item["metadata"]["token"] == "[redacted]" for item in conversations)
+
     def test_run_submission_is_idempotent_and_enqueues_worker_command(self) -> None:
         client, store = self.create_client()
         conversation = self.create_conversation(client)

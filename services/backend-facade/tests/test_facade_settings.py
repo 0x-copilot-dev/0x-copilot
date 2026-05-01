@@ -115,6 +115,28 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert response.status_code == 200
         assert response.json() == {"conversation_id": "conv_123"}
 
+    def test_facade_forwards_conversation_list_to_ai(self, monkeypatch) -> None:
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            assert args[1] == "GET"
+            assert args[2] == "/v1/agent/conversations"
+            params = kwargs["params"]
+            assert params["org_id"] == "org_123"
+            assert params["user_id"] == "user_123"
+            assert params["limit"] == 25
+            assert params["include_archived"] is False
+            return {"conversations": []}
+
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get(
+            "/v1/agent/conversations?limit=25",
+            headers=self.auth_headers(monkeypatch),
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"conversations": []}
+
     def test_facade_rejects_missing_bearer_token_when_dev_bypass_is_disabled(
         self, monkeypatch
     ) -> None:

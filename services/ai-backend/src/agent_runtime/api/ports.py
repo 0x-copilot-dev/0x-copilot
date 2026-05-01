@@ -43,6 +43,16 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant/user scope."""
 
+    def list_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        include_archived: bool = False,
+    ) -> Sequence[ConversationRecord]:
+        """Return conversations for the tenant/user scope, newest first."""
+
     def list_messages(
         self,
         *,

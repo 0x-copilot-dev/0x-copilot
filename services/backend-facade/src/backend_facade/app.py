@@ -169,6 +169,23 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
             identity=identity,
         )
 
+    @app.get("/v1/agent/conversations")
+    async def list_conversations(
+        request: Request,
+        limit: int = Query(30, ge=1, le=200),
+        include_archived: bool = False,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/agent/conversations",
+            params=identity.scoped_params(
+                {"limit": limit, "include_archived": include_archived}
+            ),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/conversations/{conversation_id}")
     async def get_conversation(
         request: Request,
