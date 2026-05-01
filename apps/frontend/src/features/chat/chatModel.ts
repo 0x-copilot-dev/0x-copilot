@@ -64,7 +64,7 @@ export type ChatItem =
       text?: string;
     };
 
-export type RuntimeEventsByRunId = ReadonlyMap<
+type RuntimeEventsByRunId = ReadonlyMap<
   string,
   readonly RuntimeEventEnvelope[]
 >;

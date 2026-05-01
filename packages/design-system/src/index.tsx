@@ -310,48 +310,6 @@ export function LinkButton({
   return <a className={classNames("ui-link-button", className)} {...props} />;
 }
 
-export function ChatShell({
-  className,
-  ...props
-}: HTMLAttributes<HTMLElement>): ReactElement {
-  return <main className={classNames("ui-chat-shell", className)} {...props} />;
-}
-
-export function ChatThread({
-  className,
-  ...props
-}: HTMLAttributes<HTMLDivElement>): ReactElement {
-  return <div className={classNames("ui-chat-thread", className)} {...props} />;
-}
-
-export function ChatBubble({
-  role,
-  className,
-  ...props
-}: HTMLAttributes<HTMLDivElement> & {
-  role: "user" | "assistant" | "system";
-}): ReactElement {
-  return (
-    <div
-      className={classNames(
-        "ui-chat-bubble",
-        `ui-chat-bubble--${role}`,
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export function ChatComposer({
-  className,
-  ...props
-}: HTMLAttributes<HTMLFormElement>): ReactElement {
-  return (
-    <form className={classNames("ui-chat-composer", className)} {...props} />
-  );
-}
-
 export function classNames(
   ...values: Array<string | false | null | undefined>
 ): string {

@@ -850,20 +850,6 @@ p {
   margin: var(--space-sm) 0 0;
 }
 
-.ui-dropdown__menu button {
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-md);
-  color: var(--color-text);
-  cursor: pointer;
-  padding: 0.65rem 0.75rem;
-  text-align: left;
-}
-
-.ui-dropdown__menu button:hover {
-  background: var(--color-surface-muted);
-}
-
 .connector-suggestion-card {
   display: grid;
   gap: var(--space-lg);

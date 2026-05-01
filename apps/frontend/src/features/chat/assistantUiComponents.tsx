@@ -85,7 +85,7 @@ export function AssistantThreadList({
   );
 }
 
-export function ModelSelector({
+function ModelSelector({
   models,
   value,
   onChange,
@@ -228,7 +228,7 @@ export function ThreadBody({
   );
 }
 
-export function ThreadWelcome(): ReactElement {
+function ThreadWelcome(): ReactElement {
   return (
     <section className="aui-welcome">
       <span className="aui-kicker">Ready when you are</span>
@@ -256,7 +256,7 @@ export function ThreadWelcome(): ReactElement {
   );
 }
 
-export function AssistantComposer(): ReactElement {
+function AssistantComposer(): ReactElement {
   const slash = unstable_useSlashCommandAdapter({
     commands: useMemo<readonly Unstable_SlashCommand[]>(
       () => [
@@ -534,7 +534,7 @@ function SystemNotice({ children }: { children: ReactNode }): ReactElement {
   return <div className="aui-system-message">{children}</div>;
 }
 
-export function MarkdownText({ text }: TextMessagePartProps): ReactElement {
+function MarkdownText({ text }: TextMessagePartProps): ReactElement {
   return (
     <Streamdown className="assistant-markdown" mode="streaming">
       {text}
