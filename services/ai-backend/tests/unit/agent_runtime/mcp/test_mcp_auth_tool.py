@@ -89,6 +89,123 @@ def test_backend_mcp_service_auth_includes_trusted_scope_headers(
     assert headers[USER_HEADER] == runtime_context_admin.user_id
 
 
+def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
+
+    class FakeSyncResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "servers": [
+                    {
+                        "server_id": "server_123",
+                        "name": "mcp_clickup_com",
+                        "display_name": "Mcp Clickup Com",
+                        "short_description": "ClickUp MCP server.",
+                        "transport": "http",
+                        "auth_mode": "oauth2",
+                        "auth_state": "authenticated",
+                        "required_scopes": ["read", "write"],
+                        "health": "healthy",
+                        "load_cost": 1,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.get",
+        lambda *args, **kwargs: FakeSyncResponse(),
+    )
+    provider = BackendMcpProvider(
+        backend_url="http://backend.local",
+        runtime_context=runtime_context_admin,
+        auth_redirect_uri="http://localhost/callback",
+    )
+
+    cards = provider.list_server_cards()
+
+    assert cards[0].name == "mcp_clickup_com"
+    assert cards[0].required_scopes == frozenset()
+
+
+def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
+
+    captured: dict[str, object] = {}
+
+    class FakeSyncResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return self.payload
+
+    def fake_get(*args: object, **kwargs: object) -> FakeSyncResponse:
+        return FakeSyncResponse(
+            {
+                "servers": [
+                    {
+                        "server_id": "server_123",
+                        "name": "mcp_clickup_com",
+                        "display_name": "Mcp Clickup Com",
+                        "short_description": "ClickUp MCP server.",
+                        "transport": "http",
+                        "auth_mode": "oauth2",
+                        "auth_state": "unauthenticated",
+                        "required_scopes": [],
+                        "health": "healthy",
+                        "load_cost": 1,
+                    }
+                ]
+            }
+        )
+
+    def fake_post(url: str, **kwargs: object) -> FakeSyncResponse:
+        captured["url"] = url
+        captured["json"] = kwargs["json"]
+        return FakeSyncResponse(
+            {
+                "server_id": "server_123",
+                "auth_url": "https://auth.example.com/authorize",
+                "expires_at": "2026-05-01T06:00:00+00:00",
+            }
+        )
+
+    monkeypatch.setattr(
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.get",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.post",
+        fake_post,
+    )
+    provider = BackendMcpProvider(
+        backend_url="http://backend.local",
+        runtime_context=runtime_context_admin,
+        auth_redirect_uri="http://localhost/callback",
+    )
+
+    session = provider.create_auth_session(
+        server_id="mcp_clickup_com",
+        runtime_context=runtime_context_admin,
+    )
+
+    assert captured["url"].endswith("/internal/v1/mcp/servers/server_123/auth/start")
+    assert session.server_id == "server_123"
+    assert session.server_name == "mcp_clickup_com"
+
+
 def test_backend_mcp_client_loads_tools_through_json_rpc_proxy(
     monkeypatch,
     runtime_context_admin: AgentRuntimeContext,
@@ -152,6 +269,73 @@ def test_backend_mcp_client_loads_tools_through_json_rpc_proxy(
     assert tools[0].input_schema == {"type": "object"}
     assert calls[1]["json"]["payload"]["method"] == "initialize"
     assert calls[3]["json"]["payload"]["method"] == "tools/list"
+
+
+def test_backend_mcp_client_calls_tool_through_json_rpc_proxy(
+    monkeypatch,
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    calls: list[dict[str, object]] = []
+    responses = [
+        FakeHttpResponse(
+            {
+                "server_id": "server_123",
+                "url": "https://mcp.example.com/mcp",
+                "transport": "http",
+                "auth_state": "authenticated",
+                "credential_ref": "credential_123",
+            }
+        ),
+        FakeHttpResponse({"payload": {"jsonrpc": "2.0", "id": 1, "result": {}}}),
+        FakeHttpResponse({"payload": {}}),
+        FakeHttpResponse(
+            {
+                "payload": {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {
+                        "content": [{"type": "text", "text": "task list"}],
+                    },
+                }
+            }
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
+        lambda timeout: FakeAsyncClient(responses, calls),
+    )
+    card = McpServerCard(
+        server_id="server_123",
+        name="clickup",
+        display_name="ClickUp",
+        short_description="ClickUp MCP server.",
+        transport="http",
+        auth_mode="oauth2",
+        auth_state="authenticated",
+        health="healthy",
+        load_cost=1,
+    )
+    client = BackendMcpClient(
+        backend_url="http://backend.local",
+        runtime_context=runtime_context_admin,
+        card=card,
+    )
+
+    output = asyncio.run(
+        client.call_tool(tool_name="list_tasks", arguments={"include_closed": True})
+    )
+
+    assert output["content"][0]["text"] == "task list"
+    assert calls[3]["json"]["payload"] == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "list_tasks",
+            "arguments": {"include_closed": True},
+        },
+    }
 
 
 class FakeHttpResponse:

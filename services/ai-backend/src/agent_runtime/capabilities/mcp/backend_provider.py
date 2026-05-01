@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import os
@@ -57,7 +58,7 @@ class BackendMcpProvider:
         response.raise_for_status()
         payload = response.json()
         return tuple(
-            McpServerCard.model_validate(card) for card in payload.get("servers", ())
+            self._runtime_visible_card(card) for card in payload.get("servers", ())
         )
 
     def create_client(self, card: McpServerCard) -> McpClient:
@@ -74,8 +75,10 @@ class BackendMcpProvider:
         server_id: str,
         runtime_context: AgentRuntimeContext,
     ) -> McpAuthSession:
+        card = self._card_by_server_id_or_name(server_id)
+        resolved_server_id = card.server_id or card.name
         response = httpx.post(
-            f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/auth/start",
+            f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{resolved_server_id}/auth/start",
             json={
                 Keys.Field.ORG_ID: runtime_context.org_id,
                 Keys.Field.USER_ID: runtime_context.user_id,
@@ -86,7 +89,6 @@ class BackendMcpProvider:
         )
         response.raise_for_status()
         payload = response.json()
-        card = self._card_by_server_id_or_name(server_id)
         return McpAuthSession(
             server_id=str(payload["server_id"]),
             server_name=card.name,
@@ -94,6 +96,11 @@ class BackendMcpProvider:
             auth_url=str(payload["auth_url"]),
             expires_at=datetime.fromisoformat(str(payload["expires_at"])),
         )
+
+    @staticmethod
+    def _runtime_visible_card(card: object) -> McpServerCard:
+        parsed = McpServerCard.model_validate(card)
+        return parsed.model_copy(update={Keys.Field.REQUIRED_SCOPES: frozenset()})
 
     def _card_by_server_id_or_name(self, value: str) -> McpServerCard:
         for card in self.list_server_cards():
@@ -172,6 +179,20 @@ class BackendMcpClient:
             self._resource_descriptor(resource)
             for resource in resources
             if isinstance(resource, dict)
+        )
+
+    async def call_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return await self._rpc_result(
+            Values.JsonRpcMethod.CALL_TOOL,
+            {
+                Keys.Field.NAME: tool_name,
+                Keys.Field.ARGUMENTS: dict(arguments),
+            },
         )
 
     async def _initialize(self) -> None:

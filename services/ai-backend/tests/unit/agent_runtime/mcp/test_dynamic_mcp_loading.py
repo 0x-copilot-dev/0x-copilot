@@ -12,6 +12,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.mcp import (
+    CallMcpTool,
     DynamicMcpRegistry,
     McpAuthError,
     McpAuthMode,
@@ -351,3 +352,79 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
 
         assert result.error is not None
         assert result.error.code == McpLoadErrorCode.INVALID_SERVER_NAME
+
+    def test_call_mcp_tool_invokes_selected_loaded_tool(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        provider = self.FakeMcpProvider(
+            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            clients={
+                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
+                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                    resources=(),
+                    tool_outputs={
+                        self.TestValues.Names.DRIVE_SEARCH: {
+                            "content": [{"type": "text", "text": "found tasks"}]
+                        }
+                    },
+                )
+            },
+        )
+        registry = DynamicMcpRegistry(providers=(provider,))
+        tool = CallMcpTool(
+            registry=registry,
+            loader=McpLoader(registry),
+            runtime_context=runtime_context_admin,
+        )
+
+        result = asyncio.run(
+            tool.ainvoke(
+                {
+                    "server_name": self.TestValues.Names.DRIVE_MCP,
+                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "arguments": {"query": "tasks"},
+                }
+            )
+        )
+
+        assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
+        assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
+        assert result["output"]["content"][0]["text"] == "found tasks"
+        assert provider.created_clients == [
+            self.TestValues.Names.DRIVE_MCP,
+            self.TestValues.Names.DRIVE_MCP,
+        ]
+
+    def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        provider = self.FakeMcpProvider(
+            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            clients={
+                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
+                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                    resources=(),
+                )
+            },
+        )
+        registry = DynamicMcpRegistry(providers=(provider,))
+        tool = CallMcpTool(
+            registry=registry,
+            loader=McpLoader(registry),
+            runtime_context=runtime_context_admin,
+        )
+
+        result = asyncio.run(
+            tool.ainvoke(
+                {
+                    "server_name": self.TestValues.Names.DRIVE_MCP,
+                    "tool_name": self.TestValues.Names.SECOND_TOOL,
+                    "arguments": {},
+                }
+            )
+        )
+
+        assert result["error"]["code"] == McpLoadErrorCode.UNKNOWN_TOOL.value
+        assert "found tasks" not in str(result)

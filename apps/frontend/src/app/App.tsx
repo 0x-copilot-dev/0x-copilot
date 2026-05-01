@@ -1,4 +1,5 @@
 import { ThemeProvider } from "@enterprise-search/design-system";
+import type { McpServer } from "@enterprise-search/api-types";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import "@enterprise-search/design-system/styles.css";
@@ -13,12 +14,38 @@ import { SettingsScreen } from "../features/settings/SettingsScreen";
 
 type Screen = "chat" | "settings";
 
+const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
+
 export default function App(): ReactElement {
   return (
     <ThemeProvider defaultScheme="dark">
       <EnterpriseSearchApp />
     </ThemeProvider>
   );
+}
+
+function completeMcpOAuthOnce(
+  state: string,
+  code: string | null,
+  error: string | null,
+  errorDescription: string | null,
+): Promise<McpServer> {
+  const key = JSON.stringify([state, code, error, errorDescription]);
+  const existing = mcpOAuthCompletions.get(key);
+  if (existing) {
+    return existing;
+  }
+  const completion = completeMcpOAuth(
+    state,
+    code,
+    error,
+    errorDescription,
+  ).catch((err: unknown) => {
+    mcpOAuthCompletions.delete(key);
+    throw err;
+  });
+  mcpOAuthCompletions.set(key, completion);
+  return completion;
 }
 
 function EnterpriseSearchApp(): ReactElement {
@@ -78,7 +105,7 @@ function EnterpriseSearchApp(): ReactElement {
     let cancelled = false;
     async function finishOAuth(): Promise<void> {
       try {
-        const server = await completeMcpOAuth(
+        const server = await completeMcpOAuthOnce(
           callbackState,
           callbackCode,
           callbackError,

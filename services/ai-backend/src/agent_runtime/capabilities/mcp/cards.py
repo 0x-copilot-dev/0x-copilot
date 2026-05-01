@@ -92,6 +92,7 @@ class McpLoadErrorCode(StrEnum):
     AUTH_FAILURE = Values.ErrorCode.AUTH_FAILURE
     CONNECTION_FAILED = Values.ErrorCode.CONNECTION_FAILED
     TIMEOUT = Values.ErrorCode.TIMEOUT
+    UNKNOWN_TOOL = Values.ErrorCode.UNKNOWN_TOOL
     MALFORMED_DESCRIPTOR = Values.ErrorCode.MALFORMED_DESCRIPTOR
     DUPLICATE_DESCRIPTOR_NAME = Values.ErrorCode.DUPLICATE_DESCRIPTOR_NAME
     LOCAL_TOOL_COLLISION = Values.ErrorCode.LOCAL_TOOL_COLLISION
@@ -197,6 +198,41 @@ class McpLoadRequest(RuntimeContract):
     @classmethod
     def _normalize_local_tool_names(cls, value: object) -> frozenset[str]:
         return McpValueNormalizer.normalize_slug_set(value, Keys.Field.LOCAL_TOOL_NAMES)
+
+
+class McpToolCallRequest(RuntimeContract):
+    """Request to invoke a validated tool on a selected MCP server."""
+
+    server_name: str
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(Keys.Field.SERVER_NAME)
+    @classmethod
+    def _normalize_server_name(cls, value: object) -> str:
+        return McpValueNormalizer.normalize_slug(value, Keys.Field.SERVER_NAME)
+
+    @field_validator(Keys.Field.TOOL_NAME)
+    @classmethod
+    def _normalize_tool_name(cls, value: object) -> str:
+        return McpValueNormalizer.normalize_slug(value, Keys.Field.TOOL_NAME)
+
+    @field_validator(Keys.Field.ARGUMENTS, mode="before")
+    @classmethod
+    def _validate_arguments(cls, value: object) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            raise ValueError(
+                Messages.Validation.json_schema_object(Keys.Field.ARGUMENTS)
+            )
+        try:
+            json.dumps(value, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                Messages.Validation.json_serializable(Keys.Field.ARGUMENTS)
+            ) from exc
+        return dict(value)
 
 
 class McpToolDescriptor(RuntimeContract):
@@ -360,6 +396,71 @@ class McpLoadError(RuntimeContract):
     @classmethod
     def _normalize_correlation_id(cls, value: object) -> str:
         return McpValueNormalizer.normalize_id(value, Keys.Field.CORRELATION_ID)
+
+
+class McpToolCallResult(RuntimeContract):
+    """Result envelope for a generic MCP tool invocation."""
+
+    server_name: str | None = None
+    tool_name: str | None = None
+    output: dict[str, Any] | None = None
+    error: McpLoadError | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_outcome(self) -> "McpToolCallResult":
+        if (self.output is None) == (self.error is None):
+            raise ValueError(Messages.Validation.EXACTLY_ONE_LOAD_OUTCOME)
+        return self
+
+    @classmethod
+    def ok(
+        cls,
+        *,
+        server_name: str,
+        tool_name: str,
+        output: Mapping[str, Any],
+    ) -> "McpToolCallResult":
+        return cls(
+            server_name=server_name,
+            tool_name=tool_name,
+            output=dict(output),
+        )
+
+    @classmethod
+    def fail(
+        cls,
+        code: McpLoadErrorCode,
+        safe_message: str,
+        *,
+        retryable: bool = False,
+        server_name: str | None = None,
+        tool_name: str | None = None,
+        correlation_id: str | None = None,
+    ) -> "McpToolCallResult":
+        return cls(
+            server_name=server_name,
+            tool_name=tool_name,
+            error=McpLoadError(
+                code=code,
+                safe_message=safe_message,
+                retryable=retryable,
+                server_name=server_name,
+                correlation_id=correlation_id or uuid4().hex,
+            ),
+        )
+
+    @classmethod
+    def fail_from_load_error(
+        cls,
+        error: McpLoadError,
+        *,
+        tool_name: str | None = None,
+    ) -> "McpToolCallResult":
+        return cls(
+            server_name=error.server_name,
+            tool_name=tool_name,
+            error=error,
+        )
 
 
 class McpLoadResult(RuntimeContract):

@@ -152,6 +152,90 @@ def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:
     }
 
 
+def test_internal_mcp_rpc_proxies_tools_call(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_remote_rpc(
+        server_url: str, payload: dict[str, object], access_token: str
+    ) -> dict[str, object]:
+        captured["server_url"] = server_url
+        captured["payload"] = payload
+        captured["access_token"] = access_token
+        return {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {"content": [{"type": "text", "text": "task list"}]},
+        }
+
+    monkeypatch.setattr(
+        McpRegistryService, "_post_remote_mcp_rpc", staticmethod(fake_remote_rpc)
+    )
+    store = InMemoryMcpStore()
+    app = create_app(
+        McpRegistryService(
+            store=store,
+            token_exchanger=FakeOAuthTokenExchanger(),
+            oauth_client=FakeOAuthClient(),
+        )
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/v1/mcp/servers",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "url": "https://mcp.example.com/mcp",
+            "display_name": "Drive MCP",
+        },
+    ).json()
+    server_id = created["server_id"]
+    client.post(
+        f"/internal/v1/mcp/servers/{server_id}/auth/start",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "redirect_uri": "http://localhost:5173/mcp/oauth/callback",
+        },
+    )
+    state = next(iter(store.auth_sessions.keys()))
+    client.get(
+        "/v1/mcp/oauth/callback",
+        params={"state": state, "code": "oauth_code"},
+    )
+
+    proxied = client.post(
+        f"/internal/v1/mcp/servers/{server_id}/rpc",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "payload": {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_tasks",
+                    "arguments": {"include_closed": True},
+                },
+            },
+        },
+    ).json()
+
+    assert proxied["payload"]["result"]["content"][0]["text"] == "task list"
+    assert captured == {
+        "server_url": "https://mcp.example.com/mcp",
+        "payload": {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "list_tasks",
+                "arguments": {"include_closed": True},
+            },
+        },
+        "access_token": "access-token-for-oauth_code",
+    }
+
+
 def test_mcp_update_disable_remove_flow() -> None:
     store = InMemoryMcpStore()
     app = create_app(McpRegistryService(store=store))

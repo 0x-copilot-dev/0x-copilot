@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from agent_runtime.capabilities.mcp.cards import (
     McpConnectionMetadata,
@@ -15,6 +15,7 @@ from agent_runtime.capabilities.mcp.cards import (
 RawMcpConnectionMetadata = McpConnectionMetadata | Mapping[str, object] | None
 RawMcpToolDescriptor = McpToolDescriptor | Mapping[str, object]
 RawMcpResourceDescriptor = McpResourceDescriptor | Mapping[str, object]
+RawMcpToolCallResult = Mapping[str, Any]
 
 
 class McpClientError(Exception):
@@ -45,6 +46,14 @@ class McpClient(Protocol):
 
     async def list_resources(self) -> Sequence[RawMcpResourceDescriptor]:
         """Return raw MCP resource descriptors from the connected server."""
+
+    async def call_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> RawMcpToolCallResult:
+        """Invoke a selected MCP tool and return the raw JSON-RPC result."""
 
 
 @runtime_checkable

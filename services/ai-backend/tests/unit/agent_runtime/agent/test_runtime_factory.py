@@ -95,6 +95,29 @@ def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
 
     tool_names = {getattr(tool, "name", "") for tool in builder.calls[0].tools}
     assert "load_mcp_server" in tool_names
+    assert "call_mcp_tool" in tool_names
+    assert "drive_search" not in tool_names
+    assert "answer directly from these cards" in builder.calls[0].system_prompt
+
+
+def test_factory_instructs_model_not_to_load_when_no_mcp_cards(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+    dependencies = fake_dependencies.model_copy(
+        update={"mcp_registry": FakeMcpRegistry(servers=())}
+    )
+
+    create_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=dependencies,
+        agent_builder=builder,
+    )
+
+    system_prompt = builder.calls[0].system_prompt
+    assert "No MCP server cards are currently registered or visible" in system_prompt
+    assert "Do not call load_mcp_server" in system_prompt
 
 
 def test_factory_rejects_invalid_dependency_dict(

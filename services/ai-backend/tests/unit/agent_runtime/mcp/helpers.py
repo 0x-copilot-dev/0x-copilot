@@ -83,6 +83,7 @@ class DynamicMcpLoadingMixin:
         tools: Sequence[McpToolDescriptor | Mapping[str, object]]
         resources: Sequence[McpResourceDescriptor | Mapping[str, object]]
         metadata: McpConnectionMetadata | Mapping[str, object] | None = None
+        tool_outputs: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
         connect_error: Exception | None = None
         list_tools_error: Exception | None = None
 
@@ -102,6 +103,24 @@ class DynamicMcpLoadingMixin:
             self,
         ) -> Sequence[McpResourceDescriptor | Mapping[str, object]]:
             return self.resources
+
+        async def call_tool(
+            self,
+            *,
+            tool_name: str,
+            arguments: Mapping[str, object],
+        ) -> Mapping[str, object]:
+            return self.tool_outputs.get(
+                tool_name,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"called {tool_name} with {dict(arguments)}",
+                        }
+                    ]
+                },
+            )
 
     @dataclass
     class FakeMcpProvider:

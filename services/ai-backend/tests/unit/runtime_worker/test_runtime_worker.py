@@ -1002,6 +1002,103 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
     )
 
 
+def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "call_mcp_tool",
+                            "id": "call_mcp_123",
+                            "args": {
+                                "server_name": "mcp_clickup_com",
+                                "tool_name": "list_tasks",
+                                "arguments": {"include_closed": True},
+                            },
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "type": "tool",
+                    "name": "call_mcp_tool",
+                    "tool_call_id": "call_mcp_123",
+                    "content": "ClickUp returned two tasks.",
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "assistant", "content": "Two tasks."}]},
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    events = store.events_by_run[run_id]
+    tool_events = [
+        event
+        for event in events
+        if event.event_type
+        in {"tool_call_started", "tool_result", "tool_call_completed"}
+    ]
+    assert [event.payload["tool_name"] for event in tool_events] == [
+        "call_mcp_tool",
+        "call_mcp_tool",
+        "call_mcp_tool",
+    ]
+    assert {event.visibility for event in tool_events} == {"user"}
+    assert tool_events[0].payload["args"]["server_name"] == "mcp_clickup_com"
+    assert tool_events[1].payload["output"]["content"] == "ClickUp returned two tasks."
+
+
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings(max_retries=1)

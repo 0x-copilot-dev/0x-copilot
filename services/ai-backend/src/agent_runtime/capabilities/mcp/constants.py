@@ -15,6 +15,7 @@ class Keys:
         ACCESS_POLICY = "access_policy"
         ALLOWED_ORG_IDS = "allowed_org_ids"
         ALLOWED_USER_IDS = "allowed_user_ids"
+        ARGUMENTS = "arguments"
         AUTH_MODE = "auth_mode"
         AUTH_STATE = "auth_state"
         CODE = "code"
@@ -44,6 +45,7 @@ class Keys:
         SERVER_CARD = "server_card"
         SERVER_NAME = "server_name"
         SHORT_DESCRIPTION = "short_description"
+        TOOL_NAME = "tool_name"
         TOOLS = "tools"
         TRANSPORT = "transport"
         URI = "uri"
@@ -107,6 +109,7 @@ class Values:
         SERVER_UNHEALTHY = "server_unhealthy"
         TIMEOUT = "timeout"
         UNKNOWN_SERVER = "unknown_server"
+        UNKNOWN_TOOL = "unknown_tool"
         UNSUPPORTED_TRANSPORT = "unsupported_transport"
 
     class Health:
@@ -131,6 +134,7 @@ class Values:
     class JsonRpcMethod:
         INITIALIZE = "initialize"
         INITIALIZED = "notifications/initialized"
+        CALL_TOOL = "tools/call"
         LIST_RESOURCES = "resources/list"
         LIST_TOOLS = "tools/list"
 
@@ -156,6 +160,7 @@ class Values:
 
     class ToolName:
         AUTH_MCP = "auth_mcp"
+        CALL_MCP_TOOL = "call_mcp_tool"
         LOAD_MCP_SERVER = "load_mcp_server"
 
     class UriScheme:
@@ -204,6 +209,10 @@ class Messages:
             "Request an authorization URL for an MCP server when the user has not "
             "authenticated it yet. Use this only when the server is needed."
         )
+        CALL_MCP_TOOL_DESCRIPTION = (
+            "Call a tool from an MCP server after load_mcp_server has returned that "
+            "server's validated tool descriptors."
+        )
         LOAD_MCP_SERVER_TOOL_DESCRIPTION = (
             "Load an authorized MCP server by stable name and return validated "
             "tool and resource descriptors."
@@ -224,6 +233,7 @@ class Messages:
         )
         REQUESTED_SERVER_UNAVAILABLE = "Requested MCP server is unavailable."
         REQUESTED_SERVER_UNKNOWN = "Requested MCP server is not available."
+        REQUESTED_TOOL_UNKNOWN = "Requested MCP tool is not available on this server."
 
     class Loader:
         AUTH_FAILED = "MCP server authentication failed."

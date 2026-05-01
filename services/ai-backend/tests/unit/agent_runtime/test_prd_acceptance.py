@@ -91,6 +91,14 @@ class FakeMcpClient:
     async def list_resources(self) -> Sequence[McpResourceDescriptor]:
         return self.resources
 
+    async def call_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return {"content": [{"type": "text", "text": f"called {tool_name}"}]}
+
 
 @dataclass
 class FakeMcpProvider:

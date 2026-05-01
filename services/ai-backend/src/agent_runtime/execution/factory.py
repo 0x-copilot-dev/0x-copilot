@@ -21,7 +21,9 @@ from agent_runtime.execution.deep_agent_builder import (
     build_deep_agent,
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
+from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
+from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
@@ -155,6 +157,16 @@ def _model_visible_tools(
                 LoadMcpServerInput,
             )
         )
+        model_tools.append(
+            _structured_tool(
+                CallMcpTool(
+                    registry=mcp_registry,  # type: ignore[arg-type]
+                    loader=loader,
+                    runtime_context=runtime_context,
+                ),
+                McpToolCallRequest,
+            )
+        )
     auth_session_creator = _auth_session_creator(mcp_registry)
     if auth_session_creator is not None:
         model_tools.append(
@@ -199,7 +211,16 @@ def _instructions_with_mcp_cards(
     *, instructions: str, mcp_servers: Sequence[object]
 ) -> str:
     if not mcp_servers:
-        return instructions
+        return "\n\n".join(
+            (
+                instructions,
+                "No MCP server cards are currently registered or visible for this "
+                "request. If the user asks which MCP servers are available, answer "
+                "that none are currently available. Do not call load_mcp_server "
+                "unless a stable MCP server name is listed in the prompt or provided "
+                "by the user.",
+            )
+        )
     card_lines = []
     for server in mcp_servers:
         name = getattr(server, "name", str(server))
@@ -214,9 +235,15 @@ def _instructions_with_mcp_cards(
     return "\n\n".join(
         (
             instructions,
-            "Available MCP servers are compact cards. If a needed MCP server is not "
-            "authenticated, call auth_mcp before trying to load its tools. If it is "
-            "authenticated, call load_mcp_server by stable server name before using its tools.",
+            "Available MCP servers are compact cards for progressive discovery. Do not "
+            "assume external services are unavailable when a relevant MCP server card is "
+            "listed. If the user asks which MCP servers are available, answer directly "
+            "from these cards and include the stable names and auth states; do not call "
+            "load_mcp_server for inventory questions. For a specific task, choose the "
+            "relevant server by stable name, call load_mcp_server to load only that "
+            "server's validated tool descriptors, call auth_mcp if the server needs "
+            "authentication, then call call_mcp_tool with a tool_name and arguments "
+            "from the loaded descriptor.",
             "\n".join(card_lines),
         )
     )

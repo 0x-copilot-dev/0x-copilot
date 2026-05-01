@@ -15,6 +15,8 @@ The implemented contracts live under `src/agent_runtime/`:
 - `LoadedToolSpec`: validated full tool description, argument schema, return schema, side-effect class, timeout, and permission policy.
 - `McpServerCard`: compact MCP server summary with transport, auth mode, scopes, health, load cost, and optional user/org allowlists.
 - `McpToolDescriptor` and `McpResourceDescriptor`: validated descriptors discovered only after explicit MCP server load.
+- `McpToolCallRequest` and `McpToolCallResult`: progressive invocation contracts
+  for calling one selected MCP tool through the backend-owned credential proxy.
 - `SkillManifest`: parsed `SKILL.md` frontmatter for product indexing and source policy.
 - `SkillSourceConfig` and `SkillSource`: configured skill roots, precedence, scope, and Deep Agents directory wiring.
 - `MemoryScope`, `MemoryRoutePlan`, and `MemoryPathPolicy`: user, agent, and organization policy namespaces plus read/write authorization.
