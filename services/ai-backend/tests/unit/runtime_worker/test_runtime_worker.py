@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-import json
 from types import SimpleNamespace
 
 from agent_runtime.execution.contracts import (
@@ -26,6 +25,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.loop import RuntimeWorker
 from runtime_worker.stream_events import StreamNamespace
 
@@ -901,6 +901,7 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
             metadata={
                 "approval_id": approval_id,
                 "approval_kind": "mcp_auth",
+                "native_interrupt_id": approval_id,
                 "server_id": "server_123",
                 "server_name": "drive_mcp",
                 "display_name": "Drive MCP",
@@ -926,12 +927,46 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
         async def handle(self, _command: RuntimeRunCommand) -> None:
             return None
 
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_resumer(_harness: RuntimeHarness, resume: object):
+        assert resume == {"approval_id": approval_id, "decision": "approved"}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [
+                    {"role": "assistant", "content": "Drive MCP is connected."}
+                ]
+            },
+        }
+
     worker = RuntimeWorker(
         persistence=store,
         event_store=store,
         queue=store,
         settings=settings,
         run_handler=NoopRunHandler(),  # type: ignore[arg-type]
+        approval_handler=RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_resumer=fake_resumer,
+        ),
     )
 
     processed = asyncio.run(worker.run_until_idle())
@@ -1461,19 +1496,36 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
         _messages: Sequence[object],
     ):
         yield {
-            "type": "custom",
+            "type": "updates",
             "ns": (),
             "data": {
-                "api_event_type": "approval_requested",
-                "approval_id": "approval_mcp_123",
-                "approval_kind": "mcp_tool",
-                "server_name": "mcp_clickup_com",
-                "display_name": "ClickUp",
-                "tool_name": "list_tasks",
-                "arguments": {"assignee": "me"},
-                "risk_level": "low",
-                "read_only": True,
-                "message": "Approve ClickUp to run list_tasks.",
+                "__interrupt__": (
+                    SimpleNamespace(
+                        id="approval_mcp_123",
+                        value={
+                            "action_requests": [
+                                {
+                                    "name": "call_mcp_tool",
+                                    "args": {
+                                        "server_name": "mcp_clickup_com",
+                                        "tool_name": "list_tasks",
+                                        "arguments": {"assignee": "me"},
+                                    },
+                                }
+                            ],
+                            "review_configs": [
+                                {
+                                    "action_name": "call_mcp_tool",
+                                    "allowed_decisions": [
+                                        "approve",
+                                        "edit",
+                                        "reject",
+                                    ],
+                                }
+                            ],
+                        },
+                    ),
+                )
             },
         }
 
@@ -1501,9 +1553,10 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
     assert approval is not None
     assert approval.metadata["approval_kind"] == "mcp_tool"
     assert approval.metadata["tool_name"] == "list_tasks"
+    assert approval.metadata["native_interrupt_id"] == "approval_mcp_123"
 
 
-def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> None:
+def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings()
     run_id = _create_queued_run(store, settings)
@@ -1529,50 +1582,33 @@ def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> No
         _messages: Sequence[object],
     ):
         yield {
-            "type": "messages",
+            "type": "updates",
             "ns": (),
-            "data": (
-                {
-                    "tool_call_chunks": (
-                        {
-                            "name": "call_mcp_tool",
-                            "id": "call_mcp_approval_123",
-                            "args": {
-                                "server_name": "mcp_clickup_com",
-                                "tool_name": "clickup_filter_tasks",
-                                "arguments": {"assignee": "me"},
-                            },
+            "data": {
+                "__interrupt__": (
+                    {
+                        "id": "approval_native_123",
+                        "value": {
+                            "action_requests": [
+                                {
+                                    "name": "call_mcp_tool",
+                                    "args": {
+                                        "server_name": "mcp_clickup_com",
+                                        "tool_name": "clickup_filter_tasks",
+                                        "arguments": {"assignee": "me"},
+                                    },
+                                }
+                            ],
+                            "review_configs": [
+                                {
+                                    "action_name": "call_mcp_tool",
+                                    "allowed_decisions": ["approve", "reject"],
+                                }
+                            ],
                         },
-                    )
-                },
-                {},
-            ),
-        }
-        yield {
-            "type": "messages",
-            "ns": (),
-            "data": (
-                SimpleNamespace(
-                    type="tool",
-                    name="call_mcp_tool",
-                    tool_call_id="call_mcp_approval_123",
-                    content=json.dumps(
-                        {
-                            "api_event_type": "approval_requested",
-                            "approval_id": "approval_json_123",
-                            "approval_kind": "mcp_tool",
-                            "server_name": "mcp_clickup_com",
-                            "display_name": "ClickUp",
-                            "tool_name": "clickup_filter_tasks",
-                            "arguments": {"assignee": "me"},
-                            "risk_level": "low",
-                            "read_only": True,
-                            "message": "Approve ClickUp to run clickup_filter_tasks.",
-                        }
-                    ),
-                ),
-                {},
-            ),
+                    },
+                )
+            },
         }
 
     worker = RuntimeWorker(
@@ -1598,23 +1634,15 @@ def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> No
         if event.event_type == "approval_requested"
     ]
     assert len(approval_events) == 1
-    assert approval_events[0].payload["approval_id"] == "approval_json_123"
+    assert approval_events[0].payload["approval_id"] == "approval_native_123"
     assert approval_events[0].payload["tool_name"] == "clickup_filter_tasks"
-    assert approval_events[0].payload["source_tool_call_id"] == "call_mcp_approval_123"
     approval = store.get_approval_request(
         org_id="org_123",
-        approval_id="approval_json_123",
+        approval_id="approval_native_123",
     )
     assert approval is not None
-    assert approval.metadata["source_tool_call_id"] == "call_mcp_approval_123"
-    wrapper_result_events = [
-        event
-        for event in store.events_by_run[run_id]
-        if event.event_type in {"tool_result", "tool_call_completed"}
-        and event.payload.get("call_id") == "call_mcp_approval_123"
-    ]
-    assert wrapper_result_events
-    assert {event.visibility for event in wrapper_result_events} == {"internal"}
+    assert approval.metadata["native_interrupt_id"] == "approval_native_123"
+    assert approval.metadata["allowed_decisions"] == ["approve", "reject"]
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

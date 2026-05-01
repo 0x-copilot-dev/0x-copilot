@@ -60,25 +60,33 @@ def test_mcp_server_card_exposes_safe_auth_state() -> None:
 def test_auth_mcp_tool_returns_safe_auth_card_payload(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_interrupt(payload: dict[str, object]) -> dict[str, object]:
+        captured.update(payload)
+        return {"decision": "approved"}
+
     tool = AuthMcpTool(
         auth_session_creator=FakeAuthSessionCreator(),
         runtime_context=runtime_context_admin,
+        interrupt_handler=fake_interrupt,
     )
 
     result = asyncio.run(
         tool.ainvoke({"server_name": "drive_mcp", "server_id": "server_123"})
     )
 
-    assert result["api_event_type"] == "mcp_auth_required"
-    assert result["approval_id"] == (
+    assert captured["api_event_type"] == "mcp_auth_required"
+    assert captured["approval_id"] == (
         f"mcp_auth:{runtime_context_admin.run_id}:server_123"
     )
-    assert result["action_id"] == result["approval_id"]
-    assert result["approval_kind"] == "mcp_auth"
-    assert result["server_id"] == "server_123"
-    assert result["display_name"] == "Drive MCP"
-    assert "auth.example.com" in result["auth_url"]
-    assert "token" not in str(result)
+    assert captured["action_id"] == captured["approval_id"]
+    assert captured["approval_kind"] == "mcp_auth"
+    assert captured["server_id"] == "server_123"
+    assert captured["display_name"] == "Drive MCP"
+    assert "auth.example.com" in str(captured["auth_url"])
+    assert result["status"] == "connected"
+    assert "token" not in str(captured)
 
 
 def test_backend_mcp_service_auth_includes_trusted_scope_headers(

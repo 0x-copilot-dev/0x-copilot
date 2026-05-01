@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from agent_runtime.api.constants import Keys, Values
-from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import (
@@ -292,29 +291,6 @@ class ToolEventProjector(StreamMessageParser):
     @classmethod
     def is_internal_tool_name(cls, tool_name: str | None) -> bool:
         return tool_name in cls.internal_tool_names
-
-    @classmethod
-    def is_promoted_control_tool_result(cls, payload: Mapping[str, object]) -> bool:
-        if (
-            cls.text(payload.get(Keys.Field.TOOL_NAME))
-            != McpValues.ToolName.CALL_MCP_TOOL
-        ):
-            return False
-        output = payload.get(Keys.Field.OUTPUT)
-        if not isinstance(output, Mapping):
-            return False
-        if set(output.keys()) - {Keys.Field.CONTENT}:
-            return False
-        content = output.get(Keys.Field.CONTENT)
-        text = (
-            content if isinstance(content, str) else cls.content_delta_to_text(content)
-        )
-        if text is None:
-            return False
-        parsed = cls.parse_json_mapping(text)
-        if parsed is None:
-            return False
-        return cls.api_event_type(parsed) is RuntimeApiEventType.APPROVAL_REQUESTED
 
     @classmethod
     def is_large_result_artifact_state(cls, state: ToolCallStreamState) -> bool:

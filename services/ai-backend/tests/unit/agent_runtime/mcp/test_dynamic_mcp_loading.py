@@ -452,7 +452,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             self.TestValues.Names.DRIVE_MCP,
         ]
 
-    def test_call_mcp_tool_requests_approval_without_grant(
+    def test_call_mcp_tool_executes_after_native_approval(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -482,11 +482,11 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             )
         )
 
-        assert result["api_event_type"] == "approval_requested"
-        assert result["approval_kind"] == "mcp_tool"
         assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
         assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
-        assert result["arguments"] == {"query": "tasks"}
+        assert result["output"]["content"][0]["text"] == (
+            "called drive_search with {'query': 'tasks'}"
+        )
 
     def test_call_mcp_tool_collects_misplaced_tool_arguments(
         self,
@@ -519,8 +519,9 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             )
         )
 
-        assert result["api_event_type"] == "approval_requested"
-        assert result["arguments"] == {"query": "tasks", "assignees": ["me"]}
+        assert result["output"]["content"][0]["text"] == (
+            "called drive_search with {'query': 'tasks', 'assignees': ['me']}"
+        )
 
     def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(
         self,

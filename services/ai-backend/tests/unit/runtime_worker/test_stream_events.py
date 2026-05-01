@@ -55,9 +55,8 @@ def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
             "type": "tool",
             "content": json.dumps(
                 {
-                    "api_event_type": "approval_requested",
-                    "approval_id": "approval_123",
-                    "approval_kind": "mcp_tool",
+                    "api_event_type": "reasoning_summary_delta",
+                    "summary": "Checking source coverage",
                 }
             ),
         }
@@ -65,9 +64,9 @@ def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
 
     assert len(payloads) == 1
     assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
-        RuntimeApiEventType.APPROVAL_REQUESTED
+        RuntimeApiEventType.REASONING_SUMMARY_DELTA
     )
-    assert payloads[0]["approval_id"] == "approval_123"
+    assert payloads[0]["summary"] == "Checking source coverage"
 
 
 def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None:
@@ -75,13 +74,12 @@ def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None
         (
             SimpleNamespace(
                 type="tool",
-                name="call_mcp_tool",
-                tool_call_id="call_mcp_approval_123",
+                name="progress_tool",
+                tool_call_id="call_progress_123",
                 content=json.dumps(
                     {
-                        "api_event_type": "approval_requested",
-                        "approval_id": "approval_from_tool_object",
-                        "approval_kind": "mcp_tool",
+                        "api_event_type": "progress",
+                        "message": "Still working.",
                     }
                 ),
             ),
@@ -91,9 +89,54 @@ def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None
 
     assert len(payloads) == 1
     assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
-        RuntimeApiEventType.APPROVAL_REQUESTED
+        RuntimeApiEventType.PROGRESS
     )
-    assert payloads[0]["approval_id"] == "approval_from_tool_object"
+    assert payloads[0]["message"] == "Still working."
+
+
+def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
+    payloads = RuntimeStreamPartAdapter.native_tool_approval_payloads(
+        interrupt_id="interrupt_123",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "mcp_clickup_com",
+                        "tool_name": "list_tasks",
+                        "arguments": {"assignee": "me"},
+                    },
+                }
+            ],
+            "review_configs": [
+                {
+                    "action_name": "call_mcp_tool",
+                    "allowed_decisions": ["approve", "reject"],
+                }
+            ],
+        },
+    )
+
+    assert payloads == (
+        {
+            "api_event_type": "approval_requested",
+            "event_type": "approval_requested",
+            "approval_id": "interrupt_123",
+            "action_id": "interrupt_123",
+            "approval_kind": "mcp_tool",
+            "native_interrupt_id": "interrupt_123",
+            "action_index": 0,
+            "action_count": 1,
+            "server_name": "mcp_clickup_com",
+            "display_name": "mcp_clickup_com",
+            "tool_name": "list_tasks",
+            "arguments": {"assignee": "me"},
+            "message": "Approve mcp_clickup_com to run list_tasks.",
+            "status": "pending",
+            "allowed_decisions": ["approve", "reject"],
+            "grant_options": ["allow_once"],
+        },
+    )
 
 
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:

@@ -162,7 +162,6 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         if self.is_tool_result_message(message):
             payload = self.tool_result_payload(message)
             payload = self.tool_result_payload_with_state(run.run_id, payload)
-            control_tool_result = self.is_promoted_control_tool_result(payload)
             if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)
                 self.append_task_lifecycle_event(
@@ -180,8 +179,6 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                     metadata=metadata,
                 )
                 return
-            if control_tool_result:
-                self.mark_internal_visibility(payload)
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -196,8 +193,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                 Keys.Field.STATUS: Values.Status.COMPLETED,
             }
             if (
-                control_tool_result
-                or self.text(payload.get(Keys.Field.VISIBILITY))
+                self.text(payload.get(Keys.Field.VISIBILITY))
                 == RuntimeEventVisibility.INTERNAL.value
             ):
                 self.mark_internal_visibility(completed_payload)
@@ -264,6 +260,29 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             )
         )
 
+    def append_native_interrupt_events(
+        self,
+        *,
+        run: RunRecord,
+        value: object,
+    ) -> bool:
+        namespace = StreamNamespace(())
+        did_append = False
+        for payload in self.native_interrupt_payloads(run, value):
+            event_type = self.api_event_type(payload)
+            if event_type is None:
+                continue
+            self.create_approval_request(run=run, payload=payload)
+            self.event_producer.append_api_event(
+                run=run,
+                source=self.source_for_event(event_type, namespace),
+                event_type=event_type,
+                payload=payload,
+                metadata=namespace.metadata("values"),
+            )
+            did_append = True
+        return did_append
+
     @classmethod
     def payload_with_action_id(
         cls,
@@ -312,6 +331,10 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
     @classmethod
     def native_interrupts(cls, value: object) -> tuple[object, ...]:
         raw = value.get("__interrupt__") if isinstance(value, Mapping) else None
+        if raw is None and isinstance(value, Mapping):
+            raw = value.get("interrupts")
+        if raw is None:
+            raw = getattr(value, "interrupts", None)
         if raw is None:
             raw = cls.payload_mapping(value).get("__interrupt__")
         if raw is None:

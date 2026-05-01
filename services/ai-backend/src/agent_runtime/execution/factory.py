@@ -119,7 +119,7 @@ def create_agent_runtime(
                 ),
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
-                interrupt_on=_native_interrupt_config(runtime_context),
+                interrupt_on=_native_interrupt_config(model_tools),
                 checkpointer=runtime_checkpointer(),
             )
         )
@@ -204,10 +204,13 @@ def _model_visible_tools(
 
 
 def _native_interrupt_config(
-    _runtime_context: AgentRuntimeContext,
+    model_tools: Sequence[object],
 ) -> dict[str, object]:
     """Return DeepAgents HITL policies for model-visible gated tools."""
 
+    tool_names = {str(getattr(tool, "name", "")).strip() for tool in model_tools}
+    if McpValues.ToolName.CALL_MCP_TOOL not in tool_names:
+        return {}
     return {
         McpValues.ToolName.CALL_MCP_TOOL: {
             "allowed_decisions": ["approve", "edit", "reject"],

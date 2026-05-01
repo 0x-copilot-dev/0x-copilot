@@ -118,6 +118,11 @@ class RuntimeRunHandler:
                     timeout=command.runtime_context.model_profile.timeout_seconds,
                 )
                 metrics.record_usage_from(result)
+                if self.stream_event_mapper.append_native_interrupt_events(
+                    run=run,
+                    value=result,
+                ):
+                    result = {"action_required": True}
             if self._is_action_interrupt(result):
                 self.persistence.update_run_status(
                     run_id=command.run_id,
@@ -500,9 +505,13 @@ class RuntimeRunHandler:
 
     @classmethod
     def _is_action_interrupt(cls, result: object) -> bool:
+        interrupts = getattr(result, "interrupts", None)
+        if interrupts:
+            return True
         return isinstance(result, Mapping) and (
             result.get("action_required") is True
             or result.get("approval_requested") is True
+            or bool(result.get("interrupts"))
         )
 
     def _append_lifecycle(
