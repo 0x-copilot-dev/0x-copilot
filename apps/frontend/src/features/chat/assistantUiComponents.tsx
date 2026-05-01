@@ -398,10 +398,85 @@ function ActivityParams({ params }: { params: ActivityParam[] }): ReactElement {
 
 function ActivityDetails({ children }: { children: ReactNode }): ReactElement {
   return (
-    <details className="aui-activity-card__details">
-      <summary>Inspect details</summary>
-      <div className="aui-activity-card__details-content">{children}</div>
+    <ActivityCollapsible
+      className="aui-activity-card__details"
+      contentClassName="aui-activity-card__details-content"
+      label="Inspect details"
+    >
+      {children}
+    </ActivityCollapsible>
+  );
+}
+
+function ActivityCollapsible({
+  label,
+  children,
+  className,
+  contentClassName,
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+  contentClassName?: string;
+}): ReactElement {
+  return (
+    <details className={classNames("aui-collapsible", className)}>
+      <summary className="aui-collapsible__trigger">{label}</summary>
+      <div className={classNames("aui-collapsible__content", contentClassName)}>
+        {children}
+      </div>
     </details>
+  );
+}
+
+function ActivityItem({
+  title,
+  status,
+  variant = "tool",
+  description,
+  details,
+  result,
+}: {
+  title: string;
+  status: string;
+  variant?: ActivityVariant;
+  description?: ReactNode;
+  details?: ReactNode;
+  result?: ReactNode;
+}): ReactElement {
+  return (
+    <div
+      className={classNames(
+        "aui-activity-item",
+        `aui-activity-item--${variant}`,
+      )}
+      data-status={status}
+    >
+      <div className="aui-activity-item__content">
+        <span className="aui-activity-item__status-dot" aria-hidden="true" />
+        <div className="aui-activity-item__text">
+          <span className="aui-activity-item__title">{title}</span>
+          {description ? (
+            <span className="aui-activity-item__description">
+              {description}
+            </span>
+          ) : null}
+          {result ? (
+            <div className="aui-activity-item__result">{result}</div>
+          ) : null}
+        </div>
+      </div>
+      <Badge tone={badgeToneForStatus(status)}>{status}</Badge>
+      {details ? (
+        <ActivityCollapsible
+          className="aui-activity-item__details"
+          contentClassName="aui-activity-item__details-content"
+          label="Details"
+        >
+          {details}
+        </ActivityCollapsible>
+      ) : null}
+    </div>
   );
 }
 
@@ -1197,21 +1272,34 @@ function ToolFallback({
   const activitySummary = stringValue(args.summary) ?? argsSummary;
   const statusLabel = toolStatusLabel(status.type, isError);
   const largeResult = largeToolResultFromValue(result);
+  const title = toolActivityTitle(toolName, status.type, isError, result, null);
+  const resultSummary = largeResult ? (
+    <LargeToolResultNotice result={largeResult} compact />
+  ) : result !== undefined ? (
+    summarizeToolValue(result, toolName)
+  ) : undefined;
+  const details = toolDetailsContent(argsText, result);
+  if (!shouldRenderFullToolCard(status.type, isError, result)) {
+    return (
+      <ActivityItem
+        title={title}
+        status={statusLabel}
+        variant="tool"
+        description={activitySummary}
+        result={resultSummary}
+        details={details}
+      />
+    );
+  }
   return (
     <ActivityCard
-      title={toolActivityTitle(toolName, status.type, isError, result, null)}
+      title={title}
       status={statusLabel}
       variant="tool"
       description={activitySummary}
       params={activityParams(argsText, args)}
-      result={
-        largeResult ? (
-          <LargeToolResultNotice result={largeResult} compact />
-        ) : result !== undefined ? (
-          summarizeToolValue(result, toolName)
-        ) : undefined
-      }
-      details={toolDetailsContent(argsText, result)}
+      result={resultSummary}
+      details={details}
     />
   );
 }
@@ -1227,26 +1315,41 @@ function McpTool({
   const serverName = stringValue(args.server_name);
   const requestedTool = stringValue(args.tool_name);
   const resultNotice = largeToolResultFromValue(result);
+  const statusLabel = toolStatusLabel(status.type, isError);
+  const title = mcpToolTitle(toolName, requestedTool);
+  const description = mcpToolSummary(
+    toolName,
+    status.type,
+    serverName,
+    requestedTool,
+  );
+  const resultSummary = resultNotice ? (
+    <LargeToolResultNotice result={resultNotice} compact />
+  ) : result !== undefined ? (
+    summarizeMcpResult(result)
+  ) : undefined;
+  const details = toolDetailsContent(argsText, result);
+  if (!shouldRenderFullMcpCard(toolName, status.type, isError, result)) {
+    return (
+      <ActivityItem
+        title={title}
+        status={statusLabel}
+        variant="mcp"
+        description={description}
+        result={resultSummary}
+        details={details}
+      />
+    );
+  }
   return (
     <ActivityCard
-      title={mcpToolTitle(toolName, requestedTool)}
-      status={toolStatusLabel(status.type, isError)}
+      title={title}
+      status={statusLabel}
       variant="mcp"
-      description={mcpToolSummary(
-        toolName,
-        status.type,
-        serverName,
-        requestedTool,
-      )}
+      description={description}
       params={mcpActivityParams(serverName, requestedTool, args.arguments)}
-      result={
-        resultNotice ? (
-          <LargeToolResultNotice result={resultNotice} compact />
-        ) : result !== undefined ? (
-          summarizeMcpResult(result)
-        ) : undefined
-      }
-      details={toolDetailsContent(argsText, result)}
+      result={resultSummary}
+      details={details}
     />
   );
 }
@@ -1261,14 +1364,33 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
   const completed =
     props.status.type === "complete" || data.status === "completed";
   const statusLabel = toolStatusLabel(props.status.type, props.isError);
+  const title = `Delegated to ${formatAgentName(subagentName)}`;
+  const details = taskId ? <small>Task ID: {taskId}</small> : undefined;
+  const hasActivityDetail = activities.length > 0;
+  const shouldUseCard =
+    props.isError === true ||
+    !completed ||
+    hasImportantSubagentActivity(activities);
+  if (!shouldUseCard) {
+    return (
+      <ActivityItem
+        title={title}
+        status={statusLabel}
+        variant="subagent"
+        description={taskSummary}
+        result={summary}
+        details={details}
+      />
+    );
+  }
   return (
     <ActivityCard
-      title={`Delegated to ${formatAgentName(subagentName)}`}
+      title={title}
       status={statusLabel}
       variant="subagent"
       description={taskSummary}
       result={completed && summary ? summary : undefined}
-      details={taskId ? <small>Task ID: {taskId}</small> : undefined}
+      details={details}
     >
       <SubagentActivityList
         activities={activities}
@@ -1592,6 +1714,76 @@ function shouldShowToolDetails(
   );
 }
 
+function shouldRenderFullToolCard(
+  status: string,
+  isError: boolean | undefined,
+  result: unknown,
+): boolean {
+  return (
+    isError === true ||
+    status === "requires-action" ||
+    largeToolResultFromValue(result) !== null ||
+    hasRichToolResult(result)
+  );
+}
+
+function shouldRenderFullMcpCard(
+  toolName: string,
+  status: string,
+  isError: boolean | undefined,
+  result: unknown,
+): boolean {
+  if (
+    isError === true ||
+    status === "requires-action" ||
+    largeToolResultFromValue(result) !== null
+  ) {
+    return true;
+  }
+  if (status === "running") {
+    return false;
+  }
+  return toolName === "call_mcp_tool" && hasRichToolResult(result);
+}
+
+function hasRichToolResult(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (largeToolResultFromValue(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 3;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 360 || trimmed.split(/\r\n|\r|\n/).length > 4;
+  }
+  const record = asRecord(value);
+  const keys = Object.keys(record);
+  if (keys.length === 0) {
+    return false;
+  }
+  const output = asRecord(record.output);
+  const content = output.content ?? record.content;
+  const text = mcpContentText(content) ?? stringValue(output.text);
+  if (text) {
+    const parsed = parseJsonObject(text);
+    if (Array.isArray(parsed?.results) || stringValue(parsed?.overview)) {
+      return true;
+    }
+    return text.length > 360 || text.split(/\r\n|\r|\n/).length > 4;
+  }
+  const informationalKeys = new Set([
+    "message",
+    "content",
+    "summary",
+    "status",
+  ]);
+  return keys.some((key) => !informationalKeys.has(key));
+}
+
 function hasComplexToolArgs(argsText: string): boolean {
   const args = parseToolArgs(argsText);
   if (args === null) {
@@ -1858,6 +2050,16 @@ function isSubagentActivityRecord(
   value: SubagentActivityRecord | null,
 ): value is SubagentActivityRecord {
   return value !== null;
+}
+
+function hasImportantSubagentActivity(
+  activities: SubagentActivityRecord[],
+): boolean {
+  return activities.some(
+    (activity) =>
+      activity.isError ||
+      !["complete", "completed"].includes(activity.status.toLowerCase()),
+  );
 }
 
 function activityTitle(activity: SubagentActivityRecord): string {

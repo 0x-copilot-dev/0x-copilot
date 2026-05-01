@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+import json
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -1413,6 +1414,109 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
     assert approval is not None
     assert approval.metadata["approval_kind"] == "mcp_tool"
     assert approval.metadata["tool_name"] == "list_tasks"
+
+
+def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def fake_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "call_mcp_tool",
+                            "id": "call_mcp_approval_123",
+                            "args": {
+                                "server_name": "mcp_clickup_com",
+                                "tool_name": "clickup_filter_tasks",
+                                "arguments": {"assignee": "me"},
+                            },
+                        },
+                    )
+                },
+                {},
+            ),
+        }
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                {
+                    "type": "tool",
+                    "name": "call_mcp_tool",
+                    "tool_call_id": "call_mcp_approval_123",
+                    "content": json.dumps(
+                        {
+                            "api_event_type": "approval_requested",
+                            "approval_id": "approval_json_123",
+                            "approval_kind": "mcp_tool",
+                            "server_name": "mcp_clickup_com",
+                            "display_name": "ClickUp",
+                            "tool_name": "clickup_filter_tasks",
+                            "arguments": {"assignee": "me"},
+                            "risk_level": "low",
+                            "read_only": True,
+                            "message": "Approve ClickUp to run clickup_filter_tasks.",
+                        }
+                    ),
+                },
+                {},
+            ),
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=fake_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
+    approval_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "approval_requested"
+    ]
+    assert len(approval_events) == 1
+    assert approval_events[0].payload["approval_id"] == "approval_json_123"
+    assert approval_events[0].payload["tool_name"] == "clickup_filter_tasks"
+    assert store.get_approval_request(
+        org_id="org_123",
+        approval_id="approval_json_123",
+    )
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

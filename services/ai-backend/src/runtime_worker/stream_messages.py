@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 
 from agent_runtime.execution.contracts import JsonObject
 from runtime_api.schemas import RuntimeApiEventType
@@ -21,6 +22,11 @@ class StreamMessageParser:
     def collect_explicit_api_payloads(
         cls, value: object, payloads: list[JsonObject]
     ) -> None:
+        if isinstance(value, str):
+            parsed = cls.parse_json_mapping(value)
+            if parsed is not None:
+                cls.collect_explicit_api_payloads(parsed, payloads)
+            return
         if isinstance(value, Mapping):
             payload = cls.payload_mapping(value)
             if cls.api_event_type(payload) is not None:
@@ -38,6 +44,18 @@ class StreamMessageParser:
     @classmethod
     def contains_explicit_api_event(cls, value: object) -> bool:
         return bool(cls.explicit_api_payloads(value))
+
+    @classmethod
+    def parse_json_mapping(cls, value: str) -> JsonObject | None:
+        if not value.strip().startswith("{"):
+            return None
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, Mapping):
+            return None
+        return cls.payload_mapping(parsed)
 
     @classmethod
     def safe_activity_payload(cls, value: object) -> JsonObject:
