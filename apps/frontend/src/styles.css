@@ -158,12 +158,12 @@ p {
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
   margin: var(--space-md) 0;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
   padding: var(--space-sm);
+  position: relative;
 }
 
 .reasoning-markdown [data-streamdown="code-block"] {
@@ -178,7 +178,25 @@ p {
   font-family: var(--font-mono);
   font-size: 0.78rem;
   min-height: 1.75rem;
+  padding: 0 5.25rem 0 var(--space-2xs);
   text-transform: lowercase;
+}
+
+.assistant-markdown
+  [data-streamdown="code-block"]
+  > :has([data-streamdown="code-block-actions"]),
+.reasoning-markdown
+  [data-streamdown="code-block"]
+  > :has([data-streamdown="code-block-actions"]) {
+  align-items: center;
+  display: flex;
+  height: 1.75rem;
+  justify-content: flex-end;
+  pointer-events: none;
+  position: absolute;
+  right: calc(var(--space-sm) + 1px);
+  top: calc(var(--space-sm) + 1px);
+  z-index: 2;
 }
 
 .assistant-markdown [data-streamdown="code-block-actions"],
@@ -189,23 +207,46 @@ p {
   border-radius: var(--radius-md);
   display: inline-flex;
   gap: var(--space-xs);
-  margin-left: auto;
+  pointer-events: auto;
   padding: 0.2rem 0.35rem;
 }
 
-.assistant-markdown [data-streamdown="code-block-actions"] button,
-.reasoning-markdown [data-streamdown="code-block-actions"] button {
+.assistant-markdown
+  :where(
+    [data-streamdown="code-block-actions"],
+    [data-streamdown="table-wrapper"]
+  )
+  button,
+.reasoning-markdown
+  :where(
+    [data-streamdown="code-block-actions"],
+    [data-streamdown="table-wrapper"]
+  )
+  button {
   align-items: center;
   background: transparent;
   border: 0;
   color: var(--color-text-muted);
   cursor: pointer;
   display: inline-flex;
+  justify-content: center;
+  min-height: 1.5rem;
+  min-width: 1.5rem;
   padding: 0.2rem;
 }
 
-.assistant-markdown [data-streamdown="code-block-actions"] button:hover,
-.reasoning-markdown [data-streamdown="code-block-actions"] button:hover {
+.assistant-markdown
+  :where(
+    [data-streamdown="code-block-actions"],
+    [data-streamdown="table-wrapper"]
+  )
+  button:hover,
+.reasoning-markdown
+  :where(
+    [data-streamdown="code-block-actions"],
+    [data-streamdown="table-wrapper"]
+  )
+  button:hover {
   color: var(--color-text);
 }
 
@@ -217,14 +258,17 @@ p {
   color: var(--color-text);
   font-size: 0.86rem;
   line-height: 1.55;
+  max-height: min(32rem, 60vh);
   max-width: 100%;
   min-width: 0;
-  overflow-x: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: var(--space-md);
 }
 
 .assistant-markdown [data-streamdown="code-block-body"] pre,
 .reasoning-markdown [data-streamdown="code-block-body"] pre {
+  background: transparent;
   margin: 0;
 }
 
@@ -233,6 +277,11 @@ p {
   display: block;
   min-width: max-content;
   white-space: pre;
+}
+
+.assistant-markdown [data-streamdown="code-block-body"] code > span,
+.reasoning-markdown [data-streamdown="code-block-body"] code > span {
+  display: block;
 }
 
 .assistant-markdown [data-streamdown="inline-code"],
@@ -331,11 +380,80 @@ p {
 
 .assistant-markdown [data-streamdown="table-wrapper"],
 .reasoning-markdown [data-streamdown="table-wrapper"] {
+  background: var(--color-surface-muted);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
   margin: var(--space-md) 0;
   max-width: 100%;
-  overflow-x: auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-sm);
+}
+
+.assistant-markdown [data-streamdown="table-wrapper"] > :first-child,
+.reasoning-markdown [data-streamdown="table-wrapper"] > :first-child {
+  align-items: center;
+  display: flex;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+  min-height: 1.75rem;
+}
+
+.assistant-markdown [data-streamdown="table-wrapper"] > :not(:first-child),
+.reasoning-markdown [data-streamdown="table-wrapper"] > :not(:first-child) {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  max-height: min(32rem, 60vh);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.assistant-markdown [data-streamdown="table-wrapper"] :where(.relative),
+.reasoning-markdown [data-streamdown="table-wrapper"] :where(.relative) {
+  position: relative;
+}
+
+.assistant-markdown [data-streamdown="table-wrapper"] :where([role="menu"]),
+.reasoning-markdown [data-streamdown="table-wrapper"] :where([role="menu"]) {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 36px rgb(0 0 0 / 0.28);
+  color: var(--color-text);
+  min-width: 12rem;
+  padding: var(--space-xs);
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2xs));
+  z-index: 5;
+}
+
+.assistant-markdown [data-streamdown="table-wrapper"] :where([role="menuitem"]),
+.reasoning-markdown
+  [data-streamdown="table-wrapper"]
+  :where([role="menuitem"]) {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  display: flex;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  width: 100%;
+}
+
+.assistant-markdown
+  [data-streamdown="table-wrapper"]
+  :where([role="menuitem"]:hover),
+.reasoning-markdown
+  [data-streamdown="table-wrapper"]
+  :where([role="menuitem"]:hover) {
+  background: var(--color-surface-muted);
 }
 
 .assistant-markdown [data-streamdown="table"],
@@ -349,6 +467,13 @@ p {
   border-bottom: 1px solid var(--color-border);
   padding: var(--space-xs) var(--space-sm);
   text-align: left;
+}
+
+.assistant-markdown :where(th),
+.reasoning-markdown :where(th) {
+  color: var(--color-text);
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .app-eyebrow {
@@ -1348,6 +1473,9 @@ p {
 }
 
 .aui-activity-card[data-status="running"] .aui-activity-card__status-dot,
+.aui-activity-card[data-status="starting"] .aui-activity-card__status-dot,
+.aui-activity-card[data-status="working"] .aui-activity-card__status-dot,
+.aui-activity-card[data-status="still working"] .aui-activity-card__status-dot,
 .aui-activity-card[data-status="waiting"] .aui-activity-card__status-dot,
 .aui-activity-card[data-status="action required"]
   .aui-activity-card__status-dot {
@@ -1356,11 +1484,14 @@ p {
 
 .aui-activity-card[data-status="complete"] .aui-activity-card__status-dot,
 .aui-activity-card[data-status="completed"] .aui-activity-card__status-dot,
+.aui-activity-card[data-status="done"] .aui-activity-card__status-dot,
 .aui-activity-card[data-status="resolved"] .aui-activity-card__status-dot {
   background: var(--color-success, var(--color-accent-strong));
 }
 
 .aui-activity-card[data-status="error"] .aui-activity-card__status-dot,
+.aui-activity-card[data-status="could not complete"]
+  .aui-activity-card__status-dot,
 .aui-activity-card[data-status="failed"] .aui-activity-card__status-dot {
   background: var(--color-danger);
 }
@@ -1490,6 +1621,9 @@ p {
 }
 
 .aui-activity-item[data-status="running"] .aui-activity-item__status-dot,
+.aui-activity-item[data-status="starting"] .aui-activity-item__status-dot,
+.aui-activity-item[data-status="working"] .aui-activity-item__status-dot,
+.aui-activity-item[data-status="still working"] .aui-activity-item__status-dot,
 .aui-activity-item[data-status="waiting"] .aui-activity-item__status-dot,
 .aui-activity-item[data-status="action required"]
   .aui-activity-item__status-dot {
@@ -1498,11 +1632,14 @@ p {
 
 .aui-activity-item[data-status="complete"] .aui-activity-item__status-dot,
 .aui-activity-item[data-status="completed"] .aui-activity-item__status-dot,
+.aui-activity-item[data-status="done"] .aui-activity-item__status-dot,
 .aui-activity-item[data-status="resolved"] .aui-activity-item__status-dot {
   background: var(--color-success, var(--color-accent-strong));
 }
 
 .aui-activity-item[data-status="error"] .aui-activity-item__status-dot,
+.aui-activity-item[data-status="could not complete"]
+  .aui-activity-item__status-dot,
 .aui-activity-item[data-status="failed"] .aui-activity-item__status-dot {
   background: var(--color-danger);
 }

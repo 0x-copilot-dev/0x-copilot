@@ -77,6 +77,15 @@ export function messagesToChatItems(
   eventsByRunId: RuntimeEventsByRunId = new Map(),
 ): ChatItem[] {
   const items: ChatItem[] = [];
+  const persistedAssistantRunIds = new Set(
+    messages.flatMap((message) =>
+      message.status !== "deleted" &&
+      message.role === "assistant" &&
+      message.run_id
+        ? [message.run_id]
+        : [],
+    ),
+  );
   const hydratedAssistantRuns = new Set<string>();
   for (const message of messages) {
     if (message.status === "deleted") {
@@ -95,6 +104,20 @@ export function messagesToChatItems(
       continue;
     }
     items.push(messageToChatItem(message));
+    if (
+      message.run_id &&
+      !persistedAssistantRunIds.has(message.run_id) &&
+      !hydratedAssistantRuns.has(message.run_id)
+    ) {
+      const replayed = syntheticAssistantItemFromEvents(
+        message,
+        eventsByRunId.get(message.run_id) ?? [],
+      );
+      if (replayed) {
+        hydratedAssistantRuns.add(message.run_id);
+        items.push(replayed);
+      }
+    }
   }
   return items;
 }
@@ -309,23 +332,11 @@ function assistantItemFromEvents(
   message: Message,
   events: readonly RuntimeEventEnvelope[],
 ): Extract<ChatItem, { kind: "message" }> | null {
-  if (events.length === 0) {
-    return null;
-  }
   const runId = message.run_id;
   if (runId === null) {
     return null;
   }
-  const replayed = [...events]
-    .sort((left, right) => left.sequence_no - right.sequence_no)
-    .reduce(
-      (current, event) => applyRuntimeEvent(current, event),
-      [] as ChatItem[],
-    );
-  const assistant = replayed.find(
-    (item): item is Extract<ChatItem, { kind: "message" }> =>
-      item.kind === "message" && item.id === assistantMessageId(runId),
-  );
+  const assistant = replayedAssistantItem(runId, events);
   return assistant && assistant.content.length > 0
     ? {
         ...assistant,
@@ -339,6 +350,46 @@ function assistantItemFromEvents(
         ),
       }
     : null;
+}
+
+function syntheticAssistantItemFromEvents(
+  message: Message,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  const runId = message.run_id;
+  if (runId === null) {
+    return null;
+  }
+  const assistant = replayedAssistantItem(runId, events);
+  return assistant && assistant.content.length > 0
+    ? {
+        ...assistant,
+        parentId: message.message_id,
+        sourceMessageId: message.source_message_id ?? null,
+        branchId: message.branch_id ?? null,
+      }
+    : null;
+}
+
+function replayedAssistantItem(
+  runId: string,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  if (events.length === 0) {
+    return null;
+  }
+  const replayed = [...events]
+    .sort((left, right) => left.sequence_no - right.sequence_no)
+    .reduce(
+      (current, event) => applyRuntimeEvent(current, event),
+      [] as ChatItem[],
+    );
+  return (
+    replayed.find(
+      (item): item is Extract<ChatItem, { kind: "message" }> =>
+        item.kind === "message" && item.id === assistantMessageId(runId),
+    ) ?? null
+  );
 }
 
 function contentFromMessage(message: Message): ThreadMessageContent {
@@ -798,28 +849,47 @@ function subagentPart(
     payloadString(event.payload, "summary") ??
     payloadString(event.payload, "message") ??
     stringValue(existingArgs.summary);
+  const shortSummary =
+    meaningfulDisplayText(payloadString(event.payload, "short_summary")) ??
+    meaningfulDisplayText(stringValue(existingArgs.short_summary)) ??
+    shortSubagentSummary(summary);
+  const displayTitle =
+    meaningfulSubagentTitle(event.display_title) ??
+    meaningfulSubagentTitle(payloadString(event.payload, "display_title")) ??
+    meaningfulSubagentTitle(stringValue(existingArgs.display_title)) ??
+    shortSummary ??
+    "Working in the background";
   const existingTaskSummary = stringValue(existingArgs.task_summary);
   const taskSummary =
+    shortSummary ??
     existingTaskSummary ??
-    (event.event_type === "subagent_completed" ? null : summary);
+    (event.event_type === "subagent_completed"
+      ? null
+      : shortSubagentSummary(summary));
   if (!existing && event.event_type === "subagent_progress" && !summary) {
     return null;
   }
   const status = statusFromEvent(event, stringValue(existingArgs.status));
+  const startedAt =
+    stringValue(existingArgs.started_at) ??
+    (event.event_type === "subagent_started" ? event.created_at : null);
   const args = {
     ...existingArgs,
     subagent_name: name,
     task_id: key,
+    display_title: displayTitle,
     status,
     summary: summary ?? null,
+    short_summary: shortSummary ?? null,
     task_summary: taskSummary ?? null,
+    started_at: startedAt,
   };
   return {
     type: "tool-call",
     toolCallId: key,
     toolName: "run_subagent",
     args: jsonArgs(args),
-    argsText: JSON.stringify(args, null, 2),
+    argsText: argsTextFromRecord(args, hiddenSubagentArgKeys),
     result: status === "completed" ? summary : existing?.result,
     isError: status === "failed",
   };
@@ -1064,6 +1134,17 @@ const hiddenApprovalArgKeys = new Set([
   "source_tool_call_id",
 ]);
 
+const hiddenSubagentArgKeys = new Set([
+  ...hiddenToolArgKeys,
+  "activities",
+  "display_title",
+  "short_summary",
+  "started_at",
+  "subagent_name",
+  "task_id",
+  "task_summary",
+]);
+
 function argsTextFromRecord(
   args: Record<string, unknown>,
   hiddenKeys: ReadonlySet<string>,
@@ -1150,6 +1231,58 @@ function meaningfulSubagentName(
     return null;
   }
   return trimmed;
+}
+
+function meaningfulSubagentTitle(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = meaningfulDisplayText(value);
+  if (trimmed === null) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (
+    normalized === "subagent update" ||
+    normalized === "subagent" ||
+    normalized.endsWith(" subagent")
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
+function meaningfulDisplayText(
+  value: string | null | undefined,
+): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function shortSubagentSummary(value: string | null | undefined): string | null {
+  const text = meaningfulDisplayText(value);
+  if (text === null) {
+    return null;
+  }
+  const [beforeRequirements] = text.split(
+    /\b(?:Provide|Include|For each claim)\b\s*[:,-]?/i,
+    1,
+  );
+  const firstSentence = beforeRequirements
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/, 1)[0]
+    .trim();
+  return truncateText(firstSentence || text, 120);
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  const truncated = value.slice(0, maxLength - 3).replace(/\s+\S*$/, "");
+  return `${truncated || value.slice(0, maxLength - 3)}...`;
 }
 
 function statusFromEvent(

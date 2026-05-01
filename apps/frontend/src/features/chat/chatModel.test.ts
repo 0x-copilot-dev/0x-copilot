@@ -367,6 +367,58 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
+  it("preserves partial streamed assistant output when a failed run has no stored assistant row", () => {
+    const replayEvents = [
+      event({
+        event_id: "delta_1",
+        sequence_no: 1,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Partial answer before failure." },
+      }),
+      event({
+        event_id: "failed_1",
+        sequence_no: 2,
+        event_type: "run_failed",
+        activity_kind: "run",
+        status: "failed",
+        display_title: "Run failed",
+        summary: "Subagent failed midway.",
+        payload: { status: "run_failed" },
+      }),
+    ];
+
+    const items = messagesToChatItems(
+      [
+        message({
+          message_id: "user_1",
+          role: "user",
+          run_id: "run_123",
+          content_text: "Research this",
+        }),
+      ],
+      new Map([["run_123", replayEvents]]),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(textPart(items)).toBe("Partial answer before failure.");
+    expect(assistantMessage(items)).toMatchObject({
+      id: "assistant-run_123",
+      parentId: "user_1",
+      runId: "run_123",
+      status: { type: "incomplete", reason: "error" },
+    });
+    expect(
+      assistantMessage(items).content.some(
+        (part) => part.type === "tool-call" && part.toolName === "run_progress",
+      ),
+    ).toBe(true);
+    expect(firstThreadMessage([assistantMessage(items)]).status).toEqual({
+      type: "incomplete",
+      reason: "error",
+    });
+  });
+
   it("falls back to stored assistant text when replay is unavailable", () => {
     const items = messagesToChatItems([
       message({
@@ -526,10 +578,14 @@ describe("applyRuntimeEvent", () => {
     const subagent = toolPart(items, "run_subagent");
     expect(subagent?.toolCallId).toBe("call_1");
     expect(subagent?.args).toMatchObject({
+      display_title: "Write a merge-sorted-lists function.",
+      short_summary: "Write a merge-sorted-lists function.",
       subagent_name: "general-purpose",
       status: "completed",
       summary: "Done.",
+      task_summary: "Write a merge-sorted-lists function.",
     });
+    expect(subagent?.argsText).toBeUndefined();
     expect(subagent?.result).toBe("Done.");
     expect(
       assistantMessage(items).content.some(
@@ -537,6 +593,80 @@ describe("applyRuntimeEvent", () => {
           part.type === "tool-call" && part.toolCallId === "namespace_1",
       ),
     ).toBe(false);
+  });
+
+  it("stores user-facing subagent presentation without raw prompt details", () => {
+    const longPrompt = [
+      "Create a formal research report on the phrase/concept 'health is wealth'.",
+      "Investigate and synthesize evidence for how health affects economic outcomes.",
+      "Provide: executive summary, mechanisms, evidence sections, policy implications, and references.",
+    ].join(" ");
+
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "subagent_started_long",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "call_report",
+        subagent_id: "general-purpose",
+        status: "queued",
+        summary: longPrompt,
+        payload: {
+          task_id: "call_report",
+          subagent_name: "general-purpose",
+          status: "queued",
+          summary: longPrompt,
+          short_summary:
+            "Preparing a formal research report on 'health is wealth'.",
+          display_title:
+            "Preparing a formal research report on 'health is wealth'.",
+        },
+      }),
+    );
+
+    const subagent = toolPart(items, "run_subagent");
+    expect(subagent?.args).toMatchObject({
+      display_title:
+        "Preparing a formal research report on 'health is wealth'.",
+      short_summary:
+        "Preparing a formal research report on 'health is wealth'.",
+      task_id: "call_report",
+      task_summary: "Preparing a formal research report on 'health is wealth'.",
+    });
+    expect(subagent?.args).toHaveProperty("summary", longPrompt);
+    expect(subagent?.argsText).toBeUndefined();
+  });
+
+  it("marks failed subagent events as errored without losing task presentation", () => {
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "subagent_failed_1",
+        event_type: "subagent_completed",
+        activity_kind: "subagent",
+        task_id: "call_failed",
+        subagent_id: "researcher",
+        status: "failed",
+        summary: "The research task failed.",
+        payload: {
+          task_id: "call_failed",
+          subagent_name: "researcher",
+          status: "failed",
+          summary: "The research task failed.",
+          short_summary: "Researching market data.",
+          display_title: "Researching market data.",
+        },
+      }),
+    );
+
+    const subagent = toolPart(items, "run_subagent");
+    expect(subagent?.isError).toBe(true);
+    expect(subagent?.args).toMatchObject({
+      display_title: "Researching market data.",
+      status: "failed",
+      task_summary: "Researching market data.",
+    });
   });
 
   it("keeps approval and MCP auth as action tool parts", () => {

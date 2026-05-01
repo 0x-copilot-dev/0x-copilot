@@ -46,6 +46,7 @@ class Keys:
         SOURCE_TOOL_CALL_ID = "source_tool_call_id"
         SPAN_ID = "span_id"
         STATUS = "status"
+        SHORT_SUMMARY = "short_summary"
         SUBAGENT_ID = "subagent_id"
         SUBAGENT_NAME = "subagent_name"
         SUMMARY = "summary"

@@ -145,6 +145,9 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                         subagent_name=state.subagent_name
                         if state is not None
                         else None,
+                        short_summary=state.short_summary
+                        if state is not None
+                        else None,
                     ),
                     metadata=metadata,
                 )

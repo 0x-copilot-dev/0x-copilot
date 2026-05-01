@@ -186,6 +186,8 @@ def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
             "subagent_name": "researcher",
             "status": "queued",
             "summary": "Research launch risks.",
+            "short_summary": "Researching launch risks.",
+            "display_title": "Researching launch risks.",
         },
     )
     assert completed == (
@@ -196,3 +198,25 @@ def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
             "summary": "Research complete.",
         },
     )
+
+
+def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
+    payload = RuntimeStreamPartAdapter.task_tool_call_payload(
+        call_id="task_report",
+        args_payload={
+            "subagent_type": "general-purpose",
+            "description": (
+                "Create a formal research report on the phrase/concept "
+                "'health is wealth'. Investigate and synthesize evidence for "
+                "how health affects economic outcomes. Provide: executive "
+                "summary, evidence, policy implications, and references."
+            ),
+        },
+    )
+
+    assert payload["summary"].startswith("Create a formal research report")
+    assert payload["short_summary"] == (
+        "Preparing a formal research report on the phrase/concept 'health is wealth'."
+    )
+    assert payload["display_title"] == payload["short_summary"]
+    assert len(str(payload["short_summary"])) <= 120

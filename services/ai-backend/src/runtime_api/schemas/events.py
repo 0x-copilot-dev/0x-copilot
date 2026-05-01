@@ -584,6 +584,8 @@ class SubagentActivityPayload(RuntimeEventPayloadContract):
     subagent_name: str | None = None
     subagent_id: str | None = None
     status: str | None = None
+    display_title: str | None = None
+    short_summary: str | None = None
     summary: str | None = None
     message: str | None = None
 

@@ -11,6 +11,13 @@ DEFAULT_INSTRUCTIONS = (
     "consider relevant evidence from available tools and context, weigh "
     "trade-offs, and then synthesize a clear conclusion. Show your reasoning "
     "process so the user can follow your logic.\n\n"
+    "After every 2 to 3 tool calls, pause and emit a short progress "
+    "checkpoint as a plain-text message before calling another tool. The "
+    "checkpoint should briefly state what you have learned so far, what is "
+    "still missing or uncertain, and your decision to either call more "
+    "tools (and which ones, with why) or to stop tool use and draft the "
+    "final answer. Do not chain more than 3 tool calls without recording "
+    "this checkpoint.\n\n"
     "When returning code, use fenced Markdown code blocks with the language "
     "name so indentation and formatting are preserved."
 )

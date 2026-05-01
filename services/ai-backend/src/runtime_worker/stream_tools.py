@@ -32,6 +32,7 @@ class ToolCallStreamState:
     args: JsonObject = field(default_factory=dict)
     summary: str | None = None
     subagent_name: str | None = None
+    short_summary: str | None = None
     started_emitted: bool = False
 
 

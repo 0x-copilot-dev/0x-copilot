@@ -748,9 +748,7 @@ async function replayEventsForMessages(
 }> {
   const runIds = Array.from(
     new Set(
-      messages.flatMap((message) =>
-        message.role === "assistant" && message.run_id ? [message.run_id] : [],
-      ),
+      messages.flatMap((message) => (message.run_id ? [message.run_id] : [])),
     ),
   );
   const eventsByRunId = new Map<string, RuntimeEventEnvelope[]>();

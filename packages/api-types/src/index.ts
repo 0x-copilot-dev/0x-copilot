@@ -550,6 +550,8 @@ export interface SubagentActivityPayload {
   subagent_name?: string;
   subagent_id?: string;
   status?: string;
+  display_title?: string;
+  short_summary?: string;
   summary?: string;
   message?: string;
   [key: string]: unknown;

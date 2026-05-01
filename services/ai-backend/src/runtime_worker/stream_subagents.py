@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
@@ -15,6 +16,7 @@ from runtime_worker.stream_tools import ToolCallStreamState, ToolEventProjector
 class SubagentEventProjector(ToolEventProjector):
     """Project Deep Agents task-tool activity into subagent lifecycle events."""
 
+    short_summary_max_chars = 120
     _subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]]
 
     def append_task_tool_call_event(
@@ -34,6 +36,7 @@ class SubagentEventProjector(ToolEventProjector):
             args_payload=args,
         )
         state.subagent_name = self.text(payload.get("subagent_name"))
+        state.short_summary = self.text(payload.get(Keys.Field.SHORT_SUMMARY))
         self.append_task_lifecycle_event(
             run=run,
             event_type=RuntimeApiEventType.SUBAGENT_STARTED,
@@ -124,6 +127,7 @@ class SubagentEventProjector(ToolEventProjector):
         summary = cls.text(args_payload.get("description")) or cls.text(
             args_payload.get("task")
         )
+        short_summary = cls.short_task_summary(summary)
         event_payload: JsonObject = {
             "task_id": call_id,
             "subagent_name": subagent_name,
@@ -131,6 +135,9 @@ class SubagentEventProjector(ToolEventProjector):
         }
         if summary is not None:
             event_payload["summary"] = summary
+        if short_summary is not None:
+            event_payload[Keys.Field.SHORT_SUMMARY] = short_summary
+            event_payload[Keys.Field.DISPLAY_TITLE] = short_summary
         return event_payload
 
     @classmethod
@@ -139,6 +146,7 @@ class SubagentEventProjector(ToolEventProjector):
         payload: Mapping[str, object],
         *,
         subagent_name: str | None = None,
+        short_summary: str | None = None,
     ) -> JsonObject:
         call_id = cls.text(payload.get("call_id")) or TraceContext.event_id()
         output = payload.get("output")
@@ -156,7 +164,60 @@ class SubagentEventProjector(ToolEventProjector):
         }
         if summary is not None:
             event_payload["summary"] = summary
+        if short_summary is not None:
+            event_payload[Keys.Field.SHORT_SUMMARY] = short_summary
+            event_payload[Keys.Field.DISPLAY_TITLE] = short_summary
         return event_payload
+
+    @classmethod
+    def short_task_summary(cls, summary: str | None) -> str | None:
+        if summary is None:
+            return None
+        text = " ".join(summary.strip().split())
+        if not text:
+            return None
+        text = cls.first_task_sentence(text)
+        text = cls.actionable_task_summary(text)
+        return cls.truncate_task_summary(text)
+
+    @classmethod
+    def first_task_sentence(cls, text: str) -> str:
+        text = re.split(r"\b(?:Provide|Include|For each claim)\b\s*[:,-]?", text, 1)[
+            0
+        ].strip()
+        match = re.search(r"(?<=[.!?])\s+", text)
+        if match is None:
+            return text
+        return text[: match.start()].strip()
+
+    @classmethod
+    def actionable_task_summary(cls, text: str) -> str:
+        replacements = (
+            (r"^create\s+(?:a|an|the)?\s*", "Preparing a "),
+            (r"^write\s+(?:a|an|the)?\s*", "Writing a "),
+            (r"^draft\s+(?:a|an|the)?\s*", "Drafting a "),
+            (r"^research\s+", "Researching "),
+            (r"^investigate\s+", "Investigating "),
+            (r"^analyze\s+", "Analyzing "),
+            (r"^review\s+", "Reviewing "),
+            (r"^summarize\s+", "Summarizing "),
+            (r"^find\s+", "Searching for "),
+            (r"^search\s+", "Searching "),
+            (r"^implement\s+", "Working on "),
+            (r"^build\s+", "Working on "),
+        )
+        for pattern, replacement in replacements:
+            updated = re.sub(pattern, replacement, text, count=1, flags=re.IGNORECASE)
+            if updated != text:
+                return updated[:1].upper() + updated[1:]
+        return text[:1].upper() + text[1:]
+
+    @classmethod
+    def truncate_task_summary(cls, text: str) -> str:
+        if len(text) <= cls.short_summary_max_chars:
+            return text
+        truncated = text[: cls.short_summary_max_chars - 3].rsplit(" ", 1)[0]
+        return f"{truncated or text[: cls.short_summary_max_chars - 3]}..."
 
     @classmethod
     def task_tool_call_payloads(cls, value: object) -> tuple[JsonObject, ...]:

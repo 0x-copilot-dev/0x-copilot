@@ -1357,29 +1357,58 @@ function McpTool({
 
 function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
   const data = asRecord(props.args);
-  const subagentName = String(data.subagent_name ?? data.name ?? "Subagent");
+  const subagentName =
+    stringValue(data.subagent_name) ?? stringValue(data.name);
   const taskId = stringValue(data.task_id);
   const summary = stringValue(data.summary);
-  const taskSummary = stringValue(data.task_summary) ?? summary;
+  const shortSummary = stringValue(data.short_summary);
+  const taskSummary = shortSummary ?? stringValue(data.task_summary) ?? summary;
+  const displayTitle = stringValue(data.display_title);
   const activities = subagentActivityRecords(data.activities);
+  const dataStatus = stringValue(data.status);
+  const normalizedStatus = dataStatus?.toLowerCase();
   const completed =
-    props.status.type === "complete" || data.status === "completed";
-  const statusLabel = toolStatusLabel(props.status.type, props.isError);
-  const title = `Delegated to ${formatAgentName(subagentName)}`;
-  const details = taskId ? <small>Task ID: {taskId}</small> : undefined;
+    props.status.type === "complete" ||
+    ["completed", "succeeded", "success"].includes(normalizedStatus ?? "");
+  const failed =
+    props.isError === true ||
+    normalizedStatus === "failed" ||
+    normalizedStatus === "error";
+  const cancelled = normalizedStatus === "cancelled";
+  const terminal = completed || failed || cancelled;
+  const elapsedSeconds = useElapsedSeconds(
+    !terminal,
+    stringValue(data.started_at),
+  );
+  const statusLabel = subagentStatusLabel(
+    dataStatus ?? props.status.type,
+    props.isError,
+    elapsedSeconds,
+  );
+  const title = subagentCardTitle(displayTitle, taskSummary, completed);
+  const fallbackProgress = subagentFallbackProgress(elapsedSeconds);
+  const description = terminal
+    ? summarizeSubagentResult(summary, taskSummary)
+    : fallbackProgress;
+  const details =
+    import.meta.env.DEV && (taskId || subagentName) ? (
+      <>
+        {subagentName ? (
+          <small>Agent: {formatAgentName(subagentName)}</small>
+        ) : null}
+        {taskId ? <small>Task ID: {taskId}</small> : null}
+      </>
+    ) : undefined;
   const hasActivityDetail = activities.length > 0;
   const shouldUseCard =
-    props.isError === true ||
-    !completed ||
-    hasImportantSubagentActivity(activities);
+    failed || !terminal || hasImportantSubagentActivity(activities);
   if (!shouldUseCard) {
     return (
       <ActivityItem
         title={title}
         status={statusLabel}
         variant="subagent"
-        description={taskSummary}
-        result={summary}
+        description={description}
         details={details}
       />
     );
@@ -1389,20 +1418,99 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
       title={title}
       status={statusLabel}
       variant="subagent"
-      description={taskSummary}
-      result={completed && summary ? summary : undefined}
+      description={description}
+      result={terminal && summary ? truncateText(summary, 180) : undefined}
       details={details}
     >
       <SubagentActivityList
         activities={activities}
         emptyText={
-          completed
-            ? "No detailed activity was reported."
-            : "Waiting for subagent activity..."
+          completed ? "No detailed activity was reported." : fallbackProgress
         }
       />
     </ActivityCard>
   );
+}
+
+function useElapsedSeconds(active: boolean, startedAt: string | null): number {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const parsedStartedAt = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const startMs = Number.isFinite(parsedStartedAt)
+    ? parsedStartedAt
+    : mountedAt;
+  return Math.max(0, Math.floor((now - startMs) / 1000));
+}
+
+function subagentCardTitle(
+  displayTitle: string | null,
+  taskSummary: string | null,
+  completed: boolean,
+): string {
+  const title = displayTitle ?? taskSummary;
+  if (title) {
+    return truncateText(title, 96);
+  }
+  return completed ? "Background task finished" : "Working in the background";
+}
+
+function subagentStatusLabel(
+  status: string,
+  isError: boolean | undefined,
+  elapsedSeconds: number,
+): string {
+  const normalized = status.toLowerCase();
+  if (isError || normalized === "failed" || normalized === "error") {
+    return "could not complete";
+  }
+  if (normalized === "cancelled") {
+    return "cancelled";
+  }
+  if (
+    normalized === "complete" ||
+    normalized === "completed" ||
+    normalized === "succeeded" ||
+    normalized === "success"
+  ) {
+    return "done";
+  }
+  if (elapsedSeconds >= 35) {
+    return "still working";
+  }
+  if (normalized === "queued" || normalized === "started") {
+    return "starting";
+  }
+  return "working";
+}
+
+function subagentFallbackProgress(elapsedSeconds: number): string {
+  if (elapsedSeconds >= 35) {
+    return "Still working. Larger tasks can take about a minute.";
+  }
+  if (elapsedSeconds >= 15) {
+    return "Working through the details...";
+  }
+  if (elapsedSeconds >= 5) {
+    return "Gathering context...";
+  }
+  return "Starting task...";
+}
+
+function summarizeSubagentResult(
+  summary: string | null,
+  taskSummary: string | null,
+): string | undefined {
+  if (!summary || summary === taskSummary) {
+    return undefined;
+  }
+  return truncateText(summary, 140);
 }
 
 function SubagentActivityList({
@@ -1423,11 +1531,15 @@ function SubagentActivityList({
             <span className="aui-tool-card__timeline-title">
               {activityTitle(activity)}
             </span>
-            {activity.summary ? <p>{activity.summary}</p> : null}
-            {!activity.summary && activity.inputSummary ? (
-              <p>{activity.inputSummary}</p>
+            {activity.summary ? (
+              <p>{truncateText(activity.summary, 160)}</p>
             ) : null}
-            {activity.result ? <p>{activity.result}</p> : null}
+            {!activity.summary && activity.inputSummary ? (
+              <p>{truncateText(activity.inputSummary, 160)}</p>
+            ) : null}
+            {activity.result ? (
+              <p>{truncateText(activity.result, 160)}</p>
+            ) : null}
           </div>
           <span>{activity.status}</span>
         </div>
@@ -2279,6 +2391,14 @@ function summarizeInlineString(value: string): string {
   return trimmed.length > 90 ? `${trimmed.slice(0, 87)}...` : trimmed;
 }
 
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  const truncated = value.slice(0, maxLength - 3).replace(/\s+\S*$/, "");
+  return `${truncated || value.slice(0, maxLength - 3)}...`;
+}
+
 function formatDetailValue(value: unknown): ReactNode {
   if (typeof value === "string") {
     const parsed = parseJsonObject(value);
@@ -2407,18 +2527,26 @@ function badgeToneForStatus(
   if (
     normalized === "complete" ||
     normalized === "completed" ||
+    normalized === "done" ||
     normalized === "resolved"
   ) {
     return "success";
   }
   if (
+    normalized === "starting" ||
+    normalized === "working" ||
+    normalized === "still working" ||
     normalized === "waiting" ||
     normalized === "running" ||
     normalized === "action required"
   ) {
     return "warning";
   }
-  if (normalized === "error" || normalized === "failed") {
+  if (
+    normalized === "could not complete" ||
+    normalized === "error" ||
+    normalized === "failed"
+  ) {
     return "danger";
   }
   return "neutral";
