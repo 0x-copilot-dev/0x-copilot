@@ -1,6 +1,4 @@
 import type {
-  ApprovalRequestedPayload,
-  McpAuthRequiredEventPayload,
   Message,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
@@ -20,17 +18,20 @@ import {
   isToolResultPayload,
 } from "@enterprise-search/api-types";
 
-type ThreadMessageContentPart = Exclude<
-  ThreadMessageLike["content"],
-  string
->[number];
+type ThreadMessageContent = Exclude<ThreadMessageLike["content"], string>;
+type ThreadMessageContentPart = ThreadMessageContent[number];
+type ThreadTextPart = Extract<ThreadMessageContentPart, { type: "text" }>;
+type ThreadReasoningPart = Extract<
+  ThreadMessageContentPart,
+  { type: "reasoning" }
+>;
 type ThreadToolCallPart = Extract<
   ThreadMessageContentPart,
   { type: "tool-call" }
 >;
 type ThreadToolCallArgs = NonNullable<ThreadToolCallPart["args"]>;
 
-export type ActivityStatus =
+type RuntimePartStatus =
   | "queued"
   | "running"
   | "completed"
@@ -39,77 +40,20 @@ export type ActivityStatus =
   | "waiting"
   | "unknown";
 
-export interface ActivityText {
-  id: string;
-  text: string;
-}
-
-export interface ActivityEvent {
-  id: string;
-  eventType: string;
-  title: string;
-  summary?: string;
-  status: ActivityStatus;
-}
-
-export interface ToolCallActivity {
-  id: string;
-  name: string;
-  status: ActivityStatus;
-  summary?: string;
-  result?: string;
-  deltas: ActivityText[];
-}
-
-export interface SubagentActivity {
-  id: string;
-  taskId: string;
-  name: string;
-  status: ActivityStatus;
-  summary?: string;
-  reasoning: ActivityText[];
-  events: ActivityEvent[];
-  tools: ToolCallActivity[];
-}
-
-export interface RunActivity {
-  runId: string;
-  status: ActivityStatus;
-  title: string;
-  summary?: string;
-  reasoning: ActivityText[];
-  events: ActivityEvent[];
-  tools: ToolCallActivity[];
-  subagents: SubagentActivity[];
-}
-
 export type ChatItem =
   | {
       id: string;
       kind: "message";
       role: "user" | "assistant" | "system";
-      text: string;
-    }
-  | {
-      id: string;
-      kind: "run-activity";
-      activity: RunActivity;
+      content: ThreadMessageContent;
+      runId?: string;
+      status?: AssistantMessageStatus;
     }
   | {
       id: string;
       kind: "status";
       title: string;
       text?: string;
-    }
-  | {
-      id: string;
-      kind: "mcp-auth";
-      payload: McpAuthRequiredEventPayload;
-    }
-  | {
-      id: string;
-      kind: "approval";
-      payload: ApprovalRequestedPayload;
     };
 
 export function messagesToChatItems(messages: Message[]): ChatItem[] {
@@ -122,7 +66,7 @@ export function messagesToChatItems(messages: Message[]): ChatItem[] {
         message.role === "assistant" || message.role === "user"
           ? message.role
           : "system",
-      text: message.content_text,
+      content: [{ type: "text", text: message.content_text }],
     }));
 }
 
@@ -131,7 +75,7 @@ export function optimisticUserMessage(text: string): ChatItem {
     id: `local-${Date.now()}`,
     kind: "message",
     role: "user",
-    text,
+    content: [{ type: "text", text }],
   };
 }
 
@@ -139,71 +83,25 @@ export function chatItemsToThreadMessages(
   items: ChatItem[],
   activeRunId: string | null,
 ): ThreadMessageLike[] {
-  return items.flatMap((item): ThreadMessageLike[] => {
+  return items.map((item): ThreadMessageLike => {
     if (item.kind === "message") {
-      return [
-        {
-          id: item.id,
-          role: item.role,
-          content: [{ type: "text", text: item.text }],
-          status: statusForMessage(item, activeRunId),
-        },
-      ];
-    }
-    if (item.kind === "run-activity") {
-      return [runActivityToThreadMessage(item.activity, activeRunId)];
-    }
-    if (item.kind === "approval") {
-      const args = jsonArgs(item.payload as Record<string, unknown>);
-      return [
-        {
-          id: item.id,
-          role: "assistant",
-          content: [
-            {
-              type: "tool-call",
-              toolCallId: item.payload.approval_id,
-              toolName: "approval_request",
-              args,
-              argsText: JSON.stringify(item.payload, null, 2),
-            },
-          ],
-          status: { type: "requires-action", reason: "interrupt" },
-        },
-      ];
-    }
-    if (item.kind === "mcp-auth") {
-      const args = jsonArgs({ ...item.payload });
-      return [
-        {
-          id: item.id,
-          role: "assistant",
-          content: [
-            {
-              type: "tool-call",
-              toolCallId: item.payload.server_id,
-              toolName: "mcp_auth_required",
-              args,
-              argsText: JSON.stringify(item.payload, null, 2),
-              result: item.payload.message,
-            },
-          ],
-          status: { type: "requires-action", reason: "interrupt" },
-        },
-      ];
-    }
-    return [
-      {
+      return {
         id: item.id,
-        role: "system",
-        content: [
-          {
-            type: "text",
-            text: item.text ? `${item.title}\n${item.text}` : item.title,
-          },
-        ],
-      },
-    ];
+        role: item.role,
+        content: item.content,
+        status: statusForMessage(item, activeRunId),
+      };
+    }
+    return {
+      id: item.id,
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: item.text ? `${item.title}\n${item.text}` : item.title,
+        },
+      ],
+    };
   });
 }
 
@@ -214,24 +112,25 @@ export function applyRuntimeEvent(
   if (event.activity_kind === "heartbeat") {
     return items;
   }
+  if (event.visibility === "internal") {
+    return items;
+  }
   if (
     event.activity_kind === "mcp_auth" &&
     isMcpAuthRequiredPayload(event.payload)
   ) {
-    return upsertById(items, {
-      id: event.event_id,
-      kind: "mcp-auth",
-      payload: event.payload,
+    return upsertAssistantPart(items, event, mcpAuthPart(event.payload), {
+      type: "requires-action",
+      reason: "interrupt",
     });
   }
   if (
     event.event_type === "approval_requested" &&
     isApprovalRequestedPayload(event.payload)
   ) {
-    return upsertById(items, {
-      id: event.event_id,
-      kind: "approval",
-      payload: event.payload,
+    return upsertAssistantPart(items, event, approvalPart(event.payload), {
+      type: "requires-action",
+      reason: "interrupt",
     });
   }
   if (
@@ -242,332 +141,429 @@ export function applyRuntimeEvent(
     if (!delta) {
       return items;
     }
-    return appendAssistantDelta(items, event.run_id, delta);
+    return updateAssistantContent(items, event, (content) =>
+      appendTextDelta(content, delta),
+    );
   }
   if (
     event.event_type === "final_response" &&
     isRuntimeTextPayload(event.payload)
   ) {
-    const withActivity = upsertRunActivity(items, event);
     const text =
       textFromPayload(event.payload, "message") ??
       textFromPayload(event.payload, "summary");
     if (!text) {
-      return withActivity;
+      return items;
     }
-    return finalizeAssistantMessage(withActivity, event.run_id, text);
+    return updateAssistantContent(
+      items,
+      event,
+      (content) => replaceText(content, text),
+      statusFromRuntimeEvent(event),
+    );
   }
-  if (event.event_type === "run_completed") {
-    return upsertRunActivity(items, event);
+  if (
+    event.event_type === "reasoning_summary" ||
+    event.event_type === "reasoning_summary_delta"
+  ) {
+    const text = reasoningText(event);
+    if (!text) {
+      return items;
+    }
+    return updateAssistantContent(items, event, (content) =>
+      appendReasoning(content, text, event.event_type === "reasoning_summary"),
+    );
   }
-  if (isActivityEvent(event)) {
-    return upsertRunActivity(items, event);
+  if (event.activity_kind === "tool") {
+    return upsertRuntimeToolPart(items, event);
   }
-  if (isRuntimeTextPayload(event.payload)) {
-    const title = event.display_title ?? titleForEvent(event.event_type);
-    const text =
-      textFromPayload(event.payload, "message") ?? event.summary ?? undefined;
-    return upsertById(items, {
-      id: event.event_id,
-      kind: "status",
-      title,
-      text,
-    });
+  if (event.activity_kind === "subagent") {
+    return upsertSubagentPart(items, event);
+  }
+  if (isProgressEvent(event)) {
+    return upsertAssistantPart(
+      items,
+      event,
+      progressPart(event),
+      statusFromRuntimeEvent(event),
+    );
   }
   return items;
 }
 
-function isActivityEvent(event: RuntimeEventEnvelope): boolean {
-  if (event.visibility === "internal") {
-    return false;
-  }
-  return ["run", "tool", "subagent", "reasoning", "approval", "event"].includes(
-    event.activity_kind,
-  );
+export function resolveApprovalDecision(
+  items: ChatItem[],
+  approvalId: string,
+  decision: "approved" | "rejected",
+): ChatItem[] {
+  return items.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    const content = item.content.map((part) => {
+      if (!isToolCallPart(part) || part.toolCallId !== approvalId) {
+        return part;
+      }
+      return {
+        ...part,
+        args: jsonArgs({
+          ...asRecord(part.args),
+          approval_id: approvalId,
+          status: decision,
+        }),
+        result: { approval_id: approvalId, decision },
+      };
+    });
+    if (content === item.content) {
+      return item;
+    }
+    const status =
+      item.status?.type === "requires-action" && !hasPendingAction(content)
+        ? ({ type: "running" } satisfies AssistantMessageStatus)
+        : item.status;
+    return { ...item, content, status };
+  });
 }
 
-function upsertRunActivity(
+function updateAssistantContent(
   items: ChatItem[],
   event: RuntimeEventEnvelope,
+  update: (content: ThreadMessageContent) => ThreadMessageContent,
+  status: AssistantMessageStatus = { type: "running" },
 ): ChatItem[] {
-  const id = `activity-${event.run_id}`;
+  const id = assistantMessageId(event.run_id);
   const existing = items.find(
-    (item): item is Extract<ChatItem, { kind: "run-activity" }> => {
-      return item.kind === "run-activity" && item.id === id;
-    },
-  );
-  const activity = applyActivityEvent(
-    existing?.activity ?? createRunActivity(event),
-    event,
+    (item): item is Extract<ChatItem, { kind: "message" }> =>
+      item.kind === "message" && item.id === id,
   );
   if (!existing) {
-    return [...items, { id, kind: "run-activity", activity }];
+    return [
+      ...items,
+      {
+        id,
+        kind: "message",
+        role: "assistant",
+        runId: event.run_id,
+        content: update([]),
+        status,
+      },
+    ];
   }
   return items.map((item) =>
-    item.id === id && item.kind === "run-activity"
-      ? { ...item, activity }
+    item.kind === "message" && item.id === id
+      ? {
+          ...item,
+          content: update(item.content),
+          status: nextMessageStatus(item.status, status),
+        }
       : item,
   );
 }
 
-function createRunActivity(event: RuntimeEventEnvelope): RunActivity {
+function upsertAssistantPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+  part: ThreadMessageContentPart,
+  status: AssistantMessageStatus = { type: "running" },
+): ChatItem[] {
+  return updateAssistantContent(
+    items,
+    event,
+    (content) => upsertPart(content, part),
+    status,
+  );
+}
+
+function upsertRuntimeToolPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
+  const callId = toolCallId(event.payload) ?? event.span_id ?? event.event_id;
+  return updateAssistantContent(items, event, (content) => {
+    const existing = content.find(
+      (part): part is ThreadToolCallPart =>
+        isToolCallPart(part) && part.toolCallId === callId,
+    );
+    return upsertPart(content, toolPart(event, callId, existing));
+  });
+}
+
+function upsertSubagentPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
+  const key = subagentKeyForEvent(event);
+  if (key === null) {
+    return items;
+  }
+  return updateAssistantContent(items, event, (content) => {
+    const existing = content.find(
+      (part): part is ThreadToolCallPart =>
+        isToolCallPart(part) &&
+        part.toolName === "run_subagent" &&
+        part.toolCallId === key,
+    );
+    const part = subagentPart(event, key, existing);
+    if (part === null) {
+      return content;
+    }
+    return upsertPart(content, part);
+  });
+}
+
+function appendTextDelta(
+  content: ThreadMessageContent,
+  delta: string,
+): ThreadMessageContent {
+  const index = content.findIndex(isTextPart);
+  if (index === -1) {
+    return [...content, { type: "text", text: delta }];
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index && isTextPart(part)
+      ? { ...part, text: part.text + delta }
+      : part,
+  );
+}
+
+function replaceText(
+  content: ThreadMessageContent,
+  text: string,
+): ThreadMessageContent {
+  const index = content.findIndex(isTextPart);
+  if (index === -1) {
+    return [...content, { type: "text", text }];
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index && isTextPart(part) ? { ...part, text } : part,
+  );
+}
+
+function appendReasoning(
+  content: ThreadMessageContent,
+  text: string,
+  replace: boolean,
+): ThreadMessageContent {
+  const index = content.findIndex(isReasoningPart);
+  if (index === -1) {
+    return [...content, { type: "reasoning", text }];
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index && isReasoningPart(part)
+      ? { ...part, text: replace ? text : part.text + text }
+      : part,
+  );
+}
+
+function upsertPart(
+  content: ThreadMessageContent,
+  next: ThreadMessageContentPart,
+): ThreadMessageContent {
+  if (!isToolCallPart(next)) {
+    return [...content, next];
+  }
+  const index = content.findIndex(
+    (part) => isToolCallPart(part) && part.toolCallId === next.toolCallId,
+  );
+  if (index === -1) {
+    return [...content, next];
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index ? next : part,
+  );
+}
+
+function toolPart(
+  event: RuntimeEventEnvelope,
+  callId: string,
+  existing: ThreadToolCallPart | undefined,
+): ThreadToolCallPart {
+  const payload = event.payload;
+  const existingArgs = asRecord(existing?.args);
+  const status = statusFromEvent(event, stringValue(existingArgs.status));
+  const args: Record<string, unknown> = {
+    ...existingArgs,
+    ...toolArgs(payload),
+    ...toolArgsDelta(payload),
+    status,
+  };
+  const summary = event.summary ?? payloadString(payload, "summary");
+  if (summary) {
+    args.summary = summary;
+  }
+  const delta = isToolCallDeltaPayload(payload)
+    ? payloadString(payload, "delta")
+    : null;
+  if (delta) {
+    args.deltas = [...stringArray(existingArgs.deltas), delta];
+  }
+  const name =
+    toolName(payload) ?? existing?.toolName ?? event.display_title ?? "tool";
+  const result = toolResultText(payload) ?? existing?.result;
   return {
-    runId: event.run_id,
-    status: runStatusFromEvent(event),
-    title: runTitleForEvent(event),
-    summary: runSummaryForEvent(event),
-    reasoning: [],
-    events: [],
-    tools: [],
-    subagents: [],
+    type: "tool-call",
+    toolCallId: callId,
+    toolName: name,
+    args: jsonArgs(args),
+    argsText: JSON.stringify(args, null, 2),
+    result,
+    isError: status === "failed",
   };
 }
 
-function applyActivityEvent(
-  activity: RunActivity,
+function subagentPart(
   event: RuntimeEventEnvelope,
-): RunActivity {
-  let next: RunActivity = {
-    ...activity,
-    status: runStatusFromEvent(event, activity.status),
-    title: runTitleForEvent(event, activity),
-    summary: runSummaryForEvent(event) ?? activity.summary,
-    reasoning: [...activity.reasoning],
-    events: [...activity.events],
-    tools: [...activity.tools],
-    subagents: activity.subagents.map((subagent) => ({
-      ...subagent,
-      reasoning: [...subagent.reasoning],
-      events: [...subagent.events],
-      tools: subagent.tools.map((tool) => ({
-        ...tool,
-        deltas: [...tool.deltas],
-      })),
-    })),
+  key: string,
+  existing: ThreadToolCallPart | undefined,
+): ThreadToolCallPart | null {
+  const existingArgs = asRecord(existing?.args);
+  const name =
+    subagentNameForEvent(event) ??
+    stringValue(existingArgs.subagent_name) ??
+    "Subagent";
+  const summary =
+    event.summary ??
+    payloadString(event.payload, "summary") ??
+    payloadString(event.payload, "message") ??
+    stringValue(existingArgs.summary);
+  if (!existing && event.event_type === "subagent_progress" && !summary) {
+    return null;
+  }
+  const status = statusFromEvent(event, stringValue(existingArgs.status));
+  const args = {
+    ...existingArgs,
+    subagent_name: name,
+    task_id: key,
+    status,
+    summary: summary ?? null,
   };
+  return {
+    type: "tool-call",
+    toolCallId: key,
+    toolName: "run_subagent",
+    args: jsonArgs(args),
+    argsText: JSON.stringify(args, null, 2),
+    result: status === "completed" ? summary : existing?.result,
+    isError: status === "failed",
+  };
+}
 
-  if (event.activity_kind === "reasoning") {
-    return appendReasoning(next, event);
+function progressPart(event: RuntimeEventEnvelope): ThreadToolCallPart {
+  const status = statusFromEvent(event);
+  const title = event.display_title ?? titleForEvent(event.event_type);
+  const summary =
+    event.summary ??
+    payloadString(event.payload, "message") ??
+    payloadString(event.payload, "summary");
+  const args = {
+    event_type: event.event_type,
+    title,
+    summary: summary ?? null,
+    status,
+  };
+  return {
+    type: "tool-call",
+    toolCallId: event.event_id,
+    toolName: "run_progress",
+    args: jsonArgs(args),
+    argsText: summary ?? title,
+    result: status,
+    isError: status === "failed",
+  };
+}
+
+function approvalPart(payload: Record<string, unknown>): ThreadToolCallPart {
+  const args = jsonArgs({ ...payload, status: "waiting" });
+  return {
+    type: "tool-call",
+    toolCallId: String(payload.approval_id),
+    toolName: "approval_request",
+    args,
+    argsText: JSON.stringify(args, null, 2),
+  };
+}
+
+function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
+  const args = jsonArgs({ ...payload, status: "waiting" });
+  return {
+    type: "tool-call",
+    toolCallId: String(payload.server_id),
+    toolName: "mcp_auth_required",
+    args,
+    argsText: JSON.stringify(args, null, 2),
+  };
+}
+
+function isProgressEvent(event: RuntimeEventEnvelope): boolean {
+  return (
+    event.activity_kind === "run" ||
+    event.activity_kind === "event" ||
+    event.event_type === "progress" ||
+    event.event_type === "run_completed" ||
+    event.event_type === "run_cancelled" ||
+    event.event_type === "run_failed" ||
+    event.event_type === "error"
+  );
+}
+
+function statusForMessage(
+  item: Extract<ChatItem, { kind: "message" }>,
+  activeRunId: string | null,
+): AssistantMessageStatus | undefined {
+  if (item.role !== "assistant") {
+    return undefined;
   }
-  if (event.activity_kind === "tool") {
-    return upsertTool(next, event);
+  if (
+    item.status?.type === "requires-action" ||
+    item.status?.type === "incomplete"
+  ) {
+    return item.status;
   }
-  if (event.activity_kind === "subagent") {
-    if (
-      isInternalSubagentProgress(event) &&
-      subagentKeyForActivity(next, event) === null
-    ) {
-      return next;
-    }
-    return upsertSubagent(next, event);
+  if (activeRunId !== null && item.runId === activeRunId) {
+    return { type: "running" };
   }
-  if (event.activity_kind !== "message") {
-    next = appendActivityRow(next, event);
+  return item.status ?? { type: "complete", reason: "stop" };
+}
+
+function nextMessageStatus(
+  current: AssistantMessageStatus | undefined,
+  next: AssistantMessageStatus,
+): AssistantMessageStatus {
+  if (current?.type === "requires-action" && next.type === "running") {
+    return current;
   }
   return next;
 }
 
-function appendReasoning(
-  activity: RunActivity,
+function statusFromRuntimeEvent(
   event: RuntimeEventEnvelope,
-): RunActivity {
-  const text = reasoningText(event);
-  if (!text) {
-    return activity;
+): AssistantMessageStatus {
+  if (event.event_type === "run_failed" || event.event_type === "error") {
+    return { type: "incomplete", reason: "error" };
   }
-  const subagentKey = subagentKeyForActivity(activity, event);
-  if (subagentKey) {
-    const withSubagent = ensureSubagent(activity, event, subagentKey);
-    return {
-      ...withSubagent,
-      subagents: withSubagent.subagents.map((subagent) =>
-        subagent.id === subagentKey
-          ? {
-              ...subagent,
-              reasoning: upsertText(subagent.reasoning, event.event_id, text),
-            }
-          : subagent,
-      ),
-    };
+  if (event.event_type === "run_cancelled") {
+    return { type: "incomplete", reason: "cancelled" };
   }
-  return {
-    ...activity,
-    reasoning: upsertText(activity.reasoning, event.event_id, text),
-  };
-}
-
-function upsertTool(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-): RunActivity {
-  if (isInternalEvent(event)) {
-    return activity;
-  }
-  const tool = toolFromEvent(event);
-  const subagentKey = subagentKeyForActivity(activity, event);
-  if (subagentKey) {
-    const withSubagent = ensureSubagent(activity, event, subagentKey);
-    return {
-      ...withSubagent,
-      subagents: withSubagent.subagents.map((subagent) =>
-        subagent.id === subagentKey
-          ? {
-              ...subagent,
-              tools: upsertToolInList(subagent.tools, tool, event),
-            }
-          : subagent,
-      ),
-    };
-  }
-  return { ...activity, tools: upsertToolInList(activity.tools, tool, event) };
-}
-
-function upsertSubagent(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-): RunActivity {
-  const key = subagentKeyForActivity(activity, event);
-  if (key === null) {
-    return appendActivityRow(activity, event);
-  }
-  const withSubagent = ensureSubagent(activity, event, key);
-  return {
-    ...withSubagent,
-    subagents: withSubagent.subagents.map((subagent) => {
-      if (subagent.id !== key) {
-        return subagent;
-      }
-      return {
-        ...subagent,
-        status: statusFromEvent(event, subagent.status),
-        summary:
-          event.summary ??
-          payloadString(event.payload, "summary") ??
-          subagent.summary,
-        events: isInternalSubagentProgress(event)
-          ? subagent.events
-          : upsertEvent(subagent.events, event),
-      };
-    }),
-  };
-}
-
-function appendActivityRow(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-): RunActivity {
-  const subagentKey = subagentKeyForActivity(activity, event);
-  if (subagentKey) {
-    const withSubagent = ensureSubagent(activity, event, subagentKey);
-    return {
-      ...withSubagent,
-      subagents: withSubagent.subagents.map((subagent) =>
-        subagent.id === subagentKey
-          ? { ...subagent, events: upsertEvent(subagent.events, event) }
-          : subagent,
-      ),
-    };
-  }
-  return { ...activity, events: upsertEvent(activity.events, event) };
-}
-
-function ensureSubagent(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-  key: string,
-): RunActivity {
-  if (activity.subagents.some((subagent) => subagent.id === key)) {
-    return activity;
-  }
-  const name = subagentNameForEvent(event) ?? "Subagent";
-  return {
-    ...activity,
-    subagents: [
-      ...activity.subagents,
-      {
-        id: key,
-        taskId:
-          event.task_id ??
-          (isSubagentActivityPayload(event.payload)
-            ? event.payload.task_id
-            : key),
-        name,
-        status: statusFromEvent(event),
-        summary:
-          event.summary ?? payloadString(event.payload, "summary") ?? undefined,
-        reasoning: [],
-        events: [],
-        tools: [],
-      },
-    ],
-  };
-}
-
-function upsertToolInList(
-  tools: ToolCallActivity[],
-  tool: ToolCallActivity,
-  event: RuntimeEventEnvelope,
-): ToolCallActivity[] {
-  const existing = tools.find((item) => item.id === tool.id);
-  if (!existing) {
-    return [...tools, tool];
-  }
-  return tools.map((item) => {
-    if (item.id !== tool.id) {
-      return item;
-    }
-    return {
-      ...item,
-      name: tool.name,
-      status: tool.status,
-      summary: tool.summary ?? item.summary,
-      result: tool.result ?? item.result,
-      deltas: mergeText(item.deltas, tool.deltas),
-    };
-  });
-}
-
-function toolFromEvent(event: RuntimeEventEnvelope): ToolCallActivity {
-  const payload = event.payload;
-  const fallbackId = event.span_id ?? event.event_id;
-  const name = toolName(payload) ?? event.display_title ?? "tool";
-  return {
-    id: toolCallId(payload) ?? fallbackId,
-    name,
-    status: statusFromEvent(event),
-    summary: event.summary ?? payloadString(payload, "summary") ?? undefined,
-    result: toolResultText(payload),
-    deltas: [],
-  };
-}
-
-function toolName(payload: Record<string, unknown>): string | null {
-  if (isToolCallPayload(payload) || isToolResultPayload(payload)) {
-    return payload.tool_name;
-  }
-  const value = payload.tool_name;
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function toolCallId(payload: Record<string, unknown>): string | null {
   if (
-    isToolCallPayload(payload) ||
-    isToolCallDeltaPayload(payload) ||
-    isToolResultPayload(payload)
+    event.event_type === "run_completed" ||
+    event.event_type === "final_response"
   ) {
-    return payload.call_id;
+    return { type: "complete", reason: "stop" };
   }
-  const value = payload.call_id;
-  return typeof value === "string" && value.trim() ? value : null;
+  return { type: "running" };
 }
 
-function toolResultText(payload: Record<string, unknown>): string | undefined {
-  if (!isToolResultPayload(payload)) {
-    return payloadString(payload, "summary") ?? undefined;
-  }
-  return (
-    payload.summary ?? payload.safe_message ?? objectSummary(payload.output)
-  );
+function hasPendingAction(content: ThreadMessageContent): boolean {
+  return content.some((part) => {
+    if (!isToolCallPart(part)) {
+      return false;
+    }
+    return (
+      (part.toolName === "approval_request" ||
+        part.toolName === "mcp_auth_required") &&
+      part.result === undefined
+    );
+  });
 }
 
 function reasoningText(event: RuntimeEventEnvelope): string | null {
@@ -580,41 +576,54 @@ function reasoningText(event: RuntimeEventEnvelope): string | null {
   return event.summary ?? null;
 }
 
+function toolName(payload: Record<string, unknown>): string | null {
+  if (isToolCallPayload(payload) || isToolResultPayload(payload)) {
+    return payload.tool_name;
+  }
+  return payloadString(payload, "tool_name");
+}
+
+function toolCallId(payload: Record<string, unknown>): string | null {
+  if (
+    isToolCallPayload(payload) ||
+    isToolCallDeltaPayload(payload) ||
+    isToolResultPayload(payload)
+  ) {
+    return payload.call_id;
+  }
+  return payloadString(payload, "call_id");
+}
+
+function toolArgs(payload: Record<string, unknown>): Record<string, unknown> {
+  if (isToolCallPayload(payload) && isPlainRecord(payload.args)) {
+    return payload.args;
+  }
+  return {};
+}
+
+function toolArgsDelta(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isToolCallDeltaPayload(payload) && isPlainRecord(payload.args_delta)) {
+    return payload.args_delta;
+  }
+  return {};
+}
+
+function toolResultText(payload: Record<string, unknown>): string | undefined {
+  if (!isToolResultPayload(payload)) {
+    return payloadString(payload, "summary") ?? undefined;
+  }
+  return (
+    payload.summary ?? payload.safe_message ?? objectSummary(payload.output)
+  );
+}
+
 function subagentKeyForEvent(event: RuntimeEventEnvelope): string | null {
-  const name = subagentNameForEvent(event);
-  if (isSubagentActivityPayload(event.payload) && name !== null) {
+  if (isSubagentActivityPayload(event.payload)) {
     return event.payload.task_id;
   }
-  if (name !== null) {
-    return event.task_id ?? event.parent_task_id ?? event.subagent_id ?? null;
-  }
-  return null;
-}
-
-function subagentKeyForActivity(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-): string | null {
-  return (
-    subagentKeyForEvent(event) ?? existingSubagentKeyForEvent(activity, event)
-  );
-}
-
-function existingSubagentKeyForEvent(
-  activity: RunActivity,
-  event: RuntimeEventEnvelope,
-): string | null {
-  const candidates = [
-    isSubagentActivityPayload(event.payload) ? event.payload.task_id : null,
-    event.task_id ?? null,
-    event.parent_task_id ?? null,
-    event.subagent_id ?? null,
-  ];
-  return (
-    candidates.find((candidate) =>
-      activity.subagents.some((subagent) => subagent.id === candidate),
-    ) ?? null
-  );
+  return event.task_id ?? event.parent_task_id ?? event.subagent_id ?? null;
 }
 
 function subagentNameForEvent(event: RuntimeEventEnvelope): string | null {
@@ -640,115 +649,14 @@ function meaningfulSubagentName(
   return trimmed;
 }
 
-function upsertEvent(
-  events: ActivityEvent[],
-  event: RuntimeEventEnvelope,
-): ActivityEvent[] {
-  return upsertByKey(events, event.event_id, {
-    id: event.event_id,
-    eventType: event.event_type,
-    title: event.display_title ?? titleForEvent(event.event_type),
-    summary:
-      event.summary ??
-      payloadString(event.payload, "message") ??
-      payloadString(event.payload, "summary") ??
-      undefined,
-    status: statusFromEvent(event),
-  });
-}
-
-function isInternalSubagentProgress(event: RuntimeEventEnvelope): boolean {
-  if (isInternalEvent(event)) {
-    return true;
-  }
-  const text =
-    payloadString(event.payload, "message") ??
-    payloadString(event.payload, "summary") ??
-    event.summary ??
-    "";
-  return event.event_type === "subagent_progress" && !text;
-}
-
-function isInternalEvent(event: RuntimeEventEnvelope): boolean {
-  return event.visibility === "internal";
-}
-
-function upsertText(
-  items: ActivityText[],
-  id: string,
-  text: string,
-): ActivityText[] {
-  return upsertByKey(items, id, { id, text });
-}
-
-function mergeText(
-  current: ActivityText[],
-  next: ActivityText[],
-): ActivityText[] {
-  return next.reduce(
-    (items, item) => upsertText(items, item.id, item.text),
-    current,
-  );
-}
-
-function upsertByKey<T extends { id: string }>(
-  items: T[],
-  id: string,
-  next: T,
-): T[] {
-  if (!items.some((item) => item.id === id)) {
-    return [...items, next];
-  }
-  return items.map((item) => (item.id === id ? next : item));
-}
-
-function runTitleForEvent(event: RuntimeEventEnvelope): string;
-function runTitleForEvent(
-  event: RuntimeEventEnvelope,
-  activity: RunActivity,
-): string;
-function runTitleForEvent(
-  event: RuntimeEventEnvelope,
-  activity?: RunActivity,
-): string {
-  if (event.event_type === "run_completed") {
-    return "Run completed";
-  }
-  if (event.event_type === "run_failed") {
-    return "Run failed";
-  }
-  if (event.event_type === "run_cancelled") {
-    return "Run cancelled";
-  }
-  if (event.activity_kind === "run") {
-    return event.display_title ?? titleForEvent(event.event_type);
-  }
-  return activity?.title ?? "Agent activity";
-}
-
-function runSummaryForEvent(event: RuntimeEventEnvelope): string | undefined {
-  return event.activity_kind === "run"
-    ? (event.summary ?? undefined)
-    : undefined;
-}
-
-function runStatusFromEvent(
-  event: RuntimeEventEnvelope,
-  fallback: ActivityStatus = "running",
-): ActivityStatus {
-  if (event.activity_kind === "run" || event.event_type === "final_response") {
-    return statusFromEvent(event, fallback);
-  }
-  return fallback;
-}
-
 function statusFromEvent(
   event: RuntimeEventEnvelope,
-  fallback: ActivityStatus = "unknown",
-): ActivityStatus {
+  fallback: string | null = "unknown",
+): RuntimePartStatus {
   const value = (
     event.status ??
     payloadString(event.payload, "status") ??
+    fallback ??
     ""
   ).toLowerCase();
   if (value === "queued") {
@@ -783,50 +691,7 @@ function statusFromEvent(
   if (value === "running" || value === "started" || value === "progress") {
     return "running";
   }
-  return fallback;
-}
-
-function appendAssistantDelta(
-  items: ChatItem[],
-  runId: string,
-  delta: string,
-): ChatItem[] {
-  const id = `assistant-${runId}`;
-  const existing = items.find(
-    (item): item is Extract<ChatItem, { kind: "message" }> => {
-      return item.kind === "message" && item.id === id;
-    },
-  );
-  if (!existing) {
-    return [...items, { id, kind: "message", role: "assistant", text: delta }];
-  }
-  return items.map((item) =>
-    item.id === id && item.kind === "message"
-      ? { ...item, text: item.text + delta }
-      : item,
-  );
-}
-
-function finalizeAssistantMessage(
-  items: ChatItem[],
-  runId: string,
-  text: string,
-): ChatItem[] {
-  const id = `assistant-${runId}`;
-  const existing = items.some((item) => item.id === id);
-  if (!existing) {
-    return [...items, { id, kind: "message", role: "assistant", text }];
-  }
-  return items.map((item) =>
-    item.id === id && item.kind === "message" ? { ...item, text } : item,
-  );
-}
-
-function upsertById(items: ChatItem[], next: ChatItem): ChatItem[] {
-  if (!items.some((item) => item.id === next.id)) {
-    return [...items, next];
-  }
-  return items.map((item) => (item.id === next.id ? next : item));
+  return "unknown";
 }
 
 function textFromPayload(
@@ -861,129 +726,50 @@ function objectSummary(
   return keys.length > 0 ? `${keys.length} fields returned` : undefined;
 }
 
-function statusForMessage(
-  item: Extract<ChatItem, { kind: "message" }>,
-  activeRunId: string | null,
-): AssistantMessageStatus | undefined {
-  if (item.role !== "assistant") {
-    return undefined;
-  }
-  if (activeRunId !== null && item.id === `assistant-${activeRunId}`) {
-    return { type: "running" };
-  }
-  return { type: "complete", reason: "stop" };
+function assistantMessageId(runId: string): string {
+  return `assistant-${runId}`;
 }
 
-function runActivityToThreadMessage(
-  activity: RunActivity,
-  activeRunId: string | null,
-): ThreadMessageLike {
-  const content: ThreadMessageContentPart[] = [];
-  for (const item of activity.reasoning) {
-    content.push({
-      type: "reasoning",
-      text: item.text,
-    });
-  }
-  for (const tool of activity.tools) {
-    content.push(toolToMessagePart(tool));
-  }
-  for (const subagent of activity.subagents) {
-    content.push(subagentToMessagePart(subagent));
-  }
-  for (const event of activity.events) {
-    content.push({
-      type: "tool-call",
-      toolCallId: event.id,
-      toolName: "runtime_event",
-      args: jsonArgs({
-        event_type: event.eventType,
-        title: event.title,
-        summary: event.summary ?? null,
-        status: event.status,
-      }),
-      argsText: event.summary ?? event.title,
-      result: event.status,
-    });
-  }
-  if (content.length === 0) {
-    content.push({
-      type: "tool-call",
-      toolCallId: activity.runId,
-      toolName: "agent_run",
-      args: jsonArgs({
-        title: activity.title,
-        status: activity.status,
-        summary: activity.summary ?? null,
-      }),
-      argsText: activity.summary ?? activity.title,
-      result: activity.status,
-    });
-  }
-  return {
-    id: `activity-${activity.runId}`,
-    role: "assistant",
-    content,
-    status:
-      activeRunId === activity.runId || activity.status === "running"
-        ? { type: "running" }
-        : activity.status === "failed"
-          ? { type: "incomplete", reason: "error" }
-          : activity.status === "cancelled"
-            ? { type: "incomplete", reason: "cancelled" }
-            : { type: "complete", reason: "stop" },
-  };
+function isTextPart(part: ThreadMessageContentPart): part is ThreadTextPart {
+  return part.type === "text";
 }
 
-function toolToMessagePart(tool: ToolCallActivity): ThreadToolCallPart {
-  const args = {
-    summary: tool.summary ?? null,
-    deltas: tool.deltas.map((item) => item.text),
-    status: tool.status,
-  };
-  return {
-    type: "tool-call",
-    toolCallId: tool.id,
-    toolName: tool.name,
-    args: jsonArgs(args),
-    argsText: JSON.stringify(args, null, 2),
-    result: tool.result,
-    isError: tool.status === "failed",
-  };
+function isReasoningPart(
+  part: ThreadMessageContentPart,
+): part is ThreadReasoningPart {
+  return part.type === "reasoning";
 }
 
-function subagentToMessagePart(subagent: SubagentActivity): ThreadToolCallPart {
-  const args = {
-    subagent_name: subagent.name,
-    task_id: subagent.taskId,
-    summary: subagent.summary ?? null,
-    status: subagent.status,
-    reasoning: subagent.reasoning.map((item) => item.text),
-    events: subagent.events.map((event) => ({
-      title: event.title,
-      summary: event.summary ?? null,
-      status: event.status,
-    })),
-    tools: subagent.tools.map((tool) => ({
-      name: tool.name,
-      summary: tool.summary ?? null,
-      status: tool.status,
-      result: tool.result ?? null,
-    })),
-  };
-  return {
-    type: "tool-call",
-    toolCallId: subagent.id,
-    toolName: "run_subagent",
-    args: jsonArgs(args),
-    argsText: JSON.stringify(args, null, 2),
-    result: subagent.summary,
-    isError: subagent.status === "failed",
-  };
+function isToolCallPart(
+  part: ThreadMessageContentPart,
+): part is ThreadToolCallPart {
+  return part.type === "tool-call";
 }
 
 function jsonArgs(value: Record<string, unknown>): ThreadToolCallArgs {
   return value as ThreadToolCallArgs;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isPlainRecord(value) ? value : {};
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function titleForEvent(eventType: string): string {

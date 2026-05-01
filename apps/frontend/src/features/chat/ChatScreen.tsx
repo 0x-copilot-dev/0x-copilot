@@ -50,6 +50,7 @@ import {
   chatItemsToThreadMessages,
   messagesToChatItems,
   optimisticUserMessage,
+  resolveApprovalDecision,
   type ChatItem,
 } from "./chatModel";
 import {
@@ -349,16 +350,7 @@ export function ChatScreen({
     try {
       await decideApproval(approvalId, decision, identity);
       setItems((current) =>
-        current.map((item) =>
-          item.kind === "approval" && item.payload.approval_id === approvalId
-            ? {
-                id: `approval-${approvalId}-${decision}`,
-                kind: "status",
-                title: "Approval resolved",
-                text: decision === "approved" ? "Approved." : "Rejected.",
-              }
-            : item,
-        ),
+        resolveApprovalDecision(current, approvalId, decision),
       );
     } catch (err) {
       setItems((current) => [

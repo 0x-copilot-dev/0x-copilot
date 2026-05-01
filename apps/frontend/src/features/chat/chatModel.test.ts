@@ -1,6 +1,19 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { ThreadMessageLike } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
-import { applyRuntimeEvent, type ChatItem } from "./chatModel";
+import {
+  applyRuntimeEvent,
+  chatItemsToThreadMessages,
+  resolveApprovalDecision,
+  type ChatItem,
+} from "./chatModel";
+
+type ThreadMessageContent = Exclude<ThreadMessageLike["content"], string>;
+type ThreadMessageContentPart = ThreadMessageContent[number];
+type ThreadToolCallPart = Extract<
+  ThreadMessageContentPart,
+  { type: "tool-call" }
+>;
 
 function event(overrides: Partial<RuntimeEventEnvelope>): RuntimeEventEnvelope {
   return {
@@ -17,13 +30,36 @@ function event(overrides: Partial<RuntimeEventEnvelope>): RuntimeEventEnvelope {
   };
 }
 
-function messageText(items: ChatItem[], id: string): string | undefined {
-  const item = items.find((candidate) => candidate.id === id);
-  return item?.kind === "message" ? item.text : undefined;
+function assistantMessage(
+  items: ChatItem[],
+): Extract<ChatItem, { kind: "message" }> {
+  const item = items.find((candidate) => candidate.id === "assistant-run_123");
+  if (!item || item.kind !== "message") {
+    throw new Error("Expected assistant message");
+  }
+  return item;
+}
+
+function textPart(items: ChatItem[]): string | undefined {
+  const part = assistantMessage(items).content.find(
+    (candidate) => candidate.type === "text",
+  );
+  return part?.type === "text" ? part.text : undefined;
+}
+
+function toolPart(
+  items: ChatItem[],
+  toolName: string,
+): ThreadToolCallPart | undefined {
+  const part = assistantMessage(items).content.find(
+    (candidate): candidate is ThreadToolCallPart =>
+      candidate.type === "tool-call" && candidate.toolName === toolName,
+  );
+  return part;
 }
 
 describe("applyRuntimeEvent", () => {
-  it("concatenates model deltas and reconciles the final assistant response", () => {
+  it("streams and reconciles assistant text on the run message", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -45,7 +81,10 @@ describe("applyRuntimeEvent", () => {
       }),
     );
 
-    expect(messageText(items, "assistant-run_123")).toBe("Hello world");
+    expect(textPart(items)).toBe("Hello world");
+    expect(chatItemsToThreadMessages(items, "run_123")[0].status).toEqual({
+      type: "running",
+    });
 
     items = applyRuntimeEvent(
       items,
@@ -58,10 +97,14 @@ describe("applyRuntimeEvent", () => {
       }),
     );
 
-    expect(messageText(items, "assistant-run_123")).toBe("Final answer.");
+    expect(textPart(items)).toBe("Final answer.");
+    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+      type: "complete",
+      reason: "stop",
+    });
   });
 
-  it("keeps completed run activity in the live thread", () => {
+  it("emits ordered progress, reasoning, subagent, and tool parts", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -71,43 +114,11 @@ describe("applyRuntimeEvent", () => {
         event_type: "run_started",
         activity_kind: "run",
         status: "running",
+        display_title: "Run started",
+        summary: "Run started",
         payload: { status: "running" },
       }),
     );
-    items = applyRuntimeEvent(
-      items,
-      event({
-        event_id: "final_response",
-        event_type: "final_response",
-        activity_kind: "message",
-        status: "completed",
-        payload: { message: "Hello!" },
-      }),
-    );
-
-    expect(items.some((item) => item.kind === "run-activity")).toBe(true);
-
-    items = applyRuntimeEvent(
-      items,
-      event({
-        event_id: "run_completed",
-        event_type: "run_completed",
-        activity_kind: "run",
-        status: "completed",
-        payload: { status: "completed" },
-      }),
-    );
-
-    expect(messageText(items, "assistant-run_123")).toBe("Hello!");
-    const activity = items.find((item) => item.kind === "run-activity");
-    expect(activity?.kind === "run-activity" && activity.activity.status).toBe(
-      "completed",
-    );
-  });
-
-  it("projects tool, subagent, and reasoning events into run activity", () => {
-    let items: ChatItem[] = [];
-
     items = applyRuntimeEvent(
       items,
       event({
@@ -165,32 +176,21 @@ describe("applyRuntimeEvent", () => {
       }),
     );
 
-    const activityItem = items.find((item) => item.kind === "run-activity");
-    expect(activityItem?.kind).toBe("run-activity");
-    if (activityItem?.kind !== "run-activity") {
-      throw new Error("Expected run activity item");
-    }
-    expect(activityItem.activity.reasoning[0].text).toBe("Checking sources");
-    expect(activityItem.activity.subagents[0].name).toBe("researcher");
-    expect(activityItem.activity.subagents[0].tools[0].name).toBe("doc_search");
-    expect(activityItem.activity.subagents[0].tools).toHaveLength(1);
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["run_progress", "reasoning", "run_subagent", "doc_search"]);
+    expect(
+      assistantMessage(items).content.some(
+        (part) => part.type === "tool-call" && part.toolName === "write_todos",
+      ),
+    ).toBe(false);
   });
 
-  it("keeps subagent progress from overwriting the parent run overview", () => {
+  it("updates subagent parts without creating empty namespace progress", () => {
     let items: ChatItem[] = [];
 
-    items = applyRuntimeEvent(
-      items,
-      event({
-        event_id: "run_queued",
-        event_type: "run_queued",
-        activity_kind: "run",
-        status: "queued",
-        display_title: "Run queued",
-        summary: "Run was queued for runtime execution.",
-        payload: { status: "queued" },
-      }),
-    );
     items = applyRuntimeEvent(
       items,
       event({
@@ -264,40 +264,88 @@ describe("applyRuntimeEvent", () => {
         task_id: "call_1",
         subagent_id: "general-purpose",
         status: "completed",
-        summary: "```python\nprint('large result')\n```",
+        summary: "Done.",
         payload: {
           task_id: "call_1",
           subagent_name: "general-purpose",
           status: "completed",
-          summary: "```python\nprint('large result')\n```",
+          summary: "Done.",
         },
       }),
     );
 
-    const activityItem = items.find((item) => item.kind === "run-activity");
-    expect(activityItem?.kind).toBe("run-activity");
-    if (activityItem?.kind !== "run-activity") {
-      throw new Error("Expected run activity item");
-    }
-    expect(activityItem.activity.title).toBe("Run started");
-    expect(activityItem.activity.status).toBe("running");
-    expect(activityItem.activity.summary).toBe("Run started");
-    expect(activityItem.activity.subagents).toHaveLength(1);
-    expect(activityItem.activity.subagents[0].status).toBe("completed");
+    const subagent = toolPart(items, "run_subagent");
+    expect(subagent?.toolCallId).toBe("call_1");
+    expect(subagent?.args).toMatchObject({
+      subagent_name: "general-purpose",
+      status: "completed",
+      summary: "Done.",
+    });
+    expect(subagent?.result).toBe("Done.");
     expect(
-      activityItem.activity.events.some(
-        (activityEvent) => activityEvent.title === "Subagent update",
+      assistantMessage(items).content.some(
+        (part) =>
+          part.type === "tool-call" && part.toolCallId === "namespace_1",
       ),
     ).toBe(false);
   });
 
-  it("ignores heartbeat events and unsupported non-text envelopes", () => {
+  it("keeps approval and MCP auth as action tool parts", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "approval_1",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_123",
+          message: "Approve the tool call?",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          server_id: "server_123",
+          server_name: "github",
+          display_name: "GitHub",
+          auth_url: "https://example.test/auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect GitHub",
+        },
+      }),
+    );
+
+    expect(toolPart(items, "approval_request")?.toolCallId).toBe(
+      "approval_123",
+    );
+    expect(toolPart(items, "mcp_auth_required")?.toolCallId).toBe("server_123");
+    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+      type: "requires-action",
+      reason: "interrupt",
+    });
+
+    items = resolveApprovalDecision(items, "approval_123", "approved");
+
+    expect(toolPart(items, "approval_request")?.result).toEqual({
+      approval_id: "approval_123",
+      decision: "approved",
+    });
+  });
+
+  it("ignores heartbeat, internal, and unsupported message envelopes", () => {
     const items: ChatItem[] = [
       {
         id: "existing",
         kind: "message",
         role: "user",
-        text: "Hello",
+        content: [{ type: "text", text: "Hello" }],
       },
     ];
 
@@ -311,13 +359,24 @@ describe("applyRuntimeEvent", () => {
         }),
       ),
     ).toBe(items);
-
+    expect(
+      applyRuntimeEvent(
+        items,
+        event({
+          event_id: "internal_1",
+          event_type: "progress",
+          activity_kind: "event",
+          visibility: "internal",
+          payload: { message: "scratchpad" },
+        }),
+      ),
+    ).toBe(items);
     expect(
       applyRuntimeEvent(
         items,
         event({
           event_id: "unknown_1",
-          event_type: "progress",
+          event_type: "observation",
           activity_kind: "message",
           payload: { count: 1 },
         }),

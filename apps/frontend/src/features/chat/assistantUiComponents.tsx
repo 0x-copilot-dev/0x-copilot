@@ -449,6 +449,7 @@ function AssistantMessage(): ReactElement {
               Fallback: ToolFallback,
               by_name: {
                 run_subagent: SubagentTool,
+                run_progress: ProgressTool,
                 approval_request: ApprovalTool,
                 mcp_auth_required: ConnectorAuthTool,
               },
@@ -590,6 +591,23 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
       {props.result !== undefined ? (
         <pre>{formatToolValue(props.result)}</pre>
       ) : null}
+    </div>
+  );
+}
+
+function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
+  const data = asRecord(props.args);
+  const status =
+    typeof data.status === "string"
+      ? data.status
+      : toolStatusLabel(props.status.type, props.isError);
+  return (
+    <div className="aui-tool-card" data-status={props.status.type}>
+      <div className="aui-tool-card__header">
+        <strong>{String(data.title ?? "Progress")}</strong>
+        <span>{status}</span>
+      </div>
+      {typeof data.summary === "string" ? <p>{data.summary}</p> : null}
     </div>
   );
 }
