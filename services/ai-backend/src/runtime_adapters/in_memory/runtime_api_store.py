@@ -45,6 +45,7 @@ RuntimeApiServiceTerminalStatuses = frozenset(
         AgentRunStatus.TIMED_OUT,
     }
 )
+SYNTHETIC_ASSISTANT_MESSAGE_PREFIX = "assistant-"
 
 
 class InMemoryRuntimeApiStore:
@@ -240,7 +241,8 @@ class InMemoryRuntimeApiStore:
             )
             if regenerated is not None:
                 return regenerated
-        parent_message_id = request.parent_message_id or self._latest_message_id(
+        parent_message_id = self._parent_message_id_for_run_request(
+            request=request,
             org_id=conversation.org_id,
             conversation_id=conversation.conversation_id,
         )
@@ -295,6 +297,51 @@ class InMemoryRuntimeApiStore:
             limit=1_000,
         )
         return messages[-1].message_id if messages else None
+
+    def _parent_message_id_for_run_request(
+        self,
+        *,
+        request: CreateRunRequest,
+        org_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        parent_message_id = request.parent_message_id
+        if parent_message_id is None:
+            return self._latest_message_id(
+                org_id=org_id,
+                conversation_id=conversation_id,
+            )
+        return (
+            self._real_assistant_message_id_for_synthetic_parent(
+                parent_message_id=parent_message_id,
+                org_id=org_id,
+                conversation_id=conversation_id,
+            )
+            or parent_message_id
+        )
+
+    def _real_assistant_message_id_for_synthetic_parent(
+        self,
+        *,
+        parent_message_id: str,
+        org_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        if not parent_message_id.startswith(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX):
+            return None
+        run_id = parent_message_id.removeprefix(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX)
+        matches = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.run_id == run_id
+            and message.role == MessageRole.ASSISTANT
+            and message.deleted_at is None
+        ]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda message: message.created_at)[-1].message_id
 
     @staticmethod
     def _message_metadata(request: CreateRunRequest) -> dict[str, object]:

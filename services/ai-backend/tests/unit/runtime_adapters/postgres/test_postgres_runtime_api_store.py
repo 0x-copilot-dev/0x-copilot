@@ -12,7 +12,12 @@ from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.postgres import PostgresRuntimeApiStore
-from runtime_api.schemas import CreateConversationRequest, CreateRunRequest
+from runtime_api.schemas import (
+    CreateConversationRequest,
+    CreateRunRequest,
+    MessageRecord,
+    MessageRole,
+)
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.loop import RuntimeWorker
 
@@ -116,3 +121,74 @@ def test_postgres_adapter_processes_run_and_persists_final_response() -> None:
         "run_completed",
     ]
     assert replay.events[2].payload["message"] == "hi there"
+
+
+def test_postgres_adapter_resolves_live_assistant_parent_id() -> None:
+    store = PostgresRuntimeApiStore(os.environ["TEST_DATABASE_URL"])
+    store.migrate()
+    suffix = uuid4().hex
+    settings = RuntimeSettings.load(
+        environ={
+            "OPENAI_API_KEY": "sk-test",
+            "RUNTIME_DEFAULT_PROVIDER": "openai",
+            "RUNTIME_DEFAULT_MODEL": "gpt-4.1-mini",
+            "RUNTIME_STORE_BACKEND": "postgres",
+            "DATABASE_URL": os.environ["TEST_DATABASE_URL"],
+        }
+    )
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id=f"org_{suffix}",
+            user_id=f"user_{suffix}",
+            assistant_id="assistant_test",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            user_id=conversation.user_id,
+            user_input="Remember this Postgres detail.",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id=f"assistant_{suffix}",
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="Postgres detail remembered.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            user_id=conversation.user_id,
+            user_input="What detail did I ask you to remember?",
+            parent_message_id=f"assistant-{first.run_id}",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+    messages = service.list_messages(
+        org_id=conversation.org_id,
+        user_id=conversation.user_id,
+        conversation_id=conversation.conversation_id,
+    ).messages
+    follow_up_user = next(
+        message
+        for message in messages
+        if message.message_id == follow_up.user_message_id
+    )
+
+    assert follow_up_user.parent_message_id == assistant.message_id

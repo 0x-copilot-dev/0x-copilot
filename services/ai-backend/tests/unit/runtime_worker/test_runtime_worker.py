@@ -234,6 +234,73 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
     assert "Sibling branch that should not leak" not in messages[-1]["content"]
 
 
+def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    first = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Remember that the launch is on Tuesday.",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="persisted_assistant_1",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="Got it. The launch is on Tuesday.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+
+    follow_up = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What day is the launch?",
+            parent_message_id=f"assistant-{first.run_id}",
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+
+    assert (
+        store.messages[follow_up.user_message_id].parent_message_id
+        == assistant.message_id
+    )
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    command = store.run_commands[-1]
+    messages = handler._messages_for_run(command, store.runs[follow_up.run_id])
+
+    assert [message["content"] for message in messages] == [
+        "Remember that the launch is on Tuesday.",
+        "Got it. The launch is on Tuesday.",
+        "What day is the launch?",
+    ]
+
+
 def test_runtime_worker_includes_structured_composer_context() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings()

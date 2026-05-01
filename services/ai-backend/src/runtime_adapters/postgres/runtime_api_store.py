@@ -43,6 +43,8 @@ from agent_runtime.persistence.schema.postgres import (
     POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
 )
 
+SYNTHETIC_ASSISTANT_MESSAGE_PREFIX = "assistant-"
+
 
 class PostgresRuntimeApiStore:
     """Postgres implementation of persistence, event store, and queue ports."""
@@ -798,8 +800,9 @@ class PostgresRuntimeApiStore:
             )
             if regenerated is not None:
                 return regenerated
-        parent_message_id = request.parent_message_id or self._latest_message_id(
+        parent_message_id = self._parent_message_id_for_run_request(
             conn=conn,
+            request=request,
             org_id=conversation.org_id,
             conversation_id=conversation.conversation_id,
         )
@@ -875,6 +878,57 @@ class PostgresRuntimeApiStore:
             LIMIT 1
             """,
             (org_id, conversation_id),
+        ).fetchone()
+        return row["id"] if row is not None else None
+
+    def _parent_message_id_for_run_request(
+        self,
+        *,
+        conn: psycopg.Connection,
+        request: CreateRunRequest,
+        org_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        parent_message_id = request.parent_message_id
+        if parent_message_id is None:
+            return self._latest_message_id(
+                conn=conn,
+                org_id=org_id,
+                conversation_id=conversation_id,
+            )
+        return (
+            self._real_assistant_message_id_for_synthetic_parent(
+                conn=conn,
+                parent_message_id=parent_message_id,
+                org_id=org_id,
+                conversation_id=conversation_id,
+            )
+            or parent_message_id
+        )
+
+    @staticmethod
+    def _real_assistant_message_id_for_synthetic_parent(
+        *,
+        conn: psycopg.Connection,
+        parent_message_id: str,
+        org_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        if not parent_message_id.startswith(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX):
+            return None
+        run_id = parent_message_id.removeprefix(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX)
+        row = conn.execute(
+            """
+            SELECT id FROM agent_messages
+            WHERE org_id = %s
+              AND conversation_id = %s
+              AND run_id = %s
+              AND role = %s
+              AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (org_id, conversation_id, run_id, MessageRole.ASSISTANT.value),
         ).fetchone()
         return row["id"] if row is not None else None
 
