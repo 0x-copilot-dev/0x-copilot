@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 
+from agent_runtime.prompts.tools import (
+    LOAD_TOOL_SPEC_DESCRIPTION as _LOAD_TOOL_SPEC_DESCRIPTION,
+)
+
 
 class Keys:
     """Stable string keys used by the dynamic tool-loading package."""
@@ -61,7 +65,7 @@ class Messages:
     """Centralized public and validation messages for dynamic tools."""
 
     class Builtin:
-        LOAD_TOOL_SPEC_DESCRIPTION = "Load the full schema and instructions for an authorized tool by stable name."
+        LOAD_TOOL_SPEC_DESCRIPTION = _LOAD_TOOL_SPEC_DESCRIPTION
 
     class Errors:
         CONNECTOR_LOAD_FAILED = "The connector could not load this tool right now."

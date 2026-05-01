@@ -1513,10 +1513,21 @@ def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> No
     assert len(approval_events) == 1
     assert approval_events[0].payload["approval_id"] == "approval_json_123"
     assert approval_events[0].payload["tool_name"] == "clickup_filter_tasks"
-    assert store.get_approval_request(
+    assert approval_events[0].payload["source_tool_call_id"] == "call_mcp_approval_123"
+    approval = store.get_approval_request(
         org_id="org_123",
         approval_id="approval_json_123",
     )
+    assert approval is not None
+    assert approval.metadata["source_tool_call_id"] == "call_mcp_approval_123"
+    wrapper_result_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type in {"tool_result", "tool_call_completed"}
+        and event.payload.get("call_id") == "call_mcp_approval_123"
+    ]
+    assert wrapper_result_events
+    assert {event.visibility for event in wrapper_result_events} == {"internal"}
 
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:

@@ -51,7 +51,7 @@ from backend_app.contracts import (
     normalize_skill_slug,
 )
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
-from backend_app.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
+from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 

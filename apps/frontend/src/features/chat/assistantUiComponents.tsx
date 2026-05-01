@@ -37,6 +37,7 @@ import type {
   Skill,
 } from "@enterprise-search/api-types";
 import { isAssistantPerformanceMetrics } from "@enterprise-search/api-types";
+import { mcpServerInstructionPrompt, skillInstructionPrompt } from "./prompts";
 
 export function AssistantThreadList({
   collapsed,
@@ -701,12 +702,12 @@ function AssistantComposer({
                   }}
                   onUseMcpServer={(server) =>
                     appendComposerInstruction(
-                      `Use the ${server.display_name} MCP server for this request.`,
+                      mcpServerInstructionPrompt(server.display_name),
                     )
                   }
                   onUseSkill={(skill) =>
                     appendComposerInstruction(
-                      `Use the ${skill.display_name} skill for this request.`,
+                      skillInstructionPrompt(skill.display_name),
                     )
                   }
                 />
@@ -1500,7 +1501,7 @@ function ApprovalTool({
             ]
           : []
       }
-      details={toolDetailsContent(JSON.stringify(args, null, 2), result)}
+      details={approvalDetailsContent(args, result)}
     >
       {!resolved ? (
         <div className="aui-tool-card__actions">
@@ -1685,16 +1686,51 @@ function toolDetailsContent(
     <>
       {argsText ? (
         <>
-          <small>Raw input</small>
-          <pre>{argsText}</pre>
+          <small>Input</small>
+          <pre>{formatToolValue(parseToolArgs(argsText) ?? argsText)}</pre>
         </>
       ) : null}
       {result !== undefined && !largeToolResultFromValue(result) ? (
         <>
-          <small>Raw output</small>
-          <pre>{formatToolValue(result)}</pre>
+          <small>Result</small>
+          <pre>{formatToolValue(displayToolResult(result))}</pre>
         </>
       ) : null}
+    </>
+  );
+}
+
+function approvalDetailsContent(
+  args: Record<string, unknown>,
+  result: unknown,
+): ReactNode | null {
+  const reason = stringValue(args.reason);
+  const toolArgs = args.arguments;
+  const renderedResult =
+    result !== undefined ? (
+      <>
+        <small>Decision</small>
+        <pre>{formatToolValue(displayToolResult(result))}</pre>
+      </>
+    ) : null;
+  if (!reason && toolArgs === undefined && !renderedResult) {
+    return null;
+  }
+  return (
+    <>
+      {reason ? (
+        <>
+          <small>Reason</small>
+          <p>{reason}</p>
+        </>
+      ) : null}
+      {toolArgs !== undefined ? (
+        <>
+          <small>Arguments</small>
+          {formatDetailValue(toolArgs)}
+        </>
+      ) : null}
+      {renderedResult}
     </>
   );
 }
@@ -1879,10 +1915,11 @@ function mcpActivityParams(
     params.push({ label: "Tool", value: humanizeIdentifier(toolName) });
   }
   if (args !== undefined) {
+    const displayArgs = parseJsonObject(args) ?? args;
     params.push({
       label: "Arguments",
-      value: formatDetailValue(args),
-      block: isComplexToolValue(args),
+      value: formatDetailValue(displayArgs),
+      block: isComplexToolValue(displayArgs),
     });
   }
   return params;
@@ -1891,7 +1928,7 @@ function mcpActivityParams(
 function summarizeToolValue(value: unknown, toolName?: string): string {
   const largeResult = largeToolResultFromValue(value);
   if (largeResult) {
-    return `Large result saved to ${largeResult.path}`;
+    return "Large result saved for the agent to inspect";
   }
   if (Array.isArray(value)) {
     return value.length === 0
@@ -1918,6 +1955,10 @@ function summarizeToolValue(value: unknown, toolName?: string): string {
 }
 
 function summarizeMcpResult(value: unknown): ReactNode {
+  const loadedServer = loadedMcpServerSummary(value);
+  if (loadedServer) {
+    return loadedServer;
+  }
   const parsed = parseJsonObject(value);
   const output = asRecord(parsed?.output ?? parsed ?? value);
   const content = output.content;
@@ -2000,6 +2041,60 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function displayToolResult(value: unknown): unknown {
+  const parsed = parseJsonObject(value);
+  const output = asRecord(parsed?.output ?? parsed ?? value);
+  const content = output.content;
+  const text = mcpContentText(content) ?? stringValue(output.text);
+  if (text) {
+    return parseJsonObject(text) ?? text;
+  }
+  return parsed ?? value;
+}
+
+function loadedMcpServerSummary(value: unknown): ReactNode | null {
+  const payload = displayToolResult(value);
+  const loadedServer = asRecord(asRecord(payload).loaded_server);
+  if (Object.keys(loadedServer).length === 0) {
+    return null;
+  }
+  const serverCard = asRecord(loadedServer.server_card);
+  const tools = Array.isArray(loadedServer.tools) ? loadedServer.tools : [];
+  const displayName =
+    stringValue(serverCard.display_name) ??
+    stringValue(serverCard.name) ??
+    "MCP server";
+  const health = stringValue(serverCard.health);
+  const authState = stringValue(serverCard.auth_state);
+  const visibleTools = tools
+    .map((tool) => stringValue(asRecord(tool).name))
+    .filter((tool): tool is string => tool !== null)
+    .slice(0, 4);
+  return (
+    <div className="aui-mcp-result-preview">
+      <p>
+        Loaded {tools.length} tools from {displayName}.
+      </p>
+      {health || authState ? (
+        <div className="aui-mcp-result-preview__badges">
+          {health ? (
+            <Badge tone="neutral">{humanizeIdentifier(health)}</Badge>
+          ) : null}
+          {authState ? (
+            <Badge tone="neutral">{humanizeIdentifier(authState)}</Badge>
+          ) : null}
+        </div>
+      ) : null}
+      {visibleTools.length > 0 ? (
+        <p>
+          Available tools include{" "}
+          {visibleTools.map(humanizeIdentifier).join(", ")}.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function emptyResultLabel(toolName?: string): string {
   const normalized = toolName?.toLowerCase() ?? "";
   if (normalized.includes("grep") || normalized.includes("search")) {
@@ -2072,7 +2167,6 @@ function activityTitle(activity: SubagentActivityRecord): string {
 }
 
 function LargeToolResultNotice({
-  result,
   compact = false,
 }: {
   result: LargeToolResult;
@@ -2083,22 +2177,10 @@ function LargeToolResultNotice({
       <span className="aui-tool-card__notice-title">Large result saved</span>
       {compact ? null : (
         <p>
-          The connector returned more data than fits in chat. The model can read
-          it in chunks from the saved result file when it needs details.
+          The connector returned more data than fits in chat. The agent can
+          inspect the saved response when it needs details.
         </p>
       )}
-      <dl className="aui-tool-card__fields">
-        <div className="aui-tool-card__field">
-          <dt>Path</dt>
-          <dd>{result.path}</dd>
-        </div>
-        {result.callId ? (
-          <div className="aui-tool-card__field">
-            <dt>Tool call</dt>
-            <dd>{result.callId}</dd>
-          </div>
-        ) : null}
-      </dl>
     </div>
   );
 }
@@ -2109,20 +2191,36 @@ type LargeToolResult = {
 };
 
 function largeToolResultFromValue(value: unknown): LargeToolResult | null {
-  if (typeof value !== "string") {
+  const text = largeToolResultText(value);
+  if (text === null) {
     return null;
   }
-  const pathMatch = value.match(
+  const pathMatch = text.match(
     /path:\s*(\/large_tool_results\/[A-Za-z0-9_-]+)/,
   );
   if (!pathMatch) {
     return null;
   }
-  const callMatch = value.match(/tool call\s+([A-Za-z0-9_-]+)/);
+  const callMatch = text.match(/tool call\s+([A-Za-z0-9_-]+)/);
   return {
     path: pathMatch[1],
     callId: callMatch?.[1] ?? null,
   };
+}
+
+function largeToolResultText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  const record = asRecord(value);
+  const output = asRecord(record.output);
+  return (
+    mcpContentText(record.content) ??
+    mcpContentText(output.content) ??
+    stringValue(record.content) ??
+    stringValue(output.content) ??
+    stringValue(output.text)
+  );
 }
 
 function parseToolArgs(argsText: string): Record<string, unknown> | null {
@@ -2183,6 +2281,10 @@ function summarizeInlineString(value: string): string {
 
 function formatDetailValue(value: unknown): ReactNode {
   if (typeof value === "string") {
+    const parsed = parseJsonObject(value);
+    if (parsed) {
+      return <pre>{formatToolValue(parsed)}</pre>;
+    }
     return shouldRenderBlockValue(value) ? (
       <pre>{value}</pre>
     ) : (

@@ -1444,12 +1444,16 @@ p {
 .aui-collapsible__content {
   display: grid;
   gap: var(--space-xs);
+  max-width: 100%;
+  min-width: 0;
   padding-top: var(--space-xs);
 }
 
 .aui-activity-card__details-content {
   display: grid;
   gap: var(--space-xs);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .aui-activity-card__details-content small {
@@ -1540,6 +1544,8 @@ p {
 .aui-activity-item__details-content {
   display: grid;
   gap: var(--space-xs);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .aui-activity-item__details-content small {
@@ -1569,7 +1575,9 @@ p {
   color: var(--color-text-muted);
   margin: 0;
   max-height: 18rem;
+  max-width: 100%;
   overflow: auto;
+  overflow-wrap: anywhere;
   padding: var(--space-sm);
   white-space: pre-wrap;
 }

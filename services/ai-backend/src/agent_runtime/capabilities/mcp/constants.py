@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import re
 
+from agent_runtime.prompts.tools import (
+    AUTH_MCP_TOOL_DESCRIPTION as _AUTH_MCP_TOOL_DESCRIPTION,
+    CALL_MCP_TOOL_DESCRIPTION as _CALL_MCP_TOOL_DESCRIPTION,
+    LOAD_MCP_SERVER_TOOL_DESCRIPTION as _LOAD_MCP_SERVER_TOOL_DESCRIPTION,
+)
+
 
 class Keys:
     """Stable keys used at MCP validation and serialization boundaries."""
@@ -209,18 +215,9 @@ class Messages:
     """Centralized safe validation and public error messages."""
 
     class Middleware:
-        AUTH_MCP_TOOL_DESCRIPTION = (
-            "Request an authorization URL for an MCP server when the user has not "
-            "authenticated it yet. Use this only when the server is needed."
-        )
-        CALL_MCP_TOOL_DESCRIPTION = (
-            "Call a tool from an MCP server after load_mcp_server has returned that "
-            "server's validated tool descriptors."
-        )
-        LOAD_MCP_SERVER_TOOL_DESCRIPTION = (
-            "Load an authorized MCP server by stable name and return validated "
-            "tool and resource descriptors."
-        )
+        AUTH_MCP_TOOL_DESCRIPTION = _AUTH_MCP_TOOL_DESCRIPTION
+        CALL_MCP_TOOL_DESCRIPTION = _CALL_MCP_TOOL_DESCRIPTION
+        LOAD_MCP_SERVER_TOOL_DESCRIPTION = _LOAD_MCP_SERVER_TOOL_DESCRIPTION
 
     class Registry:
         CARDS_LOAD_FAILED = "MCP server cards could not be loaded."

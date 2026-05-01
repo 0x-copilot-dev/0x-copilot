@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
-from runtime_api.schemas import ApprovalRequestRecord, RunRecord, RuntimeApiEventType
+from runtime_api.schemas import (
+    ApprovalRequestRecord,
+    RunRecord,
+    RuntimeApiEventType,
+    RuntimeEventVisibility,
+)
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
 from runtime_worker.stream_subagents import SubagentEventProjector
 from runtime_worker.stream_tools import ToolCallStreamState
@@ -37,11 +43,24 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         data = part["data"]
         metadata = namespace.metadata(stream_type)
         parent_task_id = namespace.subagent_task_id
+        source_tool_call_id = (
+            self.source_tool_call_id_for_payload(data)
+            if stream_type == "messages"
+            else None
+        )
 
         for payload in self.explicit_api_payloads(data):
             event_type = self.api_event_type(payload)
             if event_type is None:
                 continue
+            if (
+                event_type is RuntimeApiEventType.APPROVAL_REQUESTED
+                and source_tool_call_id is not None
+            ):
+                payload = {
+                    **payload,
+                    Keys.Field.SOURCE_TOOL_CALL_ID: source_tool_call_id,
+                }
             if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
                 self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
@@ -115,7 +134,8 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         if self.is_tool_result_message(message):
             payload = self.tool_result_payload(message)
             payload = self.tool_result_payload_with_state(run.run_id, payload)
-            if payload["tool_name"] == "task":
+            control_tool_result = self.is_promoted_control_tool_result(payload)
+            if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)
                 self.append_task_lifecycle_event(
                     run=run,
@@ -129,6 +149,8 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                     metadata=metadata,
                 )
                 return
+            if control_tool_result:
+                self.mark_internal_visibility(payload)
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -138,11 +160,18 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                 parent_task_id=parent_task_id,
             )
             completed_payload = {
-                "tool_name": payload["tool_name"],
-                "call_id": payload["call_id"],
-                "status": "completed",
+                Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
+                Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
+                Keys.Field.STATUS: Values.Status.COMPLETED,
             }
-            self.apply_tool_visibility(completed_payload)
+            if (
+                control_tool_result
+                or self.text(payload.get(Keys.Field.VISIBILITY))
+                == RuntimeEventVisibility.INTERNAL.value
+            ):
+                self.mark_internal_visibility(completed_payload)
+            else:
+                self.apply_tool_visibility(completed_payload)
             self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -163,6 +192,18 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         if cls.tool_call_chunks(message) or cls.is_tool_result_message(message):
             return None
         return cls.message_delta(message)
+
+    @classmethod
+    def source_tool_call_id_for_payload(cls, payload: object) -> str | None:
+        message = cls.message_from_stream_payload(payload)
+        if not cls.is_tool_result_message(message):
+            return None
+        message_payload = cls.payload_mapping(message)
+        return (
+            cls.text(message_payload.get(Keys.Field.TOOL_CALL_ID))
+            or cls.text(message_payload.get(Keys.Field.CALL_ID))
+            or cls.text(message_payload.get(Keys.Field.ID))
+        )
 
     def create_approval_request(
         self,

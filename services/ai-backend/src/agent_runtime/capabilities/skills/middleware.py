@@ -14,6 +14,7 @@ from agent_runtime.capabilities.skills.virtual import (
     VirtualSkillBundle,
     VirtualSkillRegistry,
 )
+from agent_runtime.prompts.tools import LOAD_SKILL_TOOL_DESCRIPTION
 
 
 class LoadSkillInput(RuntimeContract):
@@ -28,10 +29,7 @@ class LoadSkillTool:
 
     registry: VirtualSkillRegistry
     name: str = "load_skill"
-    description: str = (
-        "Load the full Markdown for an available Skill by stable skill_name. "
-        "Use this only when a compact Skill card is relevant to the user request."
-    )
+    description: str = LOAD_SKILL_TOOL_DESCRIPTION
 
     async def ainvoke(
         self, raw_input: LoadSkillInput | Mapping[str, Any] | str

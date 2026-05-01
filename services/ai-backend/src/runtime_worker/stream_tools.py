@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from agent_runtime.api.constants import Keys, Values
+from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import (
@@ -38,6 +39,14 @@ class ToolEventProjector(StreamMessageParser):
     """Project provider tool-call chunks and tool-result messages."""
 
     internal_tool_names = frozenset({Values.Tool.WRITE_TODOS})
+    large_result_artifact_tool_names = frozenset(
+        {
+            Values.Tool.READ_FILE,
+            Values.Tool.RG,
+            Values.Tool.GREP,
+            Values.Tool.SEARCH_FILES,
+        }
+    )
 
     _tool_call_states: dict[tuple[str, tuple[str, ...], str], ToolCallStreamState]
     _tool_call_ids: dict[tuple[str, str], ToolCallStreamState]
@@ -52,7 +61,7 @@ class ToolEventProjector(StreamMessageParser):
         parent_task_id: str | None,
     ) -> None:
         state = self.tool_call_state(run.run_id, namespace, tool_call)
-        if state.tool_name == "task":
+        if state.tool_name == Values.Tool.TASK:
             self.append_task_tool_call_event(  # type: ignore[attr-defined]
                 run=run,
                 state=state,
@@ -68,7 +77,7 @@ class ToolEventProjector(StreamMessageParser):
             else RuntimeApiEventType.TOOL_CALL_DELTA
         )
         if event_type is RuntimeApiEventType.TOOL_CALL_DELTA:
-            payload["status"] = "running"
+            payload[Keys.Field.STATUS] = Values.Status.RUNNING
         self.event_producer.append_api_event(  # type: ignore[attr-defined]
             run=run,
             source=StreamEventSource.TOOL,
@@ -83,26 +92,30 @@ class ToolEventProjector(StreamMessageParser):
     def tool_call_payload(cls, tool_call: object) -> JsonObject:
         payload = cls.payload_mapping(tool_call)
         tool_name = (
-            cls.text(payload.get("name"))
-            or cls.text(payload.get("tool_name"))
-            or "unknown_tool"
+            cls.text(payload.get(Keys.Field.NAME))
+            or cls.text(payload.get(Keys.Field.TOOL_NAME))
+            or Values.Tool.UNKNOWN_TOOL
         )
         call_id = (
-            cls.text(payload.get("id"))
-            or cls.text(payload.get("call_id"))
+            cls.text(payload.get(Keys.Field.ID))
+            or cls.text(payload.get(Keys.Field.CALL_ID))
             or TraceContext.event_id()
         )
-        args = payload.get("args", {})
+        args = payload.get(Keys.Field.ARGS, {})
         result: JsonObject = {
-            "tool_name": tool_name,
-            "call_id": call_id,
-            "args": args if isinstance(args, Mapping) else {"delta": str(args)},
-            "delta": str(args) if args and not isinstance(args, Mapping) else "",
-            "status": payload.get("status", "started"),
+            Keys.Field.TOOL_NAME: tool_name,
+            Keys.Field.CALL_ID: call_id,
+            Keys.Field.ARGS: args
+            if isinstance(args, Mapping)
+            else {Keys.Payload.DELTA: str(args)},
+            Keys.Payload.DELTA: str(args)
+            if args and not isinstance(args, Mapping)
+            else "",
+            Keys.Field.STATUS: payload.get(Keys.Field.STATUS, Values.Status.STARTED),
         }
-        summary = cls.text(payload.get("summary"))
+        summary = cls.text(payload.get(Keys.Field.SUMMARY))
         if summary is not None:
-            result["summary"] = summary
+            result[Keys.Field.SUMMARY] = summary
         cls.apply_tool_visibility(result)
         return result
 
@@ -113,10 +126,12 @@ class ToolEventProjector(StreamMessageParser):
         tool_call: object,
     ) -> ToolCallStreamState:
         payload = self.payload_mapping(tool_call)
-        tool_name = self.text(payload.get("name")) or self.text(
-            payload.get("tool_name")
+        tool_name = self.text(payload.get(Keys.Field.NAME)) or self.text(
+            payload.get(Keys.Field.TOOL_NAME)
         )
-        call_id = self.text(payload.get("id")) or self.text(payload.get("call_id"))
+        call_id = self.text(payload.get(Keys.Field.ID)) or self.text(
+            payload.get(Keys.Field.CALL_ID)
+        )
         key = self.tool_call_state_key(run_id, namespace, payload, call_id)
         state_key = (run_id, namespace.parts, key)
         state = self._tool_call_states.get(state_key)
@@ -128,16 +143,16 @@ class ToolEventProjector(StreamMessageParser):
             self._tool_call_states[state_key] = state
         if tool_name is not None:
             state.tool_name = tool_name
-        summary = self.text(payload.get("summary"))
+        summary = self.text(payload.get(Keys.Field.SUMMARY))
         if summary is not None:
             state.summary = summary
         if call_id is not None:
             state.call_id = call_id
             self._tool_call_ids[(run_id, call_id)] = state
-        args = payload.get("args", {})
+        args = payload.get(Keys.Field.ARGS, {})
         if isinstance(args, Mapping):
-            if "delta" in args:
-                delta = self.raw_text(args.get("delta"))
+            if Keys.Payload.DELTA in args:
+                delta = self.raw_text(args.get(Keys.Payload.DELTA))
                 if delta is not None:
                     state.args_text += delta
                     state.last_delta = delta
@@ -178,14 +193,15 @@ class ToolEventProjector(StreamMessageParser):
     def tool_call_payload_from_state(cls, state: ToolCallStreamState) -> JsonObject:
         args = state.args or cls.parse_args_text(state.args_text)
         payload: JsonObject = {
-            "tool_name": state.tool_name or "unknown_tool",
-            "call_id": state.call_id or TraceContext.event_id(),
-            "args": args or ({"delta": state.args_text} if state.args_text else {}),
-            "delta": state.last_delta if state.started_emitted else "",
-            "status": "started",
+            Keys.Field.TOOL_NAME: state.tool_name or Values.Tool.UNKNOWN_TOOL,
+            Keys.Field.CALL_ID: state.call_id or TraceContext.event_id(),
+            Keys.Field.ARGS: args
+            or ({Keys.Payload.DELTA: state.args_text} if state.args_text else {}),
+            Keys.Payload.DELTA: state.last_delta if state.started_emitted else "",
+            Keys.Field.STATUS: Values.Status.STARTED,
         }
         if state.summary is not None:
-            payload["summary"] = state.summary
+            payload[Keys.Field.SUMMARY] = state.summary
         cls.apply_tool_visibility(payload)
         return payload
 
@@ -203,31 +219,31 @@ class ToolEventProjector(StreamMessageParser):
     def tool_result_payload(cls, message: object) -> JsonObject:
         payload = cls.payload_mapping(message)
         tool_name = (
-            cls.text(payload.get("name"))
-            or cls.text(payload.get("tool_name"))
-            or "unknown_tool"
+            cls.text(payload.get(Keys.Field.NAME))
+            or cls.text(payload.get(Keys.Field.TOOL_NAME))
+            or Values.Tool.UNKNOWN_TOOL
         )
         call_id = (
-            cls.text(payload.get("tool_call_id"))
-            or cls.text(payload.get("id"))
-            or cls.text(payload.get("call_id"))
+            cls.text(payload.get(Keys.Field.TOOL_CALL_ID))
+            or cls.text(payload.get(Keys.Field.ID))
+            or cls.text(payload.get(Keys.Field.CALL_ID))
             or TraceContext.event_id()
         )
         excluded = {
-            "type",
-            "name",
-            "id",
-            "tool_call_id",
-            "call_id",
-            "tool_name",
-            "status",
+            Keys.Field.TYPE,
+            Keys.Field.NAME,
+            Keys.Field.ID,
+            Keys.Field.TOOL_CALL_ID,
+            Keys.Field.CALL_ID,
+            Keys.Field.TOOL_NAME,
+            Keys.Field.STATUS,
         }
         output = {key: value for key, value in payload.items() if key not in excluded}
         result: JsonObject = {
-            "tool_name": tool_name,
-            "call_id": call_id,
-            "status": payload.get("status", "completed"),
-            "output": output or payload,
+            Keys.Field.TOOL_NAME: tool_name,
+            Keys.Field.CALL_ID: call_id,
+            Keys.Field.STATUS: payload.get(Keys.Field.STATUS, Values.Status.COMPLETED),
+            Keys.Field.OUTPUT: output or payload,
         }
         cls.apply_tool_visibility(result)
         return result
@@ -235,14 +251,19 @@ class ToolEventProjector(StreamMessageParser):
     def tool_result_payload_with_state(
         self, run_id: str, payload: JsonObject
     ) -> JsonObject:
-        call_id = self.text(payload.get("call_id"))
+        call_id = self.text(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return payload
         state = self._tool_call_ids.get((run_id, call_id))
         if state is None:
             return payload
-        if payload.get("tool_name") == "unknown_tool" and state.tool_name is not None:
-            payload = {**payload, "tool_name": state.tool_name}
+        if (
+            payload.get(Keys.Field.TOOL_NAME) == Values.Tool.UNKNOWN_TOOL
+            and state.tool_name is not None
+        ):
+            payload = {**payload, Keys.Field.TOOL_NAME: state.tool_name}
+        if self.is_large_result_artifact_state(state):
+            self.mark_internal_visibility(payload)
         self.apply_tool_visibility(payload)
         return payload
 
@@ -251,16 +272,79 @@ class ToolEventProjector(StreamMessageParser):
         run_id: str,
         payload: Mapping[str, object],
     ) -> ToolCallStreamState | None:
-        call_id = self.text(payload.get("call_id"))
+        call_id = self.text(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return None
         return self._tool_call_ids.get((run_id, call_id))
 
     @classmethod
     def apply_tool_visibility(cls, payload: JsonObject) -> None:
-        if cls.is_internal_tool_name(cls.text(payload.get("tool_name"))):
-            payload[Keys.Field.VISIBILITY] = RuntimeEventVisibility.INTERNAL.value
+        if cls.is_internal_tool_name(cls.text(payload.get(Keys.Field.TOOL_NAME))):
+            cls.mark_internal_visibility(payload)
+        if cls.is_large_result_artifact_payload(payload):
+            cls.mark_internal_visibility(payload)
+
+    @classmethod
+    def mark_internal_visibility(cls, payload: JsonObject) -> None:
+        payload[Keys.Field.VISIBILITY] = RuntimeEventVisibility.INTERNAL.value
 
     @classmethod
     def is_internal_tool_name(cls, tool_name: str | None) -> bool:
         return tool_name in cls.internal_tool_names
+
+    @classmethod
+    def is_promoted_control_tool_result(cls, payload: Mapping[str, object]) -> bool:
+        if (
+            cls.text(payload.get(Keys.Field.TOOL_NAME))
+            != McpValues.ToolName.CALL_MCP_TOOL
+        ):
+            return False
+        output = payload.get(Keys.Field.OUTPUT)
+        if not isinstance(output, Mapping):
+            return False
+        if set(output.keys()) - {Keys.Field.CONTENT}:
+            return False
+        content = output.get(Keys.Field.CONTENT)
+        text = (
+            content if isinstance(content, str) else cls.content_delta_to_text(content)
+        )
+        if text is None:
+            return False
+        parsed = cls.parse_json_mapping(text)
+        if parsed is None:
+            return False
+        return cls.api_event_type(parsed) is RuntimeApiEventType.APPROVAL_REQUESTED
+
+    @classmethod
+    def is_large_result_artifact_state(cls, state: ToolCallStreamState) -> bool:
+        args = state.args or cls.parse_args_text(state.args_text)
+        payload: JsonObject = {
+            Keys.Field.TOOL_NAME: state.tool_name,
+            Keys.Field.ARGS: args,
+        }
+        return cls.is_large_result_artifact_payload(payload)
+
+    @classmethod
+    def is_large_result_artifact_payload(cls, payload: Mapping[str, object]) -> bool:
+        if not cls.is_large_result_artifact_tool_name(
+            cls.text(payload.get(Keys.Field.TOOL_NAME))
+        ):
+            return False
+        args = payload.get(Keys.Field.ARGS)
+        if not isinstance(args, Mapping):
+            return False
+        path = cls.text(args.get(Keys.Field.FILE_PATH)) or cls.text(
+            args.get(Keys.Field.PATH)
+        )
+        return bool(
+            path and path.startswith(Values.VirtualPath.LARGE_TOOL_RESULTS_PREFIX)
+        )
+
+    @classmethod
+    def is_large_result_artifact_tool_name(cls, tool_name: str | None) -> bool:
+        if tool_name is None:
+            return False
+        normalized = tool_name.strip().lower()
+        return (
+            normalized in cls.large_result_artifact_tool_names or "search" in normalized
+        )

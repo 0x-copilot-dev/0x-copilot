@@ -617,6 +617,150 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
+  it("replaces correlated MCP wrapper calls with approval cards", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_approval_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_mcp_approval_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_approval_123",
+          args: {
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_filter_tasks",
+            arguments: { assignees: ["me"] },
+          },
+        },
+      }),
+    );
+    expect(toolPart(items, "call_mcp_tool")?.toolCallId).toBe(
+      "call_mcp_approval_123",
+    );
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "approval_from_tool_1",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_json_123",
+          approval_kind: "mcp_tool",
+          source_tool_call_id: "call_mcp_approval_123",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          tool_name: "clickup_filter_tasks",
+          arguments: { assignees: ["me"] },
+          risk_level: "medium",
+          read_only: true,
+          message: "Approve ClickUp to run clickup_filter_tasks.",
+        },
+      }),
+    );
+
+    expect(toolPart(items, "call_mcp_tool")).toBeUndefined();
+    expect(toolPart(items, "approval_request")?.toolCallId).toBe(
+      "approval_json_123",
+    );
+    expect(assistantMessage(items).content).toHaveLength(1);
+  });
+
+  it("does not expose streamed tool arg deltas in display text", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_delta_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_mcp_delta_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_delta_123",
+          args: {
+            server_name: "mcp_clickup_com",
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_delta_2",
+        event_type: "tool_call_delta",
+        activity_kind: "tool",
+        span_id: "call_mcp_delta_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_delta_123",
+          delta: '{"server_name":"mcp_clickup_com"}',
+          args_delta: {
+            tool_name: "clickup_filter_tasks",
+            arguments: { assignees: ["me"] },
+          },
+          status: "running",
+        },
+      }),
+    );
+
+    const mcpTool = toolPart(items, "call_mcp_tool");
+    expect(mcpTool?.args).not.toHaveProperty("deltas");
+    expect(mcpTool?.args).not.toHaveProperty("delta");
+    expect(mcpTool?.argsText).toContain("clickup_filter_tasks");
+    expect(mcpTool?.argsText).not.toContain("deltas");
+    expect(mcpTool?.argsText).not.toContain("delta");
+    expect(mcpTool?.argsText).not.toContain("status");
+  });
+
+  it("hides virtual large-result read and search tool calls", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "large_read_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_large_read",
+        payload: {
+          tool_name: "read_file",
+          call_id: "call_large_read",
+          args: {
+            file_path: "/large_tool_results/call_OSm333FzbeC5JRHDhiu6DnRP",
+            offset: 0,
+            limit: 120,
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "large_search_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_large_search",
+        payload: {
+          tool_name: "rg",
+          call_id: "call_large_search",
+          args: {
+            pattern: "clickup_resolve_assignees",
+            path: "/large_tool_results/call_OSm333FzbeC5JRHDhiu6DnRP",
+            output_mode: "files_with_matches",
+          },
+        },
+      }),
+    );
+
+    expect(items).toEqual([]);
+  });
+
   it("preserves structured MCP output for result previews", () => {
     let items: ChatItem[] = [];
     const output = {

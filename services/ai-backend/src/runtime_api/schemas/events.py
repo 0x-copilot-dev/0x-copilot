@@ -399,7 +399,7 @@ class RuntimeEventPresentationProjector:
         safe_payload: JsonObject = {}
         for key in (
             Keys.Field.APPROVAL_ID,
-            "approval_kind",
+            Keys.Field.APPROVAL_KIND,
             Keys.Field.SERVER_ID,
             Keys.Field.SERVER_NAME,
             "display_name",
@@ -408,6 +408,7 @@ class RuntimeEventPresentationProjector:
             Keys.Payload.MESSAGE,
             Keys.Field.REASON,
             Keys.Field.STATUS,
+            Keys.Field.SOURCE_TOOL_CALL_ID,
         ):
             value = cls._text(payload.get(key))
             if value is not None:

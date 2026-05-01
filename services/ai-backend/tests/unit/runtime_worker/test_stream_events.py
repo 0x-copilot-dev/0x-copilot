@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_worker.stream_events import RuntimeStreamPartAdapter
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
@@ -46,6 +48,27 @@ def test_explicit_api_payloads_are_collected_from_nested_payloads() -> None:
     assert payloads[0]["summary"] == "Checking source coverage"
 
 
+def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
+    payloads = RuntimeStreamPartAdapter.explicit_api_payloads(
+        {
+            "type": "tool",
+            "content": json.dumps(
+                {
+                    "api_event_type": "approval_requested",
+                    "approval_id": "approval_123",
+                    "approval_kind": "mcp_tool",
+                }
+            ),
+        }
+    )
+
+    assert len(payloads) == 1
+    assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
+        RuntimeApiEventType.APPROVAL_REQUESTED
+    )
+    assert payloads[0]["approval_id"] == "approval_123"
+
+
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:
     adapter = RuntimeStreamPartAdapter(event_producer=object())  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
@@ -74,6 +97,51 @@ def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> Non
     assert payload["tool_name"] == "write_todos"
     assert payload["call_id"] == "call_123"
     assert payload["args"] == {"todos": "check prime"}
+
+
+def test_large_result_file_tools_are_internal_only_for_virtual_paths() -> None:
+    large_payload = RuntimeStreamPartAdapter.tool_call_payload(
+        {
+            "name": "read_file",
+            "id": "call_large",
+            "args": {"file_path": "/large_tool_results/call_123"},
+        }
+    )
+    normal_payload = RuntimeStreamPartAdapter.tool_call_payload(
+        {
+            "name": "read_file",
+            "id": "call_project",
+            "args": {"file_path": "src/app.ts"},
+        }
+    )
+
+    assert large_payload["visibility"] == "internal"
+    assert "visibility" not in normal_payload
+
+
+def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
+    adapter = RuntimeStreamPartAdapter(event_producer=object())  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+
+    adapter.tool_call_state(
+        "run_123",
+        namespace,
+        {
+            "name": "read_file",
+            "id": "call_large",
+            "args": {"file_path": "/large_tool_results/call_123"},
+        },
+    )
+    payload = adapter.tool_result_payload_with_state(
+        "run_123",
+        {
+            "tool_name": "unknown_tool",
+            "call_id": "call_large",
+            "output": {"content": "large payload"},
+        },
+    )
+
+    assert payload["visibility"] == "internal"
 
 
 def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:

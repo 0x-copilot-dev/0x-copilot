@@ -490,6 +490,7 @@ export interface ApprovalRequestedPayload {
   message?: string;
   reason?: string;
   status?: string;
+  source_tool_call_id?: string;
   [key: string]: unknown;
 }
 

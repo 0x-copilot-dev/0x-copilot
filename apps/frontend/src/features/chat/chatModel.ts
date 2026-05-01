@@ -204,10 +204,7 @@ export function applyRuntimeEvent(
     event.event_type === "approval_requested" &&
     isApprovalRequestedPayload(event.payload)
   ) {
-    return upsertAssistantPart(items, event, approvalPart(event.payload), {
-      type: "requires-action",
-      reason: "interrupt",
-    });
+    return upsertApprovalPart(items, event, event.payload);
   }
   if (event.parent_task_id && event.activity_kind === "tool") {
     const withNestedActivity = upsertSubagentActivity(items, event);
@@ -264,6 +261,9 @@ export function applyRuntimeEvent(
     );
   }
   if (event.activity_kind === "tool") {
+    if (isLargeResultArtifactToolEvent(event)) {
+      return items;
+    }
     return upsertRuntimeToolPart(items, event);
   }
   if (event.activity_kind === "subagent") {
@@ -587,6 +587,36 @@ function upsertAssistantPart(
   );
 }
 
+function upsertApprovalPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+  payload: Record<string, unknown>,
+): ChatItem[] {
+  const sourceToolCallId = stringValue(payload.source_tool_call_id);
+  return updateAssistantContent(
+    items,
+    event,
+    (content) =>
+      upsertPart(
+        removeToolCallPart(content, sourceToolCallId),
+        approvalPart(payload),
+      ),
+    { type: "requires-action", reason: "interrupt" },
+  );
+}
+
+function removeToolCallPart(
+  content: ThreadMessageContent,
+  toolCallId: string | null,
+): ThreadMessageContent {
+  if (!toolCallId) {
+    return content;
+  }
+  return content.filter(
+    (part) => !isToolCallPart(part) || part.toolCallId !== toolCallId,
+  );
+}
+
 function upsertRuntimeToolPart(
   items: ChatItem[],
   event: RuntimeEventEnvelope,
@@ -739,12 +769,6 @@ function toolPart(
   if (summary) {
     args.summary = summary;
   }
-  const delta = isToolCallDeltaPayload(payload)
-    ? payloadString(payload, "delta")
-    : null;
-  if (delta) {
-    args.deltas = [...stringArray(existingArgs.deltas), delta];
-  }
   const name =
     toolName(payload) ?? existing?.toolName ?? event.display_title ?? "tool";
   const result = toolResultValue(payload) ?? existing?.result;
@@ -753,7 +777,7 @@ function toolPart(
     toolCallId: callId,
     toolName: name,
     args: jsonArgs(args),
-    argsText: JSON.stringify(args, null, 2),
+    argsText: argsTextFromRecord(args, hiddenToolArgKeys),
     result,
     isError: status === "failed",
   };
@@ -882,7 +906,7 @@ function approvalPart(payload: Record<string, unknown>): ThreadToolCallPart {
     toolCallId: String(payload.approval_id),
     toolName: "approval_request",
     args,
-    argsText: JSON.stringify(args, null, 2),
+    argsText: argsTextFromRecord(args, hiddenApprovalArgKeys),
   };
 }
 
@@ -893,7 +917,7 @@ function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
     toolCallId: String(payload.server_id),
     toolName: "mcp_auth_required",
     args,
-    argsText: JSON.stringify(args, null, 2),
+    argsText: argsTextFromRecord(args, hiddenToolArgKeys),
   };
 }
 
@@ -1018,6 +1042,73 @@ function toolResultValue(payload: Record<string, unknown>): unknown {
   }
   return (
     payload.summary ?? payload.safe_message ?? objectSummary(payload.output)
+  );
+}
+
+const hiddenToolArgKeys = new Set([
+  "status",
+  "summary",
+  "delta",
+  "deltas",
+  "event_type",
+]);
+
+const hiddenApprovalArgKeys = new Set([
+  ...hiddenToolArgKeys,
+  "api_event_type",
+  "approval_id",
+  "approval_kind",
+  "event",
+  "grant_options",
+  "kind",
+  "source_tool_call_id",
+]);
+
+function argsTextFromRecord(
+  args: Record<string, unknown>,
+  hiddenKeys: ReadonlySet<string>,
+): string | undefined {
+  const visible: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (hiddenKeys.has(key) || value === undefined || value === null) {
+      continue;
+    }
+    visible[key] = value;
+  }
+  return Object.keys(visible).length > 0
+    ? JSON.stringify(visible, null, 2)
+    : undefined;
+}
+
+function isLargeResultArtifactToolEvent(event: RuntimeEventEnvelope): boolean {
+  const name = toolName(event.payload);
+  if (!isLargeResultArtifactToolName(name)) {
+    return false;
+  }
+  return hasLargeResultPath({
+    ...toolArgs(event.payload),
+    ...toolArgsDelta(event.payload),
+  });
+}
+
+function isLargeResultArtifactToolName(toolName: string | null): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const normalized = toolName.trim().toLowerCase();
+  return (
+    normalized === "read_file" ||
+    normalized === "rg" ||
+    normalized === "grep" ||
+    normalized === "search_files" ||
+    normalized.includes("search")
+  );
+}
+
+function hasLargeResultPath(args: Record<string, unknown>): boolean {
+  return (
+    stringValue(args.file_path)?.startsWith("/large_tool_results/") === true ||
+    stringValue(args.path)?.startsWith("/large_tool_results/") === true
   );
 }
 
@@ -1225,12 +1316,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function titleForEvent(eventType: string): string {
