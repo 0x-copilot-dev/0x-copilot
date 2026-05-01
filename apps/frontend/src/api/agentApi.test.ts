@@ -1,6 +1,10 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RuntimeStreamProtocolError, streamRunEvents } from "./agentApi";
+import {
+  RuntimeStreamProtocolError,
+  replayRunEvents,
+  streamRunEvents,
+} from "./agentApi";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -109,5 +113,36 @@ describe("streamRunEvents", () => {
 
     expect(onEvent).not.toHaveBeenCalled();
     expect(onProtocolError.mock.calls[0][0].reason).toBe("invalid_envelope");
+  });
+});
+
+describe("replayRunEvents", () => {
+  it("fetches persisted runtime events for a run", async () => {
+    const event = runtimeEvent();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+      return new Response(
+        JSON.stringify({
+          run_id: "run_123",
+          events: [event],
+          latest_sequence_no: 1,
+          run_status: "completed",
+          has_more: false,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const replay = await replayRunEvents(
+      "run_123",
+      { orgId: "org_123", userId: "user_123" },
+      3,
+    );
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/v1/agent/runs/run_123/events?",
+    );
+    expect(String(fetchMock.mock.calls[0][0])).toContain("after_sequence=3");
+    expect(replay.events).toEqual([event]);
   });
 });

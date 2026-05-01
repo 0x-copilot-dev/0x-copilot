@@ -2,6 +2,7 @@ import type {
   ApprovalDecision,
   Conversation,
   CreateRunRequest,
+  Message,
   ModelCatalogModel,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
@@ -40,6 +41,7 @@ import {
   listConversations,
   listModels,
   listMessages,
+  replayRunEvents,
   streamRunEvents,
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
@@ -51,6 +53,7 @@ import {
   messagesToChatItems,
   optimisticUserMessage,
   resolveApprovalDecision,
+  resolveMcpAuthSkip,
   type ChatItem,
 } from "./chatModel";
 import {
@@ -99,6 +102,20 @@ export function ChatScreen({
     setConversations(response.conversations);
   }, [identity]);
 
+  const loadHistoryItems = useCallback(
+    async (
+      nextConversationId: string,
+    ): Promise<{ items: ChatItem[]; replayFailed: boolean }> => {
+      const history = await listMessages(nextConversationId, identity);
+      const replay = await replayEventsForMessages(history.messages, identity);
+      return {
+        items: messagesToChatItems(history.messages, replay.eventsByRunId),
+        replayFailed: replay.replayFailed,
+      };
+    },
+    [identity],
+  );
+
   useEffect(() => {
     let cancelled = false;
     async function loadInitialConversation(): Promise<void> {
@@ -119,10 +136,10 @@ export function ChatScreen({
           return;
         }
         setConversationId(latest.conversation_id);
-        const history = await listMessages(latest.conversation_id, identity);
+        const history = await loadHistoryItems(latest.conversation_id);
         if (!cancelled) {
-          setItems(messagesToChatItems(history.messages));
-          setStatus("Ready");
+          setItems(history.items);
+          setStatus(history.replayFailed ? historyReplayWarning : "Ready");
           setHistoryError(null);
         }
       } catch (err) {
@@ -147,7 +164,7 @@ export function ChatScreen({
       }
       streamRef.current?.close();
     };
-  }, [identity]);
+  }, [identity, loadHistoryItems]);
 
   useEffect(() => {
     let cancelled = false;
@@ -245,20 +262,20 @@ export function ChatScreen({
         setStatus("Opening conversation...");
         const [conversation, history] = await Promise.all([
           getConversation(nextConversationId, identity),
-          listMessages(nextConversationId, identity),
+          loadHistoryItems(nextConversationId),
         ]);
         setConversationId(nextConversationId);
         setConversations((current) =>
           upsertConversation(current, conversation),
         );
-        setItems(messagesToChatItems(history.messages));
+        setItems(history.items);
         setShowConnectorSuggestions(false);
-        setStatus("Ready");
+        setStatus(history.replayFailed ? historyReplayWarning : "Ready");
       } catch (err) {
         setStatus(errorMessage(err, "Could not open conversation"));
       }
     },
-    [activeRunId, identity],
+    [activeRunId, identity, loadHistoryItems],
   );
 
   const onNew = useCallback(
@@ -364,6 +381,46 @@ export function ChatScreen({
       ]);
     }
   }
+
+  const onMcpAuthConnect = useCallback(
+    async (serverId: string): Promise<void> => {
+      try {
+        await connectors.authenticate(serverId);
+      } catch (err) {
+        setItems((current) => [
+          ...current,
+          {
+            id: `mcp-auth-error-${Date.now()}`,
+            kind: "status",
+            title: "Connector auth failed",
+            text: errorMessage(err, "Could not start connector auth"),
+          },
+        ]);
+      }
+    },
+    [connectors],
+  );
+
+  const onMcpAuthSkip = useCallback(
+    async (serverId: string): Promise<void> => {
+      try {
+        await connectors.skipAuth(serverId);
+        setItems((current) => resolveMcpAuthSkip(current, serverId));
+        setShowConnectorSuggestions(false);
+      } catch (err) {
+        setItems((current) => [
+          ...current,
+          {
+            id: `mcp-skip-error-${Date.now()}`,
+            kind: "status",
+            title: "Connector skip failed",
+            text: errorMessage(err, "Could not skip connector auth"),
+          },
+        ]);
+      }
+    },
+    [connectors],
+  );
 
   const threadMessages = useMemo<ThreadMessageLike[]>(
     () => chatItemsToThreadMessages(items, activeRunId),
@@ -514,14 +571,14 @@ export function ChatScreen({
         >
           <ThreadBody
             oauthStatus={oauthStatus}
+            onMcpAuthConnect={onMcpAuthConnect}
+            onMcpAuthSkip={onMcpAuthSkip}
             connectorSuggestions={
               showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
                   servers={suggestedServers}
-                  onConnect={(serverId) =>
-                    void connectors.authenticate(serverId)
-                  }
-                  onSkip={(serverId) => void connectors.skipAuth(serverId)}
+                  onConnect={(serverId) => void onMcpAuthConnect(serverId)}
+                  onSkip={(serverId) => void onMcpAuthSkip(serverId)}
                   onNone={() => setShowConnectorSuggestions(false)}
                 />
               ) : null
@@ -625,6 +682,35 @@ function ChatSettingsPanel({
       </Card>
     </aside>
   );
+}
+
+async function replayEventsForMessages(
+  messages: Message[],
+  identity: RequestIdentity,
+): Promise<{
+  eventsByRunId: Map<string, RuntimeEventEnvelope[]>;
+  replayFailed: boolean;
+}> {
+  const runIds = Array.from(
+    new Set(
+      messages.flatMap((message) =>
+        message.role === "assistant" && message.run_id ? [message.run_id] : [],
+      ),
+    ),
+  );
+  const eventsByRunId = new Map<string, RuntimeEventEnvelope[]>();
+  let replayFailed = false;
+  await Promise.all(
+    runIds.map(async (runId) => {
+      try {
+        const replay = await replayRunEvents(runId, identity);
+        eventsByRunId.set(runId, replay.events);
+      } catch {
+        replayFailed = true;
+      }
+    }),
+  );
+  return { eventsByRunId, replayFailed };
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -738,7 +824,7 @@ function upsertConversation(
 
 function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
   if (event.visibility === "internal") {
-    return event.parent_task_id ? "Subagent working..." : null;
+    return null;
   }
   if (event.event_type === "run_started") {
     return "Working...";
@@ -750,45 +836,9 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
     event.event_type === "reasoning_summary" ||
     event.event_type === "reasoning_summary_delta"
   ) {
-    return event.parent_task_id || event.subagent_id
-      ? "Subagent thinking..."
-      : "Thinking...";
-  }
-  if (
-    event.event_type === "tool_call" ||
-    event.event_type === "tool_call_started" ||
-    event.event_type === "tool_call_delta"
-  ) {
-    const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
-    return `Using ${toolName}...`;
-  }
-  if (
-    event.event_type === "tool_result" ||
-    event.event_type === "tool_call_completed"
-  ) {
-    const toolName = stringPayload(event.payload, "tool_name") ?? "tool";
-    return `${toolName} finished`;
-  }
-  if (
-    event.event_type === "subagent_started" ||
-    event.event_type === "subagent_progress" ||
-    event.event_type === "subagent_update"
-  ) {
-    const subagentName =
-      event.subagent_id ??
-      stringPayload(event.payload, "subagent_name") ??
-      "Subagent";
-    return `${subagentName} working...`;
+    return "Thinking...";
   }
   return null;
-}
-
-function stringPayload(
-  payload: Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = payload[key];
-  return typeof value === "string" && value.trim() ? value : null;
 }
 
 const fallbackModels: ModelCatalogModel[] = [
@@ -817,3 +867,6 @@ const fallbackModels: ModelCatalogModel[] = [
     configured: false,
   },
 ];
+
+const historyReplayWarning =
+  "History loaded; some activity could not be restored.";

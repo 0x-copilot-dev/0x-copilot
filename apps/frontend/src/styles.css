@@ -724,6 +724,11 @@ p {
 
 .aui-reasoning-group,
 .aui-tool-group {
+  color: var(--color-text-muted);
+}
+
+.aui-reasoning-group,
+.aui-tool-group {
   overflow: hidden;
 }
 
@@ -743,8 +748,8 @@ p {
 
 .aui-tool-card {
   display: grid;
-  gap: var(--space-sm);
-  padding: var(--space-md);
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
 }
 
 .aui-tool-card__header span {
@@ -763,6 +768,23 @@ p {
   overflow: auto;
   padding: var(--space-sm);
   white-space: pre-wrap;
+}
+
+.aui-tool-card__summary,
+.aui-tool-card__result {
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.aui-tool-card__result {
+  color: var(--color-text);
+}
+
+.aui-tool-card__details summary {
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  font-size: 0.82rem;
+  width: max-content;
 }
 
 .aui-tool-card--approval {
@@ -792,13 +814,6 @@ p {
   font: inherit;
   margin: 0 auto var(--space-sm);
   padding: 0.35rem 0.7rem;
-}
-
-.approval-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  margin-top: var(--space-md);
 }
 
 .chat-settings-panel header,
@@ -849,27 +864,14 @@ p {
   background: var(--color-surface-muted);
 }
 
-.connector-consent-card,
 .connector-suggestion-card {
   display: grid;
   gap: var(--space-lg);
   max-width: 42rem;
 }
 
-.connector-consent-card__copy {
-  display: grid;
-  gap: var(--space-sm);
-}
-
-.connector-consent-card h3,
 .connector-suggestion-card h3 {
   margin: 0;
-}
-
-.connector-consent-card__actions {
-  align-items: center;
-  display: flex;
-  gap: var(--space-sm);
 }
 
 .connector-suggestion-card__list {

@@ -1,48 +1,6 @@
-import type {
-  McpAuthRequiredEventPayload,
-  McpAuthState,
-  McpServer,
-} from "@enterprise-search/api-types";
-import {
-  Badge,
-  Button,
-  Card,
-  LinkButton,
-} from "@enterprise-search/design-system";
+import type { McpAuthState, McpServer } from "@enterprise-search/api-types";
+import { Badge, Button, Card } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
-
-export function ConnectorConsentCard({
-  payload,
-  onSkip,
-}: {
-  payload: McpAuthRequiredEventPayload;
-  onSkip?: (serverId: string) => void;
-}): ReactElement {
-  return (
-    <Card tone="accent" className="connector-consent-card">
-      <div className="connector-consent-card__copy">
-        <span className="app-eyebrow">Connector access needed</span>
-        <h3>Connect {payload.display_name}</h3>
-        <p>{payload.message}</p>
-        <small>
-          Link expires at {new Date(payload.expires_at).toLocaleString()}.
-        </small>
-      </div>
-      <div className="connector-consent-card__actions">
-        <LinkButton href={payload.auth_url}>Connect</LinkButton>
-        {onSkip ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onSkip(payload.server_id)}
-          >
-            Not now
-          </Button>
-        ) : null}
-      </div>
-    </Card>
-  );
-}
 
 export function ConnectorSuggestionCard({
   servers,

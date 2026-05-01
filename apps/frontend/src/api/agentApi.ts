@@ -12,6 +12,7 @@ import type {
   ModelCatalogResponse,
   ModelSelectionRequest,
   RuntimeEventEnvelope,
+  RuntimeEventReplayResponse,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
@@ -190,6 +191,18 @@ export async function decideApproval(
   );
   await assertOk(response);
   return (await response.json()) as ApprovalDecisionResponse;
+}
+
+export async function replayRunEvents(
+  runId: string,
+  identity: RequestIdentity,
+  afterSequence = 0,
+): Promise<RuntimeEventReplayResponse> {
+  const params = identityParams(identity);
+  params.set("after_sequence", String(afterSequence));
+  const response = await fetch(`/v1/agent/runs/${runId}/events?${params}`);
+  await assertOk(response);
+  return (await response.json()) as RuntimeEventReplayResponse;
 }
 
 export function streamRunEvents({

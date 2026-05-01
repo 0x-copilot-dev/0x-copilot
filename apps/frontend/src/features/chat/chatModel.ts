@@ -56,18 +56,36 @@ export type ChatItem =
       text?: string;
     };
 
-export function messagesToChatItems(messages: Message[]): ChatItem[] {
-  return messages
-    .filter((message) => message.status !== "deleted")
-    .map((message) => ({
-      id: message.message_id,
-      kind: "message",
-      role:
-        message.role === "assistant" || message.role === "user"
-          ? message.role
-          : "system",
-      content: [{ type: "text", text: message.content_text }],
-    }));
+export type RuntimeEventsByRunId = ReadonlyMap<
+  string,
+  readonly RuntimeEventEnvelope[]
+>;
+
+export function messagesToChatItems(
+  messages: Message[],
+  eventsByRunId: RuntimeEventsByRunId = new Map(),
+): ChatItem[] {
+  const items: ChatItem[] = [];
+  const hydratedAssistantRuns = new Set<string>();
+  for (const message of messages) {
+    if (message.status === "deleted") {
+      continue;
+    }
+    if (message.role === "assistant" && message.run_id) {
+      if (hydratedAssistantRuns.has(message.run_id)) {
+        continue;
+      }
+      hydratedAssistantRuns.add(message.run_id);
+      const replayed = assistantItemFromEvents(
+        message.run_id,
+        eventsByRunId.get(message.run_id) ?? [],
+      );
+      items.push(replayed ?? messageToChatItem(message));
+      continue;
+    }
+    items.push(messageToChatItem(message));
+  }
+  return items;
 }
 
 export function optimisticUserMessage(text: string): ChatItem {
@@ -180,7 +198,7 @@ export function applyRuntimeEvent(
   if (event.activity_kind === "subagent") {
     return upsertSubagentPart(items, event);
   }
-  if (isProgressEvent(event)) {
+  if (isVisibleProgressEvent(event)) {
     return upsertAssistantPart(
       items,
       event,
@@ -189,6 +207,39 @@ export function applyRuntimeEvent(
     );
   }
   return items;
+}
+
+function messageToChatItem(message: Message): ChatItem {
+  return {
+    id: message.message_id,
+    kind: "message",
+    role:
+      message.role === "assistant" || message.role === "user"
+        ? message.role
+        : "system",
+    runId: message.run_id ?? undefined,
+    content: [{ type: "text", text: message.content_text }],
+  };
+}
+
+function assistantItemFromEvents(
+  runId: string,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  if (events.length === 0) {
+    return null;
+  }
+  const replayed = [...events]
+    .sort((left, right) => left.sequence_no - right.sequence_no)
+    .reduce(
+      (current, event) => applyRuntimeEvent(current, event),
+      [] as ChatItem[],
+    );
+  const assistant = replayed.find(
+    (item): item is Extract<ChatItem, { kind: "message" }> =>
+      item.kind === "message" && item.id === assistantMessageId(runId),
+  );
+  return assistant && assistant.content.length > 0 ? assistant : null;
 }
 
 export function resolveApprovalDecision(
@@ -215,6 +266,45 @@ export function resolveApprovalDecision(
       };
     });
     if (content === item.content) {
+      return item;
+    }
+    const status =
+      item.status?.type === "requires-action" && !hasPendingAction(content)
+        ? ({ type: "running" } satisfies AssistantMessageStatus)
+        : item.status;
+    return { ...item, content, status };
+  });
+}
+
+export function resolveMcpAuthSkip(
+  items: ChatItem[],
+  serverId: string,
+): ChatItem[] {
+  return items.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    let changed = false;
+    const content = item.content.map((part) => {
+      if (
+        !isToolCallPart(part) ||
+        part.toolCallId !== serverId ||
+        part.toolName !== "mcp_auth_required"
+      ) {
+        return part;
+      }
+      changed = true;
+      return {
+        ...part,
+        args: jsonArgs({
+          ...asRecord(part.args),
+          server_id: serverId,
+          status: "skipped",
+        }),
+        result: { server_id: serverId, decision: "skipped" },
+      };
+    });
+    if (!changed) {
       return item;
     }
     const status =
@@ -494,15 +584,11 @@ function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
   };
 }
 
-function isProgressEvent(event: RuntimeEventEnvelope): boolean {
+function isVisibleProgressEvent(event: RuntimeEventEnvelope): boolean {
   return (
-    event.activity_kind === "run" ||
-    event.activity_kind === "event" ||
-    event.event_type === "progress" ||
-    event.event_type === "run_completed" ||
-    event.event_type === "run_cancelled" ||
+    event.event_type === "error" ||
     event.event_type === "run_failed" ||
-    event.event_type === "error"
+    event.status === "failed"
   );
 }
 

@@ -1,10 +1,15 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type {
+  Message,
+  RuntimeEventEnvelope,
+} from "@enterprise-search/api-types";
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 import {
   applyRuntimeEvent,
   chatItemsToThreadMessages,
+  messagesToChatItems,
   resolveApprovalDecision,
+  resolveMcpAuthSkip,
   type ChatItem,
 } from "./chatModel";
 
@@ -26,6 +31,26 @@ function event(overrides: Partial<RuntimeEventEnvelope>): RuntimeEventEnvelope {
     status: "running",
     payload: {},
     created_at: "2026-04-30T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function message(overrides: Partial<Message>): Message {
+  return {
+    message_id: "message_123",
+    conversation_id: "conversation_123",
+    org_id: "org_123",
+    run_id: null,
+    role: "assistant",
+    content_text: "Stored text",
+    content_format: "text/plain",
+    parent_message_id: null,
+    token_count: null,
+    trace_id: null,
+    status: "created",
+    created_at: "2026-04-30T00:00:00Z",
+    edited_at: null,
+    deleted_at: null,
     ...overrides,
   };
 }
@@ -104,7 +129,7 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
-  it("emits ordered progress, reasoning, subagent, and tool parts", () => {
+  it("emits ordered reasoning, subagent, and tool parts", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -119,6 +144,8 @@ describe("applyRuntimeEvent", () => {
         payload: { status: "running" },
       }),
     );
+    expect(items).toEqual([]);
+
     items = applyRuntimeEvent(
       items,
       event({
@@ -180,12 +207,92 @@ describe("applyRuntimeEvent", () => {
       assistantMessage(items).content.map((part) =>
         part.type === "tool-call" ? part.toolName : part.type,
       ),
-    ).toEqual(["run_progress", "reasoning", "run_subagent", "doc_search"]);
+    ).toEqual(["reasoning", "run_subagent", "doc_search"]);
     expect(
       assistantMessage(items).content.some(
         (part) => part.type === "tool-call" && part.toolName === "write_todos",
       ),
     ).toBe(false);
+  });
+
+  it("hydrates assistant history from replayed runtime events", () => {
+    const replayEvents = [
+      event({
+        event_id: "tool_1",
+        sequence_no: 2,
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        span_id: "call_123",
+        payload: {
+          tool_name: "doc_search",
+          call_id: "call_123",
+          status: "completed",
+          summary: "Found two docs.",
+        },
+      }),
+      event({
+        event_id: "reasoning_1",
+        sequence_no: 1,
+        event_type: "reasoning_summary",
+        activity_kind: "reasoning",
+        payload: { summary: "Checking sources." },
+      }),
+      event({
+        event_id: "final_1",
+        sequence_no: 3,
+        event_type: "final_response",
+        activity_kind: "message",
+        status: "completed",
+        payload: { message: "Final answer." },
+      }),
+    ];
+    const liveItems = replayEvents
+      .sort((left, right) => left.sequence_no - right.sequence_no)
+      .reduce(
+        (current, next) => applyRuntimeEvent(current, next),
+        [] as ChatItem[],
+      );
+
+    const hydrated = messagesToChatItems(
+      [
+        message({
+          message_id: "user_1",
+          role: "user",
+          content_text: "Search docs",
+        }),
+        message({
+          message_id: "assistant_row_1",
+          role: "assistant",
+          run_id: "run_123",
+          content_text: "Final answer.",
+        }),
+      ],
+      new Map([["run_123", replayEvents]]),
+    );
+
+    expect(hydrated).toHaveLength(2);
+    expect(hydrated[1]).toEqual(liveItems[0]);
+  });
+
+  it("falls back to stored assistant text when replay is unavailable", () => {
+    const items = messagesToChatItems([
+      message({
+        message_id: "assistant_row_1",
+        role: "assistant",
+        run_id: "run_123",
+        content_text: "Stored final answer.",
+      }),
+    ]);
+
+    expect(items).toEqual([
+      {
+        id: "assistant_row_1",
+        kind: "message",
+        role: "assistant",
+        runId: "run_123",
+        content: [{ type: "text", text: "Stored final answer." }],
+      },
+    ]);
   });
 
   it("updates subagent parts without creating empty namespace progress", () => {
@@ -336,6 +443,20 @@ describe("applyRuntimeEvent", () => {
     expect(toolPart(items, "approval_request")?.result).toEqual({
       approval_id: "approval_123",
       decision: "approved",
+    });
+    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+      type: "requires-action",
+      reason: "interrupt",
+    });
+
+    items = resolveMcpAuthSkip(items, "server_123");
+
+    expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
+      server_id: "server_123",
+      decision: "skipped",
+    });
+    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+      type: "running",
     });
   });
 

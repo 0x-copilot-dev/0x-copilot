@@ -20,7 +20,7 @@ import {
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
 import type { ReactElement, ReactNode } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type {
   ApprovalDecision,
   Conversation,
@@ -176,9 +176,13 @@ export function AssistantThread({
 export function ThreadBody({
   oauthStatus,
   connectorSuggestions,
+  onMcpAuthConnect,
+  onMcpAuthSkip,
 }: {
   oauthStatus: string | null;
   connectorSuggestions: ReactNode;
+  onMcpAuthConnect: (serverId: string) => Promise<void>;
+  onMcpAuthSkip: (serverId: string) => Promise<void>;
 }): ReactElement {
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -204,7 +208,12 @@ export function ThreadBody({
             if (message.role === "system") {
               return <SystemMessage />;
             }
-            return <AssistantMessage />;
+            return (
+              <AssistantMessage
+                onMcpAuthConnect={onMcpAuthConnect}
+                onMcpAuthSkip={onMcpAuthSkip}
+              />
+            );
           }}
         </ThreadPrimitive.Messages>
         {connectorSuggestions}
@@ -432,7 +441,13 @@ function AttachmentPill({
   );
 }
 
-function AssistantMessage(): ReactElement {
+function AssistantMessage({
+  onMcpAuthConnect,
+  onMcpAuthSkip,
+}: {
+  onMcpAuthConnect: (serverId: string) => Promise<void>;
+  onMcpAuthSkip: (serverId: string) => Promise<void>;
+}): ReactElement {
   return (
     <MessagePrimitive.Root className="aui-message aui-message--assistant">
       <div className="aui-message__avatar" aria-hidden="true">
@@ -451,7 +466,13 @@ function AssistantMessage(): ReactElement {
                 run_subagent: SubagentTool,
                 run_progress: ProgressTool,
                 approval_request: ApprovalTool,
-                mcp_auth_required: ConnectorAuthTool,
+                mcp_auth_required: (props) => (
+                  <ConnectorAuthTool
+                    {...props}
+                    onConnect={onMcpAuthConnect}
+                    onSkip={onMcpAuthSkip}
+                  />
+                ),
               },
             },
           }}
@@ -554,7 +575,7 @@ function ToolGroup({
 }): ReactElement {
   return (
     <details className="aui-tool-group" open>
-      <summary>Tool execution</summary>
+      <summary>Activity</summary>
       <div className="aui-tool-group__content">{children}</div>
     </details>
   );
@@ -567,14 +588,20 @@ function ToolFallback({
   status,
   isError,
 }: ToolCallMessagePartProps): ReactElement {
+  const argsSummary = summarizeArgsText(argsText);
   return (
     <div className="aui-tool-card" data-status={status.type}>
       <div className="aui-tool-card__header">
         <strong>{toolName}</strong>
         <span>{toolStatusLabel(status.type, isError)}</span>
       </div>
-      {argsText ? <pre>{argsText}</pre> : null}
-      {result !== undefined ? <pre>{formatToolValue(result)}</pre> : null}
+      {argsSummary ? (
+        <p className="aui-tool-card__summary">{argsSummary}</p>
+      ) : null}
+      {result !== undefined ? (
+        <p className="aui-tool-card__result">{summarizeToolValue(result)}</p>
+      ) : null}
+      <ToolDetails argsText={argsText} result={result} />
     </div>
   );
 }
@@ -589,8 +616,11 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
       </div>
       {typeof data.summary === "string" ? <p>{data.summary}</p> : null}
       {props.result !== undefined ? (
-        <pre>{formatToolValue(props.result)}</pre>
+        <p className="aui-tool-card__result">
+          {summarizeToolValue(props.result)}
+        </p>
       ) : null}
+      <ToolDetails argsText={props.argsText} result={props.result} />
     </div>
   );
 }
@@ -608,6 +638,7 @@ function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
         <span>{status}</span>
       </div>
       {typeof data.summary === "string" ? <p>{data.summary}</p> : null}
+      <ToolDetails argsText={props.argsText} result={props.result} />
     </div>
   );
 }
@@ -648,20 +679,70 @@ function ApprovalTool({
 
 function ConnectorAuthTool({
   args,
-}: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
+  result,
+  status,
+  onConnect,
+  onSkip,
+}: ToolCallMessagePartProps<Record<string, unknown>> & {
+  onConnect: (serverId: string) => Promise<void>;
+  onSkip: (serverId: string) => Promise<void>;
+}): ReactElement {
+  const [pendingAction, setPendingAction] = useState<"connect" | "skip" | null>(
+    null,
+  );
+  const serverId = stringValue(args.server_id);
+  const displayName =
+    stringValue(args.display_name) ??
+    stringValue(args.server_name) ??
+    "connector";
+  const message =
+    stringValue(args.message) ?? "Authenticate this connector to continue.";
+  const expiresAt = stringValue(args.expires_at);
+  const resolved = result !== undefined || status.type === "complete";
+
+  async function submit(action: "connect" | "skip"): Promise<void> {
+    if (!serverId || resolved || pendingAction !== null) {
+      return;
+    }
+    setPendingAction(action);
+    try {
+      if (action === "connect") {
+        await onConnect(serverId);
+      } else {
+        await onSkip(serverId);
+      }
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   return (
     <div className="aui-tool-card aui-tool-card--connector">
       <div className="aui-tool-card__header">
-        <strong>Connector access needed</strong>
-        <span>action required</span>
+        <strong>Connect {displayName}</strong>
+        <span>{resolved ? "resolved" : "action required"}</span>
       </div>
-      <p>
-        {String(args.message ?? "Authenticate this connector to continue.")}
-      </p>
-      {typeof args.auth_url === "string" ? (
-        <a className="aui-send-button" href={args.auth_url}>
-          Connect
-        </a>
+      <p>{message}</p>
+      {expiresAt ? (
+        <small>Link expires at {formatDateTime(expiresAt)}.</small>
+      ) : null}
+      {!resolved ? (
+        <div className="aui-tool-card__actions">
+          <button
+            type="button"
+            disabled={!serverId || pendingAction !== null}
+            onClick={() => void submit("connect")}
+          >
+            {pendingAction === "connect" ? "Connecting..." : "Connect"}
+          </button>
+          <button
+            type="button"
+            disabled={!serverId || pendingAction !== null}
+            onClick={() => void submit("skip")}
+          >
+            {pendingAction === "skip" ? "Skipping..." : "Not now"}
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -732,6 +813,102 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function ToolDetails({
+  argsText,
+  result,
+}: {
+  argsText?: string;
+  result?: unknown;
+}): ReactElement | null {
+  if (!argsText && result === undefined) {
+    return null;
+  }
+  return (
+    <details className="aui-tool-card__details">
+      <summary>Details</summary>
+      {argsText ? <pre>{argsText}</pre> : null}
+      {result !== undefined ? <pre>{formatToolValue(result)}</pre> : null}
+    </details>
+  );
+}
+
+function summarizeArgsText(argsText?: string): string | null {
+  if (!argsText) {
+    return null;
+  }
+  try {
+    return summarizeArgs(JSON.parse(argsText) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeArgs(value: unknown): string | null {
+  const record = asRecord(value);
+  const entries = Object.entries(record).filter(([key, entry]) => {
+    return (
+      !["status", "summary", "delta", "deltas", "event_type"].includes(key) &&
+      entry !== null &&
+      entry !== undefined
+    );
+  });
+  if (entries.length === 0) {
+    return null;
+  }
+  return entries
+    .slice(0, 3)
+    .map(([key, entry]) => `${key}: ${formatInlineValue(entry)}`)
+    .join(" · ");
+}
+
+function summarizeToolValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "No results" : `${value.length} results`;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "[]") {
+      return "No results";
+    }
+    return trimmed || "Completed";
+  }
+  const record = asRecord(value);
+  const message =
+    stringValue(record.message) ??
+    stringValue(record.content) ??
+    stringValue(record.summary);
+  if (message) {
+    return message;
+  }
+  const keys = Object.keys(record);
+  return keys.length > 0 ? `${keys.length} fields returned` : "Completed";
+}
+
+function formatInlineValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "[]" : `${value.length} items`;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value && typeof value === "object") {
+    return "{...}";
+  }
+  return String(value);
 }
 
 function formatToolValue(value: unknown): string {
