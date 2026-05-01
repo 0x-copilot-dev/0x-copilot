@@ -307,8 +307,13 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     run_id = _create_queued_run(store, settings)
 
     class FakeChunk:
-        def __init__(self, content: object) -> None:
+        def __init__(
+            self,
+            content: object,
+            usage_metadata: dict[str, object] | None = None,
+        ) -> None:
             self.content = content
+            self.usage_metadata = usage_metadata
 
     def fake_agent_factory(
         *,
@@ -343,7 +348,18 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         yield {
             "type": "messages",
             "ns": (),
-            "data": (FakeChunk([{"type": "text", "text": " there"}]), {}),
+            "data": (
+                FakeChunk(
+                    [{"type": "text", "text": " there"}],
+                    usage_metadata={
+                        "input_tokens": 12,
+                        "output_tokens": 3,
+                        "total_tokens": 15,
+                        "input_token_details": {"cache_read": 4},
+                    },
+                ),
+                {},
+            ),
         }
         yield {
             "type": "updates",
@@ -402,6 +418,23 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         message for message in store.messages.values() if message.role == "assistant"
     ]
     assert assistant_messages[0].content_text == "Hello\n there"
+    metrics = assistant_messages[0].metadata["performance_metrics"]
+    assert metrics["chunk_count"] == 3
+    assert metrics["usage"]["input"] == 12
+    assert metrics["usage"]["output"] == 3
+    assert metrics["usage"]["total"] == 15
+    assert metrics["usage"]["cached_input"] == 4
+    assert metrics["duration_ms"] >= 0
+    assert metrics["first_chunk_ms"] >= 0
+    assert assistant_messages[0].token_count == 3
+    final_response = next(
+        event for event in events if event.event_type == "final_response"
+    )
+    assert final_response.payload["performance_metrics"] == metrics
+    run_completed = next(
+        event for event in events if event.event_type == "run_completed"
+    )
+    assert run_completed.metadata["performance_metrics"]["chunk_count"] == 3
 
 
 def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
@@ -479,7 +512,7 @@ def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
         for event in store.events_by_run[run_id]
         if event.event_type == "final_response"
     )
-    assert final_response.payload == {"message": "Clean final."}
+    assert final_response.payload["message"] == "Clean final."
     assistant_messages = [
         message for message in store.messages.values() if message.role == "assistant"
     ]
@@ -683,7 +716,7 @@ def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -
         for event in store.events_by_run[run_id]
         if event.event_type == "final_response"
     )
-    assert final_response.payload == {"message": "Clean final."}
+    assert final_response.payload["message"] == "Clean final."
 
 
 def test_runtime_worker_persists_mcp_auth_required_event() -> None:

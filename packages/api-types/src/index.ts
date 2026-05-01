@@ -262,6 +262,22 @@ export interface Message {
   deleted_at: string | null;
 }
 
+export interface AssistantPerformanceMetrics {
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  chunk_count: number;
+  first_chunk_at?: string;
+  first_chunk_ms?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    total?: number;
+    cached_input?: number;
+    output_per_second?: number;
+  };
+}
+
 export interface MessageListResponse {
   conversation_id: string;
   messages: Message[];
@@ -472,6 +488,7 @@ export interface RuntimeTextPayload {
   delta?: string;
   summary?: string;
   display_title?: string;
+  performance_metrics?: AssistantPerformanceMetrics;
   [key: string]: unknown;
 }
 
@@ -531,6 +548,7 @@ export interface RuntimeLifecyclePayload {
   status?: string;
   message?: string;
   summary?: string;
+  performance_metrics?: AssistantPerformanceMetrics;
   [key: string]: unknown;
 }
 
@@ -646,6 +664,22 @@ export function isRuntimeTextPayload(
     typeof payload.delta === "string" ||
     typeof payload.summary === "string" ||
     typeof payload.display_title === "string"
+  );
+}
+
+export function isAssistantPerformanceMetrics(
+  value: unknown,
+): value is AssistantPerformanceMetrics {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.started_at === "string" &&
+    typeof value.completed_at === "string" &&
+    typeof value.duration_ms === "number" &&
+    Number.isFinite(value.duration_ms) &&
+    typeof value.chunk_count === "number" &&
+    Number.isFinite(value.chunk_count)
   );
 }
 

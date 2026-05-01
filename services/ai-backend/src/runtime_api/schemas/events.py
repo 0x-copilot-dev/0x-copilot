@@ -474,6 +474,28 @@ class RuntimeLifecyclePayload(RuntimeEventPayloadContract):
     summary: str | None = None
 
 
+class AssistantUsageMetrics(RuntimeContract):
+    """Exact provider token usage counts without secret-like field names."""
+
+    input: NonNegativeInt | None = None
+    output: NonNegativeInt | None = None
+    total: NonNegativeInt | None = None
+    cached_input: NonNegativeInt | None = None
+    output_per_second: float | None = Field(default=None, ge=0)
+
+
+class AssistantPerformanceMetrics(RuntimeContract):
+    """Assistant response timing and exact provider usage metadata."""
+
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: NonNegativeInt
+    chunk_count: NonNegativeInt = 0
+    first_chunk_at: datetime | None = None
+    first_chunk_ms: NonNegativeInt | None = None
+    usage: AssistantUsageMetrics | None = None
+
+
 class ReasoningSummaryPayload(RuntimeEventPayloadContract):
     """Reasoning summary payload displayed by Assistant UI reasoning parts."""
 

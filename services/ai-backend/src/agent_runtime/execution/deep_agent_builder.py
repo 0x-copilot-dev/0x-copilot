@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from deepagents import create_deep_agent
+from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
@@ -15,6 +15,37 @@ from agent_runtime.execution.contracts import (
     ModelReasoningEffort,
     ModelThinkingMode,
 )
+
+WEB_EXCLUDED_DEEP_AGENT_TOOLS = frozenset(
+    {
+        "edit_file",
+        "execute",
+        "write_file",
+    }
+)
+_WEB_HARNESS_PROFILE_KEYS = (
+    "anthropic",
+    "gemini",
+    "google_genai",
+    "openai",
+)
+_web_harness_profiles_registered = False
+
+
+def _ensure_web_harness_profiles_registered() -> None:
+    """Hide unsafe or confusing Deep Agents built-ins for web runtime runs."""
+
+    global _web_harness_profiles_registered
+    if _web_harness_profiles_registered:
+        return
+
+    profile = HarnessProfile(excluded_tools=WEB_EXCLUDED_DEEP_AGENT_TOOLS)
+    for profile_key in _WEB_HARNESS_PROFILE_KEYS:
+        register_harness_profile(profile_key, profile)
+    _web_harness_profiles_registered = True
+
+
+_ensure_web_harness_profiles_registered()
 
 
 @runtime_checkable

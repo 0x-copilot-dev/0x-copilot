@@ -132,6 +132,13 @@ concatenate those deltas for incremental display. The worker still emits a
 `final_response` event with the full assistant answer and persists that answer as
 an assistant message.
 
+Assistant responses include `performance_metrics` in the persisted assistant
+message metadata and on terminal response/lifecycle event payloads when the run
+finishes. Timing fields such as duration, first-token latency, and chunk count
+are computed by the worker. Provider usage counts are included only when exact
+provider usage metadata is present in streamed or final model messages; the
+runtime does not estimate token counts.
+
 Typical streamed order:
 
 ```text

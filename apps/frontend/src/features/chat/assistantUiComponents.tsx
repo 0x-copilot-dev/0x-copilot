@@ -1,7 +1,7 @@
 import {
+  ActionBarMorePrimitive,
   ActionBarPrimitive,
   AuiIf,
-  BranchPickerPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
   SelectionToolbarPrimitive,
@@ -9,50 +9,61 @@ import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
+  useAui,
   unstable_useMentionAdapter,
   unstable_useSlashCommandAdapter,
   type ReasoningGroupProps,
   type ReasoningMessagePartProps,
   type TextMessagePartProps,
+  type ThreadMessageLike,
   type ToolCallMessagePartProps,
   type Unstable_MentionCategory,
   type Unstable_SlashCommand,
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
 import type { ReactElement, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AssistantPerformanceMetrics,
   ApprovalDecision,
   Conversation,
   McpServer,
   ModelCatalogModel,
+  Skill,
 } from "@enterprise-search/api-types";
+import { isAssistantPerformanceMetrics } from "@enterprise-search/api-types";
 
 export function AssistantThreadList({
+  collapsed,
   conversations,
   loading,
   activeRunId,
+  onOpenSettings,
   onRefresh,
 }: {
+  collapsed: boolean;
   conversations: Conversation[];
   loading: boolean;
   activeRunId: string | null;
+  onOpenSettings: () => void;
   onRefresh: () => void;
 }): ReactElement {
   return (
-    <aside className="aui-sidebar" aria-label="Conversation history">
+    <aside
+      className="aui-sidebar"
+      data-collapsed={collapsed ? "true" : undefined}
+      aria-label="Conversation history"
+      aria-hidden={collapsed}
+    >
       <div className="aui-sidebar__header">
-        <div>
-          <span className="aui-kicker">Assistant UI</span>
-          <h1>Threads</h1>
-        </div>
+        <LogoMark />
         <button
           className="aui-icon-button"
           type="button"
           aria-label="Refresh conversations"
           onClick={onRefresh}
         >
-          R
+          ↻
         </button>
       </div>
       <ThreadListPrimitive.Root className="aui-thread-list">
@@ -81,6 +92,16 @@ export function AssistantThreadList({
           )}
         </ThreadListPrimitive.Items>
       </ThreadListPrimitive.Root>
+      <div className="aui-sidebar__footer">
+        <button
+          className="aui-sidebar-settings"
+          type="button"
+          onClick={onOpenSettings}
+        >
+          <span aria-hidden="true">⚙</span>
+          Settings
+        </button>
+      </div>
     </aside>
   );
 }
@@ -91,7 +112,7 @@ function ModelSelector({
   onChange,
   disabled,
 }: {
-  models: ModelCatalogModel[];
+  models: Array<ModelCatalogModel & { disabled?: boolean }>;
   value: string;
   onChange: (modelId: string) => void;
   disabled?: boolean;
@@ -106,7 +127,7 @@ function ModelSelector({
         onChange={(event) => onChange(event.target.value)}
       >
         {models.map((model) => (
-          <option key={model.id} value={model.id}>
+          <option key={model.id} value={model.id} disabled={model.disabled}>
             {model.name}
           </option>
         ))}
@@ -117,40 +138,49 @@ function ModelSelector({
 }
 
 export function AssistantThread({
-  title,
+  sidebarCollapsed,
   status,
   models,
   selectedModel,
   onModelChange,
   modelDisabled,
-  onOpenSettings,
+  onShare,
   onShowConnectors,
+  onToggleSidebar,
   children,
 }: {
-  title: string;
+  sidebarCollapsed: boolean;
   status: string;
-  models: ModelCatalogModel[];
+  models: Array<ModelCatalogModel & { disabled?: boolean }>;
   selectedModel: string;
   onModelChange: (modelId: string) => void;
   modelDisabled?: boolean;
-  onOpenSettings: () => void;
+  onShare: () => void;
   onShowConnectors: () => void;
+  onToggleSidebar: () => void;
   children: ReactNode;
 }): ReactElement {
   return (
     <section className="aui-chat-panel">
       <header className="aui-chat-header">
-        <div>
-          <span className="aui-kicker">Enterprise Search</span>
-          <h2>{title}</h2>
-        </div>
-        <div className="aui-chat-header__actions">
+        <div className="aui-chat-header__left">
+          <button
+            className="aui-icon-button"
+            type="button"
+            aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            onClick={onToggleSidebar}
+          >
+            {sidebarCollapsed ? "☰" : "◧"}
+          </button>
+          {sidebarCollapsed ? <LogoMark compact /> : null}
           <ModelSelector
             models={models}
             value={selectedModel}
             onChange={onModelChange}
             disabled={modelDisabled}
           />
+        </div>
+        <div className="aui-chat-header__actions">
           <span className="aui-status-pill">{status}</span>
           <button
             className="aui-ghost-button"
@@ -159,12 +189,8 @@ export function AssistantThread({
           >
             Connectors
           </button>
-          <button
-            className="aui-ghost-button"
-            type="button"
-            onClick={onOpenSettings}
-          >
-            Settings
+          <button className="aui-ghost-button" type="button" onClick={onShare}>
+            Share
           </button>
         </div>
       </header>
@@ -173,16 +199,43 @@ export function AssistantThread({
   );
 }
 
+function LogoMark({ compact = false }: { compact?: boolean }): ReactElement {
+  return (
+    <div className="aui-logo" aria-label="assistant-ui">
+      <span className="aui-logo__mark" aria-hidden="true">
+        ✦
+      </span>
+      {compact ? null : <span>assistant-ui</span>}
+    </div>
+  );
+}
+
 export function ThreadBody({
   oauthStatus,
+  connectors,
+  skills,
   connectorSuggestions,
   onMcpAuthConnect,
   onMcpAuthSkip,
+  onOpenMcpSettings,
+  onOpenSkillsSettings,
+  onShowConnectors,
 }: {
   oauthStatus: string | null;
+  connectors: {
+    servers: McpServer[];
+    loading: boolean;
+  };
+  skills: {
+    skills: Skill[];
+    loading: boolean;
+  };
   connectorSuggestions: ReactNode;
   onMcpAuthConnect: (serverId: string) => Promise<void>;
   onMcpAuthSkip: (serverId: string) => Promise<void>;
+  onOpenMcpSettings: () => void;
+  onOpenSkillsSettings: () => void;
+  onShowConnectors: () => void;
 }): ReactElement {
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -210,6 +263,7 @@ export function ThreadBody({
             }
             return (
               <AssistantMessage
+                message={message}
                 onMcpAuthConnect={onMcpAuthConnect}
                 onMcpAuthSkip={onMcpAuthSkip}
               />
@@ -221,7 +275,13 @@ export function ThreadBody({
           <ThreadPrimitive.ScrollToBottom className="aui-scroll-bottom">
             Scroll to bottom
           </ThreadPrimitive.ScrollToBottom>
-          <AssistantComposer />
+          <AssistantComposer
+            connectors={connectors}
+            skills={skills}
+            onOpenMcpSettings={onOpenMcpSettings}
+            onOpenSkillsSettings={onOpenSkillsSettings}
+            onShowConnectors={onShowConnectors}
+          />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -231,13 +291,9 @@ export function ThreadBody({
 function ThreadWelcome(): ReactElement {
   return (
     <section className="aui-welcome">
-      <span className="aui-kicker">Ready when you are</span>
-      <h2>What should Enterprise Search help with?</h2>
-      <p>
-        Ask the agent to search, reason, use connectors, run tools, or call
-        subagents. Thinking, tool execution, and approvals will stream in the
-        thread.
-      </p>
+      <LogoMark compact />
+      <h2>Hello there!</h2>
+      <p>How can I help you today?</p>
       <div className="aui-suggestions">
         <ThreadPrimitive.Suggestions>
           {() => (
@@ -256,26 +312,56 @@ function ThreadWelcome(): ReactElement {
   );
 }
 
-function AssistantComposer(): ReactElement {
+type ComposerMenuView = "root" | "mcp" | "skills";
+
+function AssistantComposer({
+  connectors,
+  skills,
+  onOpenMcpSettings,
+  onOpenSkillsSettings,
+  onShowConnectors,
+}: {
+  connectors: {
+    servers: McpServer[];
+    loading: boolean;
+  };
+  skills: {
+    skills: Skill[];
+    loading: boolean;
+  };
+  onOpenMcpSettings: () => void;
+  onOpenSkillsSettings: () => void;
+  onShowConnectors: () => void;
+}): ReactElement {
+  const aui = useAui();
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState<ComposerMenuView>("root");
   const slash = unstable_useSlashCommandAdapter({
     commands: useMemo<readonly Unstable_SlashCommand[]>(
       () => [
         {
           id: "summarize",
           label: "Summarize",
-          description: "Ask for a concise summary.",
+          description: "Summarize the conversation.",
           execute: () => undefined,
         },
         {
-          id: "connectors",
-          label: "Use connectors",
-          description: "Ask the agent to consider connected apps.",
+          id: "translate",
+          label: "Translate",
+          description: "Translate text to another language.",
           execute: () => undefined,
         },
         {
-          id: "subagent",
-          label: "Call a subagent",
-          description: "Delegate research or implementation work.",
+          id: "search",
+          label: "Search",
+          description: "Search connected context.",
+          execute: () => undefined,
+        },
+        {
+          id: "help",
+          label: "Help",
+          description: "List available commands.",
           execute: () => undefined,
         },
       ],
@@ -309,6 +395,51 @@ function AssistantComposer(): ReactElement {
     ),
     includeModelContextTools: true,
   });
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+    function onPointerDown(event: PointerEvent): void {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+        setMenuView("root");
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [menuOpen]);
+
+  function openFilePicker(accept: string): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = accept;
+    input.hidden = true;
+    document.body.appendChild(input);
+    input.onchange = () => {
+      const files = input.files;
+      if (files) {
+        for (const file of files) {
+          void aui.composer().addAttachment(file);
+        }
+      }
+      input.remove();
+      setMenuOpen(false);
+      setMenuView("root");
+    };
+    input.oncancel = () => input.remove();
+    input.click();
+  }
+
+  function appendComposerInstruction(text: string): void {
+    const composer = aui.composer();
+    const currentText = composer.getState().text.trimEnd();
+    composer.setText(currentText ? `${currentText}\n${text}` : text);
+    setMenuOpen(false);
+    setMenuView("root");
+  }
+
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer">
@@ -323,13 +454,50 @@ function AssistantComposer(): ReactElement {
             {({ attachment }) => <AttachmentPill attachment={attachment} />}
           </ComposerPrimitive.Attachments>
           <div className="aui-composer__input-row">
-            <ComposerPrimitive.AddAttachment
-              className="aui-icon-button"
-              multiple
-              title="Attach files"
-            >
-              +
-            </ComposerPrimitive.AddAttachment>
+            <div className="aui-plus-menu-root" ref={menuRef}>
+              <button
+                className="aui-icon-button"
+                type="button"
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label="Open attachment and tools menu"
+                onClick={() => {
+                  setMenuOpen((current) => !current);
+                  setMenuView("root");
+                }}
+              >
+                +
+              </button>
+              {menuOpen ? (
+                <ComposerPlusMenu
+                  view={menuView}
+                  connectors={connectors}
+                  skills={skills}
+                  onBack={() => setMenuView("root")}
+                  onAttachImage={() => openFilePicker("image/*")}
+                  onAttachFile={() => openFilePicker(fileAttachmentAccept)}
+                  onOpenMcp={() => setMenuView("mcp")}
+                  onOpenSkills={() => setMenuView("skills")}
+                  onOpenMcpSettings={onOpenMcpSettings}
+                  onOpenSkillsSettings={onOpenSkillsSettings}
+                  onShowConnectors={() => {
+                    onShowConnectors();
+                    setMenuOpen(false);
+                    setMenuView("root");
+                  }}
+                  onUseMcpServer={(server) =>
+                    appendComposerInstruction(
+                      `Use the ${server.display_name} MCP server for this request.`,
+                    )
+                  }
+                  onUseSkill={(skill) =>
+                    appendComposerInstruction(
+                      `Use the ${skill.display_name} skill for this request.`,
+                    )
+                  }
+                />
+              ) : null}
+            </div>
             <ComposerPrimitive.Input
               className="aui-composer__input"
               aria-label="Message"
@@ -390,6 +558,192 @@ function AssistantComposer(): ReactElement {
   );
 }
 
+function ComposerPlusMenu({
+  view,
+  connectors,
+  skills,
+  onBack,
+  onAttachImage,
+  onAttachFile,
+  onOpenMcp,
+  onOpenSkills,
+  onOpenMcpSettings,
+  onOpenSkillsSettings,
+  onShowConnectors,
+  onUseMcpServer,
+  onUseSkill,
+}: {
+  view: ComposerMenuView;
+  connectors: {
+    servers: McpServer[];
+    loading: boolean;
+  };
+  skills: {
+    skills: Skill[];
+    loading: boolean;
+  };
+  onBack: () => void;
+  onAttachImage: () => void;
+  onAttachFile: () => void;
+  onOpenMcp: () => void;
+  onOpenSkills: () => void;
+  onOpenMcpSettings: () => void;
+  onOpenSkillsSettings: () => void;
+  onShowConnectors: () => void;
+  onUseMcpServer: (server: McpServer) => void;
+  onUseSkill: (skill: Skill) => void;
+}): ReactElement {
+  const enabledSkills = skills.skills.filter((skill) => skill.enabled);
+
+  if (view === "mcp") {
+    return (
+      <div className="aui-plus-menu" role="menu" aria-label="MCP server menu">
+        <button
+          className="aui-trigger-popover__back"
+          type="button"
+          onClick={onBack}
+        >
+          Back
+        </button>
+        <div className="aui-plus-menu__section">
+          <strong>MCP Servers</strong>
+          {connectors.loading ? (
+            <span>Loading servers...</span>
+          ) : connectors.servers.length === 0 ? (
+            <span>No MCP servers configured.</span>
+          ) : (
+            connectors.servers.map((server) => (
+              <button
+                key={server.server_id}
+                className="aui-trigger-popover__item"
+                type="button"
+                role="menuitem"
+                onClick={() => onUseMcpServer(server)}
+              >
+                <strong>{server.display_name}</strong>
+                <span>
+                  {server.enabled ? "Enabled" : "Disabled"} -{" "}
+                  {server.auth_state.replaceAll("_", " ")}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+        <button
+          className="aui-trigger-popover__item"
+          type="button"
+          role="menuitem"
+          onClick={onShowConnectors}
+        >
+          <strong>Show connector suggestions</strong>
+          <span>Review servers that need authentication.</span>
+        </button>
+        <button
+          className="aui-trigger-popover__item"
+          type="button"
+          role="menuitem"
+          onClick={onOpenMcpSettings}
+        >
+          <strong>Open MCP settings</strong>
+          <span>Manage connector auth and server configuration.</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (view === "skills") {
+    return (
+      <div className="aui-plus-menu" role="menu" aria-label="Skills menu">
+        <button
+          className="aui-trigger-popover__back"
+          type="button"
+          onClick={onBack}
+        >
+          Back
+        </button>
+        <div className="aui-plus-menu__section">
+          <strong>Skills</strong>
+          {skills.loading ? (
+            <span>Loading skills...</span>
+          ) : enabledSkills.length === 0 ? (
+            <span>No enabled skills yet.</span>
+          ) : (
+            enabledSkills.map((skill) => (
+              <button
+                key={skill.skill_id}
+                className="aui-trigger-popover__item"
+                type="button"
+                role="menuitem"
+                onClick={() => onUseSkill(skill)}
+              >
+                <strong>{skill.display_name}</strong>
+                <span>{skill.description || skill.name}</span>
+              </button>
+            ))
+          )}
+        </div>
+        <button
+          className="aui-trigger-popover__item"
+          type="button"
+          role="menuitem"
+          onClick={onOpenSkillsSettings}
+        >
+          <strong>Open skill settings</strong>
+          <span>Manage available skills.</span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="aui-plus-menu"
+      role="menu"
+      aria-label="Attachment and tools menu"
+    >
+      <button
+        className="aui-trigger-popover__item"
+        type="button"
+        role="menuitem"
+        onClick={onAttachImage}
+      >
+        <strong>Attach Image</strong>
+        <span>Upload PNG, JPG, GIF, or WebP images.</span>
+      </button>
+      <button
+        className="aui-trigger-popover__item"
+        type="button"
+        role="menuitem"
+        onClick={onAttachFile}
+      >
+        <strong>Attach File</strong>
+        <span>Upload PDF, DOCX, spreadsheets, slides, or text files.</span>
+      </button>
+      <button
+        className="aui-trigger-popover__item"
+        type="button"
+        role="menuitem"
+        onClick={onOpenMcp}
+      >
+        <strong>MCP Servers</strong>
+        <span>Choose an available server or open MCP settings.</span>
+      </button>
+      <button
+        className="aui-trigger-popover__item"
+        type="button"
+        role="menuitem"
+        onClick={onOpenSkills}
+      >
+        <strong>Skills</strong>
+        <span>Choose an enabled skill or open skill settings.</span>
+      </button>
+    </div>
+  );
+}
+
+const fileAttachmentAccept =
+  "text/plain,text/html,text/markdown,text/csv,text/xml,text/json,text/css,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
+
 function TriggerPopoverList(): ReactElement {
   return (
     <>
@@ -442,17 +796,21 @@ function AttachmentPill({
 }
 
 function AssistantMessage({
+  message,
   onMcpAuthConnect,
   onMcpAuthSkip,
 }: {
+  message: {
+    metadata?: ThreadMessageLike["metadata"];
+    status?: ThreadMessageLike["status"];
+  };
   onMcpAuthConnect: (serverId: string) => Promise<void>;
   onMcpAuthSkip: (serverId: string) => Promise<void>;
 }): ReactElement {
+  const metrics = performanceMetricsFromMetadata(message.metadata);
+  const showFooter = isTerminalAssistantStatus(message.status);
   return (
     <MessagePrimitive.Root className="aui-message aui-message--assistant">
-      <div className="aui-message__avatar" aria-hidden="true">
-        AI
-      </div>
       <div className="aui-message__body">
         <MessagePrimitive.Parts
           components={{
@@ -477,10 +835,69 @@ function AssistantMessage({
             },
           }}
         />
-        <AssistantActionBar />
-        <MessageBranchPicker />
       </div>
+      {showFooter ? <AssistantMessageFooter metrics={metrics} /> : null}
     </MessagePrimitive.Root>
+  );
+}
+
+function AssistantMessageFooter({
+  metrics,
+}: {
+  metrics: AssistantPerformanceMetrics | null;
+}): ReactElement {
+  return (
+    <div className="aui-assistant-message-footer">
+      <ActionBarPrimitive.Root className="aui-assistant-action-bar">
+        <ActionBarPrimitive.Copy className="aui-footer-icon-button">
+          Copy
+        </ActionBarPrimitive.Copy>
+        <ActionBarPrimitive.Reload className="aui-footer-icon-button">
+          Retry
+        </ActionBarPrimitive.Reload>
+        <ActionBarMorePrimitive.Root>
+          <ActionBarMorePrimitive.Trigger
+            className="aui-footer-icon-button"
+            aria-label="More assistant actions"
+          >
+            More
+          </ActionBarMorePrimitive.Trigger>
+          <ActionBarMorePrimitive.Content className="aui-action-menu">
+            <ActionBarPrimitive.Speak className="aui-action-menu__item">
+              Speak
+            </ActionBarPrimitive.Speak>
+            <ActionBarPrimitive.StopSpeaking className="aui-action-menu__item">
+              Stop speaking
+            </ActionBarPrimitive.StopSpeaking>
+            <ActionBarPrimitive.ExportMarkdown className="aui-action-menu__item">
+              Export markdown
+            </ActionBarPrimitive.ExportMarkdown>
+          </ActionBarMorePrimitive.Content>
+        </ActionBarMorePrimitive.Root>
+      </ActionBarPrimitive.Root>
+      {metrics ? (
+        <div
+          className="aui-message-metrics"
+          aria-label="Assistant message metrics"
+        >
+          <span className="aui-message-timing">
+            {formatMilliseconds(metrics.duration_ms)}
+          </span>
+          {metrics.first_chunk_ms !== undefined ? (
+            <span>
+              First token {formatMilliseconds(metrics.first_chunk_ms)}
+            </span>
+          ) : null}
+          <span>{metrics.chunk_count} chunks</span>
+          {metrics.usage?.output_per_second !== undefined ? (
+            <span>{formatNumber(metrics.usage.output_per_second)} tok/s</span>
+          ) : null}
+          {metrics.usage?.output !== undefined ? (
+            <span>{formatTokenSummary(metrics)}</span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -492,8 +909,6 @@ function UserMessage(): ReactElement {
           {({ attachment }) => <AttachmentPill attachment={attachment} />}
         </MessagePrimitive.Attachments>
         <MessagePrimitive.Parts components={{ Text: PlainText }} />
-        <UserActionBar />
-        <MessageBranchPicker />
       </div>
     </MessagePrimitive.Root>
   );
@@ -573,12 +988,7 @@ function ToolGroup({
   endIndex: number;
   children?: ReactNode;
 }): ReactElement {
-  return (
-    <details className="aui-tool-group" open>
-      <summary>Activity</summary>
-      <div className="aui-tool-group__content">{children}</div>
-    </details>
-  );
+  return <>{children}</>;
 }
 
 function ToolFallback({
@@ -589,20 +999,74 @@ function ToolFallback({
   isError,
 }: ToolCallMessagePartProps): ReactElement {
   const argsSummary = summarizeArgsText(argsText);
+  const statusLabel = toolStatusLabel(status.type, isError);
   return (
-    <div className="aui-tool-card" data-status={status.type}>
-      <div className="aui-tool-card__header">
-        <strong>{toolName}</strong>
-        <span>{toolStatusLabel(status.type, isError)}</span>
+    <details
+      className="aui-tool-card aui-tool-card--activity"
+      data-status={status.type}
+    >
+      <summary className="aui-tool-card__activity-summary">
+        <strong>
+          {toolActivitySummary(toolName, status.type, isError, result)}
+        </strong>
+        <span>{statusLabel}</span>
+      </summary>
+      <div className="aui-tool-card__activity-content">
+        {argsSummary ? (
+          <p className="aui-tool-card__summary">Input: {argsSummary}</p>
+        ) : null}
+        {result !== undefined ? (
+          <p className="aui-tool-card__result">
+            Output: {summarizeToolValue(result)}
+          </p>
+        ) : null}
+        <ToolInputDetails argsText={argsText} />
+        {result !== undefined ? (
+          <>
+            <small>Output details</small>
+            <pre>{formatToolValue(result)}</pre>
+          </>
+        ) : null}
       </div>
-      {argsSummary ? (
-        <p className="aui-tool-card__summary">{argsSummary}</p>
-      ) : null}
-      {result !== undefined ? (
-        <p className="aui-tool-card__result">{summarizeToolValue(result)}</p>
-      ) : null}
-      <ToolDetails argsText={argsText} result={result} />
-    </div>
+    </details>
+  );
+}
+
+function ToolInputDetails({
+  argsText,
+}: {
+  argsText?: string;
+}): ReactElement | null {
+  if (!argsText) {
+    return null;
+  }
+  const args = parseToolArgs(argsText);
+  if (args === null) {
+    return (
+      <>
+        <small>Input details</small>
+        <pre>{argsText}</pre>
+      </>
+    );
+  }
+
+  const entries = visibleToolArgEntries(args);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <small>Input details</small>
+      <dl className="aui-tool-card__fields">
+        {entries.map(([key, value]) => (
+          <div key={key} className="aui-tool-card__field">
+            <dt>{formatArgLabel(key)}</dt>
+            <dd>{formatDetailValue(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }
 
@@ -748,67 +1212,6 @@ function ConnectorAuthTool({
   );
 }
 
-function AssistantActionBar(): ReactElement {
-  return (
-    <ActionBarPrimitive.Root
-      className="aui-action-bar"
-      hideWhenRunning
-      autohide="not-last"
-      autohideFloat="single-branch"
-    >
-      <ActionBarPrimitive.Copy className="aui-action">
-        Copy
-      </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload className="aui-action">
-        Retry
-      </ActionBarPrimitive.Reload>
-      <ActionBarPrimitive.Speak className="aui-action">
-        Speak
-      </ActionBarPrimitive.Speak>
-      <ActionBarPrimitive.StopSpeaking className="aui-action">
-        Stop
-      </ActionBarPrimitive.StopSpeaking>
-    </ActionBarPrimitive.Root>
-  );
-}
-
-function UserActionBar(): ReactElement {
-  return (
-    <ActionBarPrimitive.Root
-      className="aui-action-bar"
-      hideWhenRunning
-      autohide="not-last"
-      autohideFloat="single-branch"
-    >
-      <ActionBarPrimitive.Copy className="aui-action">
-        Copy
-      </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Edit className="aui-action">
-        Edit
-      </ActionBarPrimitive.Edit>
-    </ActionBarPrimitive.Root>
-  );
-}
-
-function MessageBranchPicker(): ReactElement {
-  return (
-    <BranchPickerPrimitive.Root
-      className="aui-branch-picker"
-      hideWhenSingleBranch
-    >
-      <BranchPickerPrimitive.Previous className="aui-action">
-        ‹
-      </BranchPickerPrimitive.Previous>
-      <span>
-        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-      </span>
-      <BranchPickerPrimitive.Next className="aui-action">
-        ›
-      </BranchPickerPrimitive.Next>
-    </BranchPickerPrimitive.Root>
-  );
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -817,6 +1220,45 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function performanceMetricsFromMetadata(
+  metadata: ThreadMessageLike["metadata"] | undefined,
+): AssistantPerformanceMetrics | null {
+  const metrics = metadata?.custom?.performance_metrics;
+  return isAssistantPerformanceMetrics(metrics) ? metrics : null;
+}
+
+function isTerminalAssistantStatus(
+  status: ThreadMessageLike["status"] | undefined,
+): boolean {
+  return status?.type === "complete" || status?.type === "incomplete";
+}
+
+function formatMilliseconds(value: number): string {
+  if (value < 1000) {
+    return `${Math.max(0, Math.round(value))}ms`;
+  }
+  return `${formatNumber(value / 1000)}s`;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatTokenSummary(metrics: AssistantPerformanceMetrics): string {
+  const usage = metrics.usage;
+  if (!usage || usage.output === undefined) {
+    return "";
+  }
+  const parts = [`${usage.output} output tokens`];
+  if (usage.input !== undefined) {
+    parts.push(`${usage.input} input`);
+  }
+  if (usage.cached_input !== undefined) {
+    parts.push(`${usage.cached_input} cached`);
+  }
+  return parts.join(" · ");
 }
 
 function formatDateTime(value: string): string {
@@ -847,28 +1289,19 @@ function summarizeArgsText(argsText?: string): string | null {
   if (!argsText) {
     return null;
   }
-  try {
-    return summarizeArgs(JSON.parse(argsText) as unknown);
-  } catch {
-    return null;
-  }
+  return summarizeArgs(parseToolArgs(argsText));
 }
 
 function summarizeArgs(value: unknown): string | null {
-  const record = asRecord(value);
-  const entries = Object.entries(record).filter(([key, entry]) => {
-    return (
-      !["status", "summary", "delta", "deltas", "event_type"].includes(key) &&
-      entry !== null &&
-      entry !== undefined
-    );
-  });
+  const entries = visibleToolArgEntries(asRecord(value));
   if (entries.length === 0) {
     return null;
   }
   return entries
     .slice(0, 3)
-    .map(([key, entry]) => `${key}: ${formatInlineValue(entry)}`)
+    .map(
+      ([key, entry]) => `${formatArgLabel(key)}: ${formatInlineValue(entry)}`,
+    )
     .join(" · ");
 }
 
@@ -895,12 +1328,40 @@ function summarizeToolValue(value: unknown): string {
   return keys.length > 0 ? `${keys.length} fields returned` : "Completed";
 }
 
+function parseToolArgs(argsText: string): Record<string, unknown> | null {
+  try {
+    return asRecord(JSON.parse(argsText) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function visibleToolArgEntries(
+  args: Record<string, unknown>,
+): Array<[string, unknown]> {
+  return Object.entries(args).filter(([key, entry]) => {
+    return !hiddenToolArgKeys.has(key) && entry !== null && entry !== undefined;
+  });
+}
+
+const hiddenToolArgKeys = new Set([
+  "status",
+  "summary",
+  "delta",
+  "deltas",
+  "event_type",
+]);
+
+function formatArgLabel(key: string): string {
+  return key.replaceAll("_", " ");
+}
+
 function formatInlineValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value.length === 0 ? "[]" : `${value.length} items`;
   }
   if (typeof value === "string") {
-    return value;
+    return summarizeInlineString(value);
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -909,6 +1370,40 @@ function formatInlineValue(value: unknown): string {
     return "{...}";
   }
   return String(value);
+}
+
+function summarizeInlineString(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "empty";
+  }
+  const lineCount = trimmed.split(/\r\n|\r|\n/).length;
+  if (lineCount > 1) {
+    return `${lineCount} lines`;
+  }
+  return trimmed.length > 90 ? `${trimmed.slice(0, 87)}...` : trimmed;
+}
+
+function formatDetailValue(value: unknown): ReactNode {
+  if (typeof value === "string") {
+    return shouldRenderBlockValue(value) ? (
+      <pre>{value}</pre>
+    ) : (
+      <span>{value}</span>
+    );
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  ) {
+    return <span>{String(value)}</span>;
+  }
+  return <pre>{formatToolValue(value)}</pre>;
+}
+
+function shouldRenderBlockValue(value: string): boolean {
+  return value.includes("\n") || value.length > 120;
 }
 
 function formatToolValue(value: unknown): string {
@@ -920,6 +1415,36 @@ function formatToolValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function toolActivitySummary(
+  toolName: string,
+  status: string,
+  isError: boolean | undefined,
+  result: unknown,
+): string {
+  const displayName = toolDisplayName(toolName);
+  if (isError || status === "incomplete") {
+    return `Could not run ${displayName}`;
+  }
+  if (status === "running") {
+    return `Calling ${displayName}`;
+  }
+  if (status === "requires-action") {
+    return `${displayName} needs attention`;
+  }
+  if (result !== undefined) {
+    const resultSummary = summarizeToolValue(result);
+    return resultSummary === "Completed"
+      ? `Called ${displayName}`
+      : `Called ${displayName}: ${resultSummary}`;
+  }
+  return `Calling ${displayName}`;
+}
+
+function toolDisplayName(toolName: string): string {
+  const trimmed = toolName.trim() || "tool";
+  return /\btool$/i.test(trimmed) ? trimmed : `${trimmed} tool`;
 }
 
 function toolStatusLabel(status: string, isError?: boolean): string {

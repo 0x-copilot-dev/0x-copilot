@@ -72,6 +72,32 @@ function textPart(items: ChatItem[]): string | undefined {
   return part?.type === "text" ? part.text : undefined;
 }
 
+function firstThreadMessage(
+  items: ChatItem[],
+  activeRunId: string | null = null,
+): ThreadMessageLike {
+  const [message] = chatItemsToThreadMessages(items, activeRunId);
+  if (!message) {
+    throw new Error("Expected thread message");
+  }
+  return message;
+}
+
+const performanceMetrics = {
+  started_at: "2026-04-30T00:00:00Z",
+  completed_at: "2026-04-30T00:00:02Z",
+  duration_ms: 2000,
+  chunk_count: 4,
+  first_chunk_at: "2026-04-30T00:00:00.250Z",
+  first_chunk_ms: 250,
+  usage: {
+    input: 12,
+    output: 8,
+    total: 20,
+    output_per_second: 4,
+  },
+};
+
 function toolPart(
   items: ChatItem[],
   toolName: string,
@@ -107,7 +133,7 @@ describe("applyRuntimeEvent", () => {
     );
 
     expect(textPart(items)).toBe("Hello world");
-    expect(chatItemsToThreadMessages(items, "run_123")[0].status).toEqual({
+    expect(firstThreadMessage(items, "run_123").status).toEqual({
       type: "running",
     });
 
@@ -118,14 +144,27 @@ describe("applyRuntimeEvent", () => {
         event_type: "final_response",
         activity_kind: "message",
         status: "completed",
-        payload: { message: "Final answer." },
+        payload: {
+          message: "Final answer.",
+          performance_metrics: performanceMetrics,
+        },
       }),
     );
 
     expect(textPart(items)).toBe("Final answer.");
-    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+    expect(firstThreadMessage(items).status).toEqual({
       type: "complete",
       reason: "stop",
+    });
+    expect(
+      assistantMessage(items).metadata?.custom?.performance_metrics,
+    ).toEqual(performanceMetrics);
+    expect(assistantMessage(items).metadata?.timing).toMatchObject({
+      totalStreamTime: 2000,
+      tokenCount: 8,
+      tokensPerSecond: 4,
+      totalChunks: 4,
+      toolCallCount: 0,
     });
   });
 
@@ -243,7 +282,10 @@ describe("applyRuntimeEvent", () => {
         event_type: "final_response",
         activity_kind: "message",
         status: "completed",
-        payload: { message: "Final answer." },
+        payload: {
+          message: "Final answer.",
+          performance_metrics: performanceMetrics,
+        },
       }),
     ];
     const liveItems = replayEvents
@@ -271,11 +313,23 @@ describe("applyRuntimeEvent", () => {
       new Map([["run_123", replayEvents]]),
     );
 
+    const hydratedAssistant = hydrated[1];
+    const liveAssistant = liveItems[0];
+    if (!hydratedAssistant || !liveAssistant) {
+      throw new Error("Expected hydrated assistant message");
+    }
     expect(hydrated).toHaveLength(2);
-    expect(hydrated[1]).toMatchObject({
-      ...liveItems[0],
+    expect(hydratedAssistant).toMatchObject({
+      ...liveAssistant,
       id: "assistant_row_1",
       parentId: "user_1",
+    });
+    expect(
+      firstThreadMessage([hydratedAssistant]).metadata?.timing,
+    ).toMatchObject({
+      totalStreamTime: 2000,
+      tokenCount: 8,
+      totalChunks: 4,
     });
   });
 
@@ -286,15 +340,27 @@ describe("applyRuntimeEvent", () => {
         role: "assistant",
         run_id: "run_123",
         content_text: "Stored final answer.",
+        metadata: { performance_metrics: performanceMetrics },
       }),
     ]);
 
-    expect(items[0]).toMatchObject({
+    const storedAssistant = items[0];
+    if (!storedAssistant) {
+      throw new Error("Expected stored assistant message");
+    }
+    expect(storedAssistant).toMatchObject({
       id: "assistant_row_1",
       kind: "message",
       role: "assistant",
       runId: "run_123",
       content: [{ type: "text", text: "Stored final answer." }],
+    });
+    expect(
+      firstThreadMessage([storedAssistant]).metadata?.timing,
+    ).toMatchObject({
+      totalStreamTime: 2000,
+      tokenCount: 8,
+      totalChunks: 4,
     });
   });
 
@@ -475,7 +541,7 @@ describe("applyRuntimeEvent", () => {
       "approval_123",
     );
     expect(toolPart(items, "mcp_auth_required")?.toolCallId).toBe("server_123");
-    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+    expect(firstThreadMessage(items).status).toEqual({
       type: "requires-action",
       reason: "interrupt",
     });
@@ -486,7 +552,7 @@ describe("applyRuntimeEvent", () => {
       approval_id: "approval_123",
       decision: "approved",
     });
-    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+    expect(firstThreadMessage(items).status).toEqual({
       type: "requires-action",
       reason: "interrupt",
     });
@@ -497,7 +563,7 @@ describe("applyRuntimeEvent", () => {
       server_id: "server_123",
       decision: "skipped",
     });
-    expect(chatItemsToThreadMessages(items, null)[0].status).toEqual({
+    expect(firstThreadMessage(items).status).toEqual({
       type: "running",
     });
   });

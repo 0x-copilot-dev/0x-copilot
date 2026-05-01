@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from deepagents import HarnessProfile
 import pytest
 
 from agent_runtime.execution import deep_agent_builder as builder_module
@@ -45,6 +46,28 @@ class CapturingChatModelFactory:
         )
         self.calls.append(call)
         return call
+
+
+def test_web_harness_profile_excludes_write_and_execute_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, frozenset[str]]] = []
+
+    def capture_profile(profile_key: str, profile: HarnessProfile) -> None:
+        calls.append((profile_key, profile.excluded_tools))
+
+    monkeypatch.setattr(builder_module, "register_harness_profile", capture_profile)
+    monkeypatch.setattr(builder_module, "_web_harness_profiles_registered", False)
+
+    builder_module._ensure_web_harness_profiles_registered()
+    builder_module._ensure_web_harness_profiles_registered()
+
+    assert calls == [
+        ("anthropic", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
+        ("gemini", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
+        ("google_genai", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
+        ("openai", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
+    ]
 
 
 def test_deep_agent_builder_configures_openai_responses_reasoning(

@@ -1,12 +1,15 @@
 import type {
+  AssistantPerformanceMetrics,
   Message,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import type {
+  MessageTiming,
   MessageStatus as AssistantMessageStatus,
   ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
+  isAssistantPerformanceMetrics,
   isApprovalRequestedPayload,
   isMcpAuthRequiredPayload,
   isReasoningSummaryDeltaPayload,
@@ -233,6 +236,7 @@ export function applyRuntimeEvent(
       event,
       (content) => replaceText(content, text),
       statusFromRuntimeEvent(event),
+      metadataFromRuntimeEvent(event),
     );
   }
   if (
@@ -259,6 +263,13 @@ export function applyRuntimeEvent(
       event,
       progressPart(event),
       statusFromRuntimeEvent(event),
+    );
+  }
+  if (event.event_type === "run_completed") {
+    return mergeAssistantMetadata(
+      items,
+      event,
+      metadataFromRuntimeEvent(event),
     );
   }
   return items;
@@ -310,7 +321,10 @@ function assistantItemFromEvents(
         parentId: message.parent_message_id,
         sourceMessageId: message.source_message_id ?? null,
         branchId: message.branch_id ?? null,
-        metadata: metadataFromMessage(message),
+        metadata: mergeMetadata(
+          assistant.metadata,
+          metadataFromMessage(message),
+        ),
       }
     : null;
 }
@@ -349,7 +363,75 @@ function metadataFromMessage(message: Message): ThreadMessageLike["metadata"] {
   if (message.branch_id) {
     custom.branch_id = message.branch_id;
   }
-  return Object.keys(custom).length > 0 ? { custom } : undefined;
+  return metadataFromCustom(custom);
+}
+
+function metadataFromRuntimeEvent(
+  event: RuntimeEventEnvelope,
+): ThreadMessageLike["metadata"] | undefined {
+  const metrics =
+    performanceMetricsFromRecord(event.payload) ??
+    performanceMetricsFromRecord(event.metadata);
+  return metrics
+    ? metadataFromCustom({ performance_metrics: metrics })
+    : undefined;
+}
+
+function metadataFromCustom(
+  custom: Record<string, unknown>,
+): ThreadMessageLike["metadata"] | undefined {
+  const metrics = performanceMetricsFromRecord(custom);
+  if (Object.keys(custom).length === 0 && !metrics) {
+    return undefined;
+  }
+  return {
+    custom,
+    ...(metrics ? { timing: timingFromPerformanceMetrics(metrics) } : {}),
+  };
+}
+
+function mergeMetadata(
+  current: ThreadMessageLike["metadata"] | undefined,
+  next: ThreadMessageLike["metadata"] | undefined,
+): ThreadMessageLike["metadata"] | undefined {
+  if (!current) {
+    return next;
+  }
+  if (!next) {
+    return current;
+  }
+  return {
+    ...current,
+    ...next,
+    custom: {
+      ...(current.custom ?? {}),
+      ...(next.custom ?? {}),
+    },
+  };
+}
+
+function performanceMetricsFromRecord(
+  value: unknown,
+): AssistantPerformanceMetrics | null {
+  const record = asRecord(value);
+  const metrics = record.performance_metrics;
+  return isAssistantPerformanceMetrics(metrics) ? metrics : null;
+}
+
+function timingFromPerformanceMetrics(
+  metrics: AssistantPerformanceMetrics,
+): MessageTiming {
+  return {
+    streamStartTime: Date.parse(metrics.started_at),
+    firstTokenTime: metrics.first_chunk_at
+      ? Date.parse(metrics.first_chunk_at)
+      : undefined,
+    totalStreamTime: metrics.duration_ms,
+    tokenCount: metrics.usage?.output ?? metrics.usage?.total,
+    tokensPerSecond: metrics.usage?.output_per_second,
+    totalChunks: metrics.chunk_count,
+    toolCallCount: 0,
+  };
 }
 
 export function resolveApprovalDecision(
@@ -430,6 +512,7 @@ function updateAssistantContent(
   event: RuntimeEventEnvelope,
   update: (content: ThreadMessageContent) => ThreadMessageContent,
   status: AssistantMessageStatus = { type: "running" },
+  metadata?: ThreadMessageLike["metadata"],
 ): ChatItem[] {
   const id = assistantMessageId(event.run_id);
   const existing = items.find(
@@ -445,6 +528,7 @@ function updateAssistantContent(
         role: "assistant",
         runId: event.run_id,
         content: update([]),
+        metadata,
         status,
       },
     ];
@@ -454,8 +538,25 @@ function updateAssistantContent(
       ? {
           ...item,
           content: update(item.content),
+          metadata: mergeMetadata(item.metadata, metadata),
           status: nextMessageStatus(item.status, status),
         }
+      : item,
+  );
+}
+
+function mergeAssistantMetadata(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+  metadata?: ThreadMessageLike["metadata"],
+): ChatItem[] {
+  if (!metadata) {
+    return items;
+  }
+  const id = assistantMessageId(event.run_id);
+  return items.map((item) =>
+    item.kind === "message" && item.id === id
+      ? { ...item, metadata: mergeMetadata(item.metadata, metadata) }
       : item,
   );
 }

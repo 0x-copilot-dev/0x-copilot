@@ -52,6 +52,15 @@ run status enum constants between the Python server and this package.
 - Enum additions need UI fallback behavior before rollout.
 - Enum removals or renames are breaking and require a versioned migration.
 
+## Assistant Performance Metrics
+
+Agent runtime responses may include `AssistantPerformanceMetrics` under
+`metadata.performance_metrics` for persisted assistant messages and under
+`payload.performance_metrics` for `final_response` / `run_completed` events.
+Timing and chunk fields are server-computed. Token fields are optional and must
+represent exact provider usage metadata under the `usage` object; clients should
+omit token UI when those fields are absent.
+
 ## MCP OAuth Client Configuration
 
 `CreateMcpServerRequest.oauth_client` and

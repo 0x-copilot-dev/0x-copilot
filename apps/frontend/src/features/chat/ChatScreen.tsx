@@ -8,7 +8,11 @@ import type {
 } from "@enterprise-search/api-types";
 import {
   AssistantRuntimeProvider,
+  type Attachment,
+  type AttachmentAdapter,
   CompositeAttachmentAdapter,
+  type CompleteAttachment,
+  type PendingAttachment,
   SimpleImageAttachmentAdapter,
   SimpleTextAttachmentAdapter,
   Suggestions,
@@ -17,19 +21,10 @@ import {
   useAui,
   useExternalStoreRuntime,
   type AppendMessage,
-  type CompleteAttachment,
   type ExternalStoreThreadData,
   type ExternalStoreThreadListAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import {
-  Button,
-  Card,
-  Field,
-  Select,
-  useTheme,
-  type ThemeScheme,
-} from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -39,7 +34,6 @@ import {
   decideApproval,
   getConversation,
   listConversations,
-  listModels,
   listMessages,
   replayRunEvents,
   streamRunEvents,
@@ -47,6 +41,9 @@ import {
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
+import type { SkillState } from "../skills/useSkills";
+
+type ChatSettingsTarget = "general" | "connectors" | "skills";
 import {
   applyRuntimeEvent,
   chatItemsToThreadMessages,
@@ -66,27 +63,28 @@ import {
 
 export function ChatScreen({
   connectors,
+  skills,
   onOpenSettings,
   identity,
   oauthStatus,
 }: {
   connectors: ConnectorState;
-  onOpenSettings: () => void;
+  skills: SkillState;
+  onOpenSettings: (section?: ChatSettingsTarget) => void;
   identity: RequestIdentity;
   oauthStatus: string | null;
 }): ReactElement {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [items, setItems] = useState<ChatItem[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showConnectorSuggestions, setShowConnectorSuggestions] =
     useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [status, setStatus] = useState("Ready");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [models, setModels] = useState<ModelCatalogModel[]>(fallbackModels);
-  const [selectedModelId, setSelectedModelId] = useState(fallbackModels[0].id);
+  const [selectedModelId, setSelectedModelId] = useState(demoModels[0].id);
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -168,35 +166,6 @@ export function ChatScreen({
       streamRef.current?.close();
     };
   }, [identity, loadHistoryItems]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadModelCatalog(): Promise<void> {
-      try {
-        const response = await listModels(identity);
-        if (cancelled) {
-          return;
-        }
-        setModels(
-          response.models.length > 0 ? response.models : fallbackModels,
-        );
-        setSelectedModelId(
-          response.default_model_id ??
-            response.models[0]?.id ??
-            fallbackModels[0].id,
-        );
-      } catch {
-        if (!cancelled) {
-          setModels(fallbackModels);
-          setSelectedModelId(fallbackModels[0].id);
-        }
-      }
-    }
-    void loadModelCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, [identity]);
 
   const handleEvent = useCallback(
     (event: RuntimeEventEnvelope) => {
@@ -338,7 +307,7 @@ export function ChatScreen({
           }),
         ]);
         const run = await createRun(targetConversationId, text, identity, {
-          model: modelSelectionForId(models, selectedModelId),
+          model: modelSelectionForId(demoModels, selectedModelId),
           attachments,
           content,
           quote,
@@ -382,7 +351,6 @@ export function ChatScreen({
       conversationId,
       identity,
       items,
-      models,
       refreshConversations,
       selectedModelId,
       startEventStream,
@@ -436,6 +404,19 @@ export function ChatScreen({
     setShowConnectorSuggestions(false);
     setStatus("Ready");
   }, [activeRunId]);
+
+  const onShare = useCallback(async (): Promise<void> => {
+    if (typeof window === "undefined" || !navigator.clipboard) {
+      setStatus("Copy this page URL to share the chat.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setStatus(conversationId ? "Thread link copied." : "Chat link copied.");
+    } catch {
+      setStatus("Could not copy share link.");
+    }
+  }, [conversationId]);
 
   async function onApprovalDecision(
     approvalId: string,
@@ -555,6 +536,7 @@ export function ChatScreen({
       new CompositeAttachmentAdapter([
         new SimpleImageAttachmentAdapter(),
         new SimpleTextAttachmentAdapter(),
+        new GenericFileAttachmentAdapter(),
       ]),
     [],
   );
@@ -611,7 +593,7 @@ export function ChatScreen({
           "Regenerate the previous response.",
         identity,
         {
-          model: modelSelectionForId(models, selectedModelId),
+          model: modelSelectionForId(demoModels, selectedModelId),
           parentMessageId,
           sourceMessageId,
           regenerateFromMessageId: sourceMessageId ?? parentMessageId,
@@ -640,27 +622,41 @@ export function ChatScreen({
 
   return (
     <AssistantRuntimeProvider runtime={runtime} aui={aui}>
-      <main className="aui-workspace">
+      <main
+        className={
+          sidebarCollapsed
+            ? "aui-workspace aui-workspace--sidebar-collapsed"
+            : "aui-workspace"
+        }
+      >
         <AssistantThreadList
           activeRunId={activeRunId}
+          collapsed={sidebarCollapsed}
           conversations={conversations}
           loading={historyLoading}
+          onOpenSettings={() => onOpenSettings("general")}
           onRefresh={() => void refreshConversations()}
         />
         <AssistantThread
-          title={currentTitle(conversations, conversationId)}
+          sidebarCollapsed={sidebarCollapsed}
           status={historyError ?? status}
-          models={models}
+          models={demoModels}
           selectedModel={selectedModelId}
           onModelChange={setSelectedModelId}
           modelDisabled={activeRunId !== null}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onShare={() => void onShare()}
           onShowConnectors={() => setShowConnectorSuggestions(true)}
+          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         >
           <ThreadBody
             oauthStatus={oauthStatus}
+            connectors={connectors}
+            skills={skills}
             onMcpAuthConnect={onMcpAuthConnect}
             onMcpAuthSkip={onMcpAuthSkip}
+            onOpenMcpSettings={() => onOpenSettings("connectors")}
+            onOpenSkillsSettings={() => onOpenSettings("skills")}
+            onShowConnectors={() => setShowConnectorSuggestions(true)}
             connectorSuggestions={
               showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
@@ -673,103 +669,80 @@ export function ChatScreen({
             }
           />
         </AssistantThread>
-
-        {settingsOpen ? (
-          <ChatSettingsPanel
-            connectors={connectors}
-            identity={identity}
-            onClose={() => setSettingsOpen(false)}
-            onOpenFullSettings={() => {
-              setSettingsOpen(false);
-              onOpenSettings();
-            }}
-          />
-        ) : null}
       </main>
     </AssistantRuntimeProvider>
   );
 }
 
-function ChatSettingsPanel({
-  connectors,
-  identity,
-  onClose,
-  onOpenFullSettings,
-}: {
-  connectors: ConnectorState;
-  identity: RequestIdentity;
-  onClose: () => void;
-  onOpenFullSettings: () => void;
-}): ReactElement {
-  const { scheme, setScheme } = useTheme();
-  const connectedCount = connectors.servers.filter(
-    (server) => server.auth_state === "authenticated",
-  ).length;
-  const enabledCount = connectors.servers.filter(
-    (server) => server.enabled,
-  ).length;
+class GenericFileAttachmentAdapter implements AttachmentAdapter {
+  public accept =
+    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
-  return (
-    <aside className="chat-settings-panel" aria-label="Chat settings">
-      <header>
-        <div>
-          <span className="app-eyebrow">Settings</span>
-          <h2>Chat controls</h2>
-        </div>
-        <button
-          className="aui-icon-button"
-          aria-label="Close chat settings"
-          type="button"
-          onClick={onClose}
-        >
-          x
-        </button>
-      </header>
-      <Card>
-        <Field label="Theme" hint="Applies across chat and settings.">
-          <Select
-            value={scheme}
-            onChange={(event) => setScheme(event.target.value as ThemeScheme)}
-          >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="slate">Slate</option>
-          </Select>
-        </Field>
-      </Card>
-      <Card>
-        <h3>Connectors</h3>
-        <p>
-          {connectedCount}/{enabledCount} enabled connectors authenticated.
-        </p>
-        <div className="chat-settings-panel__actions">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void connectors.refresh()}
-          >
-            Refresh
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={onOpenFullSettings}
-          >
-            Manage connectors
-          </Button>
-        </div>
-      </Card>
-      <Card>
-        <h3>Session</h3>
-        <p>
-          Org <code>{identity.orgId}</code>
-        </p>
-        <p>
-          User <code>{identity.userId}</code>
-        </p>
-      </Card>
-    </aside>
-  );
+  public async add({ file }: { file: File }): Promise<PendingAttachment> {
+    return {
+      id: `${file.name}-${file.lastModified}`,
+      type: "file",
+      name: file.name,
+      contentType: file.type || mimeTypeForFile(file.name),
+      file,
+      status: { type: "requires-action", reason: "composer-send" },
+    };
+  }
+
+  public async send(
+    attachment: PendingAttachment,
+  ): Promise<CompleteAttachment> {
+    return {
+      ...attachment,
+      status: { type: "complete" },
+      content: [
+        {
+          type: "file",
+          filename: attachment.name,
+          data: await readFileDataURL(attachment.file),
+          mimeType:
+            attachment.contentType ||
+            mimeTypeForFile(attachment.name) ||
+            "application/octet-stream",
+        },
+      ],
+    };
+  }
+
+  public async remove(_attachment: Attachment): Promise<void> {
+    return undefined;
+  }
+}
+
+function readFileDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function mimeTypeForFile(fileName: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "pdf":
+      return "application/pdf";
+    case "doc":
+      return "application/msword";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "xls":
+      return "application/vnd.ms-excel";
+    case "xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "ppt":
+      return "application/vnd.ms-powerpoint";
+    case "pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    default:
+      return "";
+  }
 }
 
 async function replayEventsForMessages(
@@ -818,9 +791,7 @@ function textFromAppendMessage(message: AppendMessage): string {
 function contentFromAppendMessage(
   message: AppendMessage,
 ): NonNullable<CreateRunRequest["content"]> {
-  return message.content.map((part) => ({
-    ...part,
-  })) as NonNullable<CreateRunRequest["content"]>;
+  return message.content.map(normalizeRunContentPart);
 }
 
 function completeAttachmentsFromAppendMessage(
@@ -840,10 +811,25 @@ function attachmentsFromAppendMessage(
     type: attachment.type,
     name: attachment.name,
     content_type: attachment.contentType ?? null,
-    content: attachment.content as NonNullable<
-      CreateRunRequest["attachments"]
-    >[number]["content"],
+    size: attachment.file?.size ?? null,
+    content: attachment.content.map(normalizeRunContentPart),
   }));
+}
+
+function normalizeRunContentPart(
+  part:
+    | AppendMessage["content"][number]
+    | CompleteAttachment["content"][number],
+): NonNullable<CreateRunRequest["content"]>[number] {
+  if (part.type === "file") {
+    return {
+      type: "file",
+      filename: part.filename,
+      data: part.data,
+      mime_type: part.mimeType,
+    };
+  }
+  return { ...part } as NonNullable<CreateRunRequest["content"]>[number];
 }
 
 function quoteFromAppendMessage(
@@ -1051,30 +1037,78 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
   return null;
 }
 
-const fallbackModels: ModelCatalogModel[] = [
+const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [
   {
-    id: "gpt-4.1-mini",
+    id: "gpt-5.4-nano",
     provider: "openai",
-    model_name: "gpt-4.1-mini",
-    name: "GPT-4.1 Mini",
-    description: "Default fast OpenAI model",
+    model_name: "gpt-5.4-nano",
+    name: "GPT-5.4 Nano",
+    description: "Fastest OpenAI model",
     configured: true,
+    supports_streaming: true,
   },
   {
-    id: "claude-opus-4-7",
+    id: "gpt-5.4-mini",
+    provider: "openai",
+    model_name: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    description: "Compact OpenAI model",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "anthropic/claude-haiku-4-5",
     provider: "anthropic",
-    model_name: "claude-opus-4-7",
-    name: "Claude Opus 4.7",
-    description: "Anthropic reasoning model",
+    model_name: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
+    description: "Anthropic fast model",
     configured: false,
+    disabled: true,
   },
   {
-    id: "gemini-2.5-pro",
+    id: "google-ai-studio/gemini-3-flash",
     provider: "gemini",
-    model_name: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
+    model_name: "gemini-3-flash",
+    name: "Gemini 3 Flash",
     description: "Google long-context model",
     configured: false,
+    disabled: true,
+  },
+  {
+    id: "grok/grok-4-1-fast",
+    provider: "grok",
+    model_name: "grok-4-1-fast",
+    name: "Grok 4.1 Fast",
+    description: "xAI fast model",
+    configured: false,
+    disabled: true,
+  },
+  {
+    id: "grok/grok-3-mini-fast",
+    provider: "grok",
+    model_name: "grok-3-mini-fast",
+    name: "Grok 3 Mini Fast",
+    description: "xAI compact model",
+    configured: false,
+    disabled: true,
+  },
+  {
+    id: "groq/llama-3.3-70b-versatile",
+    provider: "groq",
+    model_name: "llama-3.3-70b-versatile",
+    name: "Llama 3.3 70B",
+    description: "Groq-hosted Meta model",
+    configured: false,
+    disabled: true,
+  },
+  {
+    id: "groq/qwen/qwen3-32b",
+    provider: "groq",
+    model_name: "qwen/qwen3-32b",
+    name: "Qwen3 32B",
+    description: "Groq-hosted Qwen model",
+    configured: false,
+    disabled: true,
   },
 ];
 

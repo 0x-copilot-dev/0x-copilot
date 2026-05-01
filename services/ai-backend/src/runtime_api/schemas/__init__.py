@@ -36,6 +36,8 @@ from runtime_api.schemas.conversations import (
 )
 from runtime_api.schemas.errors import ApiErrorResponse
 from runtime_api.schemas.events import (
+    AssistantPerformanceMetrics,
+    AssistantUsageMetrics,
     ReasoningSummaryDeltaPayload,
     ReasoningSummaryPayload,
     RuntimeLifecyclePayload,
@@ -103,6 +105,8 @@ __all__ = [
     "RuntimeEventPresentationProjector",
     "RuntimeTextPayload",
     "RuntimeLifecyclePayload",
+    "AssistantPerformanceMetrics",
+    "AssistantUsageMetrics",
     "ReasoningSummaryPayload",
     "ReasoningSummaryDeltaPayload",
     "ToolCallPayload",

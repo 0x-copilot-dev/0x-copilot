@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
+from datetime import UTC, datetime
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -26,6 +27,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import RuntimeStreamPartAdapter
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
@@ -81,6 +83,7 @@ class RuntimeRunHandler:
             run_id=command.run_id, status=AgentRunStatus.RUNNING
         )
         self._append_lifecycle(run, RuntimeApiEventType.RUN_STARTED, "Run started")
+        metrics = AssistantRunMetrics.from_run(run)
 
         try:
             harness = self.agent_factory(
@@ -92,7 +95,13 @@ class RuntimeRunHandler:
                 self._runtime_streamer_explicit
                 or callable(getattr(harness.agent, "astream", None))
             ):
-                result = await self._stream_runtime(command, run, harness, messages)
+                result = await self._stream_runtime(
+                    command,
+                    run,
+                    harness,
+                    messages,
+                    metrics,
+                )
             else:
                 result = await asyncio.wait_for(
                     self.runtime_invoker(
@@ -101,8 +110,12 @@ class RuntimeRunHandler:
                     ),
                     timeout=command.runtime_context.model_profile.timeout_seconds,
                 )
+                metrics.record_usage_from(result)
             final_text = self._extract_final_text(result)
             if final_text is not None:
+                metrics_payload = metrics.to_payload(completed_at=datetime.now(UTC))
+                usage = metrics_payload.get("usage")
+                output_tokens = usage.get("output") if isinstance(usage, dict) else None
                 self.persistence.append_message(
                     MessageRecord(
                         conversation_id=command.conversation_id,
@@ -114,6 +127,10 @@ class RuntimeRunHandler:
                         branch_id=self._trace_text(
                             command.runtime_context, "branch_id"
                         ),
+                        metadata=AssistantRunMetrics.metadata(metrics_payload),
+                        token_count=output_tokens
+                        if isinstance(output_tokens, int)
+                        else None,
                         trace_id=command.trace_id,
                     )
                 )
@@ -121,7 +138,11 @@ class RuntimeRunHandler:
                     run,
                     RuntimeApiEventType.FINAL_RESPONSE,
                     final_text,
-                    payload={"message": final_text},
+                    payload=AssistantRunMetrics.with_payload(
+                        {"message": final_text},
+                        metrics_payload,
+                    ),
+                    metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError as exc:
             failed = self.persistence.update_run_status(
@@ -146,8 +167,18 @@ class RuntimeRunHandler:
         completed = self.persistence.update_run_status(
             run_id=command.run_id, status=AgentRunStatus.COMPLETED
         )
+        metrics_payload = metrics.to_payload(
+            completed_at=completed.completed_at or datetime.now(UTC)
+        )
         self._append_lifecycle(
-            completed, RuntimeApiEventType.RUN_COMPLETED, "Run completed"
+            completed,
+            RuntimeApiEventType.RUN_COMPLETED,
+            "Run completed",
+            payload=AssistantRunMetrics.with_payload(
+                {"status": RuntimeApiEventType.RUN_COMPLETED.value},
+                metrics_payload,
+            ),
+            metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
 
     def _messages_for_run(
@@ -389,6 +420,7 @@ class RuntimeRunHandler:
         run: RunRecord,
         harness: RuntimeHarness,
         messages: Sequence[object],
+        metrics: AssistantRunMetrics,
     ) -> object:
         final_result: object | None = None
         response_deltas: list[str] = []
@@ -400,10 +432,12 @@ class RuntimeRunHandler:
             command.runtime_context.model_profile.timeout_seconds
         ):
             async for chunk in self.runtime_streamer(harness, messages):
+                metrics.record_usage_from(chunk)
                 latest_before = self.event_store.get_latest_sequence(run_id=run.run_id)
                 candidate = self.stream_event_mapper.stream_result_candidate(chunk)
                 if candidate is not None and not active_subagent_tasks:
                     final_result = candidate
+                    metrics.record_usage_from(candidate)
                 delta = self.stream_event_mapper.stream_delta(chunk)
                 self.stream_event_mapper.append_activity_events(
                     run=run, chunk=chunk, delta=delta
@@ -433,6 +467,7 @@ class RuntimeRunHandler:
                     continue
                 if not active_subagent_tasks:
                     response_deltas.append(delta)
+                metrics.record_model_delta(delta)
                 self._append_lifecycle(
                     run,
                     RuntimeApiEventType.MODEL_DELTA,
@@ -456,6 +491,7 @@ class RuntimeRunHandler:
         *,
         source: StreamEventSource = StreamEventSource.SYSTEM,
         payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         self.event_producer.append_api_event(
             run=run,
@@ -466,6 +502,7 @@ class RuntimeRunHandler:
             if event_type == RuntimeApiEventType.FINAL_RESPONSE
             else None,
             payload=payload or {"status": event_type.value},
+            metadata=metadata,
         )
 
     @classmethod
