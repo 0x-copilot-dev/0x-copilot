@@ -586,6 +586,7 @@ class RuntimeApiService:
             permission_scopes=context.permission_scopes,
             connector_scopes=context.connector_scopes,
             model_profile=model_config,
+            max_parallel_tasks=self.settings.execution.max_parallel_tasks,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
         )

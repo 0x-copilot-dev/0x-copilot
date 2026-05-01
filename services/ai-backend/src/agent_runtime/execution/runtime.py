@@ -69,6 +69,7 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
             "run_id": run_id,
             "trace_id": context.trace_id,
         },
+        "max_concurrency": context.max_parallel_tasks,
         "metadata": metadata,
         "tags": ["agent_runtime", f"run:{run_id}"],
     }

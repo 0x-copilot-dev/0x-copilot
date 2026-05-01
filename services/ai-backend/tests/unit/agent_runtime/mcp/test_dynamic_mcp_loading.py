@@ -488,6 +488,40 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
         assert result["arguments"] == {"query": "tasks"}
 
+    def test_call_mcp_tool_collects_misplaced_tool_arguments(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        provider = self.FakeMcpProvider(
+            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            clients={
+                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
+                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                    resources=(),
+                )
+            },
+        )
+        registry = DynamicMcpRegistry(providers=(provider,))
+        tool = CallMcpTool(
+            registry=registry,
+            loader=McpLoader(registry),
+            runtime_context=runtime_context_admin,
+        )
+
+        result = asyncio.run(
+            tool.ainvoke(
+                {
+                    "server_name": self.TestValues.Names.DRIVE_MCP,
+                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "query": "tasks",
+                    "assignees": ["me"],
+                }
+            )
+        )
+
+        assert result["api_event_type"] == "approval_requested"
+        assert result["arguments"] == {"query": "tasks", "assignees": ["me"]}
+
     def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(
         self,
         runtime_context_admin: AgentRuntimeContext,

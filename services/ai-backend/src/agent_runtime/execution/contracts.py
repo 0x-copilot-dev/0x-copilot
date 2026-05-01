@@ -265,6 +265,7 @@ class AgentRuntimeContext(RuntimeContract):
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
     parent_trace_id: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    max_parallel_tasks: PositiveInt = Field(default=4, le=100)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
 

@@ -229,6 +229,9 @@ export function applyRuntimeEvent(
   ) {
     return upsertApprovalPart(items, event, event.payload);
   }
+  if (hasPendingApprovalForRun(items, event)) {
+    return items;
+  }
   if (event.parent_task_id && event.activity_kind === "tool") {
     const withNestedActivity = upsertSubagentActivity(items, event);
     if (withNestedActivity !== items) {
@@ -266,7 +269,7 @@ export function applyRuntimeEvent(
     return updateAssistantContent(
       items,
       event,
-      (content) => replaceText(content, text),
+      (content) => reconcileFinalText(content, text),
       statusFromRuntimeEvent(event),
       metadataFromRuntimeEvent(event),
     );
@@ -308,6 +311,18 @@ export function applyRuntimeEvent(
     );
   }
   return items;
+}
+
+function hasPendingApprovalForRun(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): boolean {
+  const id = assistantMessageId(event.run_id);
+  const assistant = items.find(
+    (item): item is Extract<ChatItem, { kind: "message" }> =>
+      item.kind === "message" && item.id === id,
+  );
+  return assistant ? hasPendingApproval(assistant.content) : false;
 }
 
 function messageToChatItem(message: Message): ChatItem {
@@ -596,16 +611,18 @@ function updateAssistantContent(
       },
     ];
   }
-  return items.map((item) =>
-    item.kind === "message" && item.id === id
-      ? {
-          ...item,
-          content: update(item.content),
-          metadata: mergeMetadata(item.metadata, metadata),
-          status: nextMessageStatus(item.status, status),
-        }
-      : item,
-  );
+  return items.map((item) => {
+    if (item.kind !== "message" || item.id !== id) {
+      return item;
+    }
+    const content = update(item.content);
+    return {
+      ...item,
+      content,
+      metadata: mergeMetadata(item.metadata, metadata),
+      status: nextMessageStatus(item.status, status, content),
+    };
+  });
 }
 
 function mergeAssistantMetadata(
@@ -648,23 +665,27 @@ function upsertApprovalPart(
     items,
     event,
     (content) =>
-      upsertPart(
-        removeToolCallPart(content, sourceToolCallId),
-        approvalPart(payload),
-      ),
+      replaceToolCallPart(content, sourceToolCallId, approvalPart(payload)),
     { type: "requires-action", reason: "interrupt" },
   );
 }
 
-function removeToolCallPart(
+function replaceToolCallPart(
   content: ThreadMessageContent,
   toolCallId: string | null,
+  next: ThreadToolCallPart,
 ): ThreadMessageContent {
   if (!toolCallId) {
-    return content;
+    return upsertPart(content, next);
   }
-  return content.filter(
-    (part) => !isToolCallPart(part) || part.toolCallId !== toolCallId,
+  const index = content.findIndex(
+    (part) => isToolCallPart(part) && part.toolCallId === toolCallId,
+  );
+  if (index === -1) {
+    return upsertPart(content, next);
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index ? next : part,
   );
 }
 
@@ -744,8 +765,12 @@ function appendTextDelta(
   content: ThreadMessageContent,
   delta: string,
 ): ThreadMessageContent {
-  const index = content.findIndex(isTextPart);
-  if (index === -1) {
+  if (content.length === 0) {
+    return [{ type: "text", text: delta }];
+  }
+  const index = content.length - 1;
+  const last = content[index];
+  if (!isTextPart(last)) {
     return [...content, { type: "text", text: delta }];
   }
   return content.map((part, currentIndex) =>
@@ -755,17 +780,31 @@ function appendTextDelta(
   );
 }
 
-function replaceText(
+function reconcileFinalText(
   content: ThreadMessageContent,
   text: string,
 ): ThreadMessageContent {
-  const index = content.findIndex(isTextPart);
-  if (index === -1) {
+  const lastTextIndex = lastTextPartIndex(content);
+  if (lastTextIndex === -1) {
+    return [...content, { type: "text", text }];
+  }
+  if (lastTextIndex !== content.length - 1) {
     return [...content, { type: "text", text }];
   }
   return content.map((part, currentIndex) =>
-    currentIndex === index && isTextPart(part) ? { ...part, text } : part,
+    currentIndex === lastTextIndex && isTextPart(part)
+      ? { ...part, text }
+      : part,
   );
+}
+
+function lastTextPartIndex(content: ThreadMessageContent): number {
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    if (isTextPart(content[index])) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function appendReasoning(
@@ -1021,8 +1060,9 @@ function statusForMessage(
 function nextMessageStatus(
   current: AssistantMessageStatus | undefined,
   next: AssistantMessageStatus,
+  content: ThreadMessageContent,
 ): AssistantMessageStatus {
-  if (current?.type === "requires-action" && next.type === "running") {
+  if (current?.type === "requires-action" && hasPendingAction(content)) {
     return current;
   }
   return next;
@@ -1057,6 +1097,15 @@ function hasPendingAction(content: ThreadMessageContent): boolean {
       part.result === undefined
     );
   });
+}
+
+function hasPendingApproval(content: ThreadMessageContent): boolean {
+  return content.some(
+    (part) =>
+      isToolCallPart(part) &&
+      part.toolName === "approval_request" &&
+      part.result === undefined,
+  );
 }
 
 function reasoningText(event: RuntimeEventEnvelope): string | null {

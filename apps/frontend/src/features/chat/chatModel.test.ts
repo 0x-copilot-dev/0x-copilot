@@ -72,6 +72,12 @@ function textPart(items: ChatItem[]): string | undefined {
   return part?.type === "text" ? part.text : undefined;
 }
 
+function textParts(items: ChatItem[]): string[] {
+  return assistantMessage(items).content.flatMap((part) =>
+    part.type === "text" ? [part.text] : [],
+  );
+}
+
 function firstThreadMessage(
   items: ChatItem[],
   activeRunId: string | null = null,
@@ -190,6 +196,119 @@ describe("applyRuntimeEvent", () => {
     );
 
     expect(textPart(items)).toBe(code);
+  });
+
+  it("places final text after later tool calls without replacing checkpoints", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "checkpoint_1",
+        sequence_no: 1,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "I need to inspect the workspace first." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "tool_1",
+        sequence_no: 2,
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_123",
+        payload: {
+          tool_name: "read_file",
+          call_id: "call_123",
+          status: "running",
+          args: { path: "README.md" },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "final_1",
+        sequence_no: 3,
+        event_type: "final_response",
+        activity_kind: "message",
+        status: "completed",
+        payload: { message: "Final answer after the tool call." },
+      }),
+    );
+
+    expect(textParts(items)).toEqual([
+      "I need to inspect the workspace first.",
+      "Final answer after the tool call.",
+    ]);
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["text", "read_file", "text"]);
+  });
+
+  it("streams text after a tool into a new text part", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "delta_1",
+        sequence_no: 1,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "First checkpoint." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "tool_1",
+        sequence_no: 2,
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_123",
+        payload: {
+          tool_name: "read_file",
+          call_id: "call_123",
+          status: "running",
+          args: { path: "README.md" },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "delta_2",
+        sequence_no: 3,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Second checkpoint." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "delta_3",
+        sequence_no: 4,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: " More detail." },
+      }),
+    );
+
+    expect(textParts(items)).toEqual([
+      "First checkpoint.",
+      "Second checkpoint. More detail.",
+    ]);
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["text", "read_file", "text"]);
   });
 
   it("emits ordered reasoning, subagent, and tool parts", () => {
@@ -725,6 +844,24 @@ describe("applyRuntimeEvent", () => {
       reason: "interrupt",
     });
 
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "final_while_waiting",
+        event_type: "final_response",
+        activity_kind: "message",
+        status: "completed",
+        payload: {
+          message: "Authenticate here, then tell me when you are done.",
+        },
+      }),
+    );
+
+    expect(firstThreadMessage(items).status).toEqual({
+      type: "requires-action",
+      reason: "interrupt",
+    });
+
     items = resolveApprovalDecision(items, "approval_123", "approved");
 
     expect(toolPart(items, "approval_request")?.result).toEqual({
@@ -798,6 +935,144 @@ describe("applyRuntimeEvent", () => {
       "approval_json_123",
     );
     expect(assistantMessage(items).content).toHaveLength(1);
+  });
+
+  it("replaces MCP approval wrapper calls in place", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "before_approval",
+        sequence_no: 1,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "I need connector data." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_approval_1",
+        sequence_no: 2,
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_mcp_approval_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_approval_123",
+          args: {
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_filter_tasks",
+            arguments: { assignees: ["me"] },
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "after_wrapper",
+        sequence_no: 3,
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Waiting for consent." },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "approval_from_tool_1",
+        sequence_no: 4,
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_json_123",
+          approval_kind: "mcp_tool",
+          source_tool_call_id: "call_mcp_approval_123",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          tool_name: "clickup_filter_tasks",
+          arguments: { assignees: ["me"] },
+          risk_level: "medium",
+          read_only: true,
+          message: "Approve ClickUp to run clickup_filter_tasks.",
+        },
+      }),
+    );
+
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["text", "approval_request", "text"]);
+  });
+
+  it("does not append new activity while approval is pending", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "approval_1",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_123",
+          approval_kind: "mcp_tool",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          tool_name: "list_tasks",
+          arguments: { assignee: "me" },
+          risk_level: "low",
+          read_only: true,
+          message: "Approve the tool call?",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "late_tool",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "late_call",
+        payload: {
+          tool_name: "read_file",
+          call_id: "late_call",
+          status: "running",
+          args: { path: "README.md" },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "late_delta",
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Late text." },
+      }),
+    );
+
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["approval_request"]);
+
+    items = resolveApprovalDecision(items, "approval_123", "approved");
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "after_approval",
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: { delta: "Approved text." },
+      }),
+    );
+
+    expect(textParts(items)).toEqual(["Approved text."]);
   });
 
   it("does not expose streamed tool arg deltas in display text", () => {

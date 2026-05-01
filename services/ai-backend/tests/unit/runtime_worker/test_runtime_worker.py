@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 import json
+from types import SimpleNamespace
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -788,7 +789,7 @@ def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -
     assert final_response.payload["message"] == "Clean final."
 
 
-def test_runtime_worker_persists_mcp_auth_required_event() -> None:
+def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _settings()
     run_id = _create_queued_run(store, settings)
@@ -855,10 +856,17 @@ def test_runtime_worker_persists_mcp_auth_required_event() -> None:
         for event in store.events_by_run[run_id]
         if event.event_type == "mcp_auth_required"
     ]
+    final_events = [
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == "final_response"
+    ]
+    assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
     assert auth_events[0].source == "mcp"
     assert (
         auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
     )
+    assert final_events == []
 
 
 def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
@@ -1465,11 +1473,11 @@ def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> No
             "type": "messages",
             "ns": (),
             "data": (
-                {
-                    "type": "tool",
-                    "name": "call_mcp_tool",
-                    "tool_call_id": "call_mcp_approval_123",
-                    "content": json.dumps(
+                SimpleNamespace(
+                    type="tool",
+                    name="call_mcp_tool",
+                    tool_call_id="call_mcp_approval_123",
+                    content=json.dumps(
                         {
                             "api_event_type": "approval_requested",
                             "approval_id": "approval_json_123",
@@ -1483,7 +1491,7 @@ def test_runtime_worker_promotes_json_tool_result_approval_to_card_event() -> No
                             "message": "Approve ClickUp to run clickup_filter_tasks.",
                         }
                     ),
-                },
+                ),
                 {},
             ),
         }

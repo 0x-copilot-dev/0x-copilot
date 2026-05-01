@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_worker.stream_events import RuntimeStreamPartAdapter
@@ -67,6 +68,32 @@ def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
         RuntimeApiEventType.APPROVAL_REQUESTED
     )
     assert payloads[0]["approval_id"] == "approval_123"
+
+
+def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None:
+    payloads = RuntimeStreamPartAdapter.explicit_api_payloads(
+        (
+            SimpleNamespace(
+                type="tool",
+                name="call_mcp_tool",
+                tool_call_id="call_mcp_approval_123",
+                content=json.dumps(
+                    {
+                        "api_event_type": "approval_requested",
+                        "approval_id": "approval_from_tool_object",
+                        "approval_kind": "mcp_tool",
+                    }
+                ),
+            ),
+            {},
+        )
+    )
+
+    assert len(payloads) == 1
+    assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
+        RuntimeApiEventType.APPROVAL_REQUESTED
+    )
+    assert payloads[0]["approval_id"] == "approval_from_tool_object"
 
 
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:

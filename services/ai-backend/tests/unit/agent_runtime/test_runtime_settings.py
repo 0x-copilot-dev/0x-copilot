@@ -29,6 +29,7 @@ def test_runtime_settings_loads_template_env_and_process_overrides(
                 "RUNTIME_DEFAULT_TIMEOUT_SECONDS=60",
                 "RUNTIME_MAX_RETRIES=2",
                 "RUNTIME_MAX_PARALLEL_RUNS=4",
+                "RUNTIME_MAX_PARALLEL_TASKS=4",
                 "RUNTIME_MAX_PARALLEL_SUBAGENTS=4",
             )
         ),
@@ -54,6 +55,7 @@ def test_runtime_settings_loads_template_env_and_process_overrides(
     assert settings.default_model.model_name == "gpt-4.1"
     assert settings.execution.max_retries == 2
     assert settings.execution.max_parallel_runs == 8
+    assert settings.execution.max_parallel_tasks == 4
     assert settings.execution.max_parallel_subagents == 6
     assert settings.execution.allow_empty_capabilities is False
     assert settings.openai.is_configured

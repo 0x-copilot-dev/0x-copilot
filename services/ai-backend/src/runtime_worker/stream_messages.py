@@ -40,6 +40,15 @@ class StreamMessageParser:
         ):
             for item in value:
                 cls.collect_explicit_api_payloads(item, payloads)
+            return
+        payload = cls.object_payload_mapping(value)
+        if not payload:
+            return
+        if cls.api_event_type(payload) is not None:
+            payloads.append(payload)
+            return
+        for item in payload.values():
+            cls.collect_explicit_api_payloads(item, payloads)
 
     @classmethod
     def contains_explicit_api_event(cls, value: object) -> bool:

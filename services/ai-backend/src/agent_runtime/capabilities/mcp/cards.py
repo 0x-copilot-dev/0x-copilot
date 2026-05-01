@@ -208,6 +208,32 @@ class McpToolCallRequest(RuntimeContract):
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _collect_misplaced_arguments(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        known_keys = {
+            Keys.Field.SERVER_NAME,
+            Keys.Field.TOOL_NAME,
+            Keys.Field.ARGUMENTS,
+        }
+        extra_arguments = {
+            str(key): item for key, item in value.items() if str(key) not in known_keys
+        }
+        if not extra_arguments:
+            return value
+        raw_arguments = value.get(Keys.Field.ARGUMENTS)
+        arguments = raw_arguments if isinstance(raw_arguments, Mapping) else {}
+        return {
+            Keys.Field.SERVER_NAME: value.get(Keys.Field.SERVER_NAME),
+            Keys.Field.TOOL_NAME: value.get(Keys.Field.TOOL_NAME),
+            Keys.Field.ARGUMENTS: {
+                **extra_arguments,
+                **dict(arguments),
+            },
+        }
+
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
     def _normalize_server_name(cls, value: object) -> str:

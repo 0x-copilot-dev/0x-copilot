@@ -49,6 +49,7 @@ Claim records use `RuntimeWorkerClaim`; worker outcomes use `RuntimeWorkerResult
 
 - Claim queued commands with lock expiration.
 - Limit concurrent command handling with `RUNTIME_MAX_PARALLEL_RUNS`.
+- Limit concurrent LangGraph tool/task execution inside a run with `RUNTIME_MAX_PARALLEL_TASKS`.
 - Retry retryable failures up to `RUNTIME_MAX_RETRIES`, then dead-letter.
 - Re-check current run state before starting run execution.
 - Load conversation history through the persistence port.

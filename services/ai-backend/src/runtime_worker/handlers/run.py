@@ -40,6 +40,13 @@ MAX_STRUCTURED_CONTEXT_CHARS = 4_000
 class RuntimeRunHandler:
     """Execute a queued runtime run command asynchronously."""
 
+    action_interrupt_events = frozenset(
+        {
+            RuntimeApiEventType.APPROVAL_REQUESTED,
+            RuntimeApiEventType.MCP_AUTH_REQUIRED,
+        }
+    )
+
     def __init__(
         self,
         *,
@@ -111,7 +118,7 @@ class RuntimeRunHandler:
                     timeout=command.runtime_context.model_profile.timeout_seconds,
                 )
                 metrics.record_usage_from(result)
-            if self._is_approval_interrupt(result):
+            if self._is_action_interrupt(result):
                 self.persistence.update_run_status(
                     run_id=command.run_id,
                     status=AgentRunStatus.WAITING_FOR_APPROVAL,
@@ -454,8 +461,8 @@ class RuntimeRunHandler:
                     after_sequence=latest_before,
                 )
                 for event in new_events:
-                    if event.event_type == RuntimeApiEventType.APPROVAL_REQUESTED:
-                        return {"approval_requested": True}
+                    if event.event_type in self.action_interrupt_events:
+                        return {"action_required": True}
                     if (
                         event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
                         and event.task_id is not None
@@ -492,8 +499,11 @@ class RuntimeRunHandler:
         return None
 
     @classmethod
-    def _is_approval_interrupt(cls, result: object) -> bool:
-        return isinstance(result, Mapping) and result.get("approval_requested") is True
+    def _is_action_interrupt(cls, result: object) -> bool:
+        return isinstance(result, Mapping) and (
+            result.get("action_required") is True
+            or result.get("approval_requested") is True
+        )
 
     def _append_lifecycle(
         self,

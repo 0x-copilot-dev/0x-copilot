@@ -8,7 +8,7 @@ Use Pydantic for every boundary where data enters, leaves, or crosses a subsyste
 
 The implemented contracts live under `src/agent_runtime/`:
 
-- `AgentRuntimeContext`: user ID, organization ID, roles, permission scopes, connector scopes, model profile, trace ID, and feature flags.
+- `AgentRuntimeContext`: user ID, organization ID, roles, permission scopes, connector scopes, model profile, trace ID, max parallel task limit, and feature flags.
 - `ModelConfig` and `ModelReasoningConfig`: provider, model name, execution limits, streaming support, and provider-neutral reasoning/thinking controls. The runtime translates these primitives into LangChain provider kwargs at the Deep Agents boundary.
 - `RuntimeDependencies`: injected ports for tool registry, MCP registry, skill source config, memory backend factory, and subagent catalog.
 - `RuntimeErrorEnvelope`: typed, retryable, correlation-aware errors safe for product surfaces.
@@ -46,6 +46,7 @@ The implemented contracts live under `src/agent_runtime/`:
 - Secrets and oversized payloads must be redacted or truncated before reaching stream events.
 - API event payloads, event metadata, request metadata, persistence JSON payloads, and audit metadata must be redacted before storage.
 - Runtime event sequence numbers are per run and must remain replayable after reconnect.
+- Runtime graph execution must apply the configured max parallel task limit to LangGraph concurrency inside each run.
 - Provider chunk streams must preserve exact chunk text in `payload.delta`; display summaries may normalize whitespace.
 - Raw chain-of-thought, provider reasoning tokens, hidden scratchpads, and private prompt text must not be streamed or persisted as client-visible runtime events. Use `reasoning_summary` events with product-safe summaries instead.
 - Subagent handoffs must not serialize raw conversation history by default.

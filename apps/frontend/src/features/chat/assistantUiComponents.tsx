@@ -437,6 +437,7 @@ function ActivityItem({
   description,
   details,
   result,
+  icon,
 }: {
   title: string;
   status: string;
@@ -444,7 +445,9 @@ function ActivityItem({
   description?: ReactNode;
   details?: ReactNode;
   result?: ReactNode;
+  icon?: ReactNode;
 }): ReactElement {
+  const hasDetails = Boolean(details);
   return (
     <div
       className={classNames(
@@ -454,21 +457,25 @@ function ActivityItem({
       data-status={status}
     >
       <div className="aui-activity-item__content">
-        <span className="aui-activity-item__status-dot" aria-hidden="true" />
+        <span className="aui-activity-item__icon" aria-hidden="true">
+          {icon ?? <ActivityStatusIcon status={status} />}
+        </span>
         <div className="aui-activity-item__text">
-          <span className="aui-activity-item__title">{title}</span>
-          {description ? (
-            <span className="aui-activity-item__description">
-              {description}
-            </span>
-          ) : null}
+          <div className="aui-activity-item__line">
+            <span className="aui-activity-item__title">{title}</span>
+            {description ? (
+              <span className="aui-activity-item__description">
+                {description}
+              </span>
+            ) : null}
+          </div>
           {result ? (
             <div className="aui-activity-item__result">{result}</div>
           ) : null}
         </div>
       </div>
-      <Badge tone={badgeToneForStatus(status)}>{status}</Badge>
-      {details ? (
+      <span className="aui-activity-item__status">{status}</span>
+      {hasDetails ? (
         <ActivityCollapsible
           className="aui-activity-item__details"
           contentClassName="aui-activity-item__details-content"
@@ -479,6 +486,27 @@ function ActivityItem({
       ) : null}
     </div>
   );
+}
+
+function ActivityStatusIcon({ status }: { status: string }): ReactElement {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === "running" ||
+    normalized === "starting" ||
+    normalized === "working" ||
+    normalized === "still working" ||
+    normalized === "waiting"
+  ) {
+    return <span className="aui-activity-item__spinner" />;
+  }
+  if (
+    normalized === "error" ||
+    normalized === "failed" ||
+    normalized === "could not complete"
+  ) {
+    return <span className="aui-activity-item__mark">!</span>;
+  }
+  return <span className="aui-activity-item__mark">✓</span>;
 }
 
 function ThreadWelcome(): ReactElement {
@@ -1273,12 +1301,12 @@ function ToolFallback({
   const activitySummary = stringValue(args.summary) ?? argsSummary;
   const statusLabel = toolStatusLabel(status.type, isError);
   const largeResult = largeToolResultFromValue(result);
-  const title = toolActivityTitle(toolName, status.type, isError, result, null);
-  const resultSummary = largeResult ? (
-    <LargeToolResultNotice result={largeResult} compact />
-  ) : result !== undefined ? (
-    summarizeToolValue(result, toolName)
-  ) : undefined;
+  const title = inlineToolTitle(toolName, status.type, isError);
+  const resultSummary = largeResult
+    ? "large result saved"
+    : result !== undefined
+      ? summarizeToolValue(result, toolName)
+      : undefined;
   const details = toolDetailsContent(argsText, result);
   if (!shouldRenderFullToolCard(status.type, isError, result)) {
     return (
@@ -1317,18 +1345,18 @@ function McpTool({
   const requestedTool = stringValue(args.tool_name);
   const resultNotice = largeToolResultFromValue(result);
   const statusLabel = toolStatusLabel(status.type, isError);
-  const title = mcpToolTitle(toolName, requestedTool);
+  const title = inlineMcpToolTitle(toolName, requestedTool);
   const description = mcpToolSummary(
     toolName,
     status.type,
     serverName,
     requestedTool,
   );
-  const resultSummary = resultNotice ? (
-    <LargeToolResultNotice result={resultNotice} compact />
-  ) : result !== undefined ? (
-    summarizeMcpResult(result)
-  ) : undefined;
+  const resultSummary = resultNotice
+    ? "large result saved"
+    : result !== undefined
+      ? summarizeMcpResult(result)
+      : undefined;
   const details = toolDetailsContent(argsText, result);
   if (!shouldRenderFullMcpCard(toolName, status.type, isError, result)) {
     return (
@@ -1387,7 +1415,7 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
   );
   const title = subagentCardTitle(displayTitle, taskSummary, completed);
   const fallbackProgress = subagentFallbackProgress(elapsedSeconds);
-  const description = terminal
+  const outputSummary = terminal
     ? summarizeSubagentResult(summary, taskSummary)
     : fallbackProgress;
   const details =
@@ -1400,35 +1428,38 @@ function SubagentTool(props: ToolCallMessagePartProps): ReactElement {
       </>
     ) : undefined;
   const hasActivityDetail = activities.length > 0;
-  const shouldUseCard =
-    failed || !terminal || hasImportantSubagentActivity(activities);
-  if (!shouldUseCard) {
-    return (
-      <ActivityItem
-        title={title}
-        status={statusLabel}
-        variant="subagent"
-        description={description}
-        details={details}
-      />
-    );
-  }
+  const activityDetails = hasActivityDetail ? (
+    <SubagentActivityList
+      activities={activities}
+      emptyText={
+        completed ? "No detailed activity was reported." : fallbackProgress
+      }
+    />
+  ) : null;
+  const resultDetails =
+    terminal && summary ? (
+      <>
+        <small>Result</small>
+        <pre>{truncateText(summary, 800)}</pre>
+      </>
+    ) : null;
+  const subagentDetails =
+    activityDetails || details || resultDetails ? (
+      <>
+        {activityDetails}
+        {details}
+        {resultDetails}
+      </>
+    ) : undefined;
   return (
-    <ActivityCard
-      title={title}
+    <ActivityItem
+      title={subagentInlineTitle(completed, failed, cancelled)}
       status={statusLabel}
       variant="subagent"
-      description={description}
-      result={terminal && summary ? truncateText(summary, 180) : undefined}
-      details={details}
-    >
-      <SubagentActivityList
-        activities={activities}
-        emptyText={
-          completed ? "No detailed activity was reported." : fallbackProgress
-        }
-      />
-    </ActivityCard>
+      description={title}
+      result={terminal ? undefined : outputSummary}
+      details={subagentDetails}
+    />
   );
 }
 
@@ -1459,6 +1490,20 @@ function subagentCardTitle(
     return truncateText(title, 96);
   }
   return completed ? "Background task finished" : "Working in the background";
+}
+
+function subagentInlineTitle(
+  completed: boolean,
+  failed: boolean,
+  cancelled: boolean,
+): string {
+  if (failed) {
+    return "Subagent failed";
+  }
+  if (cancelled) {
+    return "Subagent cancelled";
+  }
+  return completed ? "Subagent finished" : "Subagent working";
 }
 
 function subagentStatusLabel(
@@ -1568,7 +1613,6 @@ function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
 function ApprovalTool({
   args,
   result,
-  status,
   addResult,
   resume,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
@@ -1581,7 +1625,7 @@ function ApprovalTool({
   const isMcpApproval =
     stringValue(args.approval_kind) === "mcp_tool" ||
     stringValue(args.kind) === "mcp_tool";
-  const resolved = result !== undefined || status.type === "complete";
+  const resolved = result !== undefined;
   const submit = (decision: ApprovalDecision): void => {
     addResult({ decision, approval_id: approvalId });
     resume({ decision, approval_id: approvalId });
@@ -1647,7 +1691,6 @@ function ApprovalTool({
 function ConnectorAuthTool({
   args,
   result,
-  status,
   onConnect,
   onSkip,
 }: ToolCallMessagePartProps<Record<string, unknown>> & {
@@ -1665,7 +1708,7 @@ function ConnectorAuthTool({
   const message =
     stringValue(args.message) ?? "Authenticate this connector to continue.";
   const expiresAt = stringValue(args.expires_at);
-  const resolved = result !== undefined || status.type === "complete";
+  const resolved = result !== undefined;
 
   async function submit(action: "connect" | "skip"): Promise<void> {
     if (!serverId || resolved || pendingAction !== null) {
@@ -1870,7 +1913,6 @@ function shouldRenderFullToolCard(
   return (
     isError === true ||
     status === "requires-action" ||
-    largeToolResultFromValue(result) !== null ||
     hasRichToolResult(result)
   );
 }
@@ -1881,11 +1923,7 @@ function shouldRenderFullMcpCard(
   isError: boolean | undefined,
   result: unknown,
 ): boolean {
-  if (
-    isError === true ||
-    status === "requires-action" ||
-    largeToolResultFromValue(result) !== null
-  ) {
+  if (isError === true || status === "requires-action") {
     return true;
   }
   if (status === "running") {
@@ -1899,7 +1937,7 @@ function hasRichToolResult(value: unknown): boolean {
     return false;
   }
   if (largeToolResultFromValue(value)) {
-    return true;
+    return false;
   }
   if (Array.isArray(value)) {
     return value.length > 3;
@@ -2453,6 +2491,18 @@ function toolActivityTitle(
   return status === "running" ? `${displayName} running` : displayName;
 }
 
+function inlineToolTitle(
+  toolName: string,
+  status: string,
+  isError: boolean | undefined,
+): string {
+  const displayName = toolDisplayName(toolName);
+  if (isError || status === "incomplete") {
+    return `${displayName} failed`;
+  }
+  return status === "running" ? `Running ${displayName}` : displayName;
+}
+
 function toolDisplayName(toolName: string): string {
   const normalized = toolName.trim().toLowerCase();
   if (normalized === "ls" || normalized === "list_files") {
@@ -2482,6 +2532,21 @@ function mcpToolTitle(toolName: string, requestedTool: string | null): string {
     return "Authenticate MCP server";
   }
   return requestedTool ? humanizeIdentifier(requestedTool) : "Call MCP tool";
+}
+
+function inlineMcpToolTitle(
+  toolName: string,
+  requestedTool: string | null,
+): string {
+  if (toolName === "load_mcp_server") {
+    return "Load MCP tools";
+  }
+  if (toolName === "auth_mcp") {
+    return "Authenticate connector";
+  }
+  return requestedTool
+    ? humanizeIdentifier(requestedTool)
+    : humanizeIdentifier(toolName || "MCP action");
 }
 
 function mcpToolSummary(

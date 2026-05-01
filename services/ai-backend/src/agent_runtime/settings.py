@@ -45,6 +45,7 @@ class RuntimeExecutionSettings(RuntimeContract):
 
     max_retries: int = Field(default=2, ge=0, le=10)
     max_parallel_runs: int = Field(default=4, ge=1, le=100)
+    max_parallel_tasks: int = Field(default=4, ge=1, le=100)
     max_parallel_subagents: int = Field(default=4, ge=1, le=100)
     worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
@@ -143,6 +144,7 @@ class RuntimeSettings(RuntimeContract):
             execution=RuntimeExecutionSettings(
                 max_retries=cls._int(values, "RUNTIME_MAX_RETRIES", 2),
                 max_parallel_runs=cls._int(values, "RUNTIME_MAX_PARALLEL_RUNS", 4),
+                max_parallel_tasks=cls._int(values, "RUNTIME_MAX_PARALLEL_TASKS", 4),
                 max_parallel_subagents=cls._int(
                     values, "RUNTIME_MAX_PARALLEL_SUBAGENTS", 4
                 ),
