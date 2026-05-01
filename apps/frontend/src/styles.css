@@ -620,15 +620,126 @@ p {
   padding: 0.25rem 0.4rem;
 }
 
+.aui-footer-icon-button {
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.25rem;
+}
+
+.aui-icon-button[data-tooltip],
+.aui-footer-icon-button[data-tooltip],
+.aui-send-button[data-tooltip] {
+  position: relative;
+}
+
+.aui-icon-button[data-tooltip]::after,
+.aui-footer-icon-button[data-tooltip]::after,
+.aui-send-button[data-tooltip]::after {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  bottom: calc(100% + 0.375rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+  color: var(--color-text);
+  content: attr(data-tooltip);
+  font: 500 0.75rem/1.2 var(--font-sans);
+  left: 50%;
+  max-width: min(12rem, calc(100vw - 2rem));
+  opacity: 0;
+  overflow-wrap: break-word;
+  padding: 0.375rem 0.5rem;
+  pointer-events: none;
+  position: absolute;
+  text-align: center;
+  transform: translateX(-50%) translateY(0.125rem);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+  width: max-content;
+  z-index: 80;
+}
+
+.aui-icon-button[data-tooltip]:hover::after,
+.aui-icon-button[data-tooltip]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip]:hover::after,
+.aui-footer-icon-button[data-tooltip]:focus-visible::after,
+.aui-send-button[data-tooltip]:hover::after,
+.aui-send-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  visibility: visible;
+}
+
+.aui-footer-icon-button__icon {
+  height: 1rem;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1rem;
+}
+
 .aui-message-timing {
   cursor: default;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   tab-size: 4;
 }
 
-.aui-message-metrics span:not(.aui-message-timing) {
-  color: var(--color-text-subtle);
+.aui-message-metrics {
+  position: relative;
+}
+
+.aui-message-metrics__tooltip {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  bottom: calc(100% + 0.375rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+  color: var(--color-text);
+  display: grid;
   font-size: 0.75rem;
+  gap: 0.25rem;
+  left: 0;
+  max-width: min(12rem, calc(100vw - 2rem));
+  min-width: max-content;
+  opacity: 0;
+  padding: 0.375rem 0.5rem;
+  pointer-events: none;
+  position: absolute;
+  transform: translateY(0.125rem);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+  z-index: 60;
+}
+
+.aui-message-metrics:hover .aui-message-metrics__tooltip,
+.aui-message-metrics:focus-within .aui-message-metrics__tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.aui-message-metrics__row {
+  align-items: baseline;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+
+.aui-message-metrics__row span {
+  color: var(--color-text-muted);
+}
+
+.aui-message-metrics__row strong {
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .aui-footer-icon-button:hover {
@@ -743,38 +854,75 @@ p {
 }
 
 .aui-composer {
+  --composer-padding: 0.5rem;
+  --composer-radius: 1.5rem;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 1.5rem;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.18);
-  display: grid;
-  gap: var(--space-xs);
+  border-radius: var(--composer-radius);
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
   margin: var(--space-lg) auto 0;
   max-width: 48rem;
-  padding: 0.5rem;
+  padding: var(--composer-padding);
   position: relative;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
   width: 100%;
 }
 
+.aui-composer:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 75%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
 .aui-composer__dropzone {
-  display: grid;
-  gap: var(--space-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .aui-composer__dropzone[data-dragging="true"] {
-  outline: 2px solid var(--color-accent);
+  background: color-mix(in srgb, var(--color-surface-muted) 50%, transparent);
+  outline: 2px dashed var(--color-accent);
 }
 
-.aui-composer__input-row {
-  align-items: end;
-  display: grid;
-  gap: var(--space-xs);
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+.aui-composer-attachments {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  overflow-x: auto;
+  width: 100%;
+}
+
+.aui-composer-attachments:empty {
+  display: none;
+}
+
+.aui-composer-action-wrapper {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  position: relative;
 }
 
 .aui-plus-menu-root {
   display: inline-flex;
   position: relative;
+}
+
+.aui-composer-add-attachment,
+.aui-composer-send {
+  border-radius: var(--radius-full);
+  font-size: 0.875rem;
+  height: 2rem;
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.25rem;
+  width: 2rem;
 }
 
 .aui-plus-menu {
@@ -817,27 +965,52 @@ p {
   background: transparent;
   border: 0;
   color: var(--color-text);
+  display: block;
   font-size: 0.875rem;
-  max-height: 14rem;
-  min-height: 2.25rem;
+  line-height: 1.25rem;
+  max-height: 8rem;
+  min-height: 2.5rem;
   outline: none;
+  padding: 0.25rem 0.4375rem;
+  position: relative;
   resize: none;
   width: 100%;
+}
+
+.aui-composer__input :where(p) {
+  color: inherit;
+  line-height: 1.25rem;
+  margin: 0;
+}
+
+.aui-composer__input :where(.aui-lexical-input) {
+  min-height: 1.25rem;
+  outline: none;
+}
+
+.aui-composer__input :where(.aui-lexical-placeholder) {
+  color: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
+  left: 0;
+  padding: 0.25rem 0.4375rem;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
 }
 
 .aui-send-button {
   align-items: center;
   background: var(--color-text);
   border: 1px solid var(--color-text);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   color: var(--color-bg);
   cursor: pointer;
   display: inline-flex;
   font: inherit;
   font-weight: 700;
   justify-content: center;
-  min-height: 2.25rem;
-  padding: 0.45rem 0.85rem;
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.25rem;
   text-decoration: none;
 }
 

@@ -83,7 +83,12 @@ export function SettingsScreen({
           </span>
           <span>assistant-ui</span>
         </div>
-        <button className="settings-back" type="button" onClick={onBackToChat}>
+        <button
+          className="settings-back"
+          type="button"
+          title="Back to chat"
+          onClick={onBackToChat}
+        >
           Back to chat
         </button>
         <h1>Settings</h1>
@@ -93,6 +98,7 @@ export function SettingsScreen({
               key={section.id}
               className={activeSection === section.id ? "is-active" : undefined}
               type="button"
+              title={`Open ${section.label} settings`}
               onClick={() => setActiveSection(section.id)}
             >
               {section.label}
@@ -226,6 +232,7 @@ function ConnectorsSettings({
         <Button
           type="button"
           variant="secondary"
+          title="Refresh connectors"
           onClick={() => void connectors.refresh()}
         >
           Refresh
@@ -286,7 +293,7 @@ function ConnectorsSettings({
               placeholder="https://auth.example.com/token"
             />
           </Field>
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} title="Add connector">
             Add connector
           </Button>
         </form>
@@ -405,6 +412,7 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
         <Button
           type="button"
           variant="secondary"
+          title="Refresh skills"
           onClick={() => void skills.refresh()}
         >
           Refresh
@@ -448,7 +456,7 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
               spellCheck={false}
             />
           </Field>
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} title="Add skill">
             Add skill
           </Button>
         </form>
@@ -499,6 +507,9 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                 <Button
                   type="button"
                   variant="secondary"
+                  title={
+                    isPreloaded ? "View skill markdown" : "Edit this skill"
+                  }
                   onClick={() => beginEdit(skill)}
                 >
                   {isPreloaded ? "View markdown" : "Edit"}
@@ -520,6 +531,7 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                   <Button
                     type="button"
                     variant="secondary"
+                    title="Close markdown viewer"
                     onClick={() => setEditingSkillId(null)}
                   >
                     Close
@@ -564,12 +576,17 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                     <p className="app-error">{editingError}</p>
                   ) : null}
                   <div className="skill-row-actions">
-                    <Button type="submit" disabled={saving}>
+                    <Button
+                      type="submit"
+                      disabled={saving}
+                      title="Save skill changes"
+                    >
                       Save changes
                     </Button>
                     <Button
                       type="button"
                       variant="secondary"
+                      title="Cancel editing skill"
                       onClick={() => setEditingSkillId(null)}
                     >
                       Cancel
@@ -578,6 +595,7 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                       type="button"
                       variant="danger"
                       disabled={saving}
+                      title="Delete this skill"
                       onClick={() => void onDelete(skill.skill_id)}
                     >
                       Delete
@@ -671,6 +689,7 @@ function ConnectorSettingsRow({
         <Button
           type="button"
           variant="secondary"
+          title={`Authenticate ${server.display_name}`}
           onClick={() => void connectors.authenticate(server.server_id)}
         >
           Authenticate
@@ -678,6 +697,7 @@ function ConnectorSettingsRow({
         <Button
           type="button"
           variant="ghost"
+          title={`Skip authentication for ${server.display_name}`}
           onClick={() => void connectors.skipAuth(server.server_id)}
         >
           Skip auth
@@ -685,6 +705,7 @@ function ConnectorSettingsRow({
         <Button
           type="button"
           variant="danger"
+          title={`Remove ${server.display_name}`}
           onClick={() => void connectors.removeServer(server.server_id)}
         >
           Remove

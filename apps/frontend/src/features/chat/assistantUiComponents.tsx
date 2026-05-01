@@ -1,5 +1,4 @@
 import {
-  ActionBarMorePrimitive,
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
@@ -61,6 +60,7 @@ export function AssistantThreadList({
           className="aui-icon-button"
           type="button"
           aria-label="Refresh conversations"
+          data-tooltip="Refresh conversations"
           onClick={onRefresh}
         >
           ↻
@@ -70,6 +70,11 @@ export function AssistantThreadList({
         <ThreadListPrimitive.New
           className="aui-new-thread"
           disabled={activeRunId !== null}
+          title={
+            activeRunId === null
+              ? "Start a new thread"
+              : "Stop the current response before starting a new thread"
+          }
         >
           New Thread
         </ThreadListPrimitive.New>
@@ -85,6 +90,11 @@ export function AssistantThreadList({
               <ThreadListItemPrimitive.Trigger
                 className="aui-thread-list-item__trigger"
                 disabled={activeRunId !== null}
+                title={
+                  activeRunId === null
+                    ? "Open thread"
+                    : "Stop the current response before switching threads"
+                }
               >
                 <ThreadListItemPrimitive.Title />
               </ThreadListItemPrimitive.Trigger>
@@ -96,6 +106,7 @@ export function AssistantThreadList({
         <button
           className="aui-sidebar-settings"
           type="button"
+          title="Open settings"
           onClick={onOpenSettings}
         >
           <span aria-hidden="true">⚙</span>
@@ -145,7 +156,6 @@ export function AssistantThread({
   onModelChange,
   modelDisabled,
   onShare,
-  onShowConnectors,
   onToggleSidebar,
   children,
 }: {
@@ -156,7 +166,6 @@ export function AssistantThread({
   onModelChange: (modelId: string) => void;
   modelDisabled?: boolean;
   onShare: () => void;
-  onShowConnectors: () => void;
   onToggleSidebar: () => void;
   children: ReactNode;
 }): ReactElement {
@@ -168,6 +177,7 @@ export function AssistantThread({
             className="aui-icon-button"
             type="button"
             aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            data-tooltip={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
             onClick={onToggleSidebar}
           >
             {sidebarCollapsed ? "☰" : "◧"}
@@ -185,11 +195,9 @@ export function AssistantThread({
           <button
             className="aui-ghost-button"
             type="button"
-            onClick={onShowConnectors}
+            title="Copy share link"
+            onClick={onShare}
           >
-            Connectors
-          </button>
-          <button className="aui-ghost-button" type="button" onClick={onShare}>
             Share
           </button>
         </div>
@@ -240,7 +248,10 @@ export function ThreadBody({
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
       <SelectionToolbarPrimitive.Root className="aui-selection-toolbar">
-        <SelectionToolbarPrimitive.Quote className="aui-selection-toolbar__button">
+        <SelectionToolbarPrimitive.Quote
+          className="aui-selection-toolbar__button"
+          title="Quote selected text"
+        >
           Quote
         </SelectionToolbarPrimitive.Quote>
       </SelectionToolbarPrimitive.Root>
@@ -272,7 +283,10 @@ export function ThreadBody({
         </ThreadPrimitive.Messages>
         {connectorSuggestions}
         <ThreadPrimitive.ViewportFooter className="aui-thread-footer">
-          <ThreadPrimitive.ScrollToBottom className="aui-scroll-bottom">
+          <ThreadPrimitive.ScrollToBottom
+            className="aui-scroll-bottom"
+            title="Scroll to bottom"
+          >
             Scroll to bottom
           </ThreadPrimitive.ScrollToBottom>
           <AssistantComposer
@@ -297,7 +311,11 @@ function ThreadWelcome(): ReactElement {
       <div className="aui-suggestions">
         <ThreadPrimitive.Suggestions>
           {() => (
-            <SuggestionPrimitive.Trigger className="aui-suggestion" send>
+            <SuggestionPrimitive.Trigger
+              className="aui-suggestion"
+              title="Send this suggestion"
+              send
+            >
               <strong>
                 <SuggestionPrimitive.Title />
               </strong>
@@ -442,25 +460,43 @@ function AssistantComposer({
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root className="aui-composer">
+      <ComposerPrimitive.Root
+        className="aui-composer"
+        data-slot="aui_composer-shell"
+      >
         <ComposerPrimitive.AttachmentDropzone className="aui-composer__dropzone">
           <ComposerPrimitive.Quote className="aui-quote-preview">
             <ComposerPrimitive.QuoteText />
-            <ComposerPrimitive.QuoteDismiss className="aui-icon-button">
+            <ComposerPrimitive.QuoteDismiss
+              className="aui-icon-button"
+              aria-label="Remove quoted text"
+              data-tooltip="Remove quoted text"
+            >
               ×
             </ComposerPrimitive.QuoteDismiss>
           </ComposerPrimitive.Quote>
-          <ComposerPrimitive.Attachments>
-            {({ attachment }) => <AttachmentPill attachment={attachment} />}
-          </ComposerPrimitive.Attachments>
-          <div className="aui-composer__input-row">
+          <div className="aui-composer-attachments">
+            <ComposerPrimitive.Attachments>
+              {({ attachment }) => <AttachmentPill attachment={attachment} />}
+            </ComposerPrimitive.Attachments>
+          </div>
+          <ComposerPrimitive.Input
+            className="aui-composer__input"
+            aria-label="Message"
+            placeholder="Send a message... (@ to mention, / for commands)"
+            minRows={1}
+            maxRows={5}
+            submitMode="enter"
+          />
+          <div className="aui-composer-action-wrapper">
             <div className="aui-plus-menu-root" ref={menuRef}>
               <button
-                className="aui-icon-button"
+                className="aui-icon-button aui-composer-add-attachment"
                 type="button"
                 aria-expanded={menuOpen}
                 aria-haspopup="menu"
                 aria-label="Open attachment and tools menu"
+                data-tooltip="Add attachment"
                 onClick={() => {
                   setMenuOpen((current) => !current);
                   setMenuView("root");
@@ -498,42 +534,25 @@ function AssistantComposer({
                 />
               ) : null}
             </div>
-            <ComposerPrimitive.Input
-              className="aui-composer__input"
-              aria-label="Message"
-              placeholder="Send a message... (@ to mention, / for commands)"
-              minRows={1}
-              maxRows={8}
-              submitMode="enter"
-            />
-            <AuiIf condition={(state) => state.composer.dictation == null}>
-              <ComposerPrimitive.Dictate
-                className="aui-icon-button"
-                title="Start voice dictation"
-              >
-                Mic
-              </ComposerPrimitive.Dictate>
-            </AuiIf>
-            <AuiIf condition={(state) => state.composer.dictation != null}>
-              <ComposerPrimitive.StopDictation
-                className="aui-icon-button"
-                title="Stop voice dictation"
-              >
-                Stop Mic
-              </ComposerPrimitive.StopDictation>
-            </AuiIf>
             <AuiIf condition={(state) => !state.thread.isRunning}>
-              <ComposerPrimitive.Send className="aui-send-button">
-                Send
+              <ComposerPrimitive.Send
+                className="aui-send-button aui-composer-send"
+                aria-label="Send message"
+                data-tooltip="Send message"
+              >
+                ↑
               </ComposerPrimitive.Send>
             </AuiIf>
             <AuiIf condition={(state) => state.thread.isRunning}>
-              <ComposerPrimitive.Cancel className="aui-send-button aui-send-button--stop">
+              <ComposerPrimitive.Cancel
+                className="aui-send-button aui-send-button--stop"
+                aria-label="Stop response"
+                data-tooltip="Stop response"
+              >
                 Stop
               </ComposerPrimitive.Cancel>
             </AuiIf>
           </div>
-          <ComposerPrimitive.DictationTranscript className="aui-dictation-preview" />
         </ComposerPrimitive.AttachmentDropzone>
         <ComposerPrimitive.Unstable_TriggerPopover
           char="/"
@@ -601,6 +620,7 @@ function ComposerPlusMenu({
         <button
           className="aui-trigger-popover__back"
           type="button"
+          title="Back to attachment and tools menu"
           onClick={onBack}
         >
           Back
@@ -618,6 +638,7 @@ function ComposerPlusMenu({
                 className="aui-trigger-popover__item"
                 type="button"
                 role="menuitem"
+                title={`Use ${server.display_name} MCP server`}
                 onClick={() => onUseMcpServer(server)}
               >
                 <strong>{server.display_name}</strong>
@@ -633,6 +654,7 @@ function ComposerPlusMenu({
           className="aui-trigger-popover__item"
           type="button"
           role="menuitem"
+          title="Show connector suggestions"
           onClick={onShowConnectors}
         >
           <strong>Show connector suggestions</strong>
@@ -642,6 +664,7 @@ function ComposerPlusMenu({
           className="aui-trigger-popover__item"
           type="button"
           role="menuitem"
+          title="Open MCP settings"
           onClick={onOpenMcpSettings}
         >
           <strong>Open MCP settings</strong>
@@ -657,6 +680,7 @@ function ComposerPlusMenu({
         <button
           className="aui-trigger-popover__back"
           type="button"
+          title="Back to attachment and tools menu"
           onClick={onBack}
         >
           Back
@@ -674,6 +698,7 @@ function ComposerPlusMenu({
                 className="aui-trigger-popover__item"
                 type="button"
                 role="menuitem"
+                title={`Use ${skill.display_name} skill`}
                 onClick={() => onUseSkill(skill)}
               >
                 <strong>{skill.display_name}</strong>
@@ -686,6 +711,7 @@ function ComposerPlusMenu({
           className="aui-trigger-popover__item"
           type="button"
           role="menuitem"
+          title="Open skill settings"
           onClick={onOpenSkillsSettings}
         >
           <strong>Open skill settings</strong>
@@ -705,6 +731,7 @@ function ComposerPlusMenu({
         className="aui-trigger-popover__item"
         type="button"
         role="menuitem"
+        title="Attach an image"
         onClick={onAttachImage}
       >
         <strong>Attach Image</strong>
@@ -714,6 +741,7 @@ function ComposerPlusMenu({
         className="aui-trigger-popover__item"
         type="button"
         role="menuitem"
+        title="Attach a file"
         onClick={onAttachFile}
       >
         <strong>Attach File</strong>
@@ -723,6 +751,7 @@ function ComposerPlusMenu({
         className="aui-trigger-popover__item"
         type="button"
         role="menuitem"
+        title="Open MCP server menu"
         onClick={onOpenMcp}
       >
         <strong>MCP Servers</strong>
@@ -732,6 +761,7 @@ function ComposerPlusMenu({
         className="aui-trigger-popover__item"
         type="button"
         role="menuitem"
+        title="Open skills menu"
         onClick={onOpenSkills}
       >
         <strong>Skills</strong>
@@ -754,6 +784,7 @@ function TriggerPopoverList(): ReactElement {
               key={category.id}
               categoryId={category.id}
               className="aui-trigger-popover__item"
+              title={`Open ${category.label}`}
             >
               {category.label}
             </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
@@ -768,6 +799,7 @@ function TriggerPopoverList(): ReactElement {
               item={item}
               index={index}
               className="aui-trigger-popover__item"
+              title={item.description ?? item.label}
             >
               <strong>{item.label}</strong>
               {item.description ? <span>{item.description}</span> : null}
@@ -775,7 +807,10 @@ function TriggerPopoverList(): ReactElement {
           ))
         }
       </ComposerPrimitive.Unstable_TriggerPopoverItems>
-      <ComposerPrimitive.Unstable_TriggerPopoverBack className="aui-trigger-popover__back">
+      <ComposerPrimitive.Unstable_TriggerPopoverBack
+        className="aui-trigger-popover__back"
+        title="Back"
+      >
         Back
       </ComposerPrimitive.Unstable_TriggerPopoverBack>
     </>
@@ -849,54 +884,78 @@ function AssistantMessageFooter({
   return (
     <div className="aui-assistant-message-footer">
       <ActionBarPrimitive.Root className="aui-assistant-action-bar">
-        <ActionBarPrimitive.Copy className="aui-footer-icon-button">
-          Copy
-        </ActionBarPrimitive.Copy>
-        <ActionBarPrimitive.Reload className="aui-footer-icon-button">
-          Retry
-        </ActionBarPrimitive.Reload>
-        <ActionBarMorePrimitive.Root>
-          <ActionBarMorePrimitive.Trigger
-            className="aui-footer-icon-button"
-            aria-label="More assistant actions"
-          >
-            More
-          </ActionBarMorePrimitive.Trigger>
-          <ActionBarMorePrimitive.Content className="aui-action-menu">
-            <ActionBarPrimitive.Speak className="aui-action-menu__item">
-              Speak
-            </ActionBarPrimitive.Speak>
-            <ActionBarPrimitive.StopSpeaking className="aui-action-menu__item">
-              Stop speaking
-            </ActionBarPrimitive.StopSpeaking>
-            <ActionBarPrimitive.ExportMarkdown className="aui-action-menu__item">
-              Export markdown
-            </ActionBarPrimitive.ExportMarkdown>
-          </ActionBarMorePrimitive.Content>
-        </ActionBarMorePrimitive.Root>
-      </ActionBarPrimitive.Root>
-      {metrics ? (
-        <div
-          className="aui-message-metrics"
-          aria-label="Assistant message metrics"
+        <ActionBarPrimitive.Copy
+          className="aui-footer-icon-button"
+          aria-label="Copy response"
+          data-tooltip="Copy response"
         >
-          <span className="aui-message-timing">
-            {formatMilliseconds(metrics.duration_ms)}
-          </span>
-          {metrics.first_chunk_ms !== undefined ? (
-            <span>
-              First token {formatMilliseconds(metrics.first_chunk_ms)}
-            </span>
-          ) : null}
-          <span>{metrics.chunk_count} chunks</span>
-          {metrics.usage?.output_per_second !== undefined ? (
-            <span>{formatNumber(metrics.usage.output_per_second)} tok/s</span>
-          ) : null}
-          {metrics.usage?.output !== undefined ? (
-            <span>{formatTokenSummary(metrics)}</span>
-          ) : null}
-        </div>
-      ) : null}
+          <CopyIcon />
+        </ActionBarPrimitive.Copy>
+        <ActionBarPrimitive.Reload
+          className="aui-footer-icon-button"
+          aria-label="Retry response"
+          data-tooltip="Retry response"
+        >
+          <RetryIcon />
+        </ActionBarPrimitive.Reload>
+      </ActionBarPrimitive.Root>
+      {metrics ? <AssistantMessageMetrics metrics={metrics} /> : null}
+    </div>
+  );
+}
+
+function CopyIcon(): ReactElement {
+  return (
+    <svg
+      aria-hidden="true"
+      className="aui-footer-icon-button__icon"
+      fill="none"
+      focusable="false"
+      viewBox="0 0 24 24"
+    >
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function RetryIcon(): ReactElement {
+  return (
+    <svg
+      aria-hidden="true"
+      className="aui-footer-icon-button__icon"
+      fill="none"
+      focusable="false"
+      viewBox="0 0 24 24"
+    >
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v6h-6" />
+    </svg>
+  );
+}
+
+function AssistantMessageMetrics({
+  metrics,
+}: {
+  metrics: AssistantPerformanceMetrics;
+}): ReactElement {
+  const rows = metricRows(metrics);
+  return (
+    <div
+      className="aui-message-metrics"
+      aria-label={rows.map((row) => `${row.label}: ${row.value}`).join(", ")}
+    >
+      <span className="aui-message-timing" tabIndex={0}>
+        {formatMilliseconds(metrics.duration_ms)}
+      </span>
+      <div className="aui-message-metrics__tooltip" role="tooltip">
+        {rows.map((row) => (
+          <div className="aui-message-metrics__row" key={row.label}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -925,10 +984,16 @@ function UserEditComposer(): ReactElement {
           submitMode="enter"
         />
         <div className="aui-edit-composer__actions">
-          <ComposerPrimitive.Cancel className="aui-ghost-button">
+          <ComposerPrimitive.Cancel
+            className="aui-ghost-button"
+            title="Cancel editing"
+          >
             Cancel
           </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send className="aui-send-button">
+          <ComposerPrimitive.Send
+            className="aui-send-button"
+            title="Save edited message"
+          >
             Save
           </ComposerPrimitive.Send>
         </div>
@@ -1129,10 +1194,18 @@ function ApprovalTool({
       <p>{String(args.message ?? args.reason ?? approvalId)}</p>
       {!resolved ? (
         <div className="aui-tool-card__actions">
-          <button type="button" onClick={() => submit("approved")}>
+          <button
+            type="button"
+            title="Approve this request"
+            onClick={() => submit("approved")}
+          >
             Approve
           </button>
-          <button type="button" onClick={() => submit("rejected")}>
+          <button
+            type="button"
+            title="Reject this request"
+            onClick={() => submit("rejected")}
+          >
             Reject
           </button>
         </div>
@@ -1195,6 +1268,7 @@ function ConnectorAuthTool({
           <button
             type="button"
             disabled={!serverId || pendingAction !== null}
+            title={`Connect ${displayName}`}
             onClick={() => void submit("connect")}
           >
             {pendingAction === "connect" ? "Connecting..." : "Connect"}
@@ -1202,6 +1276,7 @@ function ConnectorAuthTool({
           <button
             type="button"
             disabled={!serverId || pendingAction !== null}
+            title={`Skip ${displayName} authentication`}
             onClick={() => void submit("skip")}
           >
             {pendingAction === "skip" ? "Skipping..." : "Not now"}
@@ -1243,22 +1318,32 @@ function formatMilliseconds(value: number): string {
 }
 
 function formatNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(2).replace(/\.?0+$/, "");
 }
 
-function formatTokenSummary(metrics: AssistantPerformanceMetrics): string {
-  const usage = metrics.usage;
-  if (!usage || usage.output === undefined) {
-    return "";
+function metricRows(
+  metrics: AssistantPerformanceMetrics,
+): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (metrics.first_chunk_ms !== undefined) {
+    rows.push({
+      label: "First token",
+      value: formatMilliseconds(metrics.first_chunk_ms),
+    });
   }
-  const parts = [`${usage.output} output tokens`];
-  if (usage.input !== undefined) {
-    parts.push(`${usage.input} input`);
+  rows.push({
+    label: "Total",
+    value: formatMilliseconds(metrics.duration_ms),
+  });
+  if (metrics.usage?.output_per_second !== undefined) {
+    rows.push({
+      label: "Speed",
+      value: `${formatNumber(metrics.usage.output_per_second)} tok/s`,
+    });
   }
-  if (usage.cached_input !== undefined) {
-    parts.push(`${usage.cached_input} cached`);
-  }
-  return parts.join(" · ");
+  return rows;
 }
 
 function formatDateTime(value: string): string {

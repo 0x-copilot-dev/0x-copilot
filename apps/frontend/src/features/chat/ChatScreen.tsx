@@ -17,7 +17,6 @@ import {
   SimpleTextAttachmentAdapter,
   Suggestions,
   WebSpeechDictationAdapter,
-  WebSpeechSynthesisAdapter,
   useAui,
   useExternalStoreRuntime,
   type AppendMessage,
@@ -547,7 +546,6 @@ export function ChatScreen({
         : undefined,
     [],
   );
-  const speechAdapter = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const aui = useAui({
     suggestions: Suggestions([
       {
@@ -615,7 +613,6 @@ export function ChatScreen({
     adapters: {
       attachments: attachmentAdapter,
       dictation: dictationAdapter,
-      speech: speechAdapter,
       threadList: threadListAdapter,
     },
   });
@@ -645,7 +642,6 @@ export function ChatScreen({
           onModelChange={setSelectedModelId}
           modelDisabled={activeRunId !== null}
           onShare={() => void onShare()}
-          onShowConnectors={() => setShowConnectorSuggestions(true)}
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         >
           <ThreadBody

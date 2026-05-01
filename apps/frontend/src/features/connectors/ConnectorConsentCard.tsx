@@ -32,6 +32,7 @@ export function ConnectorSuggestionCard({
             <Button
               type="button"
               size="sm"
+              title={`Connect ${server.display_name}`}
               onClick={() => onConnect(server.server_id)}
             >
               Connect
@@ -40,6 +41,7 @@ export function ConnectorSuggestionCard({
               type="button"
               size="sm"
               variant="ghost"
+              title={`Skip ${server.display_name}`}
               onClick={() => onSkip(server.server_id)}
             >
               Skip
@@ -47,7 +49,12 @@ export function ConnectorSuggestionCard({
           </div>
         ))}
       </div>
-      <Button type="button" variant="secondary" onClick={onNone}>
+      <Button
+        type="button"
+        variant="secondary"
+        title="Dismiss connector suggestions"
+        onClick={onNone}
+      >
         None of these
       </Button>
     </Card>
