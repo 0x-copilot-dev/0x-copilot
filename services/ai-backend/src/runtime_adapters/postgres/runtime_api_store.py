@@ -811,14 +811,22 @@ class PostgresRuntimeApiStore:
             content_text=request.user_input,
             content_format=request.content_format,
             content=tuple(
-                part.model_dump(mode="json", exclude_none=True)
+                part.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
                 for part in request.content
             ),
             attachments=tuple(
-                attachment.model_dump(mode="json", exclude_none=True)
+                attachment.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
                 for attachment in request.attachments
             ),
-            quote=request.quote,
+            quote=request.quote_payload(),
             metadata=self._message_metadata(request),
             parent_message_id=parent_message_id,
             source_message_id=request.source_message_id,
@@ -873,12 +881,16 @@ class PostgresRuntimeApiStore:
     @staticmethod
     def _message_metadata(request: CreateRunRequest) -> dict[str, object]:
         metadata: dict[str, object] = {}
-        if request.quote is not None:
-            metadata["quote"] = request.quote
+        quote = request.quote_payload()
+        if quote is not None:
+            metadata["quote"] = quote
         if request.source_message_id is not None:
             metadata["source_message_id"] = request.source_message_id
         if request.branch_id is not None:
             metadata["branch_id"] = request.branch_id
+        branch = request.branch_payload()
+        if branch is not None:
+            metadata["branch"] = branch
         if request.regenerate_from_message_id is not None:
             metadata["regenerate_from_message_id"] = request.regenerate_from_message_id
         return metadata

@@ -223,11 +223,82 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
     command = store.run_commands[-1]
     messages = handler._messages_for_run(command, store.runs[edited.run_id])
 
-    assert [message["content"] for message in messages] == [
+    message_prompts = [
+        message["content"].split("\n\n", maxsplit=1)[0] for message in messages
+    ]
+    assert message_prompts == [
         "Original question",
         "Original answer",
         "Edited question",
     ]
+    assert "Sibling branch that should not leak" not in messages[-1]["content"]
+
+
+def test_runtime_worker_includes_structured_composer_context() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
+        )
+    )
+    response = service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Review the launch brief.",
+            content=[
+                {"type": "text", "text": "Review the launch brief."},
+                {
+                    "type": "document",
+                    "filename": "launch-plan.md",
+                    "mime_type": "text/markdown",
+                    "text": "Launch plan risks",
+                },
+            ],
+            attachments=[
+                {
+                    "id": "attachment_1",
+                    "type": "document",
+                    "name": "brief.txt",
+                    "content_type": "text/plain",
+                    "size": 12,
+                    "content": [{"type": "text", "text": "Budget risk"}],
+                }
+            ],
+            quote={"text": "quoted selection", "source": "assistant_1"},
+            branch_id="branch_edit",
+            branch={"replace_from_message_id": "assistant_old"},
+            model={"provider": "openai", "model_name": "gpt-4.1-mini"},
+        )
+    )
+
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    command = store.run_commands[-1]
+    messages = handler._messages_for_run(command, store.runs[response.run_id])
+    content = messages[-1]["content"]
+
+    assert "Review the launch brief." in content
+    assert "Quoted context:\nquoted selection\nSource: assistant_1" in content
+    assert "Structured content:\n- document launch-plan.md" in content
+    assert "Launch plan risks" in content
+    assert "Attachments:\n- brief.txt (text/plain, 12 bytes): Budget risk" in content
+    assert "Branch metadata:" in content
+    assert "- branch_id: branch_edit" in content
+    assert "- replace_from_message_id: assistant_old" in content
 
 
 def test_runtime_worker_streams_model_deltas_before_final_response() -> None:

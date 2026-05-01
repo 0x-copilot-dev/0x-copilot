@@ -840,7 +840,9 @@ function attachmentsFromAppendMessage(
     type: attachment.type,
     name: attachment.name,
     content_type: attachment.contentType ?? null,
-    content: attachment.content,
+    content: attachment.content as NonNullable<
+      CreateRunRequest["attachments"]
+    >[number]["content"],
   }));
 }
 

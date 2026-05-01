@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    ValidationInfo,
+    field_validator,
+)
 
 from agent_runtime.execution.contracts import (
     JsonObject,
@@ -442,6 +449,87 @@ class RuntimeEventPresentationProjector:
         if not normalized:
             return None
         return normalized
+
+
+class RuntimeEventPayloadContract(RuntimeContract):
+    """Base for structured event payloads with additive provider metadata."""
+
+    model_config = ConfigDict(extra="allow", frozen=True, validate_assignment=True)
+
+
+class RuntimeTextPayload(RuntimeEventPayloadContract):
+    """Text-bearing model, progress, observation, and error payload."""
+
+    message: str | None = None
+    delta: str | None = None
+    summary: str | None = None
+    display_title: str | None = None
+
+
+class RuntimeLifecyclePayload(RuntimeEventPayloadContract):
+    """Lifecycle payload for run and heartbeat events."""
+
+    status: str | None = None
+    message: str | None = None
+    summary: str | None = None
+
+
+class ReasoningSummaryPayload(RuntimeEventPayloadContract):
+    """Reasoning summary payload displayed by Assistant UI reasoning parts."""
+
+    summary: str
+    message: str | None = None
+
+
+class ReasoningSummaryDeltaPayload(RuntimeEventPayloadContract):
+    """Incremental reasoning summary payload."""
+
+    delta: str
+    summary: str | None = None
+    message: str | None = None
+
+
+class ToolCallPayload(RuntimeEventPayloadContract):
+    """Structured tool call payload with stable call identity."""
+
+    tool_name: str
+    call_id: str
+    args: JsonObject = Field(default_factory=dict)
+    status: str | None = None
+    summary: str | None = None
+
+
+class ToolCallDeltaPayload(RuntimeEventPayloadContract):
+    """Incremental tool call payload."""
+
+    call_id: str
+    tool_name: str | None = None
+    delta: str | None = None
+    args_delta: JsonObject = Field(default_factory=dict)
+    status: str | None = None
+    summary: str | None = None
+
+
+class ToolResultPayload(RuntimeEventPayloadContract):
+    """Structured tool result payload with safe output details."""
+
+    tool_name: str
+    call_id: str
+    status: str | None = None
+    output: JsonObject = Field(default_factory=dict)
+    summary: str | None = None
+    safe_message: str | None = None
+
+
+class SubagentActivityPayload(RuntimeEventPayloadContract):
+    """Structured subagent lifecycle/progress payload."""
+
+    task_id: str
+    subagent_name: str | None = None
+    subagent_id: str | None = None
+    status: str | None = None
+    summary: str | None = None
+    message: str | None = None
 
 
 class RuntimeEventEnvelope(RuntimeContract):

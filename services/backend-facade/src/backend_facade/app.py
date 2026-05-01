@@ -36,6 +36,7 @@ class FacadeRunRequest(BaseModel):
     source_message_id: str | None = None
     regenerate_from_message_id: str | None = None
     branch_id: str | None = None
+    branch: dict[str, object] | None = None
     idempotency_key: str | None = None
     request_context: dict[str, object] = Field(default_factory=dict)
 

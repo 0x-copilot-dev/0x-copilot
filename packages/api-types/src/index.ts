@@ -249,7 +249,7 @@ export interface Message {
   content_format: string;
   content?: RunContentPart[];
   attachments?: RunAttachmentRequest[];
-  quote?: Record<string, unknown> | null;
+  quote?: RunQuoteMetadata | null;
   metadata?: Record<string, unknown>;
   parent_message_id: string | null;
   source_message_id?: string | null;
@@ -297,23 +297,54 @@ export interface ModelCatalogResponse {
   models: ModelCatalogModel[];
 }
 
+export type RunContentPartType = "text" | "image" | "document" | "file";
+
 export interface RunContentPart {
-  type: string;
+  type: RunContentPartType | (string & {});
   text?: string;
   image?: string;
   data?: string;
   mime_type?: string;
   filename?: string;
   name?: string;
+  size?: number | null;
+  file_id?: string | null;
+  url?: string | null;
   content?: unknown;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RunAttachmentRequest {
   id: string;
-  type: string;
+  type: RunContentPartType | (string & {});
   name: string;
   content_type?: string | null;
-  content: unknown[];
+  size?: number | null;
+  file_id?: string | null;
+  url?: string | null;
+  content: RunContentPart[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface RunQuoteMetadata {
+  text?: string;
+  message_id?: string | null;
+  part_index?: number | null;
+  start_index?: number | null;
+  end_index?: number | null;
+  source?: string | null;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface RunBranchMetadata {
+  branch_id?: string | null;
+  parent_message_id?: string | null;
+  source_message_id?: string | null;
+  regenerate_from_message_id?: string | null;
+  replace_from_message_id?: string | null;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface RuntimeRequestContext {
@@ -335,11 +366,12 @@ export interface CreateRunRequest {
   model?: ModelSelectionRequest | null;
   content?: RunContentPart[];
   attachments?: RunAttachmentRequest[];
-  quote?: Record<string, unknown> | null;
+  quote?: RunQuoteMetadata | null;
   parent_message_id?: string | null;
   source_message_id?: string | null;
   regenerate_from_message_id?: string | null;
   branch_id?: string | null;
+  branch?: RunBranchMetadata | null;
   request_context?: RuntimeRequestContext;
   request_options?: Record<string, unknown>;
 }
@@ -494,6 +526,49 @@ export interface SubagentActivityPayload {
   message?: string;
   [key: string]: unknown;
 }
+
+export interface RuntimeLifecyclePayload {
+  status?: string;
+  message?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+export interface RuntimeEventPayloadByType {
+  run_queued: RuntimeLifecyclePayload;
+  run_started: RuntimeLifecyclePayload;
+  run_cancelling: RuntimeLifecyclePayload;
+  run_cancelled: RuntimeLifecyclePayload;
+  run_completed: RuntimeLifecyclePayload;
+  run_failed: RuntimeLifecyclePayload;
+  progress: RuntimeTextPayload;
+  reasoning_summary: ReasoningSummaryPayload;
+  reasoning_summary_delta: ReasoningSummaryDeltaPayload;
+  tool_call: ToolCallPayload;
+  tool_call_started: ToolCallPayload;
+  tool_call_delta: ToolCallDeltaPayload;
+  tool_result: ToolResultPayload;
+  tool_call_completed: ToolResultPayload;
+  mcp_auth_required: McpAuthRequiredEventPayload;
+  subagent_update: SubagentActivityPayload;
+  subagent_started: SubagentActivityPayload;
+  subagent_progress: SubagentActivityPayload;
+  subagent_completed: SubagentActivityPayload;
+  approval_requested: ApprovalRequestedPayload;
+  approval_resolved: RuntimeLifecyclePayload;
+  observation: RuntimeTextPayload;
+  error: RuntimeTextPayload;
+  model_delta: RuntimeTextPayload;
+  final_response: RuntimeTextPayload;
+  heartbeat: RuntimeLifecyclePayload;
+}
+
+export type StructuredRuntimeEventEnvelope<
+  TEventType extends RuntimeApiEventType = RuntimeApiEventType,
+> = RuntimeEventEnvelope & {
+  event_type: TEventType;
+  payload: RuntimeEventPayloadByType[TEventType];
+};
 
 export type SkillScope = "user" | "org";
 export type SkillSourceType = "user" | "preloaded";

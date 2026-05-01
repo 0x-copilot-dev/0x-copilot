@@ -267,12 +267,18 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
                 "type": "document",
                 "name": "brief.txt",
                 "content_type": "text/plain",
+                "size": 5,
+                "file_id": "file_brief",
                 "content": [{"type": "text", "text": "brief"}],
             }
         ]
-        payload["quote"] = {"text": "quoted selection"}
+        payload["quote"] = {
+            "text": "quoted selection",
+            "message_id": "message_quote",
+        }
         payload["source_message_id"] = "message_source"
         payload["branch_id"] = "branch_1"
+        payload["branch"] = {"replace_from_message_id": "assistant_old"}
 
         run_response = client.post("/v1/agent/runs", json=payload)
         messages = client.get(
@@ -287,11 +293,13 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert message_payload["quote"] == payload["quote"]
         assert message_payload["source_message_id"] == "message_source"
         assert message_payload["branch_id"] == "branch_1"
+        assert message_payload["metadata"]["branch"] == payload["branch"]
         run = store.runs[run_response.json()["run_id"]]
         assert (
             run.runtime_context.trace_metadata["attachments"] == payload["attachments"]
         )
         assert run.runtime_context.trace_metadata["branch_id"] == "branch_1"
+        assert run.runtime_context.trace_metadata["branch"] == payload["branch"]
 
     def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
         client, _store = self.create_client()

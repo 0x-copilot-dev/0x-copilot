@@ -545,15 +545,26 @@ class RuntimeApiService:
         trace_metadata = dict(context.trace_metadata)
         if context.context:
             trace_metadata["request_context"] = context.context
-        if request.quote is not None:
-            trace_metadata["quote"] = request.quote
+        quote = request.quote_payload()
+        if quote is not None:
+            trace_metadata["quote"] = quote
         if request.attachments:
             trace_metadata["attachments"] = [
-                attachment.model_dump(mode="json") for attachment in request.attachments
+                attachment.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                for attachment in request.attachments
             ]
         if request.content:
             trace_metadata["content_parts"] = [
-                part.model_dump(mode="json") for part in request.content
+                part.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                for part in request.content
             ]
         if request.regenerate_from_message_id is not None:
             trace_metadata["regenerate_from_message_id"] = (
@@ -565,6 +576,9 @@ class RuntimeApiService:
             trace_metadata["parent_message_id"] = request.parent_message_id
         if request.branch_id is not None:
             trace_metadata["branch_id"] = request.branch_id
+        branch = request.branch_payload()
+        if branch is not None:
+            trace_metadata["branch"] = branch
         runtime_context = AgentRuntimeContext(
             user_id=request.user_id,
             org_id=request.org_id,

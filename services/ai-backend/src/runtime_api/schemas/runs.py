@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from pydantic import (
+    ConfigDict,
     Field,
     NonNegativeInt,
     ValidationInfo,
@@ -67,7 +68,13 @@ class ModelCatalogResponse(RuntimeContract):
     models: tuple[ModelCatalogItem, ...]
 
 
-class RunContentPartRequest(RuntimeContract):
+class FlexibleRuntimePayload(RuntimeContract):
+    """Typed known fields while preserving client/runtime extension metadata."""
+
+    model_config = ConfigDict(extra="allow", frozen=True, validate_assignment=True)
+
+
+class RunContentPartRequest(FlexibleRuntimePayload):
     """Assistant UI content part sent with a run submission."""
 
     type: str
@@ -77,17 +84,48 @@ class RunContentPartRequest(RuntimeContract):
     mime_type: str | None = None
     filename: str | None = None
     name: str | None = None
+    size: NonNegativeInt | None = None
+    file_id: str | None = None
+    url: str | None = None
     content: object | None = None
+    metadata: JsonObject = Field(default_factory=dict)
 
 
-class RunAttachmentRequest(RuntimeContract):
+class RunAttachmentRequest(FlexibleRuntimePayload):
     """Attachment metadata and serialized content sent from the composer."""
 
     id: str
     type: str
     name: str
     content_type: str | None = None
-    content: tuple[JsonObject, ...] = ()
+    size: NonNegativeInt | None = None
+    file_id: str | None = None
+    url: str | None = None
+    content: tuple[RunContentPartRequest, ...] = ()
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class RunQuoteRequest(FlexibleRuntimePayload):
+    """Selected text quote metadata included with a run submission."""
+
+    text: str | None = None
+    message_id: str | None = None
+    part_index: NonNegativeInt | None = None
+    start_index: NonNegativeInt | None = None
+    end_index: NonNegativeInt | None = None
+    source: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class RunBranchMetadataRequest(FlexibleRuntimePayload):
+    """Branch/edit/regenerate metadata for Assistant UI message actions."""
+
+    branch_id: str | None = None
+    parent_message_id: str | None = None
+    source_message_id: str | None = None
+    regenerate_from_message_id: str | None = None
+    replace_from_message_id: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
 
 
 class RuntimeRequestContext(RuntimeContract):
@@ -118,11 +156,12 @@ class CreateRunRequest(RuntimeContract):
     model: ModelSelectionRequest | None = None
     content: tuple[RunContentPartRequest, ...] = ()
     attachments: tuple[RunAttachmentRequest, ...] = ()
-    quote: JsonObject | None = None
+    quote: RunQuoteRequest | None = None
     parent_message_id: str | None = None
     source_message_id: str | None = None
     regenerate_from_message_id: str | None = None
     branch_id: str | None = None
+    branch: RunBranchMetadataRequest | None = None
     request_context: RuntimeRequestContext = Field(
         default_factory=RuntimeRequestContext
     )
@@ -171,6 +210,28 @@ class CreateRunRequest(RuntimeContract):
                 "org_id and user_id are required when runtime_context is omitted"
             )
         return self
+
+    def quote_payload(self) -> JsonObject | None:
+        """Return quote metadata as JSON for persistence and trace context."""
+
+        if self.quote is None:
+            return None
+        return self.quote.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=True,
+        )
+
+    def branch_payload(self) -> JsonObject | None:
+        """Return branch metadata as JSON for persistence and trace context."""
+
+        if self.branch is None:
+            return None
+        return self.branch.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=True,
+        )
 
 
 class RunRecord(RuntimeContract):

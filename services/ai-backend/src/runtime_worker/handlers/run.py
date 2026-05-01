@@ -32,6 +32,7 @@ RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies
 AgentFactory = Callable[..., RuntimeHarness]
 RuntimeInvoker = Callable[[RuntimeHarness, Sequence[object]], object]
 RuntimeStreamer = Callable[[RuntimeHarness, Sequence[object]], AsyncIterator[object]]
+MAX_STRUCTURED_CONTEXT_CHARS = 4_000
 
 
 class RuntimeRunHandler:
@@ -159,11 +160,199 @@ class RuntimeRunHandler:
         )
         selected = self._selected_message_chain(records, run.user_message_id)
         return tuple(
-            {"role": message.role.value, "content": message.content_text}
+            {
+                "role": message.role.value,
+                "content": self._message_content_for_runtime(message),
+            }
             for message in selected
             if message.role
             in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
         )
+
+    @classmethod
+    def _message_content_for_runtime(cls, message: MessageRecord) -> str:
+        if message.role is not MessageRole.USER:
+            return message.content_text
+
+        sections = [message.content_text]
+        quote = cls._quote_context(message.quote)
+        if quote is not None:
+            sections.append(f"Quoted context:\n{quote}")
+        content_parts = cls._content_parts_context(
+            message.content,
+            message.content_text,
+        )
+        if content_parts is not None:
+            sections.append(f"Structured content:\n{content_parts}")
+        attachments = cls._attachments_context(message.attachments)
+        if attachments is not None:
+            sections.append(f"Attachments:\n{attachments}")
+        branch = cls._branch_context(message)
+        if branch is not None:
+            sections.append(f"Branch metadata:\n{branch}")
+        return "\n\n".join(sections)
+
+    @classmethod
+    def _quote_context(cls, quote: Mapping[str, object] | None) -> str | None:
+        if not quote:
+            return None
+        text = cls._text(quote.get("text")) or cls._text(quote.get("message"))
+        source = cls._text(quote.get("source")) or cls._text(quote.get("message_id"))
+        parts: list[str] = []
+        if text is not None:
+            parts.append(cls._truncate(text))
+        if source is not None:
+            parts.append(f"Source: {source}")
+        return "\n".join(parts) if parts else None
+
+    @classmethod
+    def _content_parts_context(
+        cls,
+        parts: Sequence[Mapping[str, object]],
+        content_text: str,
+    ) -> str | None:
+        summaries: list[str] = []
+        normalized_content = content_text.strip()
+        for part in parts:
+            part_type = cls._text(part.get("type")) or "part"
+            text = cls._content_text(part)
+            if part_type == "text":
+                if text is not None and text.strip() != normalized_content:
+                    summaries.append(cls._truncate(text))
+                continue
+            summaries.append(cls._part_summary(part_type, part, text))
+        return "\n".join(summary for summary in summaries if summary) or None
+
+    @classmethod
+    def _attachments_context(
+        cls,
+        attachments: Sequence[Mapping[str, object]],
+    ) -> str | None:
+        summaries: list[str] = []
+        for attachment in attachments:
+            name = (
+                cls._text(attachment.get("name"))
+                or cls._text(attachment.get("filename"))
+                or cls._text(attachment.get("id"))
+                or "attachment"
+            )
+            content_type = cls._text(attachment.get("content_type")) or cls._text(
+                attachment.get("mime_type")
+            )
+            text = cls._content_blocks_text(attachment.get("content"))
+            details = cls._details(attachment, content_type=content_type)
+            suffix = f" ({details})" if details else ""
+            if text is not None:
+                summaries.append(f"- {name}{suffix}: {cls._truncate(text)}")
+            else:
+                summaries.append(f"- {name}{suffix}")
+        return "\n".join(summaries) if summaries else None
+
+    @classmethod
+    def _branch_context(cls, message: MessageRecord) -> str | None:
+        fields = {
+            "branch_id": message.branch_id,
+            "source_message_id": message.source_message_id,
+        }
+        branch = message.metadata.get("branch")
+        if isinstance(branch, Mapping):
+            for key in (
+                "regenerate_from_message_id",
+                "replace_from_message_id",
+            ):
+                value = cls._text(branch.get(key))
+                if value is not None:
+                    fields[key] = value
+        regenerate = cls._text(message.metadata.get("regenerate_from_message_id"))
+        if regenerate is not None:
+            fields["regenerate_from_message_id"] = regenerate
+        if any(fields.values()) and message.parent_message_id is not None:
+            fields["parent_message_id"] = message.parent_message_id
+        lines = [f"- {key}: {value}" for key, value in fields.items() if value]
+        return "\n".join(lines) if lines else None
+
+    @classmethod
+    def _part_summary(
+        cls,
+        part_type: str,
+        part: Mapping[str, object],
+        text: str | None,
+    ) -> str:
+        name = cls._text(part.get("filename")) or cls._text(part.get("name"))
+        details = cls._details(part, content_type=cls._text(part.get("mime_type")))
+        title = f"- {part_type}"
+        if name is not None:
+            title = f"{title} {name}"
+        if details:
+            title = f"{title} ({details})"
+        if text is not None:
+            return f"{title}: {cls._truncate(text)}"
+        return title
+
+    @classmethod
+    def _details(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        content_type: str | None,
+    ) -> str:
+        details: list[str] = []
+        if content_type is not None:
+            details.append(content_type)
+        size = payload.get("size")
+        if isinstance(size, int):
+            details.append(f"{size} bytes")
+        file_id = cls._text(payload.get("file_id"))
+        if file_id is not None:
+            details.append(f"file_id={file_id}")
+        url = cls._text(payload.get("url"))
+        if url is not None:
+            details.append(f"url={url}")
+        return ", ".join(details)
+
+    @classmethod
+    def _content_text(cls, payload: Mapping[str, object]) -> str | None:
+        return (
+            cls._text(payload.get("text"))
+            or cls._text(payload.get("content"))
+            or cls._content_blocks_text(payload.get("content"))
+        )
+
+    @classmethod
+    def _content_blocks_text(cls, value: object) -> str | None:
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, Mapping):
+            return cls._text(value.get("text")) or cls._text(value.get("content"))
+        if not isinstance(value, Sequence) or isinstance(
+            value,
+            (str, bytes, bytearray),
+        ):
+            return None
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, Mapping):
+                text = cls._content_text(item)
+                if text is not None:
+                    parts.append(text)
+        text = "\n".join(part.strip() for part in parts if part.strip()).strip()
+        return text or None
+
+    @classmethod
+    def _text(cls, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
+    @classmethod
+    def _truncate(cls, value: str) -> str:
+        if len(value) <= MAX_STRUCTURED_CONTEXT_CHARS:
+            return value
+        return f"{value[:MAX_STRUCTURED_CONTEXT_CHARS].rstrip()} [truncated]"
 
     @classmethod
     def _selected_message_chain(
