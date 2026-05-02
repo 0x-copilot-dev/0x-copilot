@@ -28,6 +28,32 @@ class EmptyToolRegistry:
         return ()
 
 
+class WebSearchToolRegistry:
+    """Default local tools available to Deep Agents runtime runs."""
+
+    class Values:
+        WEB_SEARCH_TOOL_NAME = "web_search"
+
+    class Messages:
+        WEB_SEARCH_TOOL_DESCRIPTION = (
+            "Search the public web for recent information, documentation, news, "
+            "and external references. Returns result snippets with source links."
+        )
+
+    def list_available_tools(self, _context: object) -> Sequence[object]:
+        return (self._web_search_tool(),)
+
+    @classmethod
+    def _web_search_tool(cls) -> object:
+        from langchain_community.tools import DuckDuckGoSearchResults
+
+        return DuckDuckGoSearchResults(
+            name=cls.Values.WEB_SEARCH_TOOL_NAME,
+            description=cls.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
+            output_format="list",
+        )
+
+
 class EmptyMcpRegistry:
     """MCP registry used until production MCP adapters are wired."""
 
@@ -52,7 +78,7 @@ class DefaultRuntimeDependenciesFactory:
         self._validate_capability_mode(_context)
         mcp_registry = self._mcp_registry(_context)
         return RuntimeDependencies(
-            tool_registry=EmptyToolRegistry(),
+            tool_registry=WebSearchToolRegistry(),
             mcp_registry=mcp_registry,
             skill_source_config=SkillSourceConfig(),
             skill_registry=self._skill_registry(_context),
@@ -64,6 +90,8 @@ class DefaultRuntimeDependenciesFactory:
         if self.settings.environment is not RuntimeEnvironment.PRODUCTION:
             return
         if self.settings.execution.allow_empty_capabilities:
+            return
+        if WebSearchToolRegistry().list_available_tools(context):
             return
         if self.settings.mcp.backend_registry_url is not None:
             return

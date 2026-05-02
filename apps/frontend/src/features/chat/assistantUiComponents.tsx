@@ -230,7 +230,6 @@ function LogoMark({ compact = false }: { compact?: boolean }): ReactElement {
 }
 
 export function ThreadBody({
-  oauthStatus,
   connectors,
   skills,
   connectorSuggestions,
@@ -240,7 +239,6 @@ export function ThreadBody({
   onOpenSkillsSettings,
   onShowConnectors,
 }: {
-  oauthStatus: string | null;
   connectors: {
     servers: McpServer[];
     loading: boolean;
@@ -273,7 +271,6 @@ export function ThreadBody({
         </SelectionToolbarPrimitive.Quote>
       </SelectionToolbarPrimitive.Root>
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
-        {oauthStatus ? <SystemNotice>{oauthStatus}</SystemNotice> : null}
         <ThreadPrimitive.Empty>
           <ThreadWelcome />
         </ThreadPrimitive.Empty>
@@ -1230,10 +1227,6 @@ function SystemMessage(): ReactElement {
       <MessagePrimitive.Parts components={{ Text: PlainText }} />
     </MessagePrimitive.Root>
   );
-}
-
-function SystemNotice({ children }: { children: ReactNode }): ReactElement {
-  return <div className="aui-system-message">{children}</div>;
 }
 
 function MarkdownText({ text }: TextMessagePartProps): ReactElement {

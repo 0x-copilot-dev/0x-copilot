@@ -61,11 +61,13 @@ export function SettingsScreen({
   skills,
   initialSection = "general",
   onBackToChat,
+  onSectionChange,
 }: {
   connectors: ConnectorState;
   skills: SkillState;
   initialSection?: SettingsSection;
   onBackToChat: () => void;
+  onSectionChange?: (section: SettingsSection) => void;
 }): ReactElement {
   const [activeSection, setActiveSection] =
     useState<SettingsSection>(initialSection);
@@ -99,7 +101,10 @@ export function SettingsScreen({
               className={activeSection === section.id ? "is-active" : undefined}
               type="button"
               title={`Open ${section.label} settings`}
-              onClick={() => setActiveSection(section.id)}
+              onClick={() => {
+                setActiveSection(section.id);
+                onSectionChange?.(section.id);
+              }}
             >
               {section.label}
             </button>

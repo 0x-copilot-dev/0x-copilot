@@ -55,7 +55,6 @@ import {
   type ChatItem,
   type ChatThreadMessage,
 } from "./chatModel";
-import { rememberPendingMcpAuthAction } from "./mcpAuthAction";
 import {
   AssistantThread,
   AssistantThreadList,
@@ -65,6 +64,10 @@ import {
   CHAT_PROMPT_SUGGESTIONS,
   REGENERATE_PREVIOUS_RESPONSE_PROMPT,
 } from "./prompts";
+import {
+  rememberPendingMcpAuthAction,
+  type CompletedMcpAuthAction,
+} from "./mcpAuthAction";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -79,12 +82,14 @@ export function ChatScreen({
   onOpenSettings,
   identity,
   oauthStatus,
+  completedMcpAuthAction,
 }: {
   connectors: ConnectorState;
   skills: SkillState;
   onOpenSettings: (section?: ChatSettingsTarget) => void;
   identity: RequestIdentity;
   oauthStatus: string | null;
+  completedMcpAuthAction: CompletedMcpAuthAction | null;
 }): ReactElement {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -95,6 +100,7 @@ export function ChatScreen({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [status, setStatus] = useState("Ready");
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState(demoModels[0].id);
   const streamRef = useRef<EventSource | null>(null);
@@ -102,6 +108,7 @@ export function ChatScreen({
   const reconnectTimeoutRef = useRef<number | null>(null);
   const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pendingApprovalDecisionsRef = useRef<Set<string>>(new Set());
+  const latestReplaySequenceByRunRef = useRef<Map<string, number>>(new Map());
 
   const suggestedServers = useMemo(
     () =>
@@ -119,12 +126,17 @@ export function ChatScreen({
   const loadHistoryItems = useCallback(
     async (
       nextConversationId: string,
-    ): Promise<{ items: ChatItem[]; replayFailed: boolean }> => {
+    ): Promise<{
+      items: ChatItem[];
+      replayFailed: boolean;
+      latestSequenceByRunId: Map<string, number>;
+    }> => {
       const history = await listMessages(nextConversationId, identity);
       const replay = await replayEventsForMessages(history.messages, identity);
       return {
         items: messagesToChatItems(history.messages, replay.eventsByRunId),
         replayFailed: replay.replayFailed,
+        latestSequenceByRunId: latestSequenceByRunId(replay.eventsByRunId),
       };
     },
     [identity],
@@ -134,6 +146,7 @@ export function ChatScreen({
     let cancelled = false;
     async function loadInitialConversation(): Promise<void> {
       try {
+        setInitialHistoryLoaded(false);
         setHistoryLoading(true);
         setStatus("Loading history...");
         const response = await listConversations(identity);
@@ -144,14 +157,17 @@ export function ChatScreen({
         const latest = response.conversations[0];
         if (!latest) {
           setConversationId(null);
+          latestReplaySequenceByRunRef.current = new Map();
           setItems([]);
           setStatus("Ready");
           setHistoryError(null);
+          setInitialHistoryLoaded(true);
           return;
         }
         setConversationId(latest.conversation_id);
         const history = await loadHistoryItems(latest.conversation_id);
         if (!cancelled) {
+          latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
           setItems(history.items);
           setStatus(history.replayFailed ? historyReplayWarning : "Ready");
           setHistoryError(null);
@@ -165,6 +181,7 @@ export function ChatScreen({
       } finally {
         if (!cancelled) {
           setHistoryLoading(false);
+          setInitialHistoryLoaded(true);
         }
       }
     }
@@ -251,6 +268,108 @@ export function ChatScreen({
     [handleEvent, identity],
   );
 
+  useEffect(() => {
+    if (
+      !initialHistoryLoaded ||
+      activeRunId !== null ||
+      streamRef.current !== null
+    ) {
+      return;
+    }
+    const pendingRunId = pendingActionRunId(items);
+    if (pendingRunId === null) {
+      return;
+    }
+    const userMessageId = userMessageIdForRun(items, pendingRunId);
+    if (userMessageId) {
+      activeRunUserMessageIdsRef.current.set(pendingRunId, userMessageId);
+    }
+    latestSequenceRef.current =
+      latestReplaySequenceByRunRef.current.get(pendingRunId) ?? 0;
+    setActiveRunId(pendingRunId);
+    startEventStream(pendingRunId, latestSequenceRef.current);
+  }, [activeRunId, initialHistoryLoaded, items, startEventStream]);
+
+  useEffect(() => {
+    if (
+      completedMcpAuthAction === null ||
+      completedMcpAuthAction.runId === null ||
+      !initialHistoryLoaded
+    ) {
+      return;
+    }
+    const runId = completedMcpAuthAction.runId;
+
+    let cancelled = false;
+    async function restoreRunAfterOAuth(): Promise<void> {
+      try {
+        setStatus("Resuming after connector auth...");
+        const replay = await replayRunEvents(runId, identity);
+        if (cancelled) {
+          return;
+        }
+        const events = [...replay.events].sort(
+          (left, right) => left.sequence_no - right.sequence_no,
+        );
+        const latestSequence = events.reduce(
+          (latest, event) => Math.max(latest, event.sequence_no),
+          latestSequenceRef.current,
+        );
+        const latestEvent = events.at(-1);
+        setItems((current) => {
+          const userMessageId = userMessageIdForRun(current, runId);
+          if (userMessageId) {
+            activeRunUserMessageIdsRef.current.set(runId, userMessageId);
+          }
+          return events.reduce((next, event) => {
+            const parentId =
+              activeRunUserMessageIdsRef.current.get(event.run_id) ??
+              userMessageIdForRun(next, event.run_id);
+            return withAssistantParent(
+              applyRuntimeEvent(next, event),
+              event.run_id,
+              parentId,
+            );
+          }, current);
+        });
+        latestSequenceRef.current = latestSequence;
+        if (latestEvent && isTerminalRunEvent(latestEvent)) {
+          streamRef.current?.close();
+          streamRef.current = null;
+          setActiveRunId(null);
+          activeRunUserMessageIdsRef.current.delete(runId);
+          setStatus(
+            latestEvent.event_type === "run_completed" ? "Ready" : "Stopped",
+          );
+          void refreshConversations();
+          return;
+        }
+        setActiveRunId(runId);
+        setStatus(
+          latestEvent
+            ? (statusForRuntimeEvent(latestEvent) ?? "Working...")
+            : "Working...",
+        );
+        startEventStream(runId, latestSequenceRef.current);
+      } catch (err) {
+        if (!cancelled) {
+          setStatus(errorMessage(err, "Could not resume connector auth run"));
+        }
+      }
+    }
+
+    void restoreRunAfterOAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    completedMcpAuthAction,
+    identity,
+    initialHistoryLoaded,
+    refreshConversations,
+    startEventStream,
+  ]);
+
   const loadConversationById = useCallback(
     async (nextConversationId: string): Promise<void> => {
       if (activeRunId !== null) {
@@ -266,6 +385,7 @@ export function ChatScreen({
         setConversations((current) =>
           upsertConversation(current, conversation),
         );
+        latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
         setItems(history.items);
         setShowConnectorSuggestions(false);
         setStatus(history.replayFailed ? historyReplayWarning : "Ready");
@@ -692,7 +812,7 @@ export function ChatScreen({
         />
         <AssistantThread
           sidebarCollapsed={sidebarCollapsed}
-          status={historyError ?? status}
+          status={historyError ?? oauthStatus ?? status}
           models={demoModels}
           selectedModel={selectedModelId}
           onModelChange={setSelectedModelId}
@@ -701,7 +821,6 @@ export function ChatScreen({
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         >
           <ThreadBody
-            oauthStatus={oauthStatus}
             connectors={connectors}
             skills={skills}
             onMcpAuthConnect={onMcpAuthConnect}
@@ -964,6 +1083,48 @@ function latestAssistantChildId(
   return children.at(-1)?.id ?? null;
 }
 
+function pendingActionRunId(items: ChatItem[]): string | null {
+  for (const item of items) {
+    if (item.kind !== "message" || item.role !== "assistant" || !item.runId) {
+      continue;
+    }
+    const hasPendingAction = item.content.some(
+      (part) =>
+        part.type === "tool-call" &&
+        (part.toolName === "approval_request" ||
+          part.toolName === "mcp_auth_required") &&
+        part.result === undefined,
+    );
+    if (hasPendingAction) {
+      return item.runId;
+    }
+  }
+  return null;
+}
+
+function userMessageIdForRun(items: ChatItem[], runId: string): string | null {
+  const item = items.find(
+    (candidate) =>
+      candidate.kind === "message" &&
+      candidate.role === "user" &&
+      candidate.runId === runId,
+  );
+  return item?.kind === "message" ? item.id : null;
+}
+
+function latestSequenceByRunId(
+  eventsByRunId: ReadonlyMap<string, readonly RuntimeEventEnvelope[]>,
+): Map<string, number> {
+  const latestByRun = new Map<string, number>();
+  for (const [runId, events] of eventsByRunId) {
+    latestByRun.set(
+      runId,
+      events.reduce((latest, event) => Math.max(latest, event.sequence_no), 0),
+    );
+  }
+  return latestByRun;
+}
+
 function userTextForMessage(
   items: ChatItem[],
   messageId: string,
@@ -1105,6 +1266,14 @@ function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
     return "Thinking...";
   }
   return null;
+}
+
+function isTerminalRunEvent(event: RuntimeEventEnvelope): boolean {
+  return (
+    event.event_type === "run_completed" ||
+    event.event_type === "run_cancelled" ||
+    event.event_type === "run_failed"
+  );
 }
 
 const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [

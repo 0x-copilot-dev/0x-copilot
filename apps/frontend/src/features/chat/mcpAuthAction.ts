@@ -1,7 +1,12 @@
 export interface PendingMcpAuthAction {
   approvalId: string;
   serverId: string;
+  runId: string | null;
   createdAt: string;
+}
+
+export interface CompletedMcpAuthAction extends PendingMcpAuthAction {
+  completedAt: string;
 }
 
 const pendingMcpAuthActionKey = "enterprise-search.pending-mcp-auth-action";
@@ -17,6 +22,7 @@ export function rememberPendingMcpAuthAction(action: {
     pendingMcpAuthActionKey,
     JSON.stringify({
       ...action,
+      runId: runIdFromMcpAuthApprovalId(action.approvalId),
       createdAt: new Date().toISOString(),
     } satisfies PendingMcpAuthAction),
   );
@@ -46,6 +52,13 @@ export function clearPendingMcpAuthAction(): void {
   window.sessionStorage.removeItem(pendingMcpAuthActionKey);
 }
 
+export function runIdFromMcpAuthApprovalId(approvalId: string): string | null {
+  const parts = approvalId.split(":");
+  return parts.length >= 3 && parts[0] === "mcp_auth" && parts[1]
+    ? parts[1]
+    : null;
+}
+
 function parsePendingMcpAuthAction(value: string): PendingMcpAuthAction | null {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -63,6 +76,10 @@ function parsePendingMcpAuthAction(value: string): PendingMcpAuthAction | null {
     return {
       approvalId: record.approvalId,
       serverId: record.serverId,
+      runId:
+        typeof record.runId === "string"
+          ? record.runId
+          : runIdFromMcpAuthApprovalId(record.approvalId),
       createdAt: record.createdAt,
     };
   } catch {

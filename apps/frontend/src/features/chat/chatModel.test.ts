@@ -952,6 +952,68 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
+  it("marks stale auth_mcp wrapper calls complete when auth finishes", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "auth_wrapper_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_auth_mcp_123",
+        payload: {
+          tool_name: "auth_mcp",
+          call_id: "call_auth_mcp_123",
+          args: {
+            server_id: "server_123",
+            server_name: "mcp_clickup_com",
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          server_id: "server_123",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          auth_url: "https://example.test/old-auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect ClickUp",
+        },
+      }),
+    );
+
+    items = resolveAuthenticatedMcpServers(items, [
+      mcpServer({
+        server_id: "server_123",
+        name: "mcp_clickup_com",
+        display_name: "ClickUp",
+        auth_state: "authenticated",
+      }),
+    ]);
+
+    const authWrapper = toolPart(items, "auth_mcp");
+    expect(authWrapper?.args).toMatchObject({ status: "completed" });
+    expect(authWrapper?.result).toMatchObject({
+      server_id: "server_123",
+      status: "connected",
+    });
+    expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
+      approval_id: "mcp_auth_123",
+      server_id: "server_123",
+      decision: "approved",
+    });
+  });
+
   it("replaces correlated MCP wrapper calls with approval cards", () => {
     let items: ChatItem[] = [];
 

@@ -9,8 +9,10 @@ description = "Agent runtime foundation for the enterprise work surface"
 requires-python = ">=3.13"
 dependencies = [
   "deepagents==0.5.5",
+  "ddgs==9.14.1",
   "fastapi==0.136.1",
   "langchain==1.2.16",
+  "langchain-community==0.4.1",
   "langchain-openai==1.2.1",
   "langchain-anthropic==1.4.2",
   "langchain-google-genai==4.2.2",

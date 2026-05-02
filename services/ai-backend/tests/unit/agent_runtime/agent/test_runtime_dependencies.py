@@ -4,9 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import RuntimeDependencies, SkillSourceConfig
-from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
-from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.dependencies import (
+    DefaultRuntimeDependenciesFactory,
+    WebSearchToolRegistry,
+)
 from tests.unit.agent_runtime.agent.helpers import MissingToolRegistryMethod
 from tests.unit.fakes import (
     FakeMcpRegistry,
@@ -35,7 +37,16 @@ def test_runtime_dependencies_reject_missing_required_protocol_method() -> None:
         )
 
 
-def test_default_runtime_dependencies_fail_fast_for_empty_production_capabilities(
+def test_default_runtime_dependencies_include_web_search_tool(
+    runtime_context_admin,
+) -> None:
+    tools = WebSearchToolRegistry().list_available_tools(runtime_context_admin)
+
+    assert len(tools) == 1
+    assert getattr(tools[0], "name", "") == "web_search"
+
+
+def test_default_runtime_dependencies_allow_production_with_default_web_search_tool(
     runtime_context_admin,
 ) -> None:
     settings = RuntimeSettings.load(
@@ -45,14 +56,13 @@ def test_default_runtime_dependencies_fail_fast_for_empty_production_capabilitie
         }
     )
 
-    with pytest.raises(AgentRuntimeError) as exc_info:
-        DefaultRuntimeDependenciesFactory(settings)(runtime_context_admin)
+    dependencies = DefaultRuntimeDependenciesFactory(settings)(runtime_context_admin)
+    tools = dependencies.tool_registry.list_available_tools(runtime_context_admin)
 
-    assert exc_info.value.code == "configuration_error"
-    assert "capability sources" in exc_info.value.safe_message
+    assert getattr(tools[0], "name", "") == "web_search"
 
 
-def test_default_runtime_dependencies_allow_explicit_empty_production_capabilities(
+def test_default_runtime_dependencies_keep_web_search_when_empty_capabilities_allowed(
     runtime_context_admin,
 ) -> None:
     settings = RuntimeSettings.load(
@@ -65,4 +75,5 @@ def test_default_runtime_dependencies_allow_explicit_empty_production_capabiliti
 
     dependencies = DefaultRuntimeDependenciesFactory(settings)(runtime_context_admin)
 
-    assert dependencies.tool_registry.list_available_tools(runtime_context_admin) == ()
+    tools = dependencies.tool_registry.list_available_tools(runtime_context_admin)
+    assert getattr(tools[0], "name", "") == "web_search"

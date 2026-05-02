@@ -13,6 +13,7 @@ import { ChatScreen } from "../features/chat/ChatScreen";
 import {
   clearPendingMcpAuthAction,
   readPendingMcpAuthAction,
+  type CompletedMcpAuthAction,
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
 import {
@@ -21,9 +22,19 @@ import {
 } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
 
-type Screen = "chat" | "settings";
+type AppRoute =
+  | { screen: "chat" }
+  | { screen: "settings"; section: SettingsSection };
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
+const settingsSections = [
+  "general",
+  "account",
+  "capabilities",
+  "connectors",
+  "skills",
+  "claude-code",
+] satisfies SettingsSection[];
 
 export default function App(): ReactElement {
   return (
@@ -57,15 +68,56 @@ function completeMcpOAuthOnce(
   return completion;
 }
 
+function routeFromLocation(): AppRoute {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/settings") {
+    return { screen: "settings", section: "general" };
+  }
+  if (path.startsWith("/settings/")) {
+    const section = decodeURIComponent(path.slice("/settings/".length));
+    return {
+      screen: "settings",
+      section: isSettingsSection(section) ? section : "general",
+    };
+  }
+  return { screen: "chat" };
+}
+
+function pathForRoute(route: AppRoute): string {
+  if (route.screen === "chat") {
+    return "/";
+  }
+  return route.section === "general"
+    ? "/settings"
+    : `/settings/${route.section}`;
+}
+
+function applyAppRoute(
+  route: AppRoute,
+  setRoute: (route: AppRoute) => void,
+  mode: "push" | "replace" = "push",
+): void {
+  const path = pathForRoute(route);
+  if (window.location.pathname !== path || window.location.search) {
+    const method = mode === "replace" ? "replaceState" : "pushState";
+    window.history[method]({}, "", path);
+  }
+  setRoute(route);
+}
+
+function isSettingsSection(value: string): value is SettingsSection {
+  return settingsSections.includes(value as SettingsSection);
+}
+
 function EnterpriseSearchApp(): ReactElement {
   const [identity, setIdentity] = useState<RequestIdentity | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
-  const [screen, setScreen] = useState<Screen>("chat");
-  const [settingsSection, setSettingsSection] =
-    useState<SettingsSection>("general");
+  const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
+  const [completedMcpAuthAction, setCompletedMcpAuthAction] =
+    useState<CompletedMcpAuthAction | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +146,17 @@ function EnterpriseSearchApp(): ReactElement {
   }, []);
 
   useEffect(() => {
+    function onPopState(): void {
+      setRoute(routeFromLocation());
+    }
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
     if (
       window.location.pathname !== "/mcp/oauth/callback" ||
       identity === null
@@ -110,7 +173,7 @@ function EnterpriseSearchApp(): ReactElement {
       setOauthStatus(
         "Connector authentication callback was missing state, code, or error.",
       );
-      window.history.replaceState({}, "", "/");
+      applyAppRoute({ screen: "chat" }, setRoute, "replace");
       return;
     }
     const callbackState = state;
@@ -145,14 +208,22 @@ function EnterpriseSearchApp(): ReactElement {
               return;
             }
             clearPendingMcpAuthAction();
+            setCompletedMcpAuthAction({
+              ...pendingAction,
+              completedAt: new Date().toISOString(),
+            });
             setOauthStatus(`${server.display_name} is connected.`);
-            setScreen("chat");
+            applyAppRoute({ screen: "chat" }, setRoute, "replace");
           } else {
+            setCompletedMcpAuthAction(null);
             setOauthStatus(`${server.display_name} is connected.`);
-            setSettingsSection("connectors");
-            setScreen("settings");
+            applyAppRoute(
+              { screen: "settings", section: "connectors" },
+              setRoute,
+              "replace",
+            );
           }
-          await connectors.refresh();
+          await connectors.refresh().catch(() => undefined);
         }
       } catch (err) {
         if (!cancelled) {
@@ -161,9 +232,8 @@ function EnterpriseSearchApp(): ReactElement {
               ? err.message
               : "Connector authentication failed.",
           );
+          applyAppRoute({ screen: "chat" }, setRoute, "replace");
         }
-      } finally {
-        window.history.replaceState({}, "", "/");
       }
     }
 
@@ -189,13 +259,16 @@ function EnterpriseSearchApp(): ReactElement {
     );
   }
 
-  if (screen === "settings") {
+  if (route.screen === "settings") {
     return (
       <SettingsScreen
         connectors={connectors}
         skills={skills}
-        initialSection={settingsSection}
-        onBackToChat={() => setScreen("chat")}
+        initialSection={route.section}
+        onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
+        onSectionChange={(section) =>
+          applyAppRoute({ screen: "settings", section }, setRoute)
+        }
       />
     );
   }
@@ -206,10 +279,10 @@ function EnterpriseSearchApp(): ReactElement {
       skills={skills}
       identity={identity}
       onOpenSettings={(section = "general") => {
-        setSettingsSection(section);
-        setScreen("settings");
+        applyAppRoute({ screen: "settings", section }, setRoute);
       }}
       oauthStatus={oauthStatus}
+      completedMcpAuthAction={completedMcpAuthAction}
     />
   );
 }

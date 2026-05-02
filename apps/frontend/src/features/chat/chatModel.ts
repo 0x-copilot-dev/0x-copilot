@@ -571,36 +571,14 @@ export function resolveAuthenticatedMcpServers(
     }
     let changed = false;
     const content = item.content.map((part) => {
-      if (
-        !isToolCallPart(part) ||
-        part.toolName !== "mcp_auth_required" ||
-        part.result !== undefined
-      ) {
+      if (!isToolCallPart(part)) {
         return part;
       }
-      const args = asRecord(part.args);
-      const server = authenticated.find((candidate) =>
-        mcpAuthPartMatchesServer(args, candidate),
-      );
-      if (server === undefined) {
-        return part;
+      const resolvedPart = resolveAuthenticatedMcpPart(part, authenticated);
+      if (resolvedPart !== part) {
+        changed = true;
       }
-      changed = true;
-      const approvalId = stringValue(args.approval_id) ?? part.toolCallId;
-      return {
-        ...part,
-        args: jsonArgs({
-          ...args,
-          approval_id: approvalId,
-          server_id: server.server_id,
-          status: "approved",
-        }),
-        result: {
-          approval_id: approvalId,
-          server_id: server.server_id,
-          decision: "approved",
-        },
-      };
+      return resolvedPart;
     });
     if (!changed) {
       return item;
@@ -611,6 +589,74 @@ export function resolveAuthenticatedMcpServers(
         : item.status;
     return { ...item, content, status };
   });
+}
+
+function resolveAuthenticatedMcpPart(
+  part: ThreadToolCallPart,
+  authenticated: readonly McpServer[],
+): ThreadToolCallPart {
+  if (part.toolName === "mcp_auth_required") {
+    if (part.result !== undefined) {
+      return part;
+    }
+    const args = asRecord(part.args);
+    const server = authenticated.find((candidate) =>
+      mcpAuthPartMatchesServer(args, candidate),
+    );
+    if (server === undefined) {
+      return part;
+    }
+    const approvalId = stringValue(args.approval_id) ?? part.toolCallId;
+    return {
+      ...part,
+      args: jsonArgs({
+        ...args,
+        approval_id: approvalId,
+        server_id: server.server_id,
+        status: "approved",
+      }),
+      result: {
+        approval_id: approvalId,
+        server_id: server.server_id,
+        decision: "approved",
+      },
+    };
+  }
+  if (part.toolName !== "auth_mcp") {
+    return part;
+  }
+  const args = asRecord(part.args);
+  const server = authenticated.find((candidate) =>
+    mcpAuthPartMatchesServer(args, candidate),
+  );
+  if (server === undefined) {
+    return part;
+  }
+  const status = stringValue(args.status);
+  if (status === "completed" && part.result !== undefined) {
+    return part;
+  }
+  return {
+    ...part,
+    args: jsonArgs({
+      ...args,
+      server_id: server.server_id,
+      server_name: server.name,
+      display_name: server.display_name,
+      status: "completed",
+    }),
+    result:
+      part.result ??
+      ({
+        ok: true,
+        server_id: server.server_id,
+        server_name: server.name,
+        display_name: server.display_name,
+        status: "connected",
+        message: `${server.display_name} is connected.`,
+      } satisfies Record<string, unknown>),
+    isError: false,
+  };
 }
 
 function resolveMcpAuthDecision(

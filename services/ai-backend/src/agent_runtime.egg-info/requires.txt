@@ -1,6 +1,8 @@
 deepagents==0.5.5
+ddgs
 fastapi
 langchain
+langchain-community
 langchain-openai
 langchain-anthropic
 langchain-google-genai
