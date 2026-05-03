@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 from starlette import status
 
 from agent_runtime.execution.contracts import (
@@ -42,20 +43,45 @@ from agent_runtime.persistence.records import OutboxStatus
 from agent_runtime.persistence.schema.postgres import (
     POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
 )
-
-SYNTHETIC_ASSISTANT_MESSAGE_PREFIX = "assistant-"
+from runtime_adapters.base import (
+    message_for_run_request,
+    normalize_risk_class,
+    derive_action_summary,
+)
 
 
 class PostgresRuntimeApiStore:
     """Postgres implementation of persistence, event store, and queue ports."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_min_size: int = 2,
+        pool_max_size: int = 10,
+    ) -> None:
         self.database_url = database_url
+        self._pool: ConnectionPool = ConnectionPool(
+            conninfo=database_url,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+            kwargs={"row_factory": dict_row},
+        )
+
+    def close(self) -> None:
+        """Close the connection pool and release all resources."""
+        self._pool.close()
+
+    def __enter__(self) -> PostgresRuntimeApiStore:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def migrate(self) -> None:
         """Apply the runtime schema migration."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             conn.execute(POSTGRES_AGENT_RUNTIME_MIGRATION_SQL)
             conn.commit()
 
@@ -64,7 +90,7 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord:
         """Create or idempotently return a scoped conversation."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             if request.idempotency_key is not None:
                 existing = conn.execute(
                     """
@@ -119,7 +145,7 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Return a conversation only when org and user scope match."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM agent_conversations
@@ -140,7 +166,7 @@ class PostgresRuntimeApiStore:
         """Return scoped conversations ordered by latest update."""
 
         archived_filter = "" if include_archived else "AND status <> 'archived'"
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT * FROM agent_conversations
@@ -163,7 +189,7 @@ class PostgresRuntimeApiStore:
         """Return messages ordered by creation time."""
 
         deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT * FROM agent_messages
@@ -178,7 +204,7 @@ class PostgresRuntimeApiStore:
     def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             self._insert_message(conn, message)
             conn.execute(
                 "UPDATE agent_conversations SET updated_at = %s WHERE id = %s",
@@ -204,7 +230,7 @@ class PostgresRuntimeApiStore:
                 retryable=False,
             )
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             if request.idempotency_key is not None:
                 existing = conn.execute(
                     """
@@ -234,10 +260,44 @@ class PostgresRuntimeApiStore:
                     ).fetchone()
                     return run, self._message_record(message_row), False
 
-            user_message = self._message_for_run_request(
-                conn=conn,
+            def _get_msg(message_id: str) -> MessageRecord | None:
+                row = conn.execute(
+                    "SELECT * FROM agent_messages WHERE id = %s",
+                    (message_id,),
+                ).fetchone()
+                return self._message_record(row) if row is not None else None
+
+            def _latest_msg_id(org_id: str, conversation_id: str) -> str | None:
+                row = conn.execute(
+                    """
+                    SELECT id FROM agent_messages
+                    WHERE org_id = %s AND conversation_id = %s AND deleted_at IS NULL
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (org_id, conversation_id),
+                ).fetchone()
+                return row["id"] if row is not None else None
+
+            def _latest_asst(
+                org_id: str, conversation_id: str, run_id: str
+            ) -> str | None:
+                row = conn.execute(
+                    """
+                    SELECT id FROM agent_messages
+                    WHERE org_id = %s AND conversation_id = %s AND run_id = %s
+                      AND role = %s AND deleted_at IS NULL
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (org_id, conversation_id, run_id, MessageRole.ASSISTANT.value),
+                ).fetchone()
+                return row["id"] if row is not None else None
+
+            user_message = message_for_run_request(
                 request=request,
                 conversation=conversation,
+                get_message=_get_msg,
+                get_latest_message_id=_latest_msg_id,
+                find_latest_assistant_for_run=_latest_asst,
             )
             run = RunRecord(
                 run_id=context.run_id,
@@ -272,7 +332,7 @@ class PostgresRuntimeApiStore:
     def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM agent_runs WHERE id = %s AND org_id = %s",
                 (run_id, org_id),
@@ -282,7 +342,7 @@ class PostgresRuntimeApiStore:
     def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
         """Update mutable run status and return the new record."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             existing = conn.execute(
                 "SELECT * FROM agent_runs WHERE id = %s", (run_id,)
             ).fetchone()
@@ -311,7 +371,7 @@ class PostgresRuntimeApiStore:
     ) -> RunRecord:
         """Persist latest event sequence for run inspection."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 """
                 UPDATE agent_runs SET latest_sequence_no = %s
@@ -329,7 +389,7 @@ class PostgresRuntimeApiStore:
     ) -> ApprovalDecisionRecord:
         """Persist an approval decision against the approval request row."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             conn.execute(
                 """
                 UPDATE runtime_approval_requests
@@ -355,17 +415,9 @@ class PostgresRuntimeApiStore:
     ) -> ApprovalRequestRecord:
         """Persist a pending approval request."""
 
-        risk_class = str(record.metadata.get("risk_level") or "low").lower()
-        if risk_class == "critical":
-            risk_class = "high"
-        if risk_class not in {"low", "medium", "high"}:
-            risk_class = "low"
-        action_summary = str(
-            record.metadata.get("message")
-            or record.metadata.get("reason")
-            or "Approve this runtime action."
-        )
-        with self._connect() as conn:
+        risk_class = normalize_risk_class(record.metadata)
+        action_summary = derive_action_summary(record.metadata)
+        with self._pool.connection() as conn:
             existing = conn.execute(
                 """
                 SELECT a.*, r.conversation_id, r.user_id
@@ -427,7 +479,7 @@ class PostgresRuntimeApiStore:
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 """
                 SELECT a.*, r.conversation_id, r.user_id
@@ -460,7 +512,7 @@ class PostgresRuntimeApiStore:
             data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
         )
         audit_id = str(data.get("audit_event_id") or f"audit_{now.timestamp_ns()}")
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO runtime_audit_log (
@@ -501,7 +553,7 @@ class PostgresRuntimeApiStore:
 
         now = datetime.now(UTC)
         audit_event_id = f"history_delete_{now.timestamp_ns()}"
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             hold = conn.execute(
                 """
                 SELECT id FROM runtime_legal_holds
@@ -631,7 +683,7 @@ class PostgresRuntimeApiStore:
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             run = conn.execute(
                 "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE",
                 (event.run_id,),
@@ -714,13 +766,6 @@ class PostgresRuntimeApiStore:
             conn.commit()
             return envelope
 
-    def append_events(
-        self, events: Sequence[RuntimeEventDraft]
-    ) -> Sequence[RuntimeEventEnvelope]:
-        """Append multiple events in input order."""
-
-        return tuple(self.append_event(event) for event in events)
-
     def list_events_after(
         self,
         *,
@@ -730,7 +775,7 @@ class PostgresRuntimeApiStore:
     ) -> Sequence[RuntimeEventEnvelope]:
         """Return persisted events after a sequence number."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM runtime_events
@@ -744,7 +789,7 @@ class PostgresRuntimeApiStore:
     def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(sequence_no), 0) AS latest FROM runtime_events WHERE run_id = %s",
                 (run_id,),
@@ -794,7 +839,7 @@ class PostgresRuntimeApiStore:
     ) -> RuntimeWorkerClaim | None:
         """Claim the next available runtime command using SKIP LOCKED."""
 
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             row = conn.execute(
                 """
                 WITH next_event AS (
@@ -856,175 +901,6 @@ class PostgresRuntimeApiStore:
 
         self._mark_outbox(result=result, status_value=OutboxStatus.DEAD_LETTER)
 
-    def _message_for_run_request(
-        self,
-        *,
-        conn: psycopg.Connection,
-        request: CreateRunRequest,
-        conversation: ConversationRecord,
-    ) -> MessageRecord:
-        """Return the existing or newly created user message for a run request."""
-
-        context = request.runtime_context
-        if request.regenerate_from_message_id is not None:
-            regenerated = self._regenerated_user_message(
-                conn=conn,
-                message_id=request.regenerate_from_message_id,
-            )
-            if regenerated is not None:
-                return regenerated
-        parent_message_id = self._parent_message_id_for_run_request(
-            conn=conn,
-            request=request,
-            org_id=conversation.org_id,
-            conversation_id=conversation.conversation_id,
-        )
-        return MessageRecord(
-            conversation_id=conversation.conversation_id,
-            org_id=conversation.org_id,
-            run_id=None,
-            role=MessageRole.USER,
-            content_text=request.user_input,
-            content_format=request.content_format,
-            content=tuple(
-                part.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=True,
-                )
-                for part in request.content
-            ),
-            attachments=tuple(
-                attachment.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=True,
-                )
-                for attachment in request.attachments
-            ),
-            quote=request.quote_payload(),
-            metadata=self._message_metadata(request),
-            parent_message_id=parent_message_id,
-            source_message_id=request.source_message_id,
-            branch_id=request.branch_id,
-            trace_id=context.trace_id,
-        )
-
-    def _regenerated_user_message(
-        self,
-        *,
-        conn: psycopg.Connection,
-        message_id: str,
-    ) -> MessageRecord | None:
-        row = conn.execute(
-            "SELECT * FROM agent_messages WHERE id = %s",
-            (message_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        message = self._message_record(row)
-        if message.role == MessageRole.USER:
-            return message
-        if message.parent_message_id is None:
-            return None
-        parent_row = conn.execute(
-            "SELECT * FROM agent_messages WHERE id = %s",
-            (message.parent_message_id,),
-        ).fetchone()
-        if parent_row is None:
-            return None
-        parent = self._message_record(parent_row)
-        return parent if parent.role == MessageRole.USER else None
-
-    @staticmethod
-    def _latest_message_id(
-        *,
-        conn: psycopg.Connection,
-        org_id: str,
-        conversation_id: str,
-    ) -> str | None:
-        row = conn.execute(
-            """
-            SELECT id FROM agent_messages
-            WHERE org_id = %s AND conversation_id = %s AND deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (org_id, conversation_id),
-        ).fetchone()
-        return row["id"] if row is not None else None
-
-    def _parent_message_id_for_run_request(
-        self,
-        *,
-        conn: psycopg.Connection,
-        request: CreateRunRequest,
-        org_id: str,
-        conversation_id: str,
-    ) -> str | None:
-        parent_message_id = request.parent_message_id
-        if parent_message_id is None:
-            return self._latest_message_id(
-                conn=conn,
-                org_id=org_id,
-                conversation_id=conversation_id,
-            )
-        return (
-            self._real_assistant_message_id_for_synthetic_parent(
-                conn=conn,
-                parent_message_id=parent_message_id,
-                org_id=org_id,
-                conversation_id=conversation_id,
-            )
-            or parent_message_id
-        )
-
-    @staticmethod
-    def _real_assistant_message_id_for_synthetic_parent(
-        *,
-        conn: psycopg.Connection,
-        parent_message_id: str,
-        org_id: str,
-        conversation_id: str,
-    ) -> str | None:
-        if not parent_message_id.startswith(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX):
-            return None
-        run_id = parent_message_id.removeprefix(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX)
-        row = conn.execute(
-            """
-            SELECT id FROM agent_messages
-            WHERE org_id = %s
-              AND conversation_id = %s
-              AND run_id = %s
-              AND role = %s
-              AND deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (org_id, conversation_id, run_id, MessageRole.ASSISTANT.value),
-        ).fetchone()
-        return row["id"] if row is not None else None
-
-    @staticmethod
-    def _message_metadata(request: CreateRunRequest) -> dict[str, object]:
-        metadata: dict[str, object] = {}
-        quote = request.quote_payload()
-        if quote is not None:
-            metadata["quote"] = quote
-        if request.source_message_id is not None:
-            metadata["source_message_id"] = request.source_message_id
-        if request.branch_id is not None:
-            metadata["branch_id"] = request.branch_id
-        branch = request.branch_payload()
-        if branch is not None:
-            metadata["branch"] = branch
-        if request.regenerate_from_message_id is not None:
-            metadata["regenerate_from_message_id"] = request.regenerate_from_message_id
-        return metadata
-
-    def _connect(self) -> psycopg.Connection:
-        return psycopg.connect(self.database_url, row_factory=dict_row)
-
     def _enqueue_command(
         self,
         *,
@@ -1035,7 +911,7 @@ class PostgresRuntimeApiStore:
         payload: dict[str, object],
     ) -> None:
         now = datetime.now(UTC)
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO runtime_outbox_events (
@@ -1061,7 +937,7 @@ class PostgresRuntimeApiStore:
     def _mark_outbox(
         self, *, result: RuntimeWorkerResult, status_value: OutboxStatus
     ) -> None:
-        with self._connect() as conn:
+        with self._pool.connection() as conn:
             conn.execute(
                 """
                 UPDATE runtime_outbox_events

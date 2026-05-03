@@ -36,16 +36,11 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
 )
-
-RuntimeApiServiceTerminalStatuses = frozenset(
-    {
-        AgentRunStatus.CANCELLED,
-        AgentRunStatus.COMPLETED,
-        AgentRunStatus.FAILED,
-        AgentRunStatus.TIMED_OUT,
-    }
+from runtime_adapters.base import (
+    RuntimeApiServiceTerminalStatuses,
+    message_for_run_request,
+    normalize_risk_class,
 )
-SYNTHETIC_ASSISTANT_MESSAGE_PREFIX = "assistant-"
 
 
 class InMemoryRuntimeApiStore:
@@ -182,6 +177,14 @@ class InMemoryRuntimeApiStore:
         """Create message/run records or return an idempotent prior run."""
 
         context = request.runtime_context
+        if context is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Runtime context is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            )
+
         if request.idempotency_key is not None:
             key = (context.org_id, context.user_id, request.idempotency_key)
             existing_run_id = self._run_idempotency.get(key)
@@ -193,9 +196,13 @@ class InMemoryRuntimeApiStore:
                 run = self.runs[existing_run_id]
                 return run, self.messages[run.user_message_id], False
 
-        user_message = self._message_for_run_request(
+        user_message = message_for_run_request(
             request=request,
             conversation=conversation,
+            get_message=lambda mid: self.messages.get(mid),
+            get_latest_message_id=self._latest_message_id,
+            find_latest_assistant_for_run=self._find_latest_assistant_for_run,
+            run_id_for_message=context.run_id,
         )
         run = RunRecord(
             run_id=context.run_id,
@@ -226,110 +233,25 @@ class InMemoryRuntimeApiStore:
             )
         return run, user_message, True
 
-    def _message_for_run_request(
-        self,
-        *,
-        request: CreateRunRequest,
-        conversation: ConversationRecord,
-    ) -> MessageRecord:
-        """Return the existing or newly created user message for a run request."""
+    def _latest_message_id(self, org_id: str, conversation_id: str) -> str | None:
+        """Return the most recent non-deleted message ID (by created_at DESC)."""
 
-        context = request.runtime_context
-        if request.regenerate_from_message_id is not None:
-            regenerated = self._regenerated_user_message(
-                request.regenerate_from_message_id
-            )
-            if regenerated is not None:
-                return regenerated
-        parent_message_id = self._parent_message_id_for_run_request(
-            request=request,
-            org_id=conversation.org_id,
-            conversation_id=conversation.conversation_id,
-        )
-        return MessageRecord(
-            conversation_id=conversation.conversation_id,
-            org_id=conversation.org_id,
-            run_id=context.run_id,
-            role=MessageRole.USER,
-            content_text=request.user_input,
-            content_format=request.content_format,
-            content=tuple(
-                part.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=True,
-                )
-                for part in request.content
-            ),
-            attachments=tuple(
-                attachment.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=True,
-                )
-                for attachment in request.attachments
-            ),
-            quote=request.quote_payload(),
-            metadata=self._message_metadata(request),
-            parent_message_id=parent_message_id,
-            source_message_id=request.source_message_id,
-            branch_id=request.branch_id,
-            trace_id=context.trace_id,
-        )
-
-    def _regenerated_user_message(self, message_id: str) -> MessageRecord | None:
-        message = self.messages.get(message_id)
-        if message is None:
+        candidates = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.deleted_at is None
+        ]
+        if not candidates:
             return None
-        if message.role == MessageRole.USER:
-            return message
-        if message.parent_message_id is None:
-            return None
-        parent = self.messages.get(message.parent_message_id)
-        if parent is None or parent.role != MessageRole.USER:
-            return None
-        return parent
+        return max(candidates, key=lambda m: m.created_at).message_id
 
-    def _latest_message_id(self, *, org_id: str, conversation_id: str) -> str | None:
-        messages = self.list_messages(
-            org_id=org_id,
-            conversation_id=conversation_id,
-            limit=1_000,
-        )
-        return messages[-1].message_id if messages else None
-
-    def _parent_message_id_for_run_request(
-        self,
-        *,
-        request: CreateRunRequest,
-        org_id: str,
-        conversation_id: str,
+    def _find_latest_assistant_for_run(
+        self, org_id: str, conversation_id: str, run_id: str
     ) -> str | None:
-        parent_message_id = request.parent_message_id
-        if parent_message_id is None:
-            return self._latest_message_id(
-                org_id=org_id,
-                conversation_id=conversation_id,
-            )
-        return (
-            self._real_assistant_message_id_for_synthetic_parent(
-                parent_message_id=parent_message_id,
-                org_id=org_id,
-                conversation_id=conversation_id,
-            )
-            or parent_message_id
-        )
+        """Return the latest assistant message ID for a given run."""
 
-    def _real_assistant_message_id_for_synthetic_parent(
-        self,
-        *,
-        parent_message_id: str,
-        org_id: str,
-        conversation_id: str,
-    ) -> str | None:
-        if not parent_message_id.startswith(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX):
-            return None
-        run_id = parent_message_id.removeprefix(SYNTHETIC_ASSISTANT_MESSAGE_PREFIX)
         matches = [
             message
             for message in self.messages.values()
@@ -341,24 +263,7 @@ class InMemoryRuntimeApiStore:
         ]
         if not matches:
             return None
-        return sorted(matches, key=lambda message: message.created_at)[-1].message_id
-
-    @staticmethod
-    def _message_metadata(request: CreateRunRequest) -> dict[str, object]:
-        metadata: dict[str, object] = {}
-        quote = request.quote_payload()
-        if quote is not None:
-            metadata["quote"] = quote
-        if request.source_message_id is not None:
-            metadata["source_message_id"] = request.source_message_id
-        if request.branch_id is not None:
-            metadata["branch_id"] = request.branch_id
-        branch = request.branch_payload()
-        if branch is not None:
-            metadata["branch"] = branch
-        if request.regenerate_from_message_id is not None:
-            metadata["regenerate_from_message_id"] = request.regenerate_from_message_id
-        return metadata
+        return max(matches, key=lambda m: m.created_at).message_id
 
     def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
@@ -422,6 +327,9 @@ class InMemoryRuntimeApiStore:
         existing = self.approval_requests.get(record.approval_id)
         if existing is not None:
             return existing
+        normalized_metadata = dict(record.metadata)
+        normalized_metadata["risk_level"] = normalize_risk_class(record.metadata)
+        record = record.model_copy(update={"metadata": normalized_metadata})
         self.approval_requests[record.approval_id] = record
         return record
 
@@ -561,13 +469,6 @@ class InMemoryRuntimeApiStore:
         )
         events.append(envelope)
         return envelope
-
-    def append_events(
-        self, events: Sequence[RuntimeEventDraft]
-    ) -> Sequence[RuntimeEventEnvelope]:
-        """Append multiple events in input order."""
-
-        return tuple(self.append_event(event) for event in events)
 
     def list_events_after(
         self,
