@@ -43,4 +43,5 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     run_id: str
     org_id: str
     decision: ApprovalDecision
+    answer: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -184,6 +184,37 @@ def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
     )
 
 
+def test_native_ask_a_question_interrupt_projects_to_approval_requested() -> None:
+    run = TestFixtures.run_record()
+    payloads = StreamOrchestrator.native_interrupt_payloads(
+        run,
+        {
+            "__interrupt__": [
+                {
+                    "id": "ask_interrupt_42",
+                    "value": {
+                        "api_event_type": "approval_requested",
+                        "event_type": "approval_requested",
+                        "approval_kind": "ask_a_question",
+                        "approval_id": "ask_a_question:run_123:trace_123",
+                        "question": "Where would you like to travel?",
+                        "options": ["Tokyo", "Paris"],
+                        "status": "pending",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload["api_event_type"] == "approval_requested"
+    assert payload["approval_kind"] == "ask_a_question"
+    assert payload["question"] == "Where would you like to travel?"
+    assert payload["native_interrupt_id"] == "ask_interrupt_42"
+    assert payload["approval_id"] == "ask_a_question:run_123:trace_123"
+
+
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:
     producer = object()
     update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]

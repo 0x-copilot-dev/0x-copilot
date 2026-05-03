@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 
+ASK_A_QUESTION_TOOL_DESCRIPTION = (
+    "Pause and ask the human user a clarifying question, then resume with their "
+    "answer. Provide a clear `question`. Optionally include a `hint` to set "
+    "context, and `options` to constrain the user to a fixed set of choices. "
+    "The agent will halt until the user responds. Use this only when the user's "
+    "intent is ambiguous and progress depends on their input — do not use for "
+    "rhetorical or self-answerable questions."
+)
+
+
 AUTH_MCP_TOOL_DESCRIPTION = (
     "Request an authorization URL for an MCP server when the user has not "
     "authenticated it yet. Use this only when the server is needed."

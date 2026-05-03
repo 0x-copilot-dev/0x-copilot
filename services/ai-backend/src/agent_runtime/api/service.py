@@ -457,6 +457,7 @@ class RuntimeApiService:
                 status=status_value,
                 decided_by_user_id=request.decided_by_user_id,
                 reason=request.reason,
+                answer=request.answer,
             )
         )
         run = self._run_for_scope(
@@ -483,6 +484,7 @@ class RuntimeApiService:
                 run_id=record.run_id,
                 org_id=record.org_id,
                 decision=request.decision,
+                answer=request.answer,
             )
         )
         self.persistence.write_audit_log(

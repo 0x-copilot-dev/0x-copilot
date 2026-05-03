@@ -18,6 +18,7 @@ from runtime_api.schemas.common import (
 
 class _Fields:
     DECIDED_BY_USER_ID = "decided_by_user_id"
+    ANSWER = "answer"
 
 
 class ApprovalDecisionRequest(RuntimeContract):
@@ -26,6 +27,7 @@ class ApprovalDecisionRequest(RuntimeContract):
     decision: ApprovalDecision
     decided_by_user_id: str
     reason: str | None = None
+    answer: str | None = None
 
     @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
@@ -36,6 +38,11 @@ class ApprovalDecisionRequest(RuntimeContract):
     @classmethod
     def _normalize_reason(cls, value: object) -> str | None:
         return ValueNormalizer.normalize_optional_text(value, Keys.Field.REASON)
+
+    @field_validator(_Fields.ANSWER, mode="before")
+    @classmethod
+    def _normalize_answer(cls, value: object) -> str | None:
+        return ValueNormalizer.normalize_optional_text(value, _Fields.ANSWER)
 
 
 class ApprovalDecisionRecord(RuntimeContract):
@@ -49,6 +56,7 @@ class ApprovalDecisionRecord(RuntimeContract):
     status: ApprovalStatus
     decided_by_user_id: str
     reason: str | None = None
+    answer: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

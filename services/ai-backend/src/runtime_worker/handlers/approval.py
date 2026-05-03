@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime, timezone
 
+from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.contracts import (
@@ -45,6 +46,7 @@ class RuntimeApprovalHandler:
         APPROVAL_KIND = "approval_kind"
         NATIVE_INTERRUPT_ID = "native_interrupt_id"
         APPROVAL_ID = "approval_id"
+        ANSWER = "answer"
         DECISION = "decision"
         DECISIONS = "decisions"
         TYPE = "type"
@@ -101,9 +103,15 @@ class RuntimeApprovalHandler:
         )
         if (
             metadata.get(self._Fields.NATIVE_INTERRUPT_ID) is None
-            and approval_kind != "mcp_auth"
+            and approval_kind != ApiValues.ApprovalKind.MCP_AUTH
         ):
             return
+
+        if (
+            approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION
+            and command.answer is not None
+        ):
+            self._append_user_answer_message(run=run, command=command)
 
         resume = self._resume_payload(command, metadata)
         running = self.persistence.update_run_status(
@@ -216,21 +224,53 @@ class RuntimeApprovalHandler:
             summary="Run completed",
         )
 
+    def _append_user_answer_message(
+        self,
+        *,
+        run: RunRecord,
+        command: RuntimeApprovalResolvedCommand,
+    ) -> None:
+        answer = command.answer
+        if answer is None or not answer.strip():
+            return
+        self.persistence.append_message(
+            MessageRecord(
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                run_id=run.run_id,
+                role=MessageRole.USER,
+                content_text=answer,
+                parent_message_id=run.user_message_id,
+                trace_id=run.trace_id,
+                metadata={
+                    self._Fields.APPROVAL_ID: command.approval_id,
+                    self._Fields.APPROVAL_KIND: ApiValues.ApprovalKind.ASK_A_QUESTION,
+                },
+            )
+        )
+
     @classmethod
     def _resume_payload(
         cls,
         command: RuntimeApprovalResolvedCommand,
         metadata: Mapping[str, object],
     ) -> dict[str, object]:
-        if (
-            StreamTextHelper.extract(metadata.get(cls._Fields.APPROVAL_KIND))
-            == "mcp_auth"
-        ):
+        approval_kind = StreamTextHelper.extract(
+            metadata.get(cls._Fields.APPROVAL_KIND)
+        )
+        decision = (
+            "approved" if command.decision is ApprovalDecision.APPROVED else "rejected"
+        )
+        if approval_kind == ApiValues.ApprovalKind.MCP_AUTH:
             return {
                 cls._Fields.APPROVAL_ID: command.approval_id,
-                cls._Fields.DECISION: "approved"
-                if command.decision is ApprovalDecision.APPROVED
-                else "rejected",
+                cls._Fields.DECISION: decision,
+            }
+        if approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION:
+            return {
+                cls._Fields.APPROVAL_ID: command.approval_id,
+                cls._Fields.DECISION: decision,
+                cls._Fields.ANSWER: command.answer,
             }
         return {
             cls._Fields.DECISIONS: [

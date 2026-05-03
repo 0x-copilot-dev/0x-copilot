@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from agent_runtime.api.constants import Keys
+from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import StreamEventSource
@@ -314,6 +314,12 @@ class StreamOrchestrator:
             if auth_payload is not None:
                 payloads.append(auth_payload)
                 continue
+            ask_payload = cls._native_ask_a_question_payload(
+                interrupt_id, interrupt_value
+            )
+            if ask_payload is not None:
+                payloads.append(ask_payload)
+                continue
             payloads.extend(
                 cls.native_tool_approval_payloads(
                     interrupt_id=interrupt_id,
@@ -376,6 +382,38 @@ class StreamOrchestrator:
         )
         normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
         normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
+        return normalized
+
+    @classmethod
+    def _native_ask_a_question_payload(
+        cls,
+        interrupt_id: str,
+        interrupt_value: object,
+    ) -> dict[str, object] | None:
+        payload = StreamMessageParser.payload_mapping(interrupt_value)
+        if (
+            StreamMessageParser.api_event_type(payload)
+            is not RuntimeApiEventType.APPROVAL_REQUESTED
+        ):
+            return None
+        if (
+            StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_KIND))
+            != ApiValues.ApprovalKind.ASK_A_QUESTION
+        ):
+            return None
+        normalized = cls.payload_with_action_id(
+            RuntimeApiEventType.APPROVAL_REQUESTED,
+            {
+                **payload,
+                _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
+                _Fields.ACTION_ID: StreamTextHelper.extract(
+                    payload.get(_Fields.ACTION_ID)
+                )
+                or interrupt_id,
+            },
+        )
+        normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
+        normalized[Keys.Field.APPROVAL_KIND] = ApiValues.ApprovalKind.ASK_A_QUESTION
         return normalized
 
     @classmethod

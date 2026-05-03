@@ -464,8 +464,14 @@ class PostgresRuntimeApiStore:
         *,
         record: ApprovalDecisionRecord,
     ) -> ApprovalDecisionRecord:
-        """Persist an approval decision against the approval request row."""
+        """Persist an approval decision against the approval request row.
 
+        Free-text user input is stored in ``decision_reason`` regardless of
+        whether the API surfaces it as ``reason`` (action approvals) or
+        ``answer`` (ask_a_question replies).
+        """
+
+        decision_reason = record.reason if record.reason is not None else record.answer
         with self._pool.connection() as conn:
             conn.execute(
                 """
@@ -476,7 +482,7 @@ class PostgresRuntimeApiStore:
                 (
                     record.status.value,
                     record.decided_by_user_id,
-                    record.reason,
+                    decision_reason,
                     record.decided_at,
                     record.approval_id,
                     record.org_id,

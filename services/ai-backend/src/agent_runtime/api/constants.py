@@ -115,6 +115,7 @@ class Values:
         WAITING = "waiting"
 
     class Tool:
+        ASK_A_QUESTION = "ask_a_question"
         GREP = "grep"
         READ_FILE = "read_file"
         RG = "rg"
@@ -122,6 +123,12 @@ class Values:
         TASK = "task"
         UNKNOWN_TOOL = "unknown_tool"
         WRITE_TODOS = "write_todos"
+
+    class ApprovalKind:
+        ACTION = "action"
+        ASK_A_QUESTION = "ask_a_question"
+        MCP_AUTH = "mcp_auth"
+        MCP_TOOL = "mcp_tool"
 
     class VirtualPath:
         LARGE_TOOL_RESULTS_PREFIX = "/large_tool_results/"

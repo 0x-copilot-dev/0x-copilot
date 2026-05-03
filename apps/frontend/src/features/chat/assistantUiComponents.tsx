@@ -1964,9 +1964,22 @@ function ApprovalTool({
       : null);
   const riskLevel = stringValue(args.risk_level);
   const readOnly = typeof args.read_only === "boolean" ? args.read_only : null;
-  const isMcpApproval =
-    stringValue(args.approval_kind) === "mcp_tool" ||
-    stringValue(args.kind) === "mcp_tool";
+  const approvalKind =
+    stringValue(args.approval_kind) ?? stringValue(args.kind) ?? null;
+  const isMcpApproval = approvalKind === "mcp_tool";
+  const isAskAQuestion = approvalKind === "ask_a_question";
+  if (isAskAQuestion) {
+    return (
+      <AskAQuestionTool
+        args={args}
+        approvalId={approvalId}
+        resolved={result !== undefined}
+        result={result}
+        presentation={presentation}
+        resume={resume}
+      />
+    );
+  }
   const resolved = result !== undefined;
   const submit = (decision: ApprovalDecision): void => {
     resume({ decision, approval_id: approvalId });
@@ -2038,6 +2051,121 @@ function ApprovalTool({
           </Button>
         </div>
       ) : null}
+    </ActivityCard>
+  );
+}
+
+function AskAQuestionTool({
+  args,
+  approvalId,
+  resolved,
+  result,
+  presentation,
+  resume,
+}: {
+  args: Record<string, unknown>;
+  approvalId: string;
+  resolved: boolean;
+  result: unknown;
+  presentation: ReturnType<typeof presentationFromArgs>;
+  resume: ToolCallMessagePartProps<Record<string, unknown>>["resume"];
+}): ReactElement {
+  const question =
+    stringValue(args.question) ?? stringValue(args.message) ?? "";
+  const hint = stringValue(args.hint);
+  const options = Array.isArray(args.options)
+    ? (args.options.filter((option) => typeof option === "string") as string[])
+    : [];
+  const [draft, setDraft] = useState("");
+  const submit = (answer: string): void => {
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      return;
+    }
+    resume({
+      decision: "approved",
+      approval_id: approvalId,
+      approval_kind: "ask_a_question",
+      answer: trimmed,
+    });
+  };
+  const decline = (): void => {
+    resume({
+      decision: "rejected",
+      approval_id: approvalId,
+      approval_kind: "ask_a_question",
+    });
+  };
+  const submittedAnswer =
+    result && typeof result === "object" && "answer" in result
+      ? stringValue((result as Record<string, unknown>).answer)
+      : null;
+  return (
+    <ActivityCard
+      title={
+        presentation?.title ??
+        (resolved ? "Question answered" : "Question for you")
+      }
+      status={
+        presentation?.status_label ?? (resolved ? "Answered" : "Awaiting reply")
+      }
+      variant="approval"
+      description={presentation?.summary ?? question}
+      params={hint ? [{ label: "Hint", value: hint }] : []}
+      details={approvalDetailsContent(args, result)}
+      detailsLabel={presentation?.debug_label ?? "Question details"}
+    >
+      {resolved ? (
+        submittedAnswer ? (
+          <div className="aui-tool-card__answer">{submittedAnswer}</div>
+        ) : null
+      ) : options.length > 0 ? (
+        <div className="aui-tool-card__actions">
+          {options.map((option) => (
+            <Button
+              key={option}
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => submit(option)}
+            >
+              {option}
+            </Button>
+          ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            title="Decline to answer"
+            onClick={decline}
+          >
+            Skip
+          </Button>
+        </div>
+      ) : (
+        <form
+          className="aui-tool-card__actions"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit(draft);
+          }}
+        >
+          <input
+            type="text"
+            className="aui-tool-card__input"
+            placeholder="Type your answer"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            autoFocus
+          />
+          <Button type="submit" size="sm" disabled={draft.trim().length === 0}>
+            Send
+          </Button>
+          <Button type="button" size="sm" variant="secondary" onClick={decline}>
+            Skip
+          </Button>
+        </form>
+      )}
     </ActivityCard>
   );
 }

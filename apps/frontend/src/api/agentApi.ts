@@ -154,6 +154,7 @@ export function decideApproval(
   decision: ApprovalDecisionRequest["decision"],
   identity: RequestIdentity,
   reason?: string,
+  answer?: string,
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
@@ -161,6 +162,9 @@ export function decideApproval(
   };
   if (reason !== undefined) {
     payload.reason = reason;
+  }
+  if (answer !== undefined) {
+    payload.answer = answer;
   }
   const params = new URLSearchParams({ org_id: identity.orgId });
   return fetch(

@@ -505,6 +505,7 @@ export interface ApprovalDecisionRequest {
   decision: ApprovalDecision;
   decided_by_user_id: string;
   reason?: string | null;
+  answer?: string | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -516,7 +517,7 @@ export interface ApprovalDecisionResponse {
 
 export interface ApprovalRequestedPayload {
   approval_id: string;
-  approval_kind?: "mcp_tool" | string;
+  approval_kind?: "mcp_tool" | "ask_a_question" | string;
   server_id?: string;
   server_name?: string;
   display_name?: string;
@@ -529,6 +530,9 @@ export interface ApprovalRequestedPayload {
   reason?: string;
   status?: string;
   source_tool_call_id?: string;
+  question?: string;
+  hint?: string | null;
+  options?: string[];
   [key: string]: unknown;
 }
 

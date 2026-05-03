@@ -53,7 +53,9 @@ def test_factory_propagates_permissions_to_runtime_ports(
 
     call = builder.calls[0]
     assert call.model_name == runtime_context_admin.model_profile.model_name
-    assert call.tools == ("doc_search",)
+    tool_names = tuple(str(getattr(tool, "name", tool)) for tool in call.tools)
+    assert "doc_search" in tool_names
+    assert "ask_a_question" in tool_names
     assert call.subagents == ("researcher",)
     assert call.memory_backend is None
 

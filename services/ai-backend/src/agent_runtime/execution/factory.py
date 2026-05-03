@@ -21,6 +21,7 @@ from agent_runtime.execution.deep_agent_builder import (
     build_deep_agent,
     runtime_checkpointer,
 )
+from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
@@ -32,6 +33,10 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
 )
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
+from agent_runtime.capabilities.tools.builtin.ask_a_question import (
+    AskAQuestionInput,
+    AskAQuestionTool,
+)
 from agent_runtime.capabilities.tools.prior_results import (
     LoadPriorToolResultInput,
     LoadPriorToolResultTool,
@@ -216,6 +221,12 @@ def _model_visible_tools(
                 LoadPriorToolResultInput,
             )
         )
+    model_tools.append(
+        _structured_tool(
+            AskAQuestionTool(runtime_context=runtime_context),
+            AskAQuestionInput,
+        )
+    )
     return tuple(model_tools)
 
 
@@ -255,6 +266,7 @@ def _local_tool_names(
         names.add(McpValues.ToolName.AUTH_MCP)
     if include_skill_loader:
         names.add("load_skill")
+    names.add(Values.Tool.ASK_A_QUESTION)
     return frozenset(names)
 
 

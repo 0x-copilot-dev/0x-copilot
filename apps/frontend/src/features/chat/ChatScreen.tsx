@@ -570,13 +570,14 @@ export function ChatScreen({
   async function onApprovalDecision(
     approvalId: string,
     decision: ApprovalDecision,
+    answer?: string,
   ): Promise<void> {
     if (pendingApprovalDecisionsRef.current.has(approvalId)) {
       return;
     }
     pendingApprovalDecisionsRef.current.add(approvalId);
     try {
-      await decideApproval(approvalId, decision, identity);
+      await decideApproval(approvalId, decision, identity, undefined, answer);
       setItems((current) =>
         resolveApprovalDecision(current, approvalId, decision),
       );
@@ -808,7 +809,11 @@ export function ChatScreen({
         return;
       }
       if (isApprovalResumePayload(payload)) {
-        void onApprovalDecision(payload.approval_id, payload.decision);
+        void onApprovalDecision(
+          payload.approval_id,
+          payload.decision,
+          payload.answer,
+        );
       }
     },
     onCancel,
@@ -1216,9 +1221,11 @@ function modelSelectionForId(
   };
 }
 
-function isApprovalResumePayload(
-  payload: unknown,
-): payload is { decision: ApprovalDecision; approval_id: string } {
+function isApprovalResumePayload(payload: unknown): payload is {
+  decision: ApprovalDecision;
+  approval_id: string;
+  answer?: string;
+} {
   if (!payload || typeof payload !== "object") {
     return false;
   }
@@ -1226,7 +1233,8 @@ function isApprovalResumePayload(
   return (
     typeof record.approval_id === "string" &&
     record.approval_kind !== "mcp_auth" &&
-    (record.decision === "approved" || record.decision === "rejected")
+    (record.decision === "approved" || record.decision === "rejected") &&
+    (record.answer === undefined || typeof record.answer === "string")
   );
 }
 
