@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from agent_runtime.api.constants import Keys, Values
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import (
@@ -39,6 +40,8 @@ class ToolCallStreamState:
 class ToolEventProjector(StreamMessageParser):
     """Project provider tool-call chunks and tool-result messages."""
 
+    event_producer: RuntimeEventProducer
+
     internal_tool_names = frozenset({Values.Tool.WRITE_TODOS})
     large_result_artifact_tool_names = frozenset(
         {
@@ -63,7 +66,7 @@ class ToolEventProjector(StreamMessageParser):
     ) -> None:
         state = self.tool_call_state(run.run_id, namespace, tool_call)
         if state.tool_name == Values.Tool.TASK:
-            self.append_task_tool_call_event(  # type: ignore[attr-defined]
+            self.append_task_tool_call_event(
                 run=run,
                 state=state,
                 metadata=metadata,
@@ -84,7 +87,7 @@ class ToolEventProjector(StreamMessageParser):
             payload[Keys.Field.STATUS] = Values.Status.RUNNING
         elif state.pending_start:
             state.pending_start = False
-        self.event_producer.append_api_event(  # type: ignore[attr-defined]
+        self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.TOOL,
             event_type=event_type,

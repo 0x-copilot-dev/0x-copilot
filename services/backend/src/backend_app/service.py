@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 from secrets import token_urlsafe
+
+import yaml
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -52,7 +54,12 @@ from backend_app.contracts import (
 )
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
-from backend_app.store import InMemoryMcpStore, InMemorySkillStore, PostgresSkillStore
+from backend_app.store import (
+    InMemoryMcpStore,
+    InMemorySkillStore,
+    PostgresMcpStore,
+    PostgresSkillStore,
+)
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 
 
@@ -150,7 +157,7 @@ class McpRegistryService:
     def __init__(
         self,
         *,
-        store: InMemoryMcpStore | None = None,
+        store: InMemoryMcpStore | PostgresMcpStore | None = None,
         token_vault: TokenVault | None = None,
         token_exchanger: OAuthTokenExchanger | None = None,
         oauth_client: OAuthDiscoveryClient | None = None,
@@ -570,7 +577,10 @@ class McpRegistryService:
         return json.loads(raw or "{}")
 
     @classmethod
-    def _default_store(cls) -> InMemoryMcpStore:
+    def _default_store(cls) -> InMemoryMcpStore | PostgresMcpStore:
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        if database_url:
+            return PostgresMcpStore(database_url=database_url)
         if TokenVaultFactory.environment() == "production":
             raise RuntimeError("Production requires a persistent MCP registry store")
         return InMemoryMcpStore()
@@ -972,81 +982,13 @@ class SkillMarkdownParser:
 
     @classmethod
     def _parse_fields(cls, frontmatter: str) -> dict[str, object]:
-        parsed: dict[str, object] = {}
-        lines = frontmatter.splitlines()
-        index = 0
-        while index < len(lines):
-            line = lines[index]
-            if not line.strip() or line.lstrip().startswith("#"):
-                index += 1
-                continue
-            if line.startswith((" ", "\t")) or ":" not in line:
-                raise ValueError("Skill frontmatter contains malformed YAML")
-            key, raw_value = line.split(":", maxsplit=1)
-            key = key.strip()
-            value = raw_value.strip()
-            if value:
-                parsed[key] = cls._scalar_or_list(value)
-                index += 1
-                continue
-            children: list[str] = []
-            index += 1
-            while index < len(lines) and (
-                not lines[index].strip() or lines[index].startswith((" ", "\t"))
-            ):
-                children.append(lines[index])
-                index += 1
-            parsed[key] = cls._block(children)
+        try:
+            parsed = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as exc:
+            raise ValueError("Skill frontmatter contains malformed YAML") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Skill frontmatter contains malformed YAML")
         return parsed
-
-    @classmethod
-    def _block(cls, lines: list[str]) -> object:
-        meaningful = [line.strip() for line in lines if line.strip()]
-        if not meaningful:
-            return None
-        if all(line.startswith("- ") for line in meaningful):
-            return [cls._scalar(line[2:].strip()) for line in meaningful]
-        mapping: dict[str, object] = {}
-        for line in meaningful:
-            if ":" not in line:
-                raise ValueError("Skill frontmatter contains unsupported nested YAML")
-            key, value = line.split(":", maxsplit=1)
-            mapping[key.strip()] = cls._scalar(value.strip())
-        return mapping
-
-    @classmethod
-    def _scalar_or_list(cls, value: str) -> object:
-        if value.startswith("[") and value.endswith("]"):
-            inner = value[1:-1].strip()
-            if not inner:
-                return []
-            return [cls._scalar(part.strip()) for part in inner.split(",")]
-        return cls._scalar(value)
-
-    @classmethod
-    def _scalar(cls, value: str) -> object:
-        stripped = value.strip()
-        if (
-            len(stripped) >= 2
-            and stripped[0] == stripped[-1]
-            and stripped[0] in {"'", '"'}
-        ):
-            return stripped[1:-1]
-        lowered = stripped.lower()
-        if lowered in {"null", "none", "~"}:
-            return None
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-        try:
-            return int(stripped)
-        except ValueError:
-            pass
-        try:
-            return float(stripped)
-        except ValueError:
-            return stripped
 
     @classmethod
     def _list(cls, value: object) -> tuple[object, ...]:

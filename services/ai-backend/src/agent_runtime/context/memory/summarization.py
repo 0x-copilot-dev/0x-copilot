@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import TypeAlias
 
@@ -59,6 +60,9 @@ class ContextSummarizationManager:
             summary = cls._coerce_summary(summarizer())
             fallback_used = False
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Context summarization failed, using fallback", exc_info=True
+            )
             summary = cls._fallback_summary(
                 objective=objective,
                 decisions=decisions,

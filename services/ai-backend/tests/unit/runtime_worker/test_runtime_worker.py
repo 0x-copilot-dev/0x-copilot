@@ -13,6 +13,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
+from agent_runtime.persistence.records import OutboxStatus
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -65,7 +66,10 @@ def _runtime_context(run_id: str) -> AgentRuntimeContext:
 
 
 def _create_queued_run(
-    store: InMemoryRuntimeApiStore, settings: RuntimeSettings
+    store: InMemoryRuntimeApiStore,
+    settings: RuntimeSettings,
+    *,
+    model: dict[str, object] | None = None,
 ) -> str:
     service = RuntimeApiService(
         persistence=store,
@@ -86,7 +90,7 @@ def _create_queued_run(
             org_id="org_123",
             user_id="user_123",
             user_input="Summarize launch risks.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     return response.run_id
@@ -916,6 +920,73 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         event for event in events if event.event_type == "run_completed"
     )
     assert run_completed.metadata["performance_metrics"]["chunk_count"] == 3
+
+
+def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _settings()
+    run_id = _create_queued_run(
+        store,
+        settings,
+        model={
+            "provider": "openai",
+            "model_name": "gpt-5.4-mini",
+            "timeout_seconds": 0.001,
+        },
+    )
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def slow_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        await asyncio.sleep(0.05)
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "assistant", "content": "Too late"}]},
+        }
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        retry_delay_seconds=0,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=slow_streamer,
+        ),
+    )
+
+    processed = asyncio.run(worker.run_until_idle())
+
+    assert processed == 1
+    assert store.runs[run_id].status == AgentRunStatus.TIMED_OUT
+    assert [event.event_type for event in store.events_by_run[run_id]] == [
+        "run_queued",
+        "run_started",
+        "run_failed",
+    ]
+    assert store.events_by_run[run_id][-1].summary == "Run timed out"
+    assert set(store._queue_statuses.values()) == {OutboxStatus.COMPLETED}
 
 
 def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:

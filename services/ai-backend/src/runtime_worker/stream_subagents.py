@@ -59,7 +59,7 @@ class SubagentEventProjector(ToolEventProjector):
             if key in self._subagent_lifecycle_keys:
                 return
             self._subagent_lifecycle_keys.add(key)
-        self.event_producer.append_api_event(  # type: ignore[attr-defined]
+        self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=event_type,
@@ -102,7 +102,7 @@ class SubagentEventProjector(ToolEventProjector):
             return True
         payload.setdefault("task_id", namespace.subagent_task_id)
         payload.setdefault("status", "running")
-        self.event_producer.append_api_event(  # type: ignore[attr-defined]
+        self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,

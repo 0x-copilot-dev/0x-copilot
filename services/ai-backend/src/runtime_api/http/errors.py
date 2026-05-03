@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import Request
@@ -112,6 +113,9 @@ class RuntimeApiErrorMapper:
     ) -> JSONResponse:
         """Serialize unexpected failures as safe fallback errors."""
 
+        logging.getLogger(__name__).exception(
+            "Unhandled error in runtime API", exc_info=_exc
+        )
         response = ApiErrorResponse(
             code=RuntimeErrorCode.RUNTIME_FACTORY_ERROR,
             safe_message=Messages.Error.SAFE_FALLBACK,

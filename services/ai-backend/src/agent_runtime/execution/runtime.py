@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Generator, Sequence
+from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
@@ -77,6 +78,139 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
     }
 
 
+_NON_RETRYABLE_ERRORS = (TypeError, ValueError, AttributeError)
+
+
+class _TracedRuntimeCall:
+    """Shared logging and error-handling for all runtime invocation functions.
+
+    Encapsulates the start-event, method-validation, try/except error wrapping,
+    and success-event that every ``invoke``/``astream`` variant repeats.
+    """
+
+    __slots__ = (
+        "_agent",
+        "_context",
+        "_event_prefix",
+        "_log_runtime_errors",
+        "_logger",
+        "_safe_message",
+        "_started_at",
+        "_trace_id",
+    )
+
+    def __init__(
+        self,
+        harness: RuntimeHarness,
+        *,
+        event_prefix: str,
+        safe_message: str,
+        logger: RuntimeLogger,
+        start_metadata: dict[str, object] | None = None,
+        log_runtime_errors: bool = True,
+    ) -> None:
+        self._agent = harness.agent
+        self._context = harness.context
+        self._event_prefix = event_prefix
+        self._safe_message = safe_message
+        self._logger = logger
+        self._log_runtime_errors = log_runtime_errors
+        self._started_at = perf_counter()
+        self._trace_id = harness.context.trace_id
+
+        start_kwargs: dict[str, object] = {}
+        if start_metadata:
+            start_kwargs["metadata"] = start_metadata
+        logger.event(
+            context=self._context,
+            event=f"{event_prefix}.started",
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="started",
+            **start_kwargs,
+        )
+
+    @property
+    def logger(self) -> RuntimeLogger:
+        return self._logger
+
+    def has_method(self, method_name: str) -> bool:
+        return callable(getattr(self._agent, method_name, None))
+
+    def require_method(self, method_name: str) -> None:
+        """Raise ``AgentRuntimeError`` if the agent lacks *method_name*."""
+        if self.has_method(method_name):
+            return
+        error = AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            f"Runtime agent does not provide {method_name}().",
+            retryable=False,
+            correlation_id=self._trace_id,
+        )
+        self._log_failure(
+            error_code=error.code,
+            retryable=error.retryable,
+            safe_message=error.safe_message,
+        )
+        raise error
+
+    @contextmanager
+    def guard(self) -> Generator[None, None, None]:
+        """Context manager that logs failures/success around the yielded body."""
+        try:
+            yield
+        except AgentRuntimeError as exc:
+            if self._log_runtime_errors:
+                self._log_failure(
+                    error_code=exc.code,
+                    retryable=exc.retryable,
+                    safe_message=exc.safe_message,
+                )
+            raise
+        except Exception as exc:
+            retryable = not isinstance(exc, _NON_RETRYABLE_ERRORS)
+            self._log_failure(
+                error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+                retryable=retryable,
+                safe_message=self._safe_message,
+                metadata={"exception_type": type(exc).__name__},
+            )
+            raise AgentRuntimeError(
+                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+                self._safe_message,
+                retryable=retryable,
+                correlation_id=self._trace_id,
+            ) from exc
+        self._log_success()
+
+    def _log_failure(self, **kwargs: object) -> None:
+        self._logger.event(
+            context=self._context,
+            event=f"{self._event_prefix}.failed",
+            level=RuntimeLogLevel.ERROR,
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="failed",
+            duration_ms=_elapsed_ms(self._started_at),
+            **kwargs,
+        )
+
+    def _log_success(self) -> None:
+        self._logger.event(
+            context=self._context,
+            event=f"{self._event_prefix}.succeeded",
+            subsystem="runtime",
+            operation=TraceNames.RUNTIME_INVOKE,
+            status="succeeded",
+            duration_ms=_elapsed_ms(self._started_at),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public invocation helpers (signatures unchanged)
+# ---------------------------------------------------------------------------
+
+
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 def invoke_runtime(
     harness: RuntimeHarness,
@@ -86,87 +220,19 @@ def invoke_runtime(
 ) -> Any:
     """Invoke a sync-compatible runtime agent with typed config metadata."""
 
-    runtime_logger = logger or RuntimeLogger()
-    started_at = perf_counter()
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.invoke.started",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="started",
-        metadata={"message_count": len(messages)},
+    call = _TracedRuntimeCall(
+        harness,
+        event_prefix="runtime.invoke",
+        safe_message="Runtime invocation failed safely.",
+        logger=logger or RuntimeLogger(),
+        start_metadata={"message_count": len(messages)},
     )
-
-    if not callable(getattr(harness.agent, "invoke", None)):
-        error = AgentRuntimeError(
-            RuntimeErrorCode.CONFIGURATION_ERROR,
-            "Runtime agent does not provide invoke().",
-            retryable=False,
-            correlation_id=harness.context.trace_id,
-        )
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=error.code,
-            retryable=error.retryable,
-            safe_message=error.safe_message,
-        )
-        raise error
-
-    try:
-        result = harness.agent.invoke(
+    call.require_method("invoke")
+    with call.guard():
+        return harness.agent.invoke(
             {"messages": list(messages)},
             config=runtime_config(harness),
         )
-    except AgentRuntimeError as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=exc.code,
-            retryable=exc.retryable,
-            safe_message=exc.safe_message,
-        )
-        raise
-    except Exception as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            retryable=True,
-            safe_message="Runtime invocation failed safely.",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        raise AgentRuntimeError(
-            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            "Runtime invocation failed safely.",
-            retryable=True,
-            correlation_id=harness.context.trace_id,
-        ) from exc
-
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.invoke.succeeded",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="succeeded",
-        duration_ms=_elapsed_ms(started_at),
-    )
-    return result
 
 
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
@@ -178,87 +244,19 @@ async def ainvoke_runtime(
 ) -> Any:
     """Invoke an async-compatible runtime agent with typed config metadata."""
 
-    runtime_logger = logger or RuntimeLogger()
-    started_at = perf_counter()
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.invoke.started",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="started",
-        metadata={"message_count": len(messages)},
+    call = _TracedRuntimeCall(
+        harness,
+        event_prefix="runtime.invoke",
+        safe_message="Runtime invocation failed safely.",
+        logger=logger or RuntimeLogger(),
+        start_metadata={"message_count": len(messages)},
     )
-
-    if not callable(getattr(harness.agent, "ainvoke", None)):
-        error = AgentRuntimeError(
-            RuntimeErrorCode.CONFIGURATION_ERROR,
-            "Runtime agent does not provide ainvoke().",
-            retryable=False,
-            correlation_id=harness.context.trace_id,
-        )
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=error.code,
-            retryable=error.retryable,
-            safe_message=error.safe_message,
-        )
-        raise error
-
-    try:
-        result = await harness.agent.ainvoke(
+    call.require_method("ainvoke")
+    with call.guard():
+        return await harness.agent.ainvoke(
             {"messages": list(messages)},
             config=runtime_config(harness),
         )
-    except AgentRuntimeError as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=exc.code,
-            retryable=exc.retryable,
-            safe_message=exc.safe_message,
-        )
-        raise
-    except Exception as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.invoke.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            retryable=True,
-            safe_message="Runtime invocation failed safely.",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        raise AgentRuntimeError(
-            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            "Runtime invocation failed safely.",
-            retryable=True,
-            correlation_id=harness.context.trace_id,
-        ) from exc
-
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.invoke.succeeded",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="succeeded",
-        duration_ms=_elapsed_ms(started_at),
-    )
-    return result
 
 
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
@@ -270,74 +268,19 @@ async def ainvoke_runtime_resume(
 ) -> Any:
     """Resume a checkpointed runtime graph with a LangGraph HITL decision."""
 
-    runtime_logger = logger or RuntimeLogger()
-    started_at = perf_counter()
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.resume.started",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="started",
+    call = _TracedRuntimeCall(
+        harness,
+        event_prefix="runtime.resume",
+        safe_message="Runtime resume failed safely.",
+        logger=logger or RuntimeLogger(),
+        log_runtime_errors=False,
     )
-
-    if not callable(getattr(harness.agent, "ainvoke", None)):
-        error = AgentRuntimeError(
-            RuntimeErrorCode.CONFIGURATION_ERROR,
-            "Runtime agent does not provide ainvoke().",
-            retryable=False,
-            correlation_id=harness.context.trace_id,
-        )
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.resume.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=error.code,
-            retryable=error.retryable,
-            safe_message=error.safe_message,
-        )
-        raise error
-
-    try:
-        result = await harness.agent.ainvoke(
+    call.require_method("ainvoke")
+    with call.guard():
+        return await harness.agent.ainvoke(
             Command(resume=resume),
             config=runtime_config(harness),
         )
-    except AgentRuntimeError:
-        raise
-    except Exception as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.resume.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            retryable=True,
-            safe_message="Runtime resume failed safely.",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        raise AgentRuntimeError(
-            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            "Runtime resume failed safely.",
-            retryable=True,
-            correlation_id=harness.context.trace_id,
-        ) from exc
-
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.resume.succeeded",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="succeeded",
-        duration_ms=_elapsed_ms(started_at),
-    )
-    return result
 
 
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
@@ -349,71 +292,24 @@ async def astream_runtime(
 ) -> AsyncIterator[object]:
     """Stream runtime chunks from the graph while preserving typed config metadata."""
 
-    runtime_logger = logger or RuntimeLogger()
-    started_at = perf_counter()
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.stream.started",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="started",
-        metadata={"message_count": len(messages)},
+    call = _TracedRuntimeCall(
+        harness,
+        event_prefix="runtime.stream",
+        safe_message="Runtime streaming failed safely.",
+        logger=logger or RuntimeLogger(),
+        start_metadata={"message_count": len(messages)},
     )
-
-    if not callable(getattr(harness.agent, "astream", None)):
-        yield await ainvoke_runtime(harness, messages, logger=runtime_logger)
+    if not call.has_method("astream"):
+        yield await ainvoke_runtime(harness, messages, logger=call.logger)
         return
 
-    try:
+    with call.guard():
         async for chunk in harness.agent.astream(
             {"messages": list(messages)},
             config=runtime_config(harness),
             **RuntimeStreamOptions.rich(),
         ):
             yield chunk
-    except AgentRuntimeError as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.stream.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=exc.code,
-            retryable=exc.retryable,
-            safe_message=exc.safe_message,
-        )
-        raise
-    except Exception as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.stream.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            retryable=True,
-            safe_message="Runtime streaming failed safely.",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        raise AgentRuntimeError(
-            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            "Runtime streaming failed safely.",
-            retryable=True,
-            correlation_id=harness.context.trace_id,
-        ) from exc
-
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.stream.succeeded",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="succeeded",
-        duration_ms=_elapsed_ms(started_at),
-    )
 
 
 @traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
@@ -425,58 +321,24 @@ async def astream_runtime_resume(
 ) -> AsyncIterator[object]:
     """Stream a checkpointed runtime graph after a LangGraph HITL decision."""
 
-    runtime_logger = logger or RuntimeLogger()
-    started_at = perf_counter()
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.resume_stream.started",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="started",
+    call = _TracedRuntimeCall(
+        harness,
+        event_prefix="runtime.resume_stream",
+        safe_message="Runtime resume streaming failed safely.",
+        logger=logger or RuntimeLogger(),
+        log_runtime_errors=False,
     )
-
-    if not callable(getattr(harness.agent, "astream", None)):
-        yield await ainvoke_runtime_resume(harness, resume, logger=runtime_logger)
+    if not call.has_method("astream"):
+        yield await ainvoke_runtime_resume(harness, resume, logger=call.logger)
         return
 
-    try:
+    with call.guard():
         async for chunk in harness.agent.astream(
             Command(resume=resume),
             config=runtime_config(harness),
             **RuntimeStreamOptions.rich(),
         ):
             yield chunk
-    except AgentRuntimeError:
-        raise
-    except Exception as exc:
-        runtime_logger.event(
-            context=harness.context,
-            event="runtime.resume_stream.failed",
-            level=RuntimeLogLevel.ERROR,
-            subsystem="runtime",
-            operation=TraceNames.RUNTIME_INVOKE,
-            status="failed",
-            duration_ms=_elapsed_ms(started_at),
-            error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            retryable=True,
-            safe_message="Runtime resume streaming failed safely.",
-            metadata={"exception_type": type(exc).__name__},
-        )
-        raise AgentRuntimeError(
-            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-            "Runtime resume streaming failed safely.",
-            retryable=True,
-            correlation_id=harness.context.trace_id,
-        ) from exc
-
-    runtime_logger.event(
-        context=harness.context,
-        event="runtime.resume_stream.succeeded",
-        subsystem="runtime",
-        operation=TraceNames.RUNTIME_INVOKE,
-        status="succeeded",
-        duration_ms=_elapsed_ms(started_at),
-    )
 
 
 def _elapsed_ms(started_at: float) -> int:

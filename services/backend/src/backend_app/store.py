@@ -10,6 +10,7 @@ from typing import Any
 from backend_app.contracts import (
     AuditEventRecord,
     McpAuthSessionRecord,
+    McpOAuthClientConfig,
     McpServerRecord,
     SkillAuditEventRecord,
     SkillRecord,
@@ -75,6 +76,319 @@ class InMemoryMcpStore:
     def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
         self.audit_events.append(record)
         return record
+
+
+class PostgresMcpStore:
+    """PostgreSQL-backed MCP registry store.
+
+    Lazy-imports psycopg so unit tests and local in-memory runs do not require
+    a running Postgres client library.
+    """
+
+    def __init__(self, *, database_url: str) -> None:
+        self.database_url = database_url
+
+    def create_server(self, record: McpServerRecord) -> McpServerRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO mcp_servers (
+                      server_id, org_id, user_id, name, display_name, url,
+                      transport, auth_mode, auth_state, health, enabled,
+                      required_scopes, last_discovery, oauth_client,
+                      created_at, updated_at
+                    ) VALUES (
+                      %(server_id)s, %(org_id)s, %(user_id)s, %(name)s,
+                      %(display_name)s, %(url)s, %(transport)s, %(auth_mode)s,
+                      %(auth_state)s, %(health)s, %(enabled)s,
+                      %(required_scopes)s, %(last_discovery)s, %(oauth_client)s,
+                      %(created_at)s, %(updated_at)s
+                    )
+                    """,
+                    self._server_params(record),
+                )
+        return record
+
+    def update_server(self, record: McpServerRecord) -> McpServerRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE mcp_servers
+                    SET name = %(name)s,
+                        display_name = %(display_name)s,
+                        url = %(url)s,
+                        transport = %(transport)s,
+                        auth_mode = %(auth_mode)s,
+                        auth_state = %(auth_state)s,
+                        health = %(health)s,
+                        enabled = %(enabled)s,
+                        required_scopes = %(required_scopes)s,
+                        last_discovery = %(last_discovery)s,
+                        oauth_client = %(oauth_client)s,
+                        updated_at = %(updated_at)s
+                    WHERE org_id = %(org_id)s AND server_id = %(server_id)s
+                    """,
+                    self._server_params(record),
+                )
+        return record
+
+    def get_server(self, *, org_id: str, server_id: str) -> McpServerRecord | None:
+        return self._fetch_one_server(
+            "SELECT * FROM mcp_servers WHERE org_id = %(org_id)s AND server_id = %(server_id)s",
+            {"org_id": org_id, "server_id": server_id},
+        )
+
+    def list_servers(self, *, org_id: str, user_id: str) -> tuple[McpServerRecord, ...]:
+        return self._fetch_many_servers(
+            """
+            SELECT * FROM mcp_servers
+            WHERE org_id = %(org_id)s AND user_id = %(user_id)s
+            ORDER BY created_at
+            """,
+            {"org_id": org_id, "user_id": user_id},
+        )
+
+    def delete_server(self, *, org_id: str, server_id: str) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM mcp_servers WHERE org_id = %(org_id)s AND server_id = %(server_id)s",
+                    {"org_id": org_id, "server_id": server_id},
+                )
+                return cur.rowcount > 0
+
+    def create_auth_session(self, record: McpAuthSessionRecord) -> McpAuthSessionRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO mcp_auth_sessions (
+                      session_id, server_id, org_id, user_id, state,
+                      code_verifier, redirect_uri, auth_url,
+                      expires_at, created_at
+                    ) VALUES (
+                      %(session_id)s, %(server_id)s, %(org_id)s, %(user_id)s,
+                      %(state)s, %(code_verifier)s, %(redirect_uri)s, %(auth_url)s,
+                      %(expires_at)s, %(created_at)s
+                    )
+                    """,
+                    {
+                        "session_id": record.session_id,
+                        "server_id": record.server_id,
+                        "org_id": record.org_id,
+                        "user_id": record.user_id,
+                        "state": record.state,
+                        "code_verifier": record.code_verifier,
+                        "redirect_uri": record.redirect_uri,
+                        "auth_url": record.auth_url,
+                        "expires_at": record.expires_at,
+                        "created_at": record.created_at,
+                    },
+                )
+        return record
+
+    def pop_auth_session(self, *, state: str) -> McpAuthSessionRecord | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM mcp_auth_sessions WHERE state = %(state)s RETURNING *",
+                    {"state": state},
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                return McpAuthSessionRecord(
+                    session_id=str(row["session_id"]),
+                    server_id=str(row["server_id"]),
+                    org_id=str(row["org_id"]),
+                    user_id=str(row["user_id"]),
+                    state=str(row["state"]),
+                    code_verifier=str(row["code_verifier"]),
+                    redirect_uri=str(row["redirect_uri"]),
+                    auth_url=str(row["auth_url"]),
+                    expires_at=self._datetime(row["expires_at"]),
+                    created_at=self._datetime(row["created_at"]),
+                )
+
+    def put_token(self, record: TokenEnvelope) -> TokenEnvelope:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM mcp_auth_connections WHERE server_id = %(server_id)s",
+                    {"server_id": record.server_id},
+                )
+                cur.execute(
+                    """
+                    INSERT INTO mcp_auth_connections (
+                      connection_id, server_id, org_id, user_id,
+                      encrypted_access_token, encrypted_refresh_token,
+                      expires_at, created_at, updated_at
+                    ) VALUES (
+                      %(connection_id)s, %(server_id)s, %(org_id)s, %(user_id)s,
+                      %(encrypted_access_token)s, %(encrypted_refresh_token)s,
+                      %(expires_at)s, %(created_at)s, %(updated_at)s
+                    )
+                    """,
+                    {
+                        "connection_id": record.connection_id,
+                        "server_id": record.server_id,
+                        "org_id": record.org_id,
+                        "user_id": record.user_id,
+                        "encrypted_access_token": record.encrypted_access_token,
+                        "encrypted_refresh_token": record.encrypted_refresh_token,
+                        "expires_at": record.expires_at,
+                        "created_at": record.created_at,
+                        "updated_at": record.updated_at,
+                    },
+                )
+        return record
+
+    def get_token(self, *, server_id: str) -> TokenEnvelope | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM mcp_auth_connections
+                    WHERE server_id = %(server_id)s
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    {"server_id": server_id},
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                return TokenEnvelope(
+                    connection_id=str(row["connection_id"]),
+                    server_id=str(row["server_id"]),
+                    org_id=str(row["org_id"]),
+                    user_id=str(row["user_id"]),
+                    encrypted_access_token=str(row["encrypted_access_token"]),
+                    encrypted_refresh_token=str(row["encrypted_refresh_token"])
+                    if row.get("encrypted_refresh_token") is not None
+                    else None,
+                    expires_at=self._datetime(row["expires_at"])
+                    if row.get("expires_at") is not None
+                    else None,
+                    created_at=self._datetime(row["created_at"]),
+                    updated_at=self._datetime(row["updated_at"]),
+                )
+
+    def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO mcp_audit_events (
+                      audit_id, org_id, user_id, server_id, action,
+                      metadata, created_at
+                    ) VALUES (
+                      %(audit_id)s, %(org_id)s, %(user_id)s, %(server_id)s,
+                      %(action)s, %(metadata)s, %(created_at)s
+                    )
+                    """,
+                    {
+                        "audit_id": record.audit_id,
+                        "org_id": record.org_id,
+                        "user_id": record.user_id,
+                        "server_id": record.server_id,
+                        "action": record.action,
+                        "metadata": json.dumps(record.metadata),
+                        "created_at": record.created_at,
+                    },
+                )
+        return record
+
+    def _fetch_one_server(
+        self, query: str, params: dict[str, object]
+    ) -> McpServerRecord | None:
+        rows = self._fetch_many_servers(query, params)
+        return rows[0] if rows else None
+
+    def _fetch_many_servers(
+        self, query: str, params: dict[str, object]
+    ) -> tuple[McpServerRecord, ...]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return tuple(self._row_to_server(row) for row in cur.fetchall())
+
+    def _connect(self) -> Any:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        return psycopg.connect(self.database_url, row_factory=dict_row)
+
+    @classmethod
+    def _server_params(cls, record: McpServerRecord) -> dict[str, object]:
+        return {
+            "server_id": record.server_id,
+            "org_id": record.org_id,
+            "user_id": record.user_id,
+            "name": record.name,
+            "display_name": record.display_name,
+            "url": record.url,
+            "transport": record.transport.value,
+            "auth_mode": record.auth_mode.value,
+            "auth_state": record.auth_state.value,
+            "health": record.health.value,
+            "enabled": record.enabled,
+            "required_scopes": json.dumps(list(record.required_scopes)),
+            "last_discovery": json.dumps(record.last_discovery),
+            "oauth_client": json.dumps(record.oauth_client.model_dump())
+            if record.oauth_client is not None
+            else None,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    @classmethod
+    def _row_to_server(cls, row: dict[str, object]) -> McpServerRecord:
+        oauth_client_raw = cls._json_object(row.get("oauth_client"))
+        return McpServerRecord(
+            server_id=str(row["server_id"]),
+            org_id=str(row["org_id"]),
+            user_id=str(row["user_id"]),
+            name=str(row["name"]),
+            display_name=str(row["display_name"]),
+            url=str(row["url"]),
+            transport=str(row["transport"]),
+            auth_mode=str(row["auth_mode"]),
+            auth_state=str(row["auth_state"]),
+            health=str(row["health"]),
+            enabled=bool(row["enabled"]),
+            required_scopes=tuple(cls._json_list(row.get("required_scopes"))),
+            last_discovery=dict(cls._json_object(row.get("last_discovery"))),
+            oauth_client=McpOAuthClientConfig(**oauth_client_raw)
+            if oauth_client_raw
+            else None,
+            created_at=cls._datetime(row["created_at"]),
+            updated_at=cls._datetime(row["updated_at"]),
+        )
+
+    @classmethod
+    def _json_list(cls, value: object) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        if isinstance(value, str):
+            return [str(item) for item in json.loads(value)]
+        return []
+
+    @classmethod
+    def _json_object(cls, value: object) -> dict[str, object]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        return {}
+
+    @classmethod
+    def _datetime(cls, value: object) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value))
 
 
 @dataclass

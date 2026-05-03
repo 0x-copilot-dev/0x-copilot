@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
+import logging
 import os
 from pathlib import Path
 
@@ -224,6 +225,11 @@ class RuntimeSettings(RuntimeContract):
                 if value is not None
             }
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to load env file %s via dotenv, falling back to manual parse",
+                path,
+                exc_info=True,
+            )
             return cls._parse_env_file(path)
 
     @classmethod

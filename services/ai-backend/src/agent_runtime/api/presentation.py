@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -108,6 +109,9 @@ class PresentationGenerator:
                 ]
             )
         except Exception:
+            logging.getLogger(__name__).warning(
+                "LLM presentation generation failed", exc_info=True
+            )
             return None
         content = getattr(response, "content", response)
         if isinstance(content, list):
