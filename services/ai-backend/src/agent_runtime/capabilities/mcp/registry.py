@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
+from agent_runtime.validation import ValueNormalizer
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
     McpLoadErrorCode,
@@ -65,9 +65,11 @@ class DynamicMcpRegistry:
     ) -> tuple[McpServerCard, ...]:
         """Return compact MCP cards visible to the request context."""
 
-        runtime_context = coerce_runtime_context(context)
+        runtime_context = ValueNormalizer.coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = first_duplicate_name(entry.card.name for entry in entries)
+        duplicate_name = ValueNormalizer.first_duplicate_name(
+            entry.card.name for entry in entries
+        )
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -86,7 +88,7 @@ class DynamicMcpRegistry:
     def list_available_servers(self, context: object) -> tuple[McpServerCard, ...]:
         """Runtime port adapter returning model-visible compact server cards."""
 
-        return self.list_server_cards(coerce_runtime_context(context))
+        return self.list_server_cards(ValueNormalizer.coerce_runtime_context(context))
 
     def resolve_server(self, name: str) -> RegisteredMcpServer | McpLoadError:
         """Resolve a selected stable server name to exactly one provider entry."""

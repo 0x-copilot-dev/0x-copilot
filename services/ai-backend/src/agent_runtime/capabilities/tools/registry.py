@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
+from agent_runtime.validation import ValueNormalizer
 from agent_runtime.capabilities.tools.cards import (
     LoadedToolSpec,
     ToolCard,
@@ -66,9 +66,11 @@ class DynamicToolRegistry:
     def list_tool_cards(self, context: AgentRuntimeContext) -> tuple[ToolCard, ...]:
         """Return compact cards visible to the request context."""
 
-        runtime_context = coerce_runtime_context(context)
+        runtime_context = ValueNormalizer.coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = first_duplicate_name(entry.card.name for entry in entries)
+        duplicate_name = ValueNormalizer.first_duplicate_name(
+            entry.card.name for entry in entries
+        )
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -87,7 +89,7 @@ class DynamicToolRegistry:
     def list_available_tools(self, context: object) -> tuple[ToolCard, ...]:
         """Runtime port adapter returning model-visible compact cards."""
 
-        return self.list_tool_cards(coerce_runtime_context(context))
+        return self.list_tool_cards(ValueNormalizer.coerce_runtime_context(context))
 
     def resolve_tool(self, name: str) -> RegisteredTool | ToolLoadError:
         """Resolve a selected stable tool name to exactly one provider entry."""

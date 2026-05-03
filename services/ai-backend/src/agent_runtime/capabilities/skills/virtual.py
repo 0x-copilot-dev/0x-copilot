@@ -21,7 +21,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
+from agent_runtime.validation import ValueNormalizer
 
 
 class VirtualSkillCard(RuntimeContract):
@@ -109,12 +109,12 @@ class VirtualSkillRegistry:
     )
 
     def list_available_skills(self, context: object) -> tuple[VirtualSkillCard, ...]:
-        runtime_context = coerce_runtime_context(context)
+        runtime_context = ValueNormalizer.coerce_runtime_context(context)
         cards = self._card_cache
         if cards is None:
             cards = self._collect_cards(runtime_context)
             self._card_cache = cards
-        duplicate = first_duplicate_name(card.name for card in cards)
+        duplicate = ValueNormalizer.first_duplicate_name(card.name for card in cards)
         if duplicate is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
