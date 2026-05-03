@@ -135,6 +135,15 @@ function toolPart(
   return part;
 }
 
+function applyEventSequence(
+  events: Partial<RuntimeEventEnvelope>[],
+): ChatItem[] {
+  return events.reduce(
+    (current, nextEvent) => applyRuntimeEvent(current, event(nextEvent)),
+    [] as ChatItem[],
+  );
+}
+
 describe("applyRuntimeEvent", () => {
   it("streams and reconciles assistant text on the run message", () => {
     let items: ChatItem[] = [];
@@ -268,6 +277,129 @@ describe("applyRuntimeEvent", () => {
         part.type === "tool-call" ? part.toolName : part.type,
       ),
     ).toEqual(["text", "read_file", "text"]);
+  });
+
+  it("carries generated presentation metadata onto tool parts", () => {
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "tool_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_123",
+        presentation: {
+          title: "Searched the web",
+          summary: "Found official Slack MCP sources.",
+          status_label: "Done",
+          kind: "result",
+          result_preview: [
+            {
+              title: "Slack Developer Docs",
+              subtitle: "Official MCP overview",
+              url: "https://docs.slack.dev/ai/slack-mcp-server/",
+              badge: "Official",
+            },
+          ],
+          debug_label: "Tool details",
+          confidence: "high",
+        },
+        payload: {
+          tool_name: "web_search",
+          call_id: "call_123",
+          status: "completed",
+          args: { query: "Slack MCP setup" },
+        },
+      }),
+    );
+
+    expect(toolPart(items, "web_search")?.args).toMatchObject({
+      presentation: {
+        title: "Searched the web",
+        status_label: "Done",
+        kind: "result",
+        result_preview: [
+          {
+            title: "Slack Developer Docs",
+            badge: "Official",
+          },
+        ],
+      },
+    });
+  });
+
+  it("preserves richer presentation when later tool events are weaker", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "tool_result_1",
+        sequence_no: 1,
+        event_type: "tool_result",
+        activity_kind: "tool",
+        span_id: "call_123",
+        presentation: {
+          title: "Searched ClickUp tasks",
+          summary: "Found matching tasks assigned to Parth.",
+          status_label: "Done",
+          kind: "result",
+          result_preview: [{ title: "Fix onboarding", badge: "Open" }],
+          confidence: "high",
+        },
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_123",
+          status: "completed",
+          output: { results: [{ title: "Fix onboarding" }] },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "tool_complete_1",
+        sequence_no: 2,
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        span_id: "call_123",
+        presentation: {
+          title: "Checked source",
+          summary: "Enterprise Search finished this step.",
+          status_label: "Done",
+          kind: "result",
+          confidence: "low",
+        },
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_123",
+          status: "completed",
+        },
+      }),
+    );
+
+    expect(toolPart(items, "call_mcp_tool")?.args).toMatchObject({
+      presentation: {
+        title: "Searched ClickUp tasks",
+        result_preview: [{ title: "Fix onboarding", badge: "Open" }],
+      },
+    });
+  });
+
+  it("hides checkpoint scratchpad deltas from visible assistant text", () => {
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "checkpoint_1",
+        event_type: "model_delta",
+        activity_kind: "message",
+        payload: {
+          delta:
+            "Checkpoint: I loaded the ClickUp MCP server and need to inspect tools.",
+        },
+      }),
+    );
+
+    expect(items).toEqual([]);
   });
 
   it("streams text after a tool into a new text part", () => {
@@ -427,6 +559,44 @@ describe("applyRuntimeEvent", () => {
     ).toBe(false);
   });
 
+  it("does not add large-result artifact paths to subagent activity", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "subagent_1",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "task_123",
+        subagent_id: "researcher",
+        payload: {
+          task_id: "task_123",
+          subagent_name: "researcher",
+          status: "started",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "large_result_1",
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        parent_task_id: "task_123",
+        span_id: "call_large",
+        payload: {
+          tool_name: "grep",
+          call_id: "call_large",
+          status: "completed",
+          args: { path: "/large_tool_results/call_large" },
+        },
+      }),
+    );
+
+    expect(toolPart(items, "run_subagent")?.args?.activities).toBeUndefined();
+  });
+
   it("hydrates assistant history from replayed runtime events", () => {
     const replayEvents = [
       event({
@@ -503,6 +673,66 @@ describe("applyRuntimeEvent", () => {
       totalStreamTime: 2000,
       tokenCount: 8,
       totalChunks: 4,
+    });
+  });
+
+  it("hydrates replayed tool presentation metadata identically", () => {
+    const replayEvents = [
+      event({
+        event_id: "tool_1",
+        sequence_no: 1,
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        span_id: "call_123",
+        presentation: {
+          title: "Checked project files",
+          summary: "Found one matching implementation file.",
+          status_label: "Done",
+          kind: "result",
+          debug_label: "Tool details",
+        },
+        payload: {
+          tool_name: "grep",
+          call_id: "call_123",
+          status: "completed",
+          summary: "legacy fallback should not win",
+        },
+      }),
+    ];
+
+    const liveItems = replayEvents.reduce(
+      (current, next) => applyRuntimeEvent(current, next),
+      [] as ChatItem[],
+    );
+    const hydrated = messagesToChatItems(
+      [
+        message({
+          message_id: "assistant_row_1",
+          role: "assistant",
+          run_id: "run_123",
+          content_text: "",
+        }),
+      ],
+      new Map([["run_123", replayEvents]]),
+    );
+
+    const hydratedTool =
+      hydrated[0]?.kind === "message" ? hydrated[0] : undefined;
+    if (!hydratedTool) {
+      throw new Error("Expected hydrated assistant tool message");
+    }
+    const hydratedGrep = hydratedTool.content.find(
+      (part): part is ThreadToolCallPart =>
+        part.type === "tool-call" && part.toolName === "grep",
+    );
+    const liveGrep = toolPart(liveItems, "grep");
+    if (!liveGrep?.args || !hydratedGrep?.args) {
+      throw new Error("Expected live and hydrated grep tool parts");
+    }
+    expect(liveGrep.args.presentation).toEqual(hydratedGrep.args.presentation);
+    expect(liveGrep.args.presentation).toMatchObject({
+      title: "Checked project files",
+      summary: "Found one matching implementation file.",
     });
   });
 
@@ -952,7 +1182,7 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
-  it("marks stale auth_mcp wrapper calls complete when auth finishes", () => {
+  it("removes stale auth_mcp wrapper calls when auth finishes", () => {
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -1001,12 +1231,7 @@ describe("applyRuntimeEvent", () => {
       }),
     ]);
 
-    const authWrapper = toolPart(items, "auth_mcp");
-    expect(authWrapper?.args).toMatchObject({ status: "completed" });
-    expect(authWrapper?.result).toMatchObject({
-      server_id: "server_123",
-      status: "connected",
-    });
+    expect(toolPart(items, "auth_mcp")).toBeUndefined();
     expect(toolPart(items, "mcp_auth_required")?.result).toEqual({
       approval_id: "mcp_auth_123",
       server_id: "server_123",
@@ -1056,6 +1281,54 @@ describe("applyRuntimeEvent", () => {
           risk_level: "medium",
           read_only: true,
           message: "Approve ClickUp to run clickup_filter_tasks.",
+        },
+      }),
+    );
+
+    expect(toolPart(items, "call_mcp_tool")).toBeUndefined();
+    expect(toolPart(items, "approval_request")?.toolCallId).toBe(
+      "approval_json_123",
+    );
+    expect(assistantMessage(items).content).toHaveLength(1);
+  });
+
+  it("replaces matching MCP wrapper calls with approval cards without a source id", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_call_approval_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_mcp_approval_123",
+        payload: {
+          tool_name: "call_mcp_tool",
+          call_id: "call_mcp_approval_123",
+          args: {
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_search",
+            arguments: {},
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "approval_from_interrupt_1",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_json_123",
+          approval_kind: "mcp_tool",
+          server_name: "mcp_clickup_com",
+          display_name: "ClickUp",
+          tool_name: "clickup_search",
+          arguments: {},
+          risk_level: "low",
+          read_only: true,
+          message: "Allow ClickUp search?",
         },
       }),
     );
@@ -1206,6 +1479,89 @@ describe("applyRuntimeEvent", () => {
         part.type === "tool-call" ? part.toolName : part.type,
       ),
     ).toEqual(["text", "mcp_auth_required", "text"]);
+  });
+
+  it("replaces matching MCP auth wrapper calls without a source id", () => {
+    let items: ChatItem[] = [];
+
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "mcp_auth_call_1",
+        event_type: "tool_call_started",
+        activity_kind: "tool",
+        span_id: "call_auth_mcp_123",
+        payload: {
+          tool_name: "auth_mcp",
+          call_id: "call_auth_mcp_123",
+          args: {
+            server_name: "drive_mcp",
+            server_id: "server_123",
+          },
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "auth_from_interrupt_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth_123",
+          action_id: "mcp_auth_123",
+          approval_kind: "mcp_auth",
+          server_id: "server_123",
+          server_name: "drive_mcp",
+          display_name: "Drive MCP",
+          auth_url: "https://example.test/auth",
+          expires_at: "2026-04-30T01:00:00Z",
+          message: "Connect Drive MCP",
+        },
+      }),
+    );
+
+    expect(
+      assistantMessage(items).content.map((part) =>
+        part.type === "tool-call" ? part.toolName : part.type,
+      ),
+    ).toEqual(["mcp_auth_required"]);
+  });
+
+  it("carries generated presentation metadata onto approval cards", () => {
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "approval_1",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        presentation: {
+          title: "Allow ClickUp search?",
+          summary: "Enterprise Search wants to search ClickUp tasks.",
+          status_label: "Waiting for permission",
+          kind: "approval",
+          group_key: "call_123",
+          debug_label: "Tool details",
+          confidence: "high",
+        },
+        payload: {
+          approval_id: "approval_123",
+          approval_kind: "mcp_tool",
+          server_name: "mcp_clickup_com",
+          tool_name: "clickup_search",
+          status: "pending",
+        },
+      }),
+    );
+
+    expect(toolPart(items, "approval_request")?.args).toMatchObject({
+      presentation: {
+        title: "Allow ClickUp search?",
+        summary: "Enterprise Search wants to search ClickUp tasks.",
+        status_label: "Waiting for permission",
+        kind: "approval",
+      },
+    });
   });
 
   it("does not append new activity while any action is pending", () => {
@@ -1538,6 +1894,469 @@ describe("applyRuntimeEvent", () => {
     );
 
     expect(toolPart(items, "call_mcp_tool")?.result).toEqual(output);
+  });
+
+  describe("runtime flow matrix", () => {
+    it("settles a simple message flow through final response and run completion", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "run_started_1",
+          sequence_no: 1,
+          event_type: "run_started",
+          activity_kind: "run",
+        },
+        {
+          event_id: "delta_1",
+          sequence_no: 2,
+          event_type: "model_delta",
+          activity_kind: "message",
+          payload: { delta: "Draft answer." },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 3,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "Final answer." },
+        },
+        {
+          event_id: "completed_1",
+          sequence_no: 4,
+          event_type: "run_completed",
+          activity_kind: "run",
+          status: "completed",
+        },
+      ]);
+
+      expect(textPart(items)).toBe("Final answer.");
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "complete",
+        reason: "stop",
+      });
+    });
+
+    it("marks a streamed message complete when run_completed arrives without final_response", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "delta_1",
+          sequence_no: 1,
+          event_type: "model_delta",
+          activity_kind: "message",
+          payload: { delta: "Partial but valid answer." },
+        },
+        {
+          event_id: "completed_1",
+          sequence_no: 2,
+          event_type: "run_completed",
+          activity_kind: "run",
+          status: "completed",
+        },
+      ]);
+
+      expect(textPart(items)).toBe("Partial but valid answer.");
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "complete",
+        reason: "stop",
+      });
+    });
+
+    it("handles text, a tool call, stale tool status, and final response", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "delta_1",
+          sequence_no: 1,
+          event_type: "model_delta",
+          activity_kind: "message",
+          payload: { delta: "Checking source." },
+        },
+        {
+          event_id: "tool_started_1",
+          sequence_no: 2,
+          event_type: "tool_call_started",
+          activity_kind: "tool",
+          span_id: "call_123",
+          payload: {
+            tool_name: "read_file",
+            call_id: "call_123",
+            args: { path: "README.md" },
+            status: "running",
+          },
+        },
+        {
+          event_id: "tool_result_1",
+          sequence_no: 3,
+          event_type: "tool_result",
+          activity_kind: "tool",
+          span_id: "call_123",
+          status: "running",
+          payload: {
+            tool_name: "read_file",
+            call_id: "call_123",
+            output: { content: "docs" },
+          },
+        },
+        {
+          event_id: "tool_complete_1",
+          sequence_no: 4,
+          event_type: "tool_call_completed",
+          activity_kind: "tool",
+          span_id: "call_123",
+          status: "running",
+          payload: {
+            tool_name: "read_file",
+            call_id: "call_123",
+            status: "completed",
+          },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 5,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "Read the docs." },
+        },
+      ]);
+
+      expect(toolPart(items, "read_file")?.result).toEqual({ content: "docs" });
+      expect(textParts(items)).toEqual(["Checking source.", "Read the docs."]);
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "complete",
+        reason: "stop",
+      });
+    });
+
+    it("handles a subagent lifecycle followed by a final response", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "subagent_started_1",
+          sequence_no: 1,
+          event_type: "subagent_started",
+          activity_kind: "subagent",
+          task_id: "task_123",
+          status: "queued",
+          summary: "Research ClickUp tasks.",
+          payload: {
+            task_id: "task_123",
+            subagent_name: "researcher",
+            status: "queued",
+            summary: "Research ClickUp tasks.",
+          },
+        },
+        {
+          event_id: "subagent_progress_1",
+          sequence_no: 2,
+          event_type: "subagent_progress",
+          activity_kind: "subagent",
+          task_id: "task_123",
+          status: "running",
+          summary: "Looking through task results.",
+          payload: {
+            task_id: "task_123",
+            status: "running",
+            summary: "Looking through task results.",
+          },
+        },
+        {
+          event_id: "subagent_completed_1",
+          sequence_no: 3,
+          event_type: "subagent_completed",
+          activity_kind: "subagent",
+          task_id: "task_123",
+          status: "completed",
+          summary: "Found matching task details.",
+          payload: {
+            task_id: "task_123",
+            status: "completed",
+            summary: "Found matching task details.",
+          },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 4,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "Here are the task details." },
+        },
+      ]);
+
+      expect(toolPart(items, "run_subagent")?.result).toBe(
+        "Found matching task details.",
+      );
+      expect(textPart(items)).toBe("Here are the task details.");
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "complete",
+        reason: "stop",
+      });
+    });
+
+    it("attaches nested tool activity to a subagent", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "subagent_started_1",
+          sequence_no: 1,
+          event_type: "subagent_started",
+          activity_kind: "subagent",
+          task_id: "task_123",
+          status: "queued",
+          summary: "Research ClickUp tasks.",
+          payload: {
+            task_id: "task_123",
+            subagent_name: "researcher",
+            status: "queued",
+            summary: "Research ClickUp tasks.",
+          },
+        },
+        {
+          event_id: "nested_tool_1",
+          sequence_no: 2,
+          event_type: "tool_result",
+          activity_kind: "tool",
+          parent_task_id: "task_123",
+          span_id: "call_nested",
+          status: "completed",
+          payload: {
+            tool_name: "search_docs",
+            call_id: "call_nested",
+            output: { count: 2 },
+          },
+        },
+      ]);
+
+      const subagent = toolPart(items, "run_subagent");
+      expect(subagent?.args).toMatchObject({
+        activities: [
+          {
+            id: "call_nested",
+            kind: "tool",
+            status: "completed",
+            result: "1 fields returned",
+          },
+        ],
+      });
+    });
+
+    it("handles MCP tool approval without OAuth auth", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "approval_1",
+          sequence_no: 1,
+          event_type: "approval_requested",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "approval_123",
+            approval_kind: "mcp_tool",
+            server_name: "mcp_clickup_com",
+            display_name: "ClickUp",
+            tool_name: "clickup_filter_tasks",
+            arguments: { assignee: "Parth" },
+          },
+        },
+        {
+          event_id: "approval_resolved_1",
+          sequence_no: 2,
+          event_type: "approval_resolved",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "approval_123",
+            status: "approved",
+          },
+        },
+        {
+          event_id: "mcp_result_1",
+          sequence_no: 3,
+          event_type: "tool_result",
+          activity_kind: "tool",
+          span_id: "call_mcp_123",
+          payload: {
+            tool_name: "call_mcp_tool",
+            call_id: "call_mcp_123",
+            output: { tasks: [{ name: "Follow up" }] },
+          },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 4,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "Found one task." },
+        },
+      ]);
+
+      expect(toolPart(items, "approval_request")?.result).toEqual({
+        approval_id: "approval_123",
+        decision: "approved",
+      });
+      expect(toolPart(items, "call_mcp_tool")?.result).toEqual({
+        tasks: [{ name: "Follow up" }],
+      });
+      expect(textPart(items)).toBe("Found one task.");
+    });
+
+    it("handles MCP auth resolution and continued final response", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "mcp_auth_1",
+          sequence_no: 1,
+          event_type: "mcp_auth_required",
+          activity_kind: "mcp_auth",
+          payload: {
+            approval_id: "mcp_auth_123",
+            action_id: "mcp_auth_123",
+            approval_kind: "mcp_auth",
+            server_id: "server_123",
+            server_name: "mcp_clickup_com",
+            display_name: "ClickUp",
+            auth_url: "https://example.test/auth",
+            expires_at: "2026-04-30T01:00:00Z",
+            message: "Connect ClickUp",
+          },
+        },
+        {
+          event_id: "mcp_auth_resolved_1",
+          sequence_no: 2,
+          event_type: "approval_resolved",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "mcp_auth_123",
+            status: "approved",
+          },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 3,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "Connector is ready." },
+        },
+      ]);
+
+      expect(toolPart(items, "mcp_auth_required")?.result).toMatchObject({
+        approval_id: "mcp_auth_123",
+        decision: "approved",
+      });
+      expect(textPart(items)).toBe("Connector is ready.");
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "complete",
+        reason: "stop",
+      });
+    });
+
+    it("handles a mixed text, tool, approval, result, and final response flow", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "delta_1",
+          sequence_no: 1,
+          event_type: "model_delta",
+          activity_kind: "message",
+          payload: { delta: "I will check ClickUp." },
+        },
+        {
+          event_id: "tool_started_1",
+          sequence_no: 2,
+          event_type: "tool_call_started",
+          activity_kind: "tool",
+          span_id: "call_mcp_123",
+          payload: {
+            tool_name: "call_mcp_tool",
+            call_id: "call_mcp_123",
+            args: {
+              server_name: "mcp_clickup_com",
+              tool_name: "clickup_filter_tasks",
+            },
+          },
+        },
+        {
+          event_id: "approval_1",
+          sequence_no: 3,
+          event_type: "approval_requested",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "approval_123",
+            approval_kind: "mcp_tool",
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_filter_tasks",
+          },
+        },
+        {
+          event_id: "approval_resolved_1",
+          sequence_no: 4,
+          event_type: "approval_resolved",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "approval_123",
+            status: "approved",
+          },
+        },
+        {
+          event_id: "tool_result_1",
+          sequence_no: 5,
+          event_type: "tool_result",
+          activity_kind: "tool",
+          span_id: "call_mcp_123",
+          payload: {
+            tool_name: "call_mcp_tool",
+            call_id: "call_mcp_123",
+            output: { tasks: [] },
+          },
+        },
+        {
+          event_id: "final_1",
+          sequence_no: 6,
+          event_type: "final_response",
+          activity_kind: "message",
+          status: "completed",
+          payload: { message: "No matching tasks found." },
+        },
+      ]);
+
+      expect(textParts(items)).toEqual([
+        "I will check ClickUp.",
+        "No matching tasks found.",
+      ]);
+      expect(toolPart(items, "approval_request")?.result).toEqual({
+        approval_id: "approval_123",
+        decision: "approved",
+      });
+      expect(toolPart(items, "call_mcp_tool")?.result).toEqual({ tasks: [] });
+    });
+
+    it("allows run failure to settle the message while approval is pending", () => {
+      const items = applyEventSequence([
+        {
+          event_id: "approval_1",
+          sequence_no: 1,
+          event_type: "approval_requested",
+          activity_kind: "approval",
+          payload: {
+            approval_id: "approval_123",
+            approval_kind: "mcp_tool",
+            server_name: "mcp_clickup_com",
+            tool_name: "clickup_filter_tasks",
+          },
+        },
+        {
+          event_id: "failed_1",
+          sequence_no: 2,
+          event_type: "run_failed",
+          activity_kind: "run",
+          status: "failed",
+          display_title: "Run failed",
+          summary: "The connector failed while waiting.",
+          payload: { status: "failed" },
+        },
+      ]);
+
+      expect(firstThreadMessage(items).status).toEqual({
+        type: "incomplete",
+        reason: "error",
+      });
+      expect(toolPart(items, "run_progress")?.isError).toBe(true);
+    });
   });
 
   it("ignores heartbeat, internal, and unsupported message envelopes", () => {

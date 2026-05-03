@@ -454,9 +454,43 @@ export interface RuntimeEventEnvelope {
   activity_kind: RuntimeActivityKind;
   visibility?: RuntimeEventVisibility;
   redaction_state?: RuntimeEventRedactionState;
+  presentation?: RuntimeEventPresentation | null;
   payload: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   created_at: string;
+}
+
+export type RuntimeEventPresentationKind =
+  | "progress"
+  | "result"
+  | "approval"
+  | "auth"
+  | "error";
+export type RuntimeEventPresentationStatus =
+  | "Running"
+  | "Waiting for permission"
+  | "Done"
+  | "Failed";
+export type RuntimeEventPresentationConfidence = "low" | "medium" | "high";
+
+export interface RuntimeEventPresentationPreviewRow {
+  title: string;
+  subtitle?: string | null;
+  url?: string | null;
+  badge?: string | null;
+}
+
+export interface RuntimeEventPresentation {
+  title: string;
+  summary?: string | null;
+  status_label: RuntimeEventPresentationStatus;
+  kind: RuntimeEventPresentationKind;
+  group_key?: string | null;
+  primary_entity?: string | null;
+  action_label?: string | null;
+  result_preview?: RuntimeEventPresentationPreviewRow[];
+  debug_label?: string | null;
+  confidence?: RuntimeEventPresentationConfidence | null;
 }
 
 export interface RuntimeEventReplayResponse {
@@ -664,10 +698,56 @@ export function isRuntimeEventEnvelope(
     (candidate.source === undefined ||
       isRuntimeEventSource(candidate.source)) &&
     isRuntimeActivityKind(candidate.activity_kind) &&
+    (candidate.presentation === undefined ||
+      candidate.presentation === null ||
+      isRuntimeEventPresentation(candidate.presentation)) &&
     isPlainRecord(candidate.payload) &&
     (candidate.metadata === undefined || isPlainRecord(candidate.metadata)) &&
     typeof candidate.created_at === "string"
   );
+}
+
+export function isRuntimeEventPresentation(
+  value: unknown,
+): value is RuntimeEventPresentation {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.title === "string" &&
+    isRuntimeEventPresentationStatus(value.status_label) &&
+    isRuntimeEventPresentationKind(value.kind) &&
+    (value.result_preview === undefined ||
+      (Array.isArray(value.result_preview) &&
+        value.result_preview.every(isRuntimeEventPresentationPreviewRow)))
+  );
+}
+
+function isRuntimeEventPresentationKind(
+  value: unknown,
+): value is RuntimeEventPresentationKind {
+  return (
+    value === "progress" ||
+    value === "result" ||
+    value === "approval" ||
+    value === "auth" ||
+    value === "error"
+  );
+}
+
+function isRuntimeEventPresentationStatus(
+  value: unknown,
+): value is RuntimeEventPresentationStatus {
+  return (
+    value === "Running" ||
+    value === "Waiting for permission" ||
+    value === "Done" ||
+    value === "Failed"
+  );
+}
+
+function isRuntimeEventPresentationPreviewRow(value: unknown): boolean {
+  return isPlainRecord(value) && typeof value.title === "string";
 }
 
 export function isRuntimeTextPayload(

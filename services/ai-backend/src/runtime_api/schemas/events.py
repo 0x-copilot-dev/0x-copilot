@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import (
@@ -149,6 +150,18 @@ class RuntimeEventPresentationProjector:
                 metadata=metadata,
             ),
         }
+
+    @classmethod
+    def presentation_metadata(
+        cls, metadata: JsonObject
+    ) -> RuntimeEventPresentation | None:
+        raw = metadata.get("presentation")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return RuntimeEventPresentation.model_validate(raw)
+        except Exception:
+            return None
 
     @classmethod
     def activity_kind_for(
@@ -535,6 +548,74 @@ class AssistantPerformanceMetrics(RuntimeContract):
     usage: AssistantUsageMetrics | None = None
 
 
+class RuntimeEventPresentationPreviewRow(RuntimeContract):
+    """Small user-facing row rendered in an activity card result preview."""
+
+    title: str = Field(min_length=1, max_length=120)
+    subtitle: str | None = Field(default=None, max_length=240)
+    url: str | None = Field(default=None, max_length=500)
+    badge: str | None = Field(default=None, max_length=40)
+
+    @field_validator("title", "subtitle", "url", "badge", mode="before")
+    @classmethod
+    def _plain_text(cls, value: object, info: ValidationInfo) -> str | None:
+        max_lengths = {
+            "title": 120,
+            "subtitle": 240,
+            "url": 500,
+            "badge": 40,
+        }
+        return RuntimeEventPresentation.safe_text(
+            value,
+            max_length=max_lengths[info.field_name],
+        )
+
+
+class RuntimeEventPresentation(RuntimeContract):
+    """Validated LLM-generated card presentation metadata."""
+
+    title: str = Field(min_length=1, max_length=80)
+    summary: str | None = Field(default=None, max_length=240)
+    status_label: Literal["Running", "Waiting for permission", "Done", "Failed"]
+    kind: Literal["progress", "result", "approval", "auth", "error"]
+    group_key: str | None = Field(default=None, max_length=160)
+    primary_entity: str | None = Field(default=None, max_length=80)
+    action_label: str | None = Field(default=None, max_length=60)
+    result_preview: tuple[RuntimeEventPresentationPreviewRow, ...] = ()
+    debug_label: str | None = Field(default="Tool details", max_length=40)
+    confidence: Literal["low", "medium", "high"] | None = None
+
+    @field_validator(
+        "title",
+        "summary",
+        "group_key",
+        "primary_entity",
+        "action_label",
+        "debug_label",
+        mode="before",
+    )
+    @classmethod
+    def _safe_optional_text(cls, value: object, info: ValidationInfo) -> str | None:
+        max_lengths = {
+            "title": 80,
+            "summary": 240,
+            "group_key": 160,
+            "primary_entity": 80,
+            "action_label": 60,
+            "debug_label": 40,
+        }
+        return cls.safe_text(value, max_length=max_lengths[info.field_name])
+
+    @staticmethod
+    def safe_text(value: object, *, max_length: int) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.replace("<", "").replace(">", "").split())
+        if not text:
+            return None
+        return text[:max_length]
+
+
 class ReasoningSummaryPayload(RuntimeEventPayloadContract):
     """Reasoning summary payload displayed by Assistant UI reasoning parts."""
 
@@ -618,6 +699,7 @@ class RuntimeEventEnvelope(RuntimeContract):
     activity_kind: RuntimeActivityKind
     visibility: RuntimeEventVisibility = RuntimeEventVisibility.USER
     redaction_state: RuntimeEventRedactionState = RuntimeEventRedactionState.REDACTED
+    presentation: RuntimeEventPresentation | None = None
     payload: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -699,6 +781,9 @@ class RuntimeEventEnvelope(RuntimeContract):
             parent_task_id=stream_event.parent_task_id,
             payload=payload,
             metadata=stream_event.metadata,
+            presentation=RuntimeEventPresentationProjector.presentation_metadata(
+                stream_event.metadata
+            ),
             created_at=stream_event.timestamp,
             **presentation,
         )
@@ -734,6 +819,7 @@ class RuntimeEventDraft(RuntimeContract):
     activity_kind: RuntimeActivityKind | None = None
     visibility: RuntimeEventVisibility = RuntimeEventVisibility.USER
     redaction_state: RuntimeEventRedactionState = RuntimeEventRedactionState.REDACTED
+    presentation: RuntimeEventPresentation | None = None
     payload: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -805,5 +891,8 @@ class RuntimeEventDraft(RuntimeContract):
             parent_task_id=stream_event.parent_task_id,
             payload=payload,
             metadata=stream_event.metadata,
+            presentation=RuntimeEventPresentationProjector.presentation_metadata(
+                stream_event.metadata
+            ),
             **presentation,
         )

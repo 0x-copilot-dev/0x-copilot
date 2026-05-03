@@ -4,6 +4,7 @@ import type {
   Message,
   McpServer,
   RuntimeEventEnvelope,
+  RuntimeEventPresentation,
 } from "@enterprise-search/api-types";
 import type {
   MessageTiming,
@@ -231,7 +232,26 @@ export function applyRuntimeEvent(
   if (event.event_type === "approval_resolved") {
     return resolveActionFromPayload(items, event.payload);
   }
+  if (isTerminalRunEvent(event)) {
+    const withProgress = isVisibleProgressEvent(event)
+      ? upsertAssistantPart(
+          items,
+          event,
+          progressPart(event),
+          statusFromRuntimeEvent(event),
+        )
+      : items;
+    return settleAssistantRun(
+      withProgress,
+      event,
+      statusFromRuntimeEvent(event),
+      metadataFromRuntimeEvent(event),
+    );
+  }
   if (hasPendingActionForRun(items, event)) {
+    return items;
+  }
+  if (event.activity_kind === "tool" && isLargeResultArtifactToolEvent(event)) {
     return items;
   }
   if (event.parent_task_id && event.activity_kind === "tool") {
@@ -252,6 +272,9 @@ export function applyRuntimeEvent(
   ) {
     const delta = textFromPayload(event.payload, "delta");
     if (!delta) {
+      return items;
+    }
+    if (isInternalCheckpointDelta(delta)) {
       return items;
     }
     return updateAssistantContent(items, event, (content) =>
@@ -289,9 +312,6 @@ export function applyRuntimeEvent(
     );
   }
   if (event.activity_kind === "tool") {
-    if (isLargeResultArtifactToolEvent(event)) {
-      return items;
-    }
     return upsertRuntimeToolPart(items, event);
   }
   if (event.activity_kind === "subagent") {
@@ -303,13 +323,6 @@ export function applyRuntimeEvent(
       event,
       progressPart(event),
       statusFromRuntimeEvent(event),
-    );
-  }
-  if (event.event_type === "run_completed") {
-    return mergeAssistantMetadata(
-      items,
-      event,
-      metadataFromRuntimeEvent(event),
     );
   }
   return items;
@@ -570,7 +583,7 @@ export function resolveAuthenticatedMcpServers(
       return item;
     }
     let changed = false;
-    const content = item.content.map((part) => {
+    const resolvedContent = item.content.map((part) => {
       if (!isToolCallPart(part)) {
         return part;
       }
@@ -580,6 +593,10 @@ export function resolveAuthenticatedMcpServers(
       }
       return resolvedPart;
     });
+    const content = removeRedundantMcpAuthWrappers(resolvedContent);
+    if (content !== resolvedContent) {
+      changed = true;
+    }
     if (!changed) {
       return item;
     }
@@ -589,6 +606,28 @@ export function resolveAuthenticatedMcpServers(
         : item.status;
     return { ...item, content, status };
   });
+}
+
+function removeRedundantMcpAuthWrappers(
+  content: ThreadMessageContent,
+): ThreadMessageContent {
+  const authCards = content.filter(
+    (part): part is ThreadToolCallPart =>
+      isToolCallPart(part) && part.toolName === "mcp_auth_required",
+  );
+  if (authCards.length === 0) {
+    return content;
+  }
+  const filtered = content.filter((part) => {
+    if (!isToolCallPart(part) || part.toolName !== "auth_mcp") {
+      return true;
+    }
+    const args = asRecord(part.args);
+    return !authCards.some((authCard) =>
+      mcpAuthPayloadMatchesArgs(asRecord(authCard.args), args),
+    );
+  });
+  return filtered.length === content.length ? content : filtered;
 }
 
 function resolveAuthenticatedMcpPart(
@@ -788,18 +827,27 @@ function updateAssistantContent(
   });
 }
 
-function mergeAssistantMetadata(
+function settleAssistantRun(
   items: ChatItem[],
   event: RuntimeEventEnvelope,
+  status: AssistantMessageStatus,
   metadata?: ThreadMessageLike["metadata"],
 ): ChatItem[] {
-  if (!metadata) {
+  const id = assistantMessageId(event.run_id);
+  const existing = items.find(
+    (item): item is Extract<ChatItem, { kind: "message" }> =>
+      item.kind === "message" && item.id === id,
+  );
+  if (!existing) {
     return items;
   }
-  const id = assistantMessageId(event.run_id);
   return items.map((item) =>
     item.kind === "message" && item.id === id
-      ? { ...item, metadata: mergeMetadata(item.metadata, metadata) }
+      ? {
+          ...item,
+          metadata: mergeMetadata(item.metadata, metadata),
+          status,
+        }
       : item,
   );
 }
@@ -824,11 +872,14 @@ function upsertApprovalPart(
   payload: Record<string, unknown>,
 ): ChatItem[] {
   const sourceToolCallId = stringValue(payload.source_tool_call_id);
+  const nextPart = approvalPart(payload, event.presentation ?? null);
   return updateAssistantContent(
     items,
     event,
     (content) =>
-      replaceToolCallPart(content, sourceToolCallId, approvalPart(payload)),
+      replaceToolCallPart(content, sourceToolCallId, nextPart, (part) =>
+        mcpApprovalMatchesWrapper(part, payload),
+      ),
     { type: "requires-action", reason: "interrupt" },
   );
 }
@@ -839,11 +890,14 @@ function upsertMcpAuthPart(
   payload: Record<string, unknown>,
 ): ChatItem[] {
   const sourceToolCallId = stringValue(payload.source_tool_call_id);
+  const nextPart = mcpAuthPart(payload, event.presentation ?? null);
   return updateAssistantContent(
     items,
     event,
     (content) =>
-      replaceToolCallPart(content, sourceToolCallId, mcpAuthPart(payload)),
+      replaceToolCallPart(content, sourceToolCallId, nextPart, (part) =>
+        mcpAuthMatchesWrapper(part, payload),
+      ),
     { type: "requires-action", reason: "interrupt" },
   );
 }
@@ -852,12 +906,32 @@ function replaceToolCallPart(
   content: ThreadMessageContent,
   toolCallId: string | null,
   next: ThreadToolCallPart,
+  fallbackMatch?: (part: ThreadToolCallPart) => boolean,
 ): ThreadMessageContent {
   if (!toolCallId) {
-    return upsertPart(content, next);
+    return replaceFirstMatchingToolPart(content, next, fallbackMatch);
   }
   const index = content.findIndex(
     (part) => isToolCallPart(part) && part.toolCallId === toolCallId,
+  );
+  if (index === -1) {
+    return replaceFirstMatchingToolPart(content, next, fallbackMatch);
+  }
+  return content.map((part, currentIndex) =>
+    currentIndex === index ? next : part,
+  );
+}
+
+function replaceFirstMatchingToolPart(
+  content: ThreadMessageContent,
+  next: ThreadToolCallPart,
+  fallbackMatch?: (part: ThreadToolCallPart) => boolean,
+): ThreadMessageContent {
+  if (!fallbackMatch) {
+    return upsertPart(content, next);
+  }
+  const index = content.findIndex(
+    (part) => isToolCallPart(part) && fallbackMatch(part),
   );
   if (index === -1) {
     return upsertPart(content, next);
@@ -1037,6 +1111,13 @@ function toolPart(
   if (summary) {
     args.summary = summary;
   }
+  const presentation = preferredPresentation(
+    presentationFromValue(existingArgs.presentation),
+    event.presentation ?? null,
+  );
+  if (presentation) {
+    args.presentation = presentation;
+  }
   const name =
     toolName(payload) ?? existing?.toolName ?? event.display_title ?? "tool";
   const result = toolResultValue(payload) ?? existing?.result;
@@ -1174,6 +1255,7 @@ function progressPart(event: RuntimeEventEnvelope): ThreadToolCallPart {
     title,
     summary: summary ?? null,
     status,
+    presentation: event.presentation ?? null,
   };
   return {
     type: "tool-call",
@@ -1186,8 +1268,11 @@ function progressPart(event: RuntimeEventEnvelope): ThreadToolCallPart {
   };
 }
 
-function approvalPart(payload: Record<string, unknown>): ThreadToolCallPart {
-  const args = jsonArgs({ ...payload, status: "waiting" });
+function approvalPart(
+  payload: Record<string, unknown>,
+  presentation: RuntimeEventEnvelope["presentation"] = null,
+): ThreadToolCallPart {
+  const args = jsonArgs({ ...payload, status: "waiting", presentation });
   return {
     type: "tool-call",
     toolCallId: String(payload.approval_id),
@@ -1197,8 +1282,11 @@ function approvalPart(payload: Record<string, unknown>): ThreadToolCallPart {
   };
 }
 
-function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
-  const args = jsonArgs({ ...payload, status: "waiting" });
+function mcpAuthPart(
+  payload: Record<string, unknown>,
+  presentation: RuntimeEventEnvelope["presentation"] = null,
+): ThreadToolCallPart {
+  const args = jsonArgs({ ...payload, status: "waiting", presentation });
   const actionId =
     stringValue(payload.approval_id) ??
     stringValue(payload.action_id) ??
@@ -1212,11 +1300,54 @@ function mcpAuthPart(payload: Record<string, unknown>): ThreadToolCallPart {
   };
 }
 
+function mcpApprovalMatchesWrapper(
+  part: ThreadToolCallPart,
+  payload: Record<string, unknown>,
+): boolean {
+  if (part.toolName !== "call_mcp_tool") {
+    return false;
+  }
+  const args = asRecord(part.args);
+  return (
+    sameText(args.server_name, payload.server_name) &&
+    sameText(args.tool_name, payload.tool_name)
+  );
+}
+
+function mcpAuthMatchesWrapper(
+  part: ThreadToolCallPart,
+  payload: Record<string, unknown>,
+): boolean {
+  if (part.toolName !== "auth_mcp") {
+    return false;
+  }
+  return mcpAuthPayloadMatchesArgs(payload, asRecord(part.args));
+}
+
+function mcpAuthPayloadMatchesArgs(
+  payload: Record<string, unknown>,
+  args: Record<string, unknown>,
+): boolean {
+  return (
+    sameText(args.server_id, payload.server_id) ||
+    sameText(args.server_name, payload.server_name) ||
+    sameText(args.display_name, payload.display_name)
+  );
+}
+
 function isVisibleProgressEvent(event: RuntimeEventEnvelope): boolean {
   return (
     event.event_type === "error" ||
     event.event_type === "run_failed" ||
     event.status === "failed"
+  );
+}
+
+function isTerminalRunEvent(event: RuntimeEventEnvelope): boolean {
+  return (
+    event.event_type === "run_completed" ||
+    event.event_type === "run_cancelled" ||
+    event.event_type === "run_failed"
   );
 }
 
@@ -1343,6 +1474,14 @@ const hiddenToolArgKeys = new Set([
   "delta",
   "deltas",
   "event_type",
+  "action_id",
+  "approval_id",
+  "approval_kind",
+  "auth_url",
+  "display_name",
+  "server_id",
+  "server_name",
+  "source_tool_call_id",
 ]);
 
 const hiddenApprovalArgKeys = new Set([
@@ -1409,13 +1548,13 @@ function isLargeResultArtifactToolName(toolName: string | null): boolean {
 }
 
 function hasLargeResultPath(args: Record<string, unknown>): boolean {
-  return (
-    stringValue(args.file_path)?.startsWith("/large_tool_results/") === true ||
-    stringValue(args.path)?.startsWith("/large_tool_results/") === true
-  );
+  return Object.values(args).some(hasLargeResultReference);
 }
 
 function activityResultText(result: unknown, toolName: string): string | null {
+  if (hasLargeResultReference(result)) {
+    return "Large result saved for internal inspection.";
+  }
   if (typeof result === "string" && result.trim()) {
     return result;
   }
@@ -1423,6 +1562,104 @@ function activityResultText(result: unknown, toolName: string): string | null {
   return (
     summary ?? (result === undefined ? null : `${toolName} returned data.`)
   );
+}
+
+function hasLargeResultReference(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.includes("/large_tool_results/");
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasLargeResultReference);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(
+      hasLargeResultReference,
+    );
+  }
+  return false;
+}
+
+function preferredPresentation(
+  current: RuntimeEventPresentation | null,
+  next: RuntimeEventPresentation | null,
+): RuntimeEventPresentation | null {
+  if (!current) {
+    return next;
+  }
+  if (!next) {
+    return current;
+  }
+  return presentationScore(current) > presentationScore(next) ? current : next;
+}
+
+function presentationScore(presentation: RuntimeEventPresentation): number {
+  let score = 0;
+  if (presentation.confidence === "high") {
+    score += 3;
+  } else if (presentation.confidence === "medium") {
+    score += 2;
+  } else if (presentation.confidence === "low") {
+    score += 1;
+  }
+  if (presentation.result_preview && presentation.result_preview.length > 0) {
+    score += 3;
+  }
+  if (
+    presentation.title !== "Working on step" &&
+    presentation.title !== "Checked source" &&
+    presentation.title !== "Assistant activity"
+  ) {
+    score += 2;
+  }
+  if (presentation.summary) {
+    score += 1;
+  }
+  return score;
+}
+
+function presentationFromValue(
+  value: unknown,
+): RuntimeEventPresentation | null {
+  const record = asRecord(value);
+  const title = stringValue(record.title);
+  const statusLabel = stringValue(record.status_label);
+  const kind = stringValue(record.kind);
+  if (!title || !statusLabel || !kind) {
+    return null;
+  }
+  return {
+    title,
+    summary: stringValue(record.summary),
+    status_label: statusLabel as RuntimeEventPresentation["status_label"],
+    kind: kind as RuntimeEventPresentation["kind"],
+    group_key: stringValue(record.group_key),
+    primary_entity: stringValue(record.primary_entity),
+    action_label: stringValue(record.action_label),
+    result_preview: Array.isArray(record.result_preview)
+      ? record.result_preview.flatMap((item) => {
+          const row = asRecord(item);
+          const rowTitle = stringValue(row.title);
+          return rowTitle
+            ? [
+                {
+                  title: rowTitle,
+                  subtitle: stringValue(row.subtitle),
+                  url: stringValue(row.url),
+                  badge: stringValue(row.badge),
+                },
+              ]
+            : [];
+        })
+      : [],
+    debug_label: stringValue(record.debug_label),
+    confidence: stringValue(
+      record.confidence,
+    ) as RuntimeEventPresentation["confidence"],
+  };
+}
+
+function isInternalCheckpointDelta(delta: string): boolean {
+  return /^checkpoint\s*:/i.test(delta.trimStart());
 }
 
 function subagentKeyForEvent(event: RuntimeEventEnvelope): string | null {
@@ -1671,6 +1908,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function sameText(left: unknown, right: unknown): boolean {
+  const leftText = stringValue(left)?.toLowerCase();
+  const rightText = stringValue(right)?.toLowerCase();
+  return leftText !== undefined && leftText !== null && leftText === rightText;
 }
 
 function titleForEvent(eventType: string): string {

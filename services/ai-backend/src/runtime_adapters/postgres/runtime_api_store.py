@@ -667,6 +667,7 @@ class PostgresRuntimeApiStore:
                 ),
                 visibility=event.visibility,
                 redaction_state=event.redaction_state,
+                presentation=event.presentation,
                 payload=event.payload,
                 metadata=event.metadata,
             )
@@ -1172,6 +1173,9 @@ class PostgresRuntimeApiStore:
             ),
             visibility=row["visibility"],
             redaction_state=row["redaction_state"],
+            presentation=RuntimeEventPresentationProjector.presentation_metadata(
+                dict(row["metadata_json_redacted"])
+            ),
             payload=dict(row["payload_json_redacted"]),
             metadata=dict(row["metadata_json_redacted"]),
             created_at=row["created_at"],

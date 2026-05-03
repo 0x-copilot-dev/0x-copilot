@@ -555,6 +555,7 @@ class InMemoryRuntimeApiStore:
             ),
             visibility=event.visibility,
             redaction_state=event.redaction_state,
+            presentation=event.presentation,
             payload=event.payload,
             metadata=event.metadata,
         )

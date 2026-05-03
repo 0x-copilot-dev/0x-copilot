@@ -68,6 +68,7 @@ import {
   rememberPendingMcpAuthAction,
   type CompletedMcpAuthAction,
 } from "./mcpAuthAction";
+import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -109,6 +110,8 @@ export function ChatScreen({
   const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pendingApprovalDecisionsRef = useRef<Set<string>>(new Set());
   const latestReplaySequenceByRunRef = useRef<Map<string, number>>(new Map());
+  const [latestRunEvent, setLatestRunEvent] =
+    useState<RuntimeEventEnvelope | null>(null);
 
   const suggestedServers = useMemo(
     () =>
@@ -216,9 +219,8 @@ export function ChatScreen({
           activeRunUserMessageIdsRef.current.get(event.run_id) ?? null,
         ),
       );
-      const liveStatus = statusForRuntimeEvent(event);
-      if (liveStatus) {
-        setStatus(liveStatus);
+      if (isRunUiEvent(event)) {
+        setLatestRunEvent(event);
       }
       if (
         event.event_type === "run_completed" ||
@@ -233,7 +235,7 @@ export function ChatScreen({
         streamRef.current = null;
         setActiveRunId(null);
         activeRunUserMessageIdsRef.current.delete(event.run_id);
-        setStatus(event.event_type === "run_completed" ? "Ready" : "Stopped");
+        setStatus(statusForTerminalRunEvent(event));
         void refreshConversations();
       }
     },
@@ -287,6 +289,7 @@ export function ChatScreen({
     latestSequenceRef.current =
       latestReplaySequenceByRunRef.current.get(pendingRunId) ?? 0;
     setActiveRunId(pendingRunId);
+    setLatestRunEvent(null);
     startEventStream(pendingRunId, latestSequenceRef.current);
   }, [activeRunId, initialHistoryLoaded, items, startEventStream]);
 
@@ -316,6 +319,7 @@ export function ChatScreen({
           latestSequenceRef.current,
         );
         const latestEvent = events.at(-1);
+        const latestUiEvent = events.filter(isRunUiEvent).at(-1) ?? null;
         setItems((current) => {
           const userMessageId = userMessageIdForRun(current, runId);
           if (userMessageId) {
@@ -337,19 +341,15 @@ export function ChatScreen({
           streamRef.current?.close();
           streamRef.current = null;
           setActiveRunId(null);
+          setLatestRunEvent(null);
           activeRunUserMessageIdsRef.current.delete(runId);
-          setStatus(
-            latestEvent.event_type === "run_completed" ? "Ready" : "Stopped",
-          );
+          setStatus(statusForTerminalRunEvent(latestEvent));
           void refreshConversations();
           return;
         }
         setActiveRunId(runId);
-        setStatus(
-          latestEvent
-            ? (statusForRuntimeEvent(latestEvent) ?? "Working...")
-            : "Working...",
-        );
+        setLatestRunEvent(latestUiEvent);
+        setStatus("Working...");
         startEventStream(runId, latestSequenceRef.current);
       } catch (err) {
         if (!cancelled) {
@@ -387,6 +387,7 @@ export function ChatScreen({
         );
         latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
         setItems(history.items);
+        setLatestRunEvent(null);
         setShowConnectorSuggestions(false);
         setStatus(history.replayFailed ? historyReplayWarning : "Ready");
       } catch (err) {
@@ -475,6 +476,7 @@ export function ChatScreen({
         );
         latestSequenceRef.current = 0;
         setActiveRunId(run.run_id);
+        setLatestRunEvent(null);
         setStatus("Queued...");
         startEventStream(run.run_id, latestSequenceRef.current);
         void refreshConversations();
@@ -537,6 +539,7 @@ export function ChatScreen({
     streamRef.current?.close();
     streamRef.current = null;
     setActiveRunId(null);
+    setLatestRunEvent(null);
     setStatus("Cancelling...");
   }, [activeRunId, identity]);
 
@@ -546,6 +549,7 @@ export function ChatScreen({
     }
     setConversationId(null);
     setItems([]);
+    setLatestRunEvent(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
   }, [activeRunId]);
@@ -674,6 +678,27 @@ export function ChatScreen({
     () => chatItemsToThreadMessages(items, activeRunId),
     [activeRunId, items],
   );
+  const runUiState = useMemo(
+    () =>
+      deriveRunUiState({
+        activeRunId,
+        items,
+        latestEvent: latestRunEvent,
+      }),
+    [activeRunId, items, latestRunEvent],
+  );
+  const runIndicator = useMemo(
+    () =>
+      activeRunId === null ||
+      runUiState.phase === "waiting_for_permission" ||
+      runUiState.phase === "terminal"
+        ? null
+        : {
+            visible: runUiState.showPlanningIndicator,
+            label: runUiState.planningLabel,
+          },
+    [activeRunId, runUiState],
+  );
 
   const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(() => {
     const threads: ExternalStoreThreadData<"regular">[] = [];
@@ -773,6 +798,7 @@ export function ChatScreen({
       activeRunUserMessageIdsRef.current.set(run.run_id, run.user_message_id);
       latestSequenceRef.current = 0;
       setActiveRunId(run.run_id);
+      setLatestRunEvent(null);
       setStatus("Queued...");
       startEventStream(run.run_id, latestSequenceRef.current);
     },
@@ -812,7 +838,11 @@ export function ChatScreen({
         />
         <AssistantThread
           sidebarCollapsed={sidebarCollapsed}
-          status={historyError ?? oauthStatus ?? status}
+          status={
+            historyError ??
+            oauthStatus ??
+            (activeRunId === null ? status : runUiState.headerStatus)
+          }
           models={demoModels}
           selectedModel={selectedModelId}
           onModelChange={setSelectedModelId}
@@ -828,6 +858,7 @@ export function ChatScreen({
             onOpenMcpSettings={() => onOpenSettings("connectors")}
             onOpenSkillsSettings={() => onOpenSettings("skills")}
             onShowConnectors={() => setShowConnectorSuggestions(true)}
+            runIndicator={runIndicator}
             connectorSuggestions={
               showConnectorSuggestions && suggestedServers.length > 0 ? (
                 <ConnectorSuggestionCard
@@ -1249,31 +1280,22 @@ function upsertConversation(
   );
 }
 
-function statusForRuntimeEvent(event: RuntimeEventEnvelope): string | null {
-  if (event.visibility === "internal") {
-    return null;
-  }
-  if (event.event_type === "run_started") {
-    return "Working...";
-  }
-  if (event.event_type === "model_delta") {
-    return "Writing answer...";
-  }
-  if (
-    event.event_type === "reasoning_summary" ||
-    event.event_type === "reasoning_summary_delta"
-  ) {
-    return "Thinking...";
-  }
-  return null;
-}
-
 function isTerminalRunEvent(event: RuntimeEventEnvelope): boolean {
   return (
     event.event_type === "run_completed" ||
     event.event_type === "run_cancelled" ||
     event.event_type === "run_failed"
   );
+}
+
+function statusForTerminalRunEvent(event: RuntimeEventEnvelope): string {
+  if (event.event_type === "run_completed") {
+    return "Ready";
+  }
+  if (event.event_type === "run_failed") {
+    return "Could not complete";
+  }
+  return "Stopped";
 }
 
 const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [

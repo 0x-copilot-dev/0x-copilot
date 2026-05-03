@@ -410,6 +410,9 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             server_name = cls.text(args.get("server_name")) or "MCP server"
             tool_name = cls.text(args.get("tool_name")) or "MCP tool"
             arguments = args.get("arguments")
+            display_name = cls.connector_display_name(server_name)
+            action_label = cls.connector_action_name(tool_name)
+            read_only = cls.connector_action_is_read_only(tool_name)
             approval_id = (
                 interrupt_id if len(action_requests) == 1 else f"{interrupt_id}:{index}"
             )
@@ -425,16 +428,71 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                     "action_index": index,
                     "action_count": len(action_requests),
                     "server_name": server_name,
-                    "display_name": server_name,
+                    "display_name": display_name,
                     "tool_name": tool_name,
                     "arguments": arguments if isinstance(arguments, dict) else {},
-                    "message": f"Approve {server_name} to run {tool_name}.",
+                    "message": f"Allow {display_name} {action_label}?",
+                    "read_only": read_only,
+                    "risk_level": "low" if read_only else "medium",
                     "status": "pending",
                     "allowed_decisions": list(allowed_decisions),
                     "grant_options": ["allow_once"],
                 }
             )
         return tuple(approvals)
+
+    @classmethod
+    def connector_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        lowered = normalized.lower()
+        if lowered.startswith("mcp_"):
+            normalized = normalized[4:]
+        if lowered.endswith("_mcp"):
+            normalized = normalized[:-4]
+        normalized = normalized.removesuffix("_com").removesuffix("-com")
+        words = [word for word in normalized.replace("-", "_").split("_") if word]
+        if not words:
+            return "Connector"
+        acronyms = {"api", "url", "id", "mcp"}
+        return " ".join(
+            word.upper() if word.lower() in acronyms else cls.connector_brand_word(word)
+            for word in words
+        )
+
+    @classmethod
+    def connector_brand_word(cls, value: str) -> str:
+        brands = {
+            "clickup": "ClickUp",
+            "github": "GitHub",
+            "gitlab": "GitLab",
+            "slack": "Slack",
+            "google": "Google",
+        }
+        return brands.get(value.lower(), value.capitalize())
+
+    @classmethod
+    def connector_action_name(cls, tool_name: str) -> str:
+        normalized = tool_name.lower()
+        if any(term in normalized for term in ("search", "filter", "find", "list")):
+            return "search"
+        if any(term in normalized for term in ("read", "get", "fetch")):
+            return "read"
+        if any(
+            term in normalized
+            for term in ("create", "post", "send", "update", "delete")
+        ):
+            return "modify"
+        return "action"
+
+    @classmethod
+    def connector_action_is_read_only(cls, tool_name: str) -> bool:
+        normalized = tool_name.lower()
+        if any(
+            term in normalized
+            for term in ("create", "post", "send", "update", "delete", "write")
+        ):
+            return False
+        return True
 
     @classmethod
     def review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:

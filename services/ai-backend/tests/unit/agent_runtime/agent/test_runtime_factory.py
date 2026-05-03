@@ -156,6 +156,25 @@ def test_factory_instructs_model_to_return_fenced_code(
     assert "indentation and formatting are preserved" in system_prompt
 
 
+def test_factory_instructs_model_to_render_links_with_descriptive_labels(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+
+    create_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=fake_dependencies,
+        agent_builder=builder,
+    )
+
+    system_prompt = builder.calls[0].system_prompt
+    assert "Markdown links with concise, descriptive labels" in system_prompt
+    assert "use the title as the link label" in system_prompt
+    assert "Use only links that came from the user" in system_prompt
+    assert "Do not place raw URLs on their own lines" in system_prompt
+
+
 def test_factory_rejects_invalid_dependency_dict(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:

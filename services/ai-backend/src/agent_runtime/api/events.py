@@ -13,6 +13,7 @@ from runtime_api.schemas import (
     RuntimeEventPresentationProjector,
 )
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.presentation import PresentationGenerator
 
 
 class RuntimeEventProducer:
@@ -23,9 +24,11 @@ class RuntimeEventProducer:
         *,
         persistence: PersistencePort,
         event_store: EventStorePort,
+        presentation_generator: PresentationGenerator | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
+        self.presentation_generator = presentation_generator or PresentationGenerator()
 
     def append_api_event(
         self,
@@ -46,7 +49,7 @@ class RuntimeEventProducer:
             payload=payload or {},
         )
         safe_metadata = metadata or {}
-        presentation = RuntimeEventPresentationProjector.presentation_fields(
+        timeline_fields = RuntimeEventPresentationProjector.presentation_fields(
             event_type=event_type,
             source=source,
             parent_task_id=parent_task_id,
@@ -54,9 +57,19 @@ class RuntimeEventProducer:
             metadata=safe_metadata,
         )
         if summary is not None and (safe_summary := summary.strip()):
-            presentation["summary"] = safe_summary
+            timeline_fields["summary"] = safe_summary
         if status is not None and (safe_status := status.strip()):
-            presentation["status"] = safe_status
+            timeline_fields["status"] = safe_status
+        card_presentation = self.presentation_generator.presentation_for_event(
+            run=run,
+            event_type=event_type,
+            source=source,
+            payload=safe_payload,
+            metadata=safe_metadata,
+            timeline_fields=timeline_fields,
+        )
+        if card_presentation is not None:
+            safe_metadata = {**safe_metadata, "presentation": card_presentation}
         envelope = self.event_store.append_event(
             RuntimeEventDraft(
                 run_id=run.run_id,
@@ -67,7 +80,8 @@ class RuntimeEventProducer:
                 parent_task_id=parent_task_id,
                 payload=safe_payload,
                 metadata=safe_metadata,
-                **presentation,
+                presentation=card_presentation,
+                **timeline_fields,
             )
         )
         self.persistence.set_run_latest_sequence(
@@ -84,13 +98,36 @@ class RuntimeEventProducer:
     ) -> RuntimeEventEnvelope:
         """Append a normalized runtime event after projecting UI timeline fields."""
 
-        envelope = self.event_store.append_event(
-            RuntimeEventDraft.from_stream_event(
-                run_id=run.run_id,
-                conversation_id=run.conversation_id,
-                stream_event=stream_event,
-            )
+        draft = RuntimeEventDraft.from_stream_event(
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            stream_event=stream_event,
         )
+        card_presentation = self.presentation_generator.presentation_for_event(
+            run=run,
+            event_type=draft.event_type,
+            source=draft.source,
+            payload=draft.payload,
+            metadata=draft.metadata,
+            timeline_fields=draft.model_dump(
+                mode="python",
+                include={
+                    "display_title",
+                    "summary",
+                    "status",
+                    "activity_kind",
+                    "span_id",
+                },
+            ),
+        )
+        if card_presentation is not None:
+            draft = draft.model_copy(
+                update={
+                    "presentation": card_presentation,
+                    "metadata": {**draft.metadata, "presentation": card_presentation},
+                }
+            )
+        envelope = self.event_store.append_event(draft)
         self.persistence.set_run_latest_sequence(
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,

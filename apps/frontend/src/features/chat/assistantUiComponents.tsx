@@ -20,7 +20,7 @@ import {
   type Unstable_SlashCommand,
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
-import type { ReactElement, ReactNode } from "react";
+import type { AnchorHTMLAttributes, ReactElement, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
@@ -35,8 +35,10 @@ import type {
   McpServer,
   ModelCatalogModel,
   Skill,
+  RuntimeEventPresentation,
 } from "@enterprise-search/api-types";
 import { isAssistantPerformanceMetrics } from "@enterprise-search/api-types";
+import { markdownLinkLabel } from "./markdownLinks";
 import { mcpServerInstructionPrompt, skillInstructionPrompt } from "./prompts";
 
 export function AssistantThreadList({
@@ -233,6 +235,7 @@ export function ThreadBody({
   connectors,
   skills,
   connectorSuggestions,
+  runIndicator,
   onMcpAuthConnect,
   onMcpAuthSkip,
   onOpenMcpSettings,
@@ -248,6 +251,7 @@ export function ThreadBody({
     loading: boolean;
   };
   connectorSuggestions: ReactNode;
+  runIndicator: RunIndicator | null;
   onMcpAuthConnect: (payload: {
     approvalId: string;
     serverId: string;
@@ -296,6 +300,12 @@ export function ThreadBody({
           }}
         </ThreadPrimitive.Messages>
         {connectorSuggestions}
+        {runIndicator ? (
+          <PlanningIndicator
+            label={runIndicator.label}
+            visible={runIndicator.visible}
+          />
+        ) : null}
         <ThreadPrimitive.ViewportFooter className="aui-thread-footer">
           <ThreadPrimitive.ScrollToBottom
             className="aui-scroll-bottom"
@@ -313,6 +323,39 @@ export function ThreadBody({
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+  );
+}
+
+type RunIndicator = {
+  label: string;
+  visible: boolean;
+};
+
+function PlanningIndicator({ label, visible }: RunIndicator): ReactElement {
+  const words = label.split(" ");
+  return (
+    <div
+      className="aui-planning-indicator"
+      data-visible={visible ? "true" : "false"}
+      role={visible ? "status" : undefined}
+      aria-live={visible ? "polite" : undefined}
+      aria-hidden={visible ? undefined : "true"}
+      aria-label={label}
+    >
+      <span className="aui-planning-indicator__text" aria-hidden="true">
+        {words.map((word, index) => (
+          <span
+            className={classNames(
+              "aui-planning-indicator__word",
+              `aui-planning-indicator__word--${index + 1}`,
+            )}
+            key={`${word}-${index}`}
+          >
+            {word}
+          </span>
+        ))}
+      </span>
+    </div>
   );
 }
 
@@ -338,6 +381,7 @@ function ActivityCard({
   params = [],
   result,
   details,
+  detailsLabel = "Tool details",
   children,
   className,
 }: {
@@ -348,6 +392,7 @@ function ActivityCard({
   params?: ActivityParam[];
   result?: ReactNode;
   details?: ReactNode;
+  detailsLabel?: string;
   children?: ReactNode;
   className?: string;
 }): ReactElement {
@@ -376,7 +421,9 @@ function ActivityCard({
         <div className="aui-activity-card__result">{result}</div>
       ) : null}
       {children}
-      {details ? <ActivityDetails>{details}</ActivityDetails> : null}
+      {details ? (
+        <ActivityDetails label={detailsLabel}>{details}</ActivityDetails>
+      ) : null}
     </Card>
   );
 }
@@ -400,12 +447,18 @@ function ActivityParams({ params }: { params: ActivityParam[] }): ReactElement {
   );
 }
 
-function ActivityDetails({ children }: { children: ReactNode }): ReactElement {
+function ActivityDetails({
+  children,
+  label = "Tool details",
+}: {
+  children: ReactNode;
+  label?: string;
+}): ReactElement {
   return (
     <ActivityCollapsible
       className="aui-activity-card__details"
       contentClassName="aui-activity-card__details-content"
-      label="Inspect details"
+      label={label}
     >
       {children}
     </ActivityCollapsible>
@@ -439,6 +492,7 @@ function ActivityItem({
   variant = "tool",
   description,
   details,
+  detailsLabel = "Details",
   result,
   icon,
 }: {
@@ -447,6 +501,7 @@ function ActivityItem({
   variant?: ActivityVariant;
   description?: ReactNode;
   details?: ReactNode;
+  detailsLabel?: string;
   result?: ReactNode;
   icon?: ReactNode;
 }): ReactElement {
@@ -482,7 +537,7 @@ function ActivityItem({
         <ActivityCollapsible
           className="aui-activity-item__details"
           contentClassName="aui-activity-item__details-content"
-          label="Details"
+          label={detailsLabel}
         >
           {details}
         </ActivityCollapsible>
@@ -510,6 +565,141 @@ function ActivityStatusIcon({ status }: { status: string }): ReactElement {
     return <span className="aui-activity-item__mark">!</span>;
   }
   return <span className="aui-activity-item__mark">✓</span>;
+}
+
+function GeneratedPresentationCard({
+  presentation,
+  details,
+  forceCard = false,
+  variant,
+}: {
+  presentation: RuntimeEventPresentation;
+  details?: ReactNode;
+  forceCard?: boolean;
+  variant?: ActivityVariant;
+}): ReactElement {
+  const result =
+    presentation.result_preview && presentation.result_preview.length > 0 ? (
+      <PresentationResultRows rows={presentation.result_preview} />
+    ) : undefined;
+  const cardVariant = variant ?? activityVariantForPresentation(presentation);
+  if (!forceCard && presentation.kind === "progress") {
+    return (
+      <ActivityItem
+        title={presentation.title}
+        status={presentation.status_label}
+        variant={cardVariant}
+        description={presentation.summary}
+        result={result}
+        details={details}
+        detailsLabel={presentation.debug_label ?? "Tool details"}
+      />
+    );
+  }
+  return (
+    <ActivityCard
+      title={presentation.title}
+      status={presentation.status_label}
+      variant={cardVariant}
+      description={presentation.summary}
+      result={result}
+      details={details}
+      detailsLabel={presentation.debug_label ?? "Tool details"}
+    />
+  );
+}
+
+function PresentationResultRows({
+  rows,
+}: {
+  rows: RuntimeEventPresentation["result_preview"];
+}): ReactElement {
+  return (
+    <div className="aui-presentation-result">
+      {rows?.map((row, index) => (
+        <div
+          className="aui-presentation-result__row"
+          key={`${row.title}-${index}`}
+        >
+          <div className="aui-presentation-result__text">
+            {row.url ? (
+              <a href={row.url} target="_blank" rel="noreferrer">
+                {row.title}
+              </a>
+            ) : (
+              <span>{row.title}</span>
+            )}
+            {row.subtitle ? <p>{row.subtitle}</p> : null}
+          </div>
+          {row.badge ? <Badge>{row.badge}</Badge> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function activityVariantForPresentation(
+  presentation: RuntimeEventPresentation,
+): ActivityVariant {
+  if (presentation.kind === "approval") {
+    return "approval";
+  }
+  if (presentation.kind === "auth") {
+    return "connector";
+  }
+  if (presentation.kind === "progress") {
+    return "progress";
+  }
+  return "tool";
+}
+
+function presentationFromArgs(
+  args: Record<string, unknown>,
+): RuntimeEventPresentation | null {
+  const raw = asRecord(args.presentation);
+  const title = stringValue(raw.title);
+  const status = stringValue(raw.status_label);
+  const kind = stringValue(raw.kind);
+  if (!title || !status || !kind) {
+    return null;
+  }
+  return {
+    title,
+    summary: stringValue(raw.summary),
+    status_label: status as RuntimeEventPresentation["status_label"],
+    kind: kind as RuntimeEventPresentation["kind"],
+    group_key: stringValue(raw.group_key),
+    primary_entity: stringValue(raw.primary_entity),
+    action_label: stringValue(raw.action_label),
+    result_preview: presentationRows(raw.result_preview),
+    debug_label: stringValue(raw.debug_label),
+    confidence: stringValue(
+      raw.confidence,
+    ) as RuntimeEventPresentation["confidence"],
+  };
+}
+
+function presentationRows(
+  value: unknown,
+): RuntimeEventPresentation["result_preview"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const row = asRecord(item);
+    const title = stringValue(row.title);
+    if (!title) {
+      return [];
+    }
+    return [
+      {
+        title,
+        subtitle: stringValue(row.subtitle),
+        url: stringValue(row.url),
+        badge: stringValue(row.badge),
+      },
+    ];
+  });
 }
 
 function ThreadWelcome(): ReactElement {
@@ -1229,12 +1419,58 @@ function SystemMessage(): ReactElement {
   );
 }
 
-function MarkdownText({ text }: TextMessagePartProps): ReactElement {
+function MarkdownText({ text, status }: TextMessagePartProps): ReactElement {
+  const streaming = status.type === "running";
   return (
-    <Streamdown className="assistant-markdown" mode="streaming">
+    <Streamdown
+      animated={
+        streaming
+          ? {
+              animation: "fadeIn",
+              duration: 120,
+              easing: "ease-out",
+              sep: "word",
+            }
+          : false
+      }
+      className={classNames(
+        "assistant-markdown",
+        streaming ? "assistant-markdown--streaming" : undefined,
+      )}
+      components={markdownComponents}
+      isAnimating={streaming}
+      mode={streaming ? "streaming" : "static"}
+    >
       {text}
     </Streamdown>
   );
+}
+
+const markdownComponents = {
+  a: MarkdownLink,
+};
+
+function MarkdownLink({
+  children,
+  href,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
+  const external = isExternalHref(href);
+  return (
+    <a
+      {...props}
+      href={href}
+      rel={external ? "noreferrer" : props.rel}
+      target={external ? "_blank" : props.target}
+      title={props.title ?? (typeof href === "string" ? href : undefined)}
+    >
+      {markdownLinkLabel(href, children)}
+    </a>
+  );
+}
+
+function isExternalHref(href: string | undefined): boolean {
+  return Boolean(href && /^https?:\/\//i.test(href));
 }
 
 function PlainText({ text }: TextMessagePartProps): ReactElement {
@@ -1302,17 +1538,27 @@ function ToolFallback({
   status,
   isError,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
+  const presentation = presentationFromArgs(args);
   const argsSummary = summarizeArgsText(argsText);
   const activitySummary = stringValue(args.summary) ?? argsSummary;
   const statusLabel = toolStatusLabel(status.type, isError);
   const largeResult = largeToolResultFromValue(result);
-  const title = inlineToolTitle(toolName, status.type, isError);
+  const title = inlineToolTitle(toolName, status.type, isError, result);
   const resultSummary = largeResult
     ? "large result saved"
     : result !== undefined
-      ? summarizeToolValue(result, toolName)
+      ? safeMainResultSummary(summarizeToolValue(result, toolName))
       : undefined;
   const details = toolDetailsContent(argsText, result);
+  if (presentation) {
+    return (
+      <GeneratedPresentationCard
+        presentation={presentation}
+        details={details}
+        forceCard={shouldRenderFullToolCard(status.type, isError, result)}
+      />
+    );
+  }
   if (!shouldRenderFullToolCard(status.type, isError, result)) {
     return (
       <ActivityItem
@@ -1346,23 +1592,47 @@ function McpTool({
   status,
   isError,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
+  const presentation = presentationFromArgs(args);
   const serverName = stringValue(args.server_name);
+  const displayName = safeConnectorDisplayName(
+    stringValue(args.display_name) ?? serverName,
+  );
   const requestedTool = stringValue(args.tool_name);
   const resultNotice = largeToolResultFromValue(result);
   const statusLabel = toolStatusLabel(status.type, isError);
-  const title = inlineMcpToolTitle(toolName, requestedTool);
+  const title = inlineMcpToolTitle(
+    toolName,
+    requestedTool,
+    displayName,
+    status.type,
+  );
   const description = mcpToolSummary(
     toolName,
     status.type,
-    serverName,
+    displayName,
     requestedTool,
   );
   const resultSummary = resultNotice
     ? "large result saved"
     : result !== undefined
-      ? summarizeMcpResult(result)
+      ? safeMainResultSummary(summarizeMcpResult(result))
       : undefined;
   const details = toolDetailsContent(argsText, result);
+  if (presentation) {
+    return (
+      <GeneratedPresentationCard
+        presentation={presentation}
+        details={details}
+        forceCard={shouldRenderFullMcpCard(
+          toolName,
+          status.type,
+          isError,
+          result,
+        )}
+        variant="mcp"
+      />
+    );
+  }
   if (!shouldRenderFullMcpCard(toolName, status.type, isError, result)) {
     return (
       <ActivityItem
@@ -1381,7 +1651,7 @@ function McpTool({
       status={statusLabel}
       variant="mcp"
       description={description}
-      params={mcpActivityParams(serverName, requestedTool, args.arguments)}
+      params={mcpActivityParams(displayName, requestedTool, args.arguments)}
       result={resultSummary}
       details={details}
     />
@@ -1600,6 +1870,15 @@ function SubagentActivityList({
 
 function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
   const data = asRecord(props.args);
+  const presentation = presentationFromArgs(data);
+  if (presentation) {
+    return (
+      <GeneratedPresentationCard
+        presentation={presentation}
+        details={toolDetailsContent(props.argsText, props.result)}
+      />
+    );
+  }
   const status =
     typeof data.status === "string"
       ? data.status
@@ -1620,10 +1899,15 @@ function ApprovalTool({
   result,
   resume,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
+  const presentation = presentationFromArgs(args);
   const approvalId = String(args.approval_id ?? "");
   const toolName = stringValue(args.tool_name);
   const serverName = stringValue(args.server_name);
-  const displayName = stringValue(args.display_name) ?? serverName;
+  const displayName =
+    safeConnectorDisplayName(stringValue(args.display_name) ?? serverName) ??
+    (serverName
+      ? safeConnectorDisplayName(humanizeIdentifier(serverName))
+      : null);
   const riskLevel = stringValue(args.risk_level);
   const readOnly = typeof args.read_only === "boolean" ? args.read_only : null;
   const isMcpApproval =
@@ -1633,19 +1917,34 @@ function ApprovalTool({
   const submit = (decision: ApprovalDecision): void => {
     resume({ decision, approval_id: approvalId });
   };
-  const approvalStatus = resolved ? "resolved" : "waiting";
+  const approvalStatus = resolved ? "Done" : "Waiting for permission";
+  const actionName = toolActionName(toolName);
+  const approvalTitle = resolved
+    ? isMcpApproval
+      ? "Permission approved"
+      : "Approval resolved"
+    : isMcpApproval
+      ? `Allow ${displayName ?? "connector"} ${actionName}?`
+      : "Approval requested";
+  const approvalDescription = isMcpApproval
+    ? mcpApprovalDescription(displayName, actionName, readOnly, args.message)
+    : String(args.message ?? args.reason ?? approvalId);
+  const cardTitle = presentation?.title ?? approvalTitle;
+  const cardDescription = presentation?.summary ?? approvalDescription;
+  const cardStatus = presentation?.status_label ?? approvalStatus;
+  const cardResult =
+    presentation?.result_preview && presentation.result_preview.length > 0 ? (
+      <PresentationResultRows rows={presentation.result_preview} />
+    ) : undefined;
   return (
     <ActivityCard
-      title={
-        isMcpApproval ? "Connector action needs approval" : "Approval requested"
-      }
-      status={approvalStatus}
+      title={cardTitle}
+      status={cardStatus}
       variant="approval"
-      description={String(args.message ?? args.reason ?? approvalId)}
+      description={cardDescription}
       params={
         isMcpApproval
           ? [
-              ...mcpActivityParams(displayName, toolName, args.arguments),
               ...(riskLevel
                 ? [{ label: "Risk", value: <Badge>{riskLevel}</Badge> }]
                 : []),
@@ -1660,30 +1959,28 @@ function ApprovalTool({
             ]
           : []
       }
+      result={cardResult}
       details={approvalDetailsContent(args, result)}
+      detailsLabel={presentation?.debug_label ?? "Tool details"}
     >
       {!resolved ? (
         <div className="aui-tool-card__actions">
           <Button
             type="button"
             size="sm"
-            title={
-              isMcpApproval ? "Execute this MCP tool" : "Approve this request"
-            }
+            title={isMcpApproval ? "Allow this connector action" : "Approve"}
             onClick={() => submit("approved")}
           >
-            {isMcpApproval ? "Execute" : "Approve"}
+            {isMcpApproval ? "Allow once" : "Approve"}
           </Button>
           <Button
             type="button"
             size="sm"
             variant="secondary"
-            title={
-              isMcpApproval ? "Decline this MCP tool" : "Reject this request"
-            }
+            title={isMcpApproval ? "Deny this connector action" : "Reject"}
             onClick={() => submit("rejected")}
           >
-            {isMcpApproval ? "Decline" : "Reject"}
+            {isMcpApproval ? "Deny" : "Reject"}
           </Button>
         </div>
       ) : null}
@@ -1704,6 +2001,7 @@ function ConnectorAuthTool({
   }) => Promise<void>;
   onSkip: (payload: { approvalId: string; serverId: string }) => Promise<void>;
 }): ReactElement {
+  const presentation = presentationFromArgs(args);
   const [pendingAction, setPendingAction] = useState<"connect" | "skip" | null>(
     null,
   );
@@ -1711,11 +2009,12 @@ function ConnectorAuthTool({
   const approvalId =
     stringValue(args.approval_id) ?? stringValue(args.action_id) ?? serverId;
   const displayName =
-    stringValue(args.display_name) ??
-    stringValue(args.server_name) ??
-    "connector";
+    safeConnectorDisplayName(
+      stringValue(args.display_name) ?? stringValue(args.server_name),
+    ) ?? "connector";
   const message =
-    stringValue(args.message) ?? "Authenticate this connector to continue.";
+    stringValue(args.message) ??
+    `Enterprise Search needs permission to use ${displayName}.`;
   const expiresAt = stringValue(args.expires_at);
   const resolved = result !== undefined;
 
@@ -1744,16 +2043,23 @@ function ConnectorAuthTool({
 
   return (
     <ActivityCard
-      title={`Connect ${displayName}`}
-      status={resolved ? "resolved" : "action required"}
+      title={
+        presentation?.title ??
+        (resolved ? `${displayName} connected` : `Connect ${displayName}`)
+      }
+      status={
+        presentation?.status_label ??
+        (resolved ? "Done" : "Waiting for permission")
+      }
       variant="connector"
-      description={message}
+      description={presentation?.summary ?? message}
       params={
         expiresAt
           ? [{ label: "Link expires", value: formatDateTime(expiresAt) }]
           : []
       }
-      details={serverId ? <small>Server ID: {serverId}</small> : undefined}
+      details={mcpAuthDetails(args, result)}
+      detailsLabel={presentation?.debug_label ?? "Tool details"}
     >
       {!resolved ? (
         <div className="aui-tool-card__actions">
@@ -1858,7 +2164,7 @@ function toolDetailsContent(
       {argsText ? (
         <>
           <small>Input</small>
-          <pre>{formatToolValue(parseToolArgs(argsText) ?? argsText)}</pre>
+          <pre>{formatToolValue(parseJsonValue(argsText) ?? argsText)}</pre>
         </>
       ) : null}
       {result !== undefined && !largeToolResultFromValue(result) ? (
@@ -1877,6 +2183,12 @@ function approvalDetailsContent(
 ): ReactNode | null {
   const reason = stringValue(args.reason);
   const toolArgs = args.arguments;
+  const debug = compactRecord({
+    server_id: args.server_id,
+    server_name: args.server_name,
+    tool_name: args.tool_name,
+    approval_id: args.approval_id,
+  });
   const renderedResult =
     result !== undefined ? (
       <>
@@ -1884,7 +2196,7 @@ function approvalDetailsContent(
         <pre>{formatToolValue(displayToolResult(result))}</pre>
       </>
     ) : null;
-  if (!reason && toolArgs === undefined && !renderedResult) {
+  if (!reason && toolArgs === undefined && !renderedResult && !debug) {
     return null;
   }
   return (
@@ -1895,10 +2207,48 @@ function approvalDetailsContent(
           <p>{reason}</p>
         </>
       ) : null}
-      {toolArgs !== undefined ? (
+      {hasVisibleValue(toolArgs) ? (
         <>
           <small>Arguments</small>
           {formatDetailValue(toolArgs)}
+        </>
+      ) : null}
+      {debug ? (
+        <>
+          <small>Debug</small>
+          <pre>{formatToolValue(debug)}</pre>
+        </>
+      ) : null}
+      {renderedResult}
+    </>
+  );
+}
+
+function mcpAuthDetails(
+  args: Record<string, unknown>,
+  result: unknown,
+): ReactNode | null {
+  const debug = compactRecord({
+    server_id: args.server_id,
+    server_name: args.server_name,
+    approval_id: args.approval_id ?? args.action_id,
+  });
+  const renderedResult =
+    result !== undefined ? (
+      <>
+        <small>Result</small>
+        <pre>{formatToolValue(displayToolResult(result))}</pre>
+      </>
+    ) : null;
+  if (!debug && !renderedResult) {
+    return null;
+  }
+  return (
+    <>
+      {debug ? (
+        <>
+          <small>Debug</small>
+          <pre>{formatToolValue(debug)}</pre>
         </>
       ) : null}
       {renderedResult}
@@ -2075,40 +2425,107 @@ function mcpActivityParams(
 ): ActivityParam[] {
   const params: ActivityParam[] = [];
   if (serverName) {
-    params.push({ label: "Server", value: humanizeIdentifier(serverName) });
+    params.push({ label: "App", value: safeConnectorDisplayName(serverName) });
   }
   if (toolName) {
-    params.push({ label: "Tool", value: humanizeIdentifier(toolName) });
+    params.push({ label: "Action", value: safeToolActionLabel(toolName) });
   }
-  if (args !== undefined) {
-    const displayArgs = parseJsonObject(args) ?? args;
-    params.push({
-      label: "Arguments",
-      value: formatDetailValue(displayArgs),
-      block: isComplexToolValue(displayArgs),
-    });
+  if (args !== undefined && hasVisibleValue(args)) {
+    const displayArgs = parseJsonValue(args) ?? args;
+    if (!isComplexToolValue(displayArgs)) {
+      params.push({
+        label: "Input",
+        value: formatInlineValue(displayArgs),
+        block: false,
+      });
+    }
   }
   return params;
 }
 
-function summarizeToolValue(value: unknown, toolName?: string): string {
+function safeMainResultSummary(value: ReactNode): ReactNode {
+  if (typeof value !== "string") {
+    return value;
+  }
+  if (value.includes("/large_tool_results/")) {
+    return "Large result saved for internal inspection";
+  }
+  const parsed = parseJsonValue(value);
+  if (parsed !== null) {
+    return summarizeParsedMainResult(parsed);
+  }
+  if (value.length > 220 || value.split(/\r\n|\r|\n/).length > 3) {
+    return summarizeInlineString(value);
+  }
+  return safeVisibleText(value);
+}
+
+function summarizeParsedMainResult(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "No results" : `${value.length} results`;
+  }
+  const record = asRecord(value);
+  const rows = resultRowsFromValue(record);
+  if (rows) {
+    return `${rows.length} results`;
+  }
+  const message =
+    stringValue(record.message) ??
+    stringValue(record.summary) ??
+    stringValue(record.overview);
+  return message ? safeVisibleText(message) : "Result returned";
+}
+
+function safeConnectorDisplayName(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  return safeVisibleText(humanizeIdentifier(value));
+}
+
+function safeToolActionLabel(value: string): string {
+  const normalized = value
+    .replace(/^call_mcp_tool$/i, "action")
+    .replace(/^auth_mcp$/i, "connect")
+    .replace(/^mcp_/i, "")
+    .replace(/_com$/i, "")
+    .replace(/^[a-z0-9]+_/, "");
+  return safeVisibleText(humanizeIdentifier(normalized));
+}
+
+function safeVisibleText(value: string): string {
+  return value
+    .replaceAll("/large_tool_results/", "saved result ")
+    .replace(/\bmcp[_-]/gi, "")
+    .replace(/_com\b/gi, "")
+    .replaceAll("_", " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeToolValue(value: unknown, toolName?: string): ReactNode {
   const largeResult = largeToolResultFromValue(value);
   if (largeResult) {
     return "Large result saved for the agent to inspect";
   }
-  if (Array.isArray(value)) {
-    return value.length === 0
-      ? emptyResultLabel(toolName)
-      : `${value.length} results`;
+  const sources = searchSourcesFromValue(value);
+  if (isWebSearchTool(toolName) && sources) {
+    return <SearchSourceList sources={sources} />;
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
+  const normalizedValue = parseJsonValue(value) ?? value;
+  if (Array.isArray(normalizedValue)) {
+    return normalizedValue.length === 0
+      ? emptyResultLabel(toolName)
+      : `${normalizedValue.length} results`;
+  }
+  if (typeof normalizedValue === "string") {
+    const trimmed = normalizedValue.trim();
     if (trimmed === "[]") {
       return emptyResultLabel(toolName);
     }
     return trimmed || "Completed";
   }
-  const record = asRecord(value);
+  const record = asRecord(normalizedValue);
   const message =
     stringValue(record.message) ??
     stringValue(record.content) ??
@@ -2145,7 +2562,42 @@ function summarizeMcpResult(value: unknown): ReactNode {
     }
     return summarizeInlineString(text);
   }
+  const genericResults = resultRowsFromValue(value);
+  if (genericResults) {
+    return <McpResultList results={genericResults} />;
+  }
   return summarizeToolValue(value);
+}
+
+function SearchSourceList({
+  sources,
+}: {
+  sources: SearchSource[];
+}): ReactElement {
+  const rows = sources.slice(0, 4);
+  return (
+    <div className="aui-mcp-result-preview">
+      <p>{sources.length} sources found</p>
+      <ul className="aui-mcp-result-preview__list">
+        {rows.map((source, index) => (
+          <li key={`${source.link ?? source.title}-${index}`}>
+            <span className="aui-mcp-result-preview__primary">
+              <span>{source.title}</span>
+              {source.snippet ? (
+                <small>{truncateText(source.snippet, 150)}</small>
+              ) : null}
+            </span>
+            {source.trust ? <Badge tone="neutral">{source.trust}</Badge> : null}
+            {source.link ? (
+              <a href={source.link} target="_blank" rel="noreferrer">
+                Open
+              </a>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function McpResultList({ results }: { results: unknown[] }): ReactElement {
@@ -2193,6 +2645,117 @@ function mcpContentText(content: unknown): string | null {
   return null;
 }
 
+type SearchSource = {
+  title: string;
+  link: string | null;
+  snippet: string | null;
+  trust: string | null;
+};
+
+function searchSourcesFromValue(value: unknown): SearchSource[] | null {
+  const rows = resultRowsFromValue(value);
+  if (!rows) {
+    return null;
+  }
+  const sources = rows
+    .map((row) => {
+      const title =
+        stringValue(row.title) ??
+        stringValue(row.name) ??
+        stringValue(row.url) ??
+        stringValue(row.link);
+      if (!title) {
+        return null;
+      }
+      const link = stringValue(row.link) ?? stringValue(row.url);
+      return {
+        title,
+        link,
+        snippet:
+          stringValue(row.snippet) ??
+          stringValue(row.description) ??
+          stringValue(row.content),
+        trust: sourceTrustLabel(title, link),
+      };
+    })
+    .filter((source): source is SearchSource => source !== null);
+  return sources.length > 0 ? sources : null;
+}
+
+function resultRowsFromValue(value: unknown): Record<string, unknown>[] | null {
+  const parsed = parseJsonValue(value) ?? value;
+  if (Array.isArray(parsed)) {
+    const rows = parsed
+      .map(asRecord)
+      .filter((row) => Object.keys(row).length > 0);
+    return rows.length > 0 ? rows : null;
+  }
+  const record = asRecord(parsed);
+  for (const candidate of [
+    record.results,
+    record.items,
+    record.sources,
+    asRecord(record.output).results,
+    asRecord(record.output).items,
+  ]) {
+    if (Array.isArray(candidate)) {
+      const rows = candidate
+        .map(asRecord)
+        .filter((row) => Object.keys(row).length > 0);
+      if (rows.length > 0) {
+        return rows;
+      }
+    }
+  }
+  const text =
+    mcpContentText(record.content) ??
+    stringValue(record.text) ??
+    stringValue(asRecord(record.output).text);
+  if (text) {
+    const parsedText = parseJsonValue(text);
+    if (Array.isArray(parsedText)) {
+      const rows = parsedText
+        .map(asRecord)
+        .filter((row) => Object.keys(row).length > 0);
+      return rows.length > 0 ? rows : null;
+    }
+    const parsedRecord = asRecord(parsedText);
+    if (Array.isArray(parsedRecord.results)) {
+      const rows = parsedRecord.results
+        .map(asRecord)
+        .filter((row) => Object.keys(row).length > 0);
+      return rows.length > 0 ? rows : null;
+    }
+  }
+  return null;
+}
+
+function sourceTrustLabel(title: string, link: string | null): string | null {
+  const combined = `${title} ${link ?? ""}`.toLowerCase();
+  if (
+    combined.includes("docs.slack.dev") ||
+    combined.includes("slack.com/help") ||
+    combined.includes("modelcontextprotocol.io")
+  ) {
+    return "Official";
+  }
+  if (combined.includes("github.com")) {
+    return "Community";
+  }
+  return null;
+}
+
+function parseJsonValue(value: unknown): unknown | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -2207,13 +2770,39 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function compactRecord(
+  record: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const entries = Object.entries(record).filter(([, value]) =>
+    hasVisibleValue(value),
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+function hasVisibleValue(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
 function displayToolResult(value: unknown): unknown {
-  const parsed = parseJsonObject(value);
-  const output = asRecord(parsed?.output ?? parsed ?? value);
+  const parsed = parseJsonValue(value) ?? value;
+  const parsedRecord = asRecord(parsed);
+  const output = asRecord(parsedRecord.output ?? parsed);
   const content = output.content;
   const text = mcpContentText(content) ?? stringValue(output.text);
   if (text) {
-    return parseJsonObject(text) ?? text;
+    return parseJsonValue(text) ?? text;
   }
   return parsed ?? value;
 }
@@ -2359,11 +2948,10 @@ type LargeToolResult = {
 function largeToolResultFromValue(value: unknown): LargeToolResult | null {
   const text = largeToolResultText(value);
   if (text === null) {
-    return null;
+    const path = largeToolResultPath(value);
+    return path ? { path, callId: null } : null;
   }
-  const pathMatch = text.match(
-    /path:\s*(\/large_tool_results\/[A-Za-z0-9_-]+)/,
-  );
+  const pathMatch = text.match(/(\/large_tool_results\/[A-Za-z0-9_-]+)/);
   if (!pathMatch) {
     return null;
   }
@@ -2389,6 +2977,31 @@ function largeToolResultText(value: unknown): string | null {
   );
 }
 
+function largeToolResultPath(value: unknown): string | null {
+  if (typeof value === "string") {
+    const match = value.match(/(\/large_tool_results\/[A-Za-z0-9_-]+)/);
+    return match?.[1] ?? null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const path = largeToolResultPath(item);
+      if (path) {
+        return path;
+      }
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      const path = largeToolResultPath(entry);
+      if (path) {
+        return path;
+      }
+    }
+  }
+  return null;
+}
+
 function parseToolArgs(argsText: string): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(argsText) as unknown);
@@ -2411,6 +3024,17 @@ const hiddenToolArgKeys = new Set([
   "delta",
   "deltas",
   "event_type",
+  "action_id",
+  "approval_id",
+  "approval_kind",
+  "auth_url",
+  "display_name",
+  "native_interrupt_id",
+  "presentation",
+  "server_id",
+  "server_name",
+  "source_tool_call_id",
+  "tool_name",
 ]);
 
 function formatArgLabel(key: string): string {
@@ -2511,25 +3135,37 @@ function inlineToolTitle(
   toolName: string,
   status: string,
   isError: boolean | undefined,
+  result: unknown,
 ): string {
   const displayName = toolDisplayName(toolName);
   if (isError || status === "incomplete") {
     return `${displayName} failed`;
   }
-  return status === "running" ? `Running ${displayName}` : displayName;
+  if (status === "running") {
+    return toolRunningTitle(toolName, displayName);
+  }
+  if (result !== undefined) {
+    return toolCompletedTitle(toolName, displayName);
+  }
+  return displayName;
 }
 
 function toolDisplayName(toolName: string): string {
   const normalized = toolName.trim().toLowerCase();
   if (normalized === "ls" || normalized === "list_files") {
-    return "List directory";
+    return "List files";
+  }
+  if (isWebSearchTool(normalized)) {
+    return "Search web";
   }
   if (
     normalized === "grep" ||
     normalized === "rg" ||
-    normalized.includes("search")
+    normalized === "search_files" ||
+    normalized === "file_search" ||
+    normalized === "list_files"
   ) {
-    return "Search files";
+    return "Search project files";
   }
   if (normalized === "read_file") {
     return "Read file";
@@ -2538,6 +3174,34 @@ function toolDisplayName(toolName: string): string {
     return "Run command";
   }
   return humanizeIdentifier(toolName || "tool");
+}
+
+function toolRunningTitle(toolName: string, displayName: string): string {
+  const normalized = toolName.trim().toLowerCase();
+  if (isWebSearchTool(normalized)) {
+    return "Searching the web";
+  }
+  if (isProjectSearchTool(normalized)) {
+    return "Searching project files";
+  }
+  if (normalized === "ls" || normalized === "list_files") {
+    return "Listing files";
+  }
+  return `Running ${displayName}`;
+}
+
+function toolCompletedTitle(toolName: string, displayName: string): string {
+  const normalized = toolName.trim().toLowerCase();
+  if (isWebSearchTool(normalized)) {
+    return "Searched the web";
+  }
+  if (isProjectSearchTool(normalized)) {
+    return "Searched project files";
+  }
+  if (normalized === "ls" || normalized === "list_files") {
+    return "Listed files";
+  }
+  return displayName;
 }
 
 function mcpToolTitle(toolName: string, requestedTool: string | null): string {
@@ -2553,16 +3217,21 @@ function mcpToolTitle(toolName: string, requestedTool: string | null): string {
 function inlineMcpToolTitle(
   toolName: string,
   requestedTool: string | null,
+  displayName: string | null,
+  status: string,
 ): string {
   if (toolName === "load_mcp_server") {
-    return "Load MCP tools";
+    return displayName ? `Load ${displayName} tools` : "Load connector tools";
   }
   if (toolName === "auth_mcp") {
-    return "Authenticate connector";
+    return displayName ? `Connect ${displayName}` : "Connect connector";
   }
-  return requestedTool
-    ? humanizeIdentifier(requestedTool)
-    : humanizeIdentifier(toolName || "MCP action");
+  const action = toolActionName(requestedTool ?? toolName);
+  const connector = displayName ?? "connector";
+  if (status === "running") {
+    return `${capitalize(action)} ${connector}`;
+  }
+  return `${capitalizePastTense(action)} ${connector}`;
 }
 
 function mcpToolSummary(
@@ -2571,34 +3240,31 @@ function mcpToolSummary(
   serverName: string | null,
   requestedTool: string | null,
 ): string {
-  const target = [serverName, requestedTool].filter(Boolean).join(" / ");
+  const connector = serverName ? humanizeIdentifier(serverName) : "connector";
+  const action = toolActionName(requestedTool ?? toolName);
   if (status === "running") {
     if (toolName === "load_mcp_server") {
-      return target
-        ? `Loading available tools from ${target}.`
-        : "Loading available MCP tools.";
+      return `Loading available tools from ${connector}.`;
     }
-    return target ? `Executing ${target}.` : "Executing MCP tool.";
+    return `${capitalize(action)} ${connector}.`;
   }
   if (status === "requires-action") {
-    return target
-      ? `Review ${target} before execution.`
-      : "Review this MCP action before execution.";
+    return `Review ${connector} ${action} before it runs.`;
   }
-  return target ? `MCP action for ${target}.` : "MCP action completed.";
+  return `${connector} action completed.`;
 }
 
 function toolStatusLabel(status: string, isError?: boolean): string {
   if (isError) {
-    return "error";
+    return "Failed";
   }
   if (status === "requires-action") {
-    return "waiting";
+    return "Waiting for permission";
   }
   if (status === "running") {
-    return "running";
+    return "Running";
   }
-  return "complete";
+  return "Done";
 }
 
 function badgeToneForStatus(
@@ -2619,7 +3285,8 @@ function badgeToneForStatus(
     normalized === "still working" ||
     normalized === "waiting" ||
     normalized === "running" ||
-    normalized === "action required"
+    normalized === "action required" ||
+    normalized === "waiting for permission"
   ) {
     return "warning";
   }
@@ -2638,12 +3305,119 @@ function humanizeIdentifier(value: string): string {
   if (!trimmed) {
     return "Tool";
   }
-  return trimmed
+  const normalized = trimmed
     .replace(/^mcp[_-]/i, "")
+    .replace(/[_-]mcp$/i, "")
+    .replace(/\bcom$/i, "")
     .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .trim();
+  return normalized
+    .split(/\s+/)
+    .map(formatBrandWord)
+    .join(" ")
+    .replace(/\bMcp\b/g, "MCP")
+    .replace(/\bApi\b/g, "API")
+    .replace(/\bUrl\b/g, "URL");
+}
+
+function formatBrandWord(value: string): string {
+  const brands: Record<string, string> = {
+    clickup: "ClickUp",
+    github: "GitHub",
+    gitlab: "GitLab",
+    slack: "Slack",
+    google: "Google",
+  };
+  const normalized = value.toLowerCase();
+  return (
+    brands[normalized] ?? value.replace(/^\w/, (letter) => letter.toUpperCase())
+  );
 }
 
 function formatAgentName(value: string): string {
   return humanizeIdentifier(value);
+}
+
+function isWebSearchTool(toolName: string | undefined): boolean {
+  const normalized = toolName?.trim().toLowerCase() ?? "";
+  return (
+    normalized === "web_search" ||
+    normalized === "duckduckgo_search" ||
+    normalized === "duckduckgo_search_results" ||
+    normalized === "search_web"
+  );
+}
+
+function isProjectSearchTool(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return (
+    normalized === "grep" ||
+    normalized === "rg" ||
+    normalized === "search_files" ||
+    normalized === "file_search"
+  );
+}
+
+function toolActionName(toolName: string | null): string {
+  const normalized = toolName?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return "action";
+  }
+  if (
+    normalized.includes("search") ||
+    normalized.includes("filter") ||
+    normalized.includes("find") ||
+    normalized.includes("list")
+  ) {
+    return "search";
+  }
+  if (normalized.includes("read") || normalized.includes("get")) {
+    return "read";
+  }
+  if (
+    normalized.includes("create") ||
+    normalized.includes("post") ||
+    normalized.includes("send") ||
+    normalized.includes("update") ||
+    normalized.includes("delete")
+  ) {
+    return "modify";
+  }
+  return "action";
+}
+
+function mcpApprovalDescription(
+  displayName: string | null,
+  actionName: string,
+  readOnly: boolean | null,
+  fallback: unknown,
+): string {
+  const connector = displayName ?? "this connector";
+  if (readOnly === true) {
+    return `Enterprise Search wants to ${actionName} ${connector}. Read-only. No changes will be made.`;
+  }
+  if (readOnly === false) {
+    return `Enterprise Search wants to ${actionName} ${connector}. This action may change data.`;
+  }
+  return (
+    stringValue(fallback) ??
+    `Enterprise Search wants to run a ${connector} action.`
+  );
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function capitalizePastTense(value: string): string {
+  if (value === "search") {
+    return "Searched";
+  }
+  if (value === "read") {
+    return "Read";
+  }
+  if (value === "modify") {
+    return "Updated";
+  }
+  return "Ran";
 }
