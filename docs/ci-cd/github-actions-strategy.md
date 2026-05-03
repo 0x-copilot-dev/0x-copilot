@@ -28,11 +28,12 @@ After merge to `main`:
 
 ## Docker Images
 
-Each backend service should have its own image:
+Each deployable has its own image published by `release-images.yml`:
 
-- `ghcr.io/<org>/enterprise-search-backend-facade`
 - `ghcr.io/<org>/enterprise-search-backend`
-- `ghcr.io/<org>/agent-runtime-backend`
+- `ghcr.io/<org>/enterprise-search-backend-facade`
+- `ghcr.io/<org>/enterprise-search-ai-backend`
+- `ghcr.io/<org>/enterprise-search-frontend`
 
 Dockerfiles should be reproducible, minimal, and scoped to their service. Do not bake secrets into images.
 
@@ -52,12 +53,13 @@ Desktop build pipelines should come later:
 
 Do not block backend CI on desktop packaging unless the PR touches desktop app code or shared packages required by desktop apps.
 
-## Starting Workflow Set
+## Workflow layout (implemented)
 
-Begin with:
+- `.github/workflows/ci-repo.yml` — repo-wide lint + secret scan.
+- `.github/workflows/ci-backend.yml`, `ci-backend-facade.yml`, `ci-ai-backend.yml`, `ci-frontend.yml` — path-filtered component CI.
+- `.github/workflows/release-images.yml` — GHCR publish on `main` (filtered paths).
+- `.github/workflows/deploy-staging.yml`, `deploy-production.yml` — manual environment gates (wire orchestrator per tenant).
 
-- `.github/workflows/ci.yml`
-- `.github/workflows/deploy-staging.yml`
-- `.github/workflows/deploy-prod.yml`
+## Assurance specification
 
-Add component-specific workflows only when path-filtered jobs become hard to maintain.
+For the consolidated description of CI/CD controls (locking, SBOM, Trivy, attestations, manifests), see **[`ci-assurance-spec.md`](ci-assurance-spec.md)**.
