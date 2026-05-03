@@ -1,4 +1,16 @@
-"""LLM-backed presentation metadata for user-facing runtime events."""
+"""Card presentation metadata for user-facing runtime events.
+
+The generator runs in three layers:
+
+1. Deterministic templates — events whose presentation is fully derivable
+   from payload (approval/auth/error/delta) skip the LLM entirely.
+2. Tool author templates — when a tool registers a `ToolDisplayTemplate`
+   on its `ToolCard` / `McpServerCard` / `McpToolDescriptor`, the renderer
+   fills the template from the payload and skips the LLM.
+3. LLM path — for tool/progress events without registered templates, a
+   small fast OpenAI model (default `gpt-4.1-nano`, configured via
+   `RUNTIME_PRESENTATION_MODEL`) returns a strict-schema structured output.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +20,23 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import ValidationError
+from langchain_core.runnables import Runnable
+from pydantic import BaseModel, ValidationError
 
+from agent_runtime.api.presentation_templates import (
+    DeterministicTemplates,
+    PresentationOutput,
+    ToolTemplateRenderer,
+)
+from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.execution.contracts import ModelConfig, StreamEventSource
 from agent_runtime.execution.deep_agent_builder import build_chat_model
+from agent_runtime.settings import RuntimePresentationSettings
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -23,30 +45,40 @@ from runtime_api.schemas import (
 
 JsonObject = dict[str, object]
 LlmPresenter = Callable[[str], object | Awaitable[object]]
-LLM_PRESENTATION_TIMEOUT_SECONDS = 2.0
+ToolDisplayLookup = Callable[[str], ToolDisplayTemplate | None]
 
 
 @dataclass
 class PresentationGenerator:
-    """Generate validated card presentation metadata from safe event context."""
+    """Generate validated card presentation metadata from safe event context.
 
+    Attributes:
+        presentation_settings: Pinned model + timeout for the LLM path. When
+            ``None``, defaults to ``RuntimePresentationSettings()`` (gpt-4.1-nano).
+        llm_factory: Builds the small chat model. Override in tests to inject
+            a fake; production passes through ``build_chat_model``.
+        presenter: Test seam — when set, called instead of the structured-output
+            LLM path. Receives the prompt string and returns a dict (or awaitable).
+        tool_display_lookup: Optional resolver from tool name → display template.
+            When the resolver returns a template, the LLM is skipped entirely.
+    """
+
+    presentation_settings: RuntimePresentationSettings | None = None
     llm_factory: Callable[[ModelConfig], BaseChatModel] = build_chat_model
     presenter: LlmPresenter | None = None
+    tool_display_lookup: ToolDisplayLookup | None = None
     cache: dict[str, JsonObject] = field(default_factory=dict)
-    llm_timeout_seconds: float = LLM_PRESENTATION_TIMEOUT_SECONDS
+    _cached_model: BaseChatModel | None = field(default=None, init=False, repr=False)
 
-    generated_event_types = frozenset(
+    # Event types that go through the LLM path when no template matches.
+    # Deterministic event types (approvals, auth, errors, deltas) are handled
+    # by `DeterministicTemplates` and never reach the LLM.
+    llm_eligible_event_types = frozenset(
         {
             RuntimeApiEventType.PROGRESS,
             RuntimeApiEventType.TOOL_CALL,
             RuntimeApiEventType.TOOL_CALL_STARTED,
-            RuntimeApiEventType.TOOL_CALL_DELTA,
             RuntimeApiEventType.TOOL_RESULT,
-            RuntimeApiEventType.MCP_AUTH_REQUIRED,
-            RuntimeApiEventType.APPROVAL_REQUESTED,
-            RuntimeApiEventType.APPROVAL_RESOLVED,
-            RuntimeApiEventType.ERROR,
-            RuntimeApiEventType.RUN_FAILED,
         }
     )
 
@@ -65,7 +97,34 @@ class PresentationGenerator:
         explicit = self._validated(metadata.get("presentation"))
         if explicit is not None:
             return explicit
-        if event_type not in self.generated_event_types:
+
+        group_key = self._group_key(payload, timeline_fields)
+
+        deterministic = DeterministicTemplates.render(
+            event_type=event_type,
+            payload=payload,
+            timeline_fields=timeline_fields,
+            group_key=group_key,
+        )
+        if deterministic is not None:
+            validated = self._validated(deterministic)
+            if validated is not None:
+                return validated
+
+        tool_template = self._resolve_tool_template(payload)
+        if tool_template is not None:
+            tool_rendered = ToolTemplateRenderer.render(
+                event_type=event_type,
+                payload=payload,
+                template=tool_template,
+                group_key=group_key,
+            )
+            if tool_rendered is not None:
+                validated = self._validated(tool_rendered)
+                if validated is not None:
+                    return validated
+
+        if event_type not in self.llm_eligible_event_types:
             return None
 
         context = self._context(
@@ -89,40 +148,44 @@ class PresentationGenerator:
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        generated = await self._generate(run.runtime_context.model_profile, context)
+        generated = await self._generate(context)
         validated = self._validated(generated)
         if validated is None:
             validated = self._fallback(context)
+        else:
+            validated = self._with_deterministic_fields(validated, group_key=group_key)
         self.cache[cache_key] = validated
         return validated
 
-    async def _generate(self, model_config: ModelConfig, context: JsonObject) -> object:
+    async def _generate(self, context: JsonObject) -> object:
         prompt = self._prompt(context)
         if self.presenter is not None:
             result = self.presenter(prompt)
             if inspect.isawaitable(result):
                 return await result
             return result
+        settings = self.presentation_settings or RuntimePresentationSettings()
         try:
-            model = self.llm_factory(model_config.model_copy(update={"temperature": 0}))
+            structured = self._structured_model(settings)
             response = await asyncio.wait_for(
-                model.ainvoke(
+                structured.ainvoke(
                     [
                         SystemMessage(
                             content=(
-                                "You write concise, plain-text UI card metadata for an "
-                                "enterprise assistant. Return only valid JSON."
+                                "You write concise, plain-text UI card metadata "
+                                "for an enterprise assistant. Never include raw "
+                                "IDs, protocol names, JSON, markdown, or HTML."
                             )
                         ),
                         HumanMessage(content=prompt),
                     ]
                 ),
-                timeout=self.llm_timeout_seconds,
+                timeout=settings.timeout_seconds,
             )
         except (TimeoutError, asyncio.TimeoutError):
             logging.getLogger(__name__).warning(
                 "LLM presentation generation timed out after %ss",
-                self.llm_timeout_seconds,
+                settings.timeout_seconds,
             )
             return None
         except Exception:
@@ -130,10 +193,32 @@ class PresentationGenerator:
                 "LLM presentation generation failed", exc_info=True
             )
             return None
-        content = getattr(response, "content", response)
-        if isinstance(content, list):
-            content = " ".join(str(item) for item in content)
-        return self._json_from_text(str(content))
+        if isinstance(response, PresentationOutput):
+            return response.model_dump(mode="json", exclude_none=True)
+        if isinstance(response, Mapping):
+            return dict(response)
+        return None
+
+    def _structured_model(
+        self, settings: RuntimePresentationSettings
+    ) -> Runnable[LanguageModelInput, BaseModel | dict[str, object]]:
+        if self._cached_model is None:
+            self._cached_model = self.llm_factory(
+                ModelConfig(
+                    provider="openai",
+                    model_name=settings.model_name,
+                    max_input_tokens=128_000,
+                    timeout_seconds=settings.timeout_seconds,
+                    temperature=0,
+                    supports_streaming=False,
+                )
+            )
+        return cast(
+            Runnable[LanguageModelInput, BaseModel | dict[str, object]],
+            self._cached_model.with_structured_output(
+                PresentationOutput, method="json_schema", strict=True
+            ),
+        )
 
     @classmethod
     def _prompt(cls, context: JsonObject) -> str:
@@ -141,11 +226,7 @@ class PresentationGenerator:
             "Create user-facing activity card metadata for this safe runtime event.\n"
             "Do not include raw IDs, protocol names, server IDs, JSON, markdown, or HTML.\n"
             "Do not decide permissions or button labels.\n"
-            "Return JSON with keys: title, summary, status_label, kind, group_key, "
-            "primary_entity, action_label, result_preview, debug_label, confidence.\n"
-            "status_label must be one of: Running, Waiting for permission, Done, Failed.\n"
-            "kind must be one of: progress, result, approval, auth, error.\n"
-            "result_preview is an array of rows with title, subtitle, url, badge.\n"
+            "Return only the structured fields requested by the schema.\n"
             f"Safe event context:\n{json.dumps(context, sort_keys=True, default=str)}"
         )
 
@@ -159,7 +240,8 @@ class PresentationGenerator:
         metadata: JsonObject,
         timeline_fields: Mapping[str, object],
     ) -> JsonObject:
-        return {
+        agent_intent = metadata.get("agent_intent_hint")
+        context: JsonObject = {
             "event_type": event_type.value,
             "source": source.value,
             "activity_kind": timeline_fields.get("activity_kind"),
@@ -172,6 +254,9 @@ class PresentationGenerator:
             "safe_metadata": cls._safe_json(metadata),
             "group_key": cls._group_key(payload, timeline_fields),
         }
+        if isinstance(agent_intent, str) and agent_intent.strip():
+            context["agent_intent_hint"] = agent_intent.strip()[:300]
+        return context
 
     @classmethod
     def _safe_json(cls, value: object) -> object:
@@ -394,22 +479,6 @@ class PresentationGenerator:
         span_id = timeline_fields.get("span_id")
         return span_id if isinstance(span_id, str) and span_id else None
 
-    @classmethod
-    def _json_from_text(cls, text: str) -> object:
-        stripped = text.strip()
-        if stripped.startswith("```"):
-            stripped = stripped.strip("`")
-            if stripped.lower().startswith("json"):
-                stripped = stripped[4:].strip()
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start >= 0 and end >= start:
-            stripped = stripped[start : end + 1]
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            return None
-
     @staticmethod
     def _validated(value: object) -> JsonObject | None:
         if not isinstance(value, Mapping):
@@ -444,6 +513,40 @@ class PresentationGenerator:
             return "Large result saved for internal inspection."
         words = value.replace("mcp_", "").replace("_com", "")
         return " ".join(words.split())
+
+    def _resolve_tool_template(self, payload: JsonObject) -> ToolDisplayTemplate | None:
+        if self.tool_display_lookup is None:
+            return None
+        tool_name = payload.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return None
+        try:
+            return self.tool_display_lookup(tool_name.strip())
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Tool display lookup failed for %s", tool_name, exc_info=True
+            )
+            return None
+
+    @classmethod
+    def _with_deterministic_fields(
+        cls,
+        validated: JsonObject,
+        *,
+        group_key: str | None,
+    ) -> JsonObject:
+        """Backfill deterministic group_key / debug_label / confidence on LLM output.
+
+        Status_label and kind come from the LLM (constrained by the schema) but
+        we always set group_key + the fixed presentation defaults so cards are
+        consistent regardless of model variance.
+        """
+
+        if group_key is not None and not validated.get("group_key"):
+            validated["group_key"] = group_key
+        validated.setdefault("debug_label", "Tool details")
+        validated.setdefault("confidence", "medium")
+        return validated
 
     @classmethod
     def _fallback(cls, context: JsonObject) -> JsonObject:
