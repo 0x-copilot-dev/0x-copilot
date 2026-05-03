@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 import logging
 from uuid import uuid4
@@ -39,6 +40,7 @@ class RuntimeWorker:
         run_handler: RuntimeRunHandler | None = None,
         cancel_handler: RuntimeCancelHandler | None = None,
         approval_handler: RuntimeApprovalHandler | None = None,
+        on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
@@ -51,6 +53,7 @@ class RuntimeWorker:
             persistence=persistence,
             event_store=event_store,
             settings=self.settings,
+            on_event_appended=on_event_appended,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=persistence,
@@ -60,6 +63,7 @@ class RuntimeWorker:
             persistence=persistence,
             event_store=event_store,
             settings=self.settings,
+            on_event_appended=on_event_appended,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

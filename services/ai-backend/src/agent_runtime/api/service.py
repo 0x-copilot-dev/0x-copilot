@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from starlette import status
@@ -65,6 +66,7 @@ class RuntimeApiService:
         queue: RuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         model_resolver: ModelConfigResolver | None = None,
+        on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
@@ -74,6 +76,7 @@ class RuntimeApiService:
         self.event_producer = RuntimeEventProducer(
             persistence=persistence,
             event_store=event_store,
+            on_event_appended=on_event_appended,
         )
 
     def list_models(self) -> ModelCatalogResponse:

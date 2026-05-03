@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
 from runtime_api.schemas import (
@@ -25,10 +25,12 @@ class RuntimeEventProducer:
         persistence: PersistencePort,
         event_store: EventStorePort,
         presentation_generator: PresentationGenerator | None = None,
+        on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
         self.presentation_generator = presentation_generator or PresentationGenerator()
+        self._on_event_appended = on_event_appended
 
     def append_api_event(
         self,
@@ -88,6 +90,8 @@ class RuntimeEventProducer:
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )
+        if self._on_event_appended is not None:
+            self._on_event_appended(run.run_id)
         return envelope
 
     def append_stream_event(
@@ -132,6 +136,8 @@ class RuntimeEventProducer:
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )
+        if self._on_event_appended is not None:
+            self._on_event_appended(run.run_id)
         return envelope
 
     def append_stream_events(

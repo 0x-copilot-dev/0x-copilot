@@ -15,6 +15,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.routes import RuntimeApiRouter
+from runtime_api.sse.event_bus import get_event_bus
 from runtime_worker import RuntimeWorker
 
 
@@ -54,13 +55,16 @@ class RuntimeApiAppFactory:
     def default_service(cls, app: FastAPI) -> RuntimeApiService:
         settings = RuntimeSettings.load()
         ports = RuntimeAdapterFactory.from_settings(settings)
+        event_bus = get_event_bus()
         app.state.runtime_ports = ports
         app.state.runtime_settings = settings
+        app.state.runtime_event_bus = event_bus
         return RuntimeApiService(
             persistence=ports.persistence,
             event_store=ports.event_store,
             queue=ports.queue,
             settings=settings,
+            on_event_appended=event_bus.notify_sync,
         )
 
     @classmethod
@@ -75,12 +79,14 @@ class RuntimeApiAppFactory:
             return
         if not settings.execution.start_in_process_worker:
             return
+        event_bus = getattr(app.state, "runtime_event_bus", None)
         worker = RuntimeWorker(
             persistence=ports.persistence,
             event_store=ports.event_store,
             queue=ports.queue,
             settings=settings,
             lock_seconds=settings.execution.worker_lock_seconds,
+            on_event_appended=event_bus.notify_sync if event_bus else None,
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(

@@ -13,6 +13,7 @@ from runtime_api.schemas import (
     RuntimeEventPresentationProjector,
 )
 from agent_runtime.api.service import RuntimeApiService
+from runtime_api.sse.event_bus import RuntimeEventBus
 
 
 class RuntimeSseAdapter:
@@ -20,6 +21,7 @@ class RuntimeSseAdapter:
 
     MEDIA_TYPE = "text/event-stream"
     TERMINAL_RUN_STATUSES = RuntimeApiService.TERMINAL_RUN_STATUSES
+    FALLBACK_POLL_SECONDS = 2.0
 
     @classmethod
     async def stream(
@@ -31,8 +33,9 @@ class RuntimeSseAdapter:
         run_id: str,
         after_sequence: int,
         follow: bool = False,
+        event_bus: RuntimeEventBus | None = None,
     ) -> AsyncIterator[str]:
-        """Yield replayed events, then poll until the run reaches a terminal state."""
+        """Yield replayed events, waking on push notifications from the event bus."""
 
         latest_sequence = after_sequence
         while True:
@@ -46,6 +49,8 @@ class RuntimeSseAdapter:
                 latest_sequence = max(latest_sequence, event.sequence_no)
                 yield cls.format_event(event)
             if replay.run_status in cls.TERMINAL_RUN_STATUSES:
+                if event_bus is not None:
+                    event_bus.unsubscribe(run_id)
                 return
             if not follow:
                 if not replay.events:
@@ -56,8 +61,13 @@ class RuntimeSseAdapter:
                         run_id=run_id,
                         sequence_no=max(1, replay.latest_sequence_no + 1),
                     )
+                if event_bus is not None:
+                    event_bus.unsubscribe(run_id)
                 return
-            await asyncio.sleep(0.25)
+            if event_bus is not None:
+                await event_bus.wait(run_id, timeout=cls.FALLBACK_POLL_SECONDS)
+            else:
+                await asyncio.sleep(cls.FALLBACK_POLL_SECONDS)
 
     @classmethod
     def heartbeat_event(
