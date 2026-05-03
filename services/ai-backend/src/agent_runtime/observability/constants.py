@@ -37,6 +37,30 @@ class Defaults:
     TRUNCATED = "[truncated]"
 
 
+class UserContentKeys:
+    """Payload keys whose values carry user-visible content.
+
+    Strings under these keys (and any nested values inside them) bypass the
+    `MAX_STREAM_FIELD_LENGTH` cap so chat replies, tool outputs, reasoning,
+    and approval payloads render in full. Sensitive-key and sensitive-value
+    scrubbing still apply.
+    """
+
+    KEYS = frozenset(
+        {
+            "message",
+            "delta",
+            "summary",
+            "reason",
+            "output",
+            "content",
+            "arguments",
+            "args",
+            "description",
+        }
+    )
+
+
 class Patterns:
     """Compiled validators for sensitive fields."""
 

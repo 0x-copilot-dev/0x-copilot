@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from agent_runtime.observability.constants import Defaults, Patterns
+from agent_runtime.observability.constants import Defaults, Patterns, UserContentKeys
 
 
 class ObservabilityRedactor:
@@ -15,7 +15,7 @@ class ObservabilityRedactor:
         cls,
         value: object,
         *,
-        max_string_length: int = Defaults.MAX_STREAM_FIELD_LENGTH,
+        max_string_length: int | None = Defaults.MAX_STREAM_FIELD_LENGTH,
     ) -> dict[str, object]:
         """Return a JSON-compatible mapping with sensitive values removed."""
 
@@ -41,7 +41,7 @@ class ObservabilityRedactor:
         cls,
         value: object,
         *,
-        max_string_length: int = Defaults.MAX_STREAM_FIELD_LENGTH,
+        max_string_length: int | None = Defaults.MAX_STREAM_FIELD_LENGTH,
     ) -> object:
         """Return a redacted JSON scalar, list, or object."""
 
@@ -64,16 +64,18 @@ class ObservabilityRedactor:
         key: str,
         value: object,
         *,
-        max_string_length: int,
+        max_string_length: int | None,
     ) -> object:
         if Patterns.SENSITIVE_KEY.search(key):
             return Defaults.REDACTED
+        if key in UserContentKeys.KEYS:
+            return cls.redact_json_value(value, max_string_length=None)
         return cls.redact_json_value(value, max_string_length=max_string_length)
 
     @classmethod
-    def _redact_string(cls, value: str, *, max_string_length: int) -> str:
+    def _redact_string(cls, value: str, *, max_string_length: int | None) -> str:
         if Patterns.SENSITIVE_VALUE.search(value):
             return Defaults.REDACTED
-        if len(value) <= max_string_length:
+        if max_string_length is None or len(value) <= max_string_length:
             return value
         return f"{value[:max_string_length]}{Defaults.TRUNCATED}"
