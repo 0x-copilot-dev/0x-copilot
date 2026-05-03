@@ -107,6 +107,10 @@ class ToolObservationIndexBuilder:
         expected_conversation_id: str,
     ) -> tuple[ToolObservation, ...]:
         calls_by_id: dict[str, JsonObject] = {}
+        # `task_id -> SUBAGENT_STARTED.payload`. Lets a SUBAGENT_COMPLETED carry
+        # the dispatched task description into the next-turn prompt context so
+        # the model can reuse the prior result instead of re-dispatching.
+        subagent_started_by_task_id: dict[str, JsonObject] = {}
         observations: list[ToolObservation] = []
         for event in events:
             if event.conversation_id != expected_conversation_id:
@@ -122,6 +126,24 @@ class ToolObservationIndexBuilder:
                 if call_id is not None:
                     calls_by_id[call_id] = event.payload
                 continue
+            if event.event_type is RuntimeApiEventType.SUBAGENT_STARTED:
+                task_id = StreamTextHelper.extract(
+                    event.payload.get(Keys.Field.TASK_ID)
+                )
+                if task_id is not None:
+                    subagent_started_by_task_id[task_id] = event.payload
+                continue
+            if event.event_type is RuntimeApiEventType.SUBAGENT_COMPLETED:
+                observation = self._observation_from_subagent_event(
+                    event=event,
+                    started_payload=subagent_started_by_task_id.get(
+                        StreamTextHelper.extract(event.payload.get(Keys.Field.TASK_ID))
+                        or ""
+                    ),
+                )
+                if observation is not None:
+                    observations.append(observation)
+                continue
             if event.event_type is not RuntimeApiEventType.TOOL_RESULT:
                 continue
             observation = self._observation_from_event(
@@ -134,6 +156,48 @@ class ToolObservationIndexBuilder:
             if observation is not None:
                 observations.append(observation)
         return tuple(observations)
+
+    def _observation_from_subagent_event(
+        self,
+        *,
+        event: RuntimeEventEnvelope,
+        started_payload: JsonObject | None,
+    ) -> ToolObservation | None:
+        if event.visibility is not RuntimeEventVisibility.USER:
+            return None
+        if event.redaction_state is RuntimeEventRedactionState.OFFLOADED:
+            return None
+        task_id = StreamTextHelper.extract(event.payload.get(Keys.Field.TASK_ID))
+        if task_id is None:
+            return None
+        subagent_name = (
+            StreamTextHelper.extract(event.payload.get(Keys.Field.SUBAGENT_NAME))
+            or "subagent"
+        )
+        result_preview = (
+            StreamTextHelper.extract(event.payload.get(Keys.Field.SUMMARY))
+            or StreamTextHelper.extract(event.summary)
+            or self._payload_preview(event.payload.get(Keys.Field.OUTPUT))
+        )
+        if result_preview is None:
+            return None
+        objective_preview: str | None = None
+        if started_payload is not None:
+            objective = StreamTextHelper.extract(
+                started_payload.get(Keys.Field.SUMMARY)
+            ) or StreamTextHelper.extract(started_payload.get("description"))
+            if objective:
+                objective_preview = self._truncate(objective, self.max_args_chars)
+        return ToolObservation(
+            observation_id=f"obs_{event.event_id}",
+            run_id=event.run_id,
+            call_id=task_id,
+            tool_name=f"subagent:{subagent_name}",
+            args_preview=objective_preview,
+            result_preview=self._truncate(result_preview, self.max_preview_chars),
+            payload=event.payload,
+            created_at=event.created_at.isoformat(),
+        )
 
     def _observation_from_event(
         self,
@@ -181,11 +245,14 @@ class ToolObservationIndexBuilder:
         if not observations:
             return None
         lines = [
-            "Prior tool observations from earlier turns are available below.",
-            "Use them when directly relevant. Call tools again when the user asks "
-            "for fresh/current/latest data or when these summaries lack detail.",
-            "Use load_prior_tool_result with an observation_id only when you need "
-            "the full persisted redacted result.",
+            "Prior tool and subagent observations from earlier turns are "
+            "available below.",
+            "Use them when directly relevant. Call tools again when the user "
+            "asks for fresh/current/latest data or when these summaries lack "
+            "detail. Reuse a prior subagent summary instead of re-dispatching "
+            "the same research unless the user explicitly asks for fresh work.",
+            "Use load_prior_tool_result with an observation_id only when you "
+            "need the full persisted redacted result.",
             "",
             "Observations:",
         ]

@@ -39,6 +39,16 @@ class StreamUpdateProcessor:
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
         self._subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]] = set()
+        # `(run_id, supervisor_call_id) -> subagent_name`. Populated on SUBAGENT_STARTED.
+        self._subagent_name_by_call_id: dict[tuple[str, str], str] = {}
+        # `(run_id, subgraph_task_id) -> supervisor_call_id`. Populated on first child
+        # tool event seen for a subgraph; the LangGraph subgraph task id is a UUID
+        # that differs from the supervisor's `task` tool call_id, so we link them
+        # FIFO from `_unlinked_subagent_call_ids`.
+        self._subagent_call_id_by_subgraph_id: dict[tuple[str, str], str] = {}
+        # FIFO of supervisor call_ids whose subagents have started but whose
+        # subgraph task ids are not yet linked. Per-run.
+        self._unlinked_subagent_call_ids: dict[str, list[str]] = {}
 
     async def process(
         self,
@@ -71,13 +81,88 @@ class StreamUpdateProcessor:
             if key in self._subagent_lifecycle_keys:
                 return
             self._subagent_lifecycle_keys.add(key)
+        self._track_subagent_lifecycle(
+            run_id=run.run_id,
+            event_type=event_type,
+            payload=payload,
+        )
+        subagent_id = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
         await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=event_type,
             payload=payload,
             metadata=metadata,
+            subagent_id=subagent_id,
         )
+
+    def _track_subagent_lifecycle(
+        self,
+        *,
+        run_id: str,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> None:
+        """Maintain the call_id ↔ subagent_name ↔ subgraph_task_id linkage."""
+
+        call_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
+        if call_id is None:
+            return
+        if event_type is RuntimeApiEventType.SUBAGENT_STARTED:
+            subagent_name = StreamTextHelper.extract(
+                payload.get(self._Fields.SUBAGENT_NAME)
+            )
+            if subagent_name is None:
+                return
+            self._subagent_name_by_call_id[(run_id, call_id)] = subagent_name
+            queue = self._unlinked_subagent_call_ids.setdefault(run_id, [])
+            if call_id not in queue:
+                queue.append(call_id)
+            return
+        if event_type is RuntimeApiEventType.SUBAGENT_COMPLETED:
+            queue = self._unlinked_subagent_call_ids.get(run_id)
+            if queue is not None and call_id in queue:
+                queue.remove(call_id)
+
+    def subagent_call_id_for_subgraph(
+        self,
+        *,
+        run_id: str,
+        subgraph_task_id: str | None,
+    ) -> str | None:
+        """Resolve a LangGraph subagent subgraph task id to the supervisor `task` call_id.
+
+        The first child tool event in a subgraph claims the oldest unlinked
+        supervisor call_id; subsequent events for the same subgraph reuse the
+        established link. Returns None when no active subagent matches.
+        """
+
+        if subgraph_task_id is None:
+            return None
+        existing = self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
+        if existing is None:
+            queue = self._unlinked_subagent_call_ids.get(run_id)
+            if not queue:
+                return None
+            existing = queue.pop(0)
+            self._subagent_call_id_by_subgraph_id[(run_id, subgraph_task_id)] = existing
+        return existing
+
+    def subagent_id_for_subgraph(
+        self,
+        *,
+        run_id: str,
+        subgraph_task_id: str | None,
+    ) -> str | None:
+        """Resolve a subgraph task id to the active subagent's `subagent_name`."""
+
+        call_id = self.subagent_call_id_for_subgraph(
+            run_id=run_id,
+            subgraph_task_id=subgraph_task_id,
+        )
+        if call_id is None:
+            return None
+        return self._subagent_name_by_call_id.get((run_id, call_id))
 
     async def append_subagent_lifecycle_events(
         self,

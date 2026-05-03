@@ -440,6 +440,155 @@ def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
     )
 
 
+async def test_subagent_id_for_subgraph_links_first_child_event_to_started_call() -> (
+    None
+):
+    """First tool event in a subagent's subgraph claims the oldest unlinked call_id."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_supervisor_abc",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+
+    # First child tool event in this subgraph (LangGraph generates a UUID-style id)
+    resolved = update_processor.subagent_id_for_subgraph(
+        run_id=run.run_id,
+        subgraph_task_id="3af7da77-f445-1753-7487-5b703bd06945",
+    )
+    assert resolved == "general-purpose"
+
+    # Subsequent child events for the same subgraph reuse the link.
+    again = update_processor.subagent_id_for_subgraph(
+        run_id=run.run_id,
+        subgraph_task_id="3af7da77-f445-1753-7487-5b703bd06945",
+    )
+    assert again == "general-purpose"
+
+    # SUBAGENT_STARTED itself was emitted with the explicit subagent_id kwarg.
+    started_events = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_STARTED
+    ]
+    assert len(started_events) == 1
+    assert started_events[0]["subagent_id"] == "general-purpose"
+
+
+async def test_subagent_id_for_subgraph_returns_none_without_active_subagent() -> None:
+    producer = object()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+
+    assert (
+        update_processor.subagent_id_for_subgraph(
+            run_id="run_123", subgraph_task_id="some-uuid"
+        )
+        is None
+    )
+    assert (
+        update_processor.subagent_id_for_subgraph(
+            run_id="run_123", subgraph_task_id=None
+        )
+        is None
+    )
+
+
+async def test_subagent_id_for_subgraph_links_concurrent_subagents_in_fifo_order() -> (
+    None
+):
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    for call_id, name in [
+        ("call_first", "researcher"),
+        ("call_second", "writer"),
+    ]:
+        await update_processor.append_task_lifecycle_event(
+            run=run,
+            event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+            payload={
+                "task_id": call_id,
+                "subagent_name": name,
+                "status": "queued",
+            },
+            metadata={},
+        )
+
+    first_subgraph = update_processor.subagent_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="subgraph-uuid-1"
+    )
+    second_subgraph = update_processor.subagent_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="subgraph-uuid-2"
+    )
+    assert first_subgraph == "researcher"
+    assert second_subgraph == "writer"
+
+
+async def test_tool_event_inside_subagent_carries_subagent_id() -> None:
+    """Tool events emitted while a subagent is active include `subagent_id`."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    # Supervisor dispatches a subagent; SUBAGENT_STARTED is recorded.
+    await orchestrator.update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_supervisor_abc",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+
+    # A tool fires inside the subagent's subgraph. Namespace carries the
+    # LangGraph subgraph task id under the `tools:` prefix.
+    namespace = StreamNamespace.from_value(("tools:3af7da77-f445",))
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "ai",
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "web_search",
+                    "id": "call_websearch_1",
+                    "index": 0,
+                    "args": {"query": "AI agents"},
+                }
+            ],
+        },
+        delta=None,
+    )
+
+    tool_events = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    ]
+    assert len(tool_events) == 1
+    event = tool_events[0]
+    assert event["payload"]["tool_name"] == "web_search"
+    # parent_task_id is the supervisor's `task` call_id (not the raw subgraph
+    # UUID), so the frontend can group child tool events under the
+    # `subagent_started` card via a shared identifier.
+    assert event["parent_task_id"] == "call_supervisor_abc"
+    assert event["subagent_id"] == "general-purpose"
+
+
 def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
     payload = StreamUpdateProcessor.task_tool_call_payload(
         call_id="task_report",

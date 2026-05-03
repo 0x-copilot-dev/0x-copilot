@@ -407,6 +407,7 @@ export interface CreateRunResponse {
   stream_url: string;
   events_url: string;
   created_at: string;
+  prior_run_ids?: string[];
 }
 
 export interface RunStatus {

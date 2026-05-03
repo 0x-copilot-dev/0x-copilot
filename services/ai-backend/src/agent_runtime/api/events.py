@@ -83,6 +83,7 @@ class RuntimeEventProducer:
         payload: JsonObject | None = None,
         metadata: JsonObject | None = None,
         parent_task_id: str | None = None,
+        subagent_id: str | None = None,
         summary: str | None = None,
         status: str | None = None,
     ) -> RuntimeEventEnvelope:
@@ -99,6 +100,7 @@ class RuntimeEventProducer:
             parent_task_id=parent_task_id,
             payload=safe_payload,
             metadata=safe_metadata,
+            subagent_id=subagent_id,
         )
         if summary is not None and (safe_summary := summary.strip()):
             timeline_fields["summary"] = safe_summary

@@ -17,6 +17,7 @@ from runtime_api.schemas import (
 )
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
+from runtime_worker.stream_subagents import StreamUpdateProcessor
 
 
 @dataclass
@@ -60,7 +61,7 @@ class StreamMessageProcessor:
     def __init__(
         self,
         event_producer: RuntimeEventProducer,
-        update_processor: object,
+        update_processor: StreamUpdateProcessor,
     ) -> None:
         self.event_producer = event_producer
         self._update_processor = update_processor
@@ -78,7 +79,18 @@ class StreamMessageProcessor:
         delta: str | None,
     ) -> None:
         metadata = namespace.metadata("messages")
-        parent_task_id = namespace.subagent_task_id
+        # The LangGraph subgraph task id is an internal UUID; resolve it to the
+        # supervisor's `task` tool call_id so child events nest under the
+        # subagent_started card via a shared identifier.
+        subgraph_task_id = namespace.subagent_task_id
+        parent_task_id = self._update_processor.subagent_call_id_for_subgraph(
+            run_id=run.run_id,
+            subgraph_task_id=subgraph_task_id,
+        )
+        subagent_id = self._update_processor.subagent_id_for_subgraph(
+            run_id=run.run_id,
+            subgraph_task_id=subgraph_task_id,
+        )
 
         for tool_call in StreamMessageParser.tool_call_chunks(message):
             await self.append_tool_call_chunk_event(
@@ -87,6 +99,7 @@ class StreamMessageProcessor:
                 tool_call=tool_call,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
             )
 
         if StreamMessageParser.is_tool_result_message(message):
@@ -116,6 +129,7 @@ class StreamMessageProcessor:
                 payload=payload,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
             )
             completed_payload = {
                 Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
@@ -136,6 +150,7 @@ class StreamMessageProcessor:
                 payload=completed_payload,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
             )
 
     async def append_tool_call_chunk_event(
@@ -146,6 +161,7 @@ class StreamMessageProcessor:
         tool_call: object,
         metadata: JsonObject,
         parent_task_id: str | None,
+        subagent_id: str | None = None,
     ) -> None:
         state = self.tool_call_state(run.run_id, namespace, tool_call)
         if state.tool_name == Values.Tool.TASK:
@@ -177,6 +193,7 @@ class StreamMessageProcessor:
             payload=payload,
             metadata=metadata,
             parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
         )
         state.started_emitted = True
 

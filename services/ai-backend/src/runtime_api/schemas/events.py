@@ -128,12 +128,15 @@ class RuntimeEventPresentationProjector:
         parent_task_id: str | None,
         payload: JsonObject,
         metadata: JsonObject,
+        subagent_id: str | None = None,
     ) -> dict[str, object]:
         """Return additive UI timeline fields for an event envelope or draft."""
 
         task_id = cls._text(payload.get(Keys.Field.TASK_ID)) or parent_task_id
-        subagent_id = cls._text(payload.get(Keys.Field.SUBAGENT_NAME)) or cls._text(
-            payload.get(Keys.Field.SUBAGENT_ID)
+        subagent_id = (
+            cls._text(subagent_id)
+            or cls._text(payload.get(Keys.Field.SUBAGENT_NAME))
+            or cls._text(payload.get(Keys.Field.SUBAGENT_ID))
         )
         span_id = cls._span_id_for(
             event_type=event_type, task_id=task_id, payload=payload

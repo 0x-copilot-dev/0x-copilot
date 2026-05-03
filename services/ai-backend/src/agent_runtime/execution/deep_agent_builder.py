@@ -29,6 +29,19 @@ _WEB_HARNESS_PROFILE_KEYS = (
     "google_genai",
     "openai",
 )
+# Layered onto every Deep Agents subagent prompt (and the supervisor) to keep
+# tool sequences bounded and surface intermediate progress. Without this the
+# auto-injected `general-purpose` subagent runs Deep Agents' default prompt,
+# which has no checkpoint discipline and tends to chain web_search calls
+# indefinitely on broad research tasks.
+WEB_SUBAGENT_CHECKPOINT_SUFFIX = (
+    "After every 2 to 3 tool calls, pause and emit a short progress "
+    "checkpoint as a plain-text message before calling another tool. The "
+    "checkpoint should briefly state what you have learned so far, what is "
+    "still missing or uncertain, and whether you will call more tools or "
+    "stop and return your final answer. Do not chain more than 3 tool "
+    "calls without recording this checkpoint."
+)
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 
@@ -40,7 +53,10 @@ def _ensure_web_harness_profiles_registered() -> None:
     if _web_harness_profiles_registered:
         return
 
-    profile = HarnessProfile(excluded_tools=WEB_EXCLUDED_DEEP_AGENT_TOOLS)
+    profile = HarnessProfile(
+        system_prompt_suffix=WEB_SUBAGENT_CHECKPOINT_SUFFIX,
+        excluded_tools=WEB_EXCLUDED_DEEP_AGENT_TOOLS,
+    )
     for profile_key in _WEB_HARNESS_PROFILE_KEYS:
         register_harness_profile(profile_key, profile)
     _web_harness_profiles_registered = True

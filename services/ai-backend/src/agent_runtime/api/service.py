@@ -28,6 +28,7 @@ from runtime_api.schemas import (
     CreateRunResponse,
     HistoryDeletionResponse,
     MessageListResponse,
+    MessageRecord,
     ModelCatalogItem,
     ModelCatalogResponse,
     RuntimeApiEventType,
@@ -294,8 +295,16 @@ class RuntimeApiService:
                     runtime_context=run.runtime_context,
                 )
             )
+        prior_run_ids = await self._prior_run_ids_for_chain(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            current_run_id=run.run_id,
+            user_message=user_message,
+        )
         return self._create_run_response(
-            run=run, user_message_id=user_message.message_id
+            run=run,
+            user_message_id=user_message.message_id,
+            prior_run_ids=prior_run_ids,
         )
 
     async def delete_user_history(
@@ -529,7 +538,11 @@ class RuntimeApiService:
 
     @classmethod
     def _create_run_response(
-        cls, *, run: RunRecord, user_message_id: str
+        cls,
+        *,
+        run: RunRecord,
+        user_message_id: str,
+        prior_run_ids: tuple[str, ...] = (),
     ) -> CreateRunResponse:
         return CreateRunResponse(
             run_id=run.run_id,
@@ -540,7 +553,45 @@ class RuntimeApiService:
             stream_url=f"/v1/agent/runs/{run.run_id}/stream?after_sequence=0",
             events_url=f"/v1/agent/runs/{run.run_id}/events?after_sequence=0",
             created_at=run.created_at,
+            prior_run_ids=prior_run_ids,
         )
+
+    async def _prior_run_ids_for_chain(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        current_run_id: str,
+        user_message: MessageRecord,
+    ) -> tuple[str, ...]:
+        """Return distinct prior run ids reachable through the parent chain.
+
+        The chain mirrors ``RuntimeRunHandler._selected_message_chain`` so the
+        ids surfaced here match the runs whose events feed the next turn's
+        prompt context. Surfacing them keeps debugging local — on-call can
+        replay just the runs that shaped a given turn instead of scanning the
+        whole conversation.
+        """
+
+        records = await self.persistence.list_messages(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            limit=200,
+        )
+        records_by_id = {record.message_id: record for record in records}
+        seen: set[str] = set()
+        ordered: list[str] = []
+        cursor: str | None = user_message.parent_message_id
+        while cursor is not None:
+            record = records_by_id.get(cursor)
+            if record is None:
+                break
+            run_id = record.run_id
+            if run_id is not None and run_id != current_run_id and run_id not in seen:
+                seen.add(run_id)
+                ordered.append(run_id)
+            cursor = record.parent_message_id
+        return tuple(reversed(ordered))
 
     def _request_with_runtime_context(
         self, request: CreateRunRequest

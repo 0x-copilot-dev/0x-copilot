@@ -104,6 +104,61 @@ class _TestHelpers:
         return response.run_id
 
     @staticmethod
+    def append_subagent_observation(
+        service: RuntimeApiService,
+        store: InMemoryRuntimeApiStore,
+        *,
+        run_id: str,
+        subagent_name: str = "general-purpose",
+        task_id: str = "call_subagent_supervisor_123",
+        objective: str = (
+            "Research the launch risks for next quarter and report sources."
+        ),
+        completion_summary: str = (
+            "Top three launch risks: payments outage, auth migration, "
+            "compliance review with sources cited."
+        ),
+        visibility: RuntimeEventVisibility | None = None,
+        redaction_state: RuntimeEventRedactionState | None = None,
+    ) -> None:
+        started_payload: dict[str, object] = {
+            "task_id": task_id,
+            "subagent_name": subagent_name,
+            "status": "queued",
+            "summary": objective,
+        }
+        if visibility is not None:
+            started_payload["visibility"] = visibility.value
+        if redaction_state is not None:
+            started_payload["redaction_state"] = redaction_state.value
+        asyncio.run(
+            service.event_producer.append_api_event(
+                run=store.runs[run_id],
+                source=StreamEventSource.SUBAGENT,
+                event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+                payload=started_payload,
+            )
+        )
+        completed_payload: dict[str, object] = {
+            "task_id": task_id,
+            "subagent_name": subagent_name,
+            "status": "completed",
+            "summary": completion_summary,
+        }
+        if visibility is not None:
+            completed_payload["visibility"] = visibility.value
+        if redaction_state is not None:
+            completed_payload["redaction_state"] = redaction_state.value
+        asyncio.run(
+            service.event_producer.append_api_event(
+                run=store.runs[run_id],
+                source=StreamEventSource.SUBAGENT,
+                event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                payload=completed_payload,
+            )
+        )
+
+    @staticmethod
     def append_tool_observation(
         service: RuntimeApiService,
         store: InMemoryRuntimeApiStore,
@@ -465,11 +520,159 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
         "user",
     ]
     context = messages[-2]["content"]
-    assert "Prior tool observations from earlier turns" in context
+    assert "Prior tool and subagent observations from earlier turns" in context
     assert "load_prior_tool_result" in context
     assert "jira_search" in context
     assert "AUTH-123" in context
     assert "Which one is highest priority?" == messages[-1]["content"]
+
+
+def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
+    """The run-create response surfaces prior run ids reached via the parent
+    chain so on-call can correlate a turn back to the runs whose events
+    shaped its prompt context."""
+
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
+        )
+    )
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="What are my open Jira blockers?",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+    )
+    assert first.prior_run_ids == ()
+    first_assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_first",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="AUTH-123 is the highest priority blocker.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    second = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="And the medium-priority ones?",
+                parent_message_id=first_assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+    )
+
+    assert second.prior_run_ids == (first.run_id,)
+
+
+def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
+    """SUBAGENT_COMPLETED events from prior turns must surface in the next turn's
+    prompt context so the model can reuse the subagent's research instead of
+    re-dispatching."""
+
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create()
+    service = RuntimeApiService(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+    )
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
+        )
+    )
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Call a research subagent on AI agents.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+    )
+    _TestHelpers.append_subagent_observation(
+        service,
+        store,
+        run_id=first.run_id,
+        subagent_name="general-purpose",
+        objective="Research AI agents and report sources.",
+        completion_summary=(
+            "AI agents combine ReAct planning, tool use, and memory; key risks "
+            "are hallucinations and tool misuse. Sources: openai.com, anthropic.com."
+        ),
+    )
+    assistant = store.append_message(
+        MessageRecord(
+            message_id="assistant_with_subagent_summary",
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            run_id=first.run_id,
+            role=MessageRole.ASSISTANT,
+            content_text="Here is the report on AI agents.",
+            parent_message_id=first.user_message_id,
+        )
+    )
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Based on the prior research, what are the top 3 risks?",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+    )
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=settings,
+    )
+    messages = asyncio.run(
+        handler._messages_for_run(
+            store.run_commands[-1],
+            store.runs[follow_up.run_id],
+        )
+    )
+
+    context = messages[-2]["content"]
+    assert "Prior tool and subagent observations from earlier turns" in context
+    assert "subagent:general-purpose" in context
+    assert "hallucinations and tool misuse" in context
+    assert "Research AI agents" in context
+    assert "Reuse a prior subagent summary instead of re-dispatching" in context
 
 
 def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:

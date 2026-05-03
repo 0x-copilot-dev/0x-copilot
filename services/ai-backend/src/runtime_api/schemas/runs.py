@@ -317,6 +317,10 @@ class CreateRunResponse(RuntimeContract):
     stream_url: str
     events_url: str
     created_at: datetime
+    # Prior run ids in this conversation chain whose events feed cross-turn
+    # context. Surfaced on the response so on-call can correlate a turn back
+    # to the runs whose tool/subagent observations shaped its prompt.
+    prior_run_ids: tuple[str, ...] = ()
 
 
 class RunStatusResponse(RuntimeContract):
