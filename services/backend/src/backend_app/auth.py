@@ -23,12 +23,6 @@ class BackendServiceAuthenticator:
     """Class-scoped service authentication for backend routes."""
 
     @classmethod
-    def require_service_request(cls, request: Request) -> None:
-        """Require the shared service token when configured or in production."""
-
-        cls._verify_service_token(request)
-
-    @classmethod
     def internal_scoped_identity(
         cls, request: Request, *, org_id: str, user_id: str
     ) -> ScopedIdentity:

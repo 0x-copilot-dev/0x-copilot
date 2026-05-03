@@ -26,6 +26,7 @@ from runtime_api.schemas import (
     RunStatusResponse,
 )
 from runtime_api.sse.adapter import RuntimeSseAdapter
+from runtime_api.sse.event_bus import RuntimeEventBus
 
 
 class RuntimeApiRoutes:
@@ -149,7 +150,6 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
-        follow: bool = Query(True),
     ) -> RuntimeEventReplayResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).replay_events(
@@ -170,6 +170,9 @@ class RuntimeApiRoutes:
         follow: bool = Query(True),
     ) -> StreamingResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        event_bus: RuntimeEventBus | None = getattr(
+            request.app.state, "runtime_event_bus", None
+        )
         return StreamingResponse(
             RuntimeSseAdapter.stream(
                 service=cls.service(request),
@@ -178,6 +181,7 @@ class RuntimeApiRoutes:
                 run_id=run_id,
                 after_sequence=after_sequence,
                 follow=follow,
+                event_bus=event_bus,
             ),
             media_type=RuntimeSseAdapter.MEDIA_TYPE,
         )

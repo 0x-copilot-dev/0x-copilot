@@ -21,13 +21,6 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 
 
-class EmptyToolRegistry:
-    """Tool registry used until production connector adapters are wired."""
-
-    def list_available_tools(self, _context: object) -> Sequence[object]:
-        return ()
-
-
 class WebSearchToolRegistry:
     """Default local tools available to Deep Agents runtime runs."""
 

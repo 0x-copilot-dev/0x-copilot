@@ -127,11 +127,6 @@ class EventStorePort(Protocol):
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number."""
 
-    def append_events(
-        self, events: Sequence[RuntimeEventDraft]
-    ) -> Sequence[RuntimeEventEnvelope]:
-        """Append multiple events in order."""
-
     def list_events_after(
         self,
         *,
