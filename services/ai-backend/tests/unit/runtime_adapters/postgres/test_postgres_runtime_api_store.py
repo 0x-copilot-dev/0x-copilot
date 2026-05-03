@@ -59,13 +59,15 @@ class TestPostgresAdapterRunLifecycle:
                 assistant_id="assistant_test",
             )
         )
-        run = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id=conversation.org_id,
-                user_id=conversation.user_id,
-                user_input="hi",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        run = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id=conversation.org_id,
+                    user_id=conversation.user_id,
+                    user_input="hi",
+                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
 
@@ -155,13 +157,15 @@ class TestPostgresAdapterSyntheticParent:
                 assistant_id="assistant_test",
             )
         )
-        first = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id=conversation.org_id,
-                user_id=conversation.user_id,
-                user_input="Remember this Postgres detail.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        first = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id=conversation.org_id,
+                    user_id=conversation.user_id,
+                    user_input="Remember this Postgres detail.",
+                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
         assistant = store.append_message(
@@ -176,14 +180,16 @@ class TestPostgresAdapterSyntheticParent:
             )
         )
 
-        follow_up = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id=conversation.org_id,
-                user_id=conversation.user_id,
-                user_input="What detail did I ask you to remember?",
-                parent_message_id=f"assistant-{first.run_id}",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        follow_up = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id=conversation.org_id,
+                    user_id=conversation.user_id,
+                    user_input="What detail did I ask you to remember?",
+                    parent_message_id=f"assistant-{first.run_id}",
+                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
         messages = service.list_messages(

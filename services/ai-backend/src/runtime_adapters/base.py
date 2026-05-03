@@ -6,7 +6,7 @@ and ensure consistent behaviour across backends.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from runtime_api.schemas import (
@@ -20,6 +20,9 @@ from runtime_api.schemas import (
 MessageLookupFn = Callable[[str], MessageRecord | None]
 LatestMessageIdFn = Callable[[str, str], str | None]
 LatestAssistantForRunFn = Callable[[str, str, str], str | None]
+AsyncMessageLookupFn = Callable[[str], Awaitable[MessageRecord | None]]
+AsyncLatestMessageIdFn = Callable[[str, str], Awaitable[str | None]]
+AsyncLatestAssistantForRunFn = Callable[[str, str, str], Awaitable[str | None]]
 
 
 class _Fields:
@@ -278,4 +281,128 @@ class RuntimeAdapterHelpers:
             metadata.get(_Fields.MESSAGE)
             or metadata.get(_Fields.REASON)
             or "Approve this runtime action."
+        )
+
+    # ------------------------------------------------------------------
+    # Async siblings of the run-message helpers used by AsyncPostgresRuntimeApiStore.
+    # The shape mirrors the sync helpers above; the only difference is that
+    # the storage-lookup callbacks are awaitable.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def aregenerated_user_message(
+        message_id: str,
+        *,
+        aget_message: AsyncMessageLookupFn,
+    ) -> MessageRecord | None:
+        """Async sibling of :meth:`regenerated_user_message`."""
+
+        message = await aget_message(message_id)
+        if message is None:
+            return None
+        if message.role == MessageRole.USER:
+            return message
+        if message.parent_message_id is None:
+            return None
+        parent = await aget_message(message.parent_message_id)
+        if parent is None or parent.role != MessageRole.USER:
+            return None
+        return parent
+
+    @classmethod
+    async def areal_assistant_message_id_for_synthetic_parent(
+        cls,
+        *,
+        parent_message_id: str,
+        org_id: str,
+        conversation_id: str,
+        afind_latest_assistant_for_run: AsyncLatestAssistantForRunFn,
+    ) -> str | None:
+        """Async sibling of :meth:`real_assistant_message_id_for_synthetic_parent`."""
+
+        if not parent_message_id.startswith(cls.SYNTHETIC_ASSISTANT_MESSAGE_PREFIX):
+            return None
+        run_id = parent_message_id.removeprefix(cls.SYNTHETIC_ASSISTANT_MESSAGE_PREFIX)
+        return await afind_latest_assistant_for_run(org_id, conversation_id, run_id)
+
+    @classmethod
+    async def aparent_message_id_for_run_request(
+        cls,
+        *,
+        request: CreateRunRequest,
+        org_id: str,
+        conversation_id: str,
+        aget_latest_message_id: AsyncLatestMessageIdFn,
+        afind_latest_assistant_for_run: AsyncLatestAssistantForRunFn,
+    ) -> str | None:
+        """Async sibling of :meth:`parent_message_id_for_run_request`."""
+
+        parent_message_id = request.parent_message_id
+        if parent_message_id is None:
+            return await aget_latest_message_id(org_id, conversation_id)
+        resolved = await cls.areal_assistant_message_id_for_synthetic_parent(
+            parent_message_id=parent_message_id,
+            org_id=org_id,
+            conversation_id=conversation_id,
+            afind_latest_assistant_for_run=afind_latest_assistant_for_run,
+        )
+        return resolved or parent_message_id
+
+    @classmethod
+    async def amessage_for_run_request(
+        cls,
+        *,
+        request: CreateRunRequest,
+        conversation: ConversationRecord,
+        aget_message: AsyncMessageLookupFn,
+        aget_latest_message_id: AsyncLatestMessageIdFn,
+        afind_latest_assistant_for_run: AsyncLatestAssistantForRunFn,
+        run_id_for_message: str | None = None,
+    ) -> MessageRecord:
+        """Async sibling of :meth:`message_for_run_request`."""
+
+        context = request.runtime_context
+        if request.regenerate_from_message_id is not None:
+            regen = await cls.aregenerated_user_message(
+                request.regenerate_from_message_id,
+                aget_message=aget_message,
+            )
+            if regen is not None:
+                return regen
+        parent_id = await cls.aparent_message_id_for_run_request(
+            request=request,
+            org_id=conversation.org_id,
+            conversation_id=conversation.conversation_id,
+            aget_latest_message_id=aget_latest_message_id,
+            afind_latest_assistant_for_run=afind_latest_assistant_for_run,
+        )
+        return MessageRecord(
+            conversation_id=conversation.conversation_id,
+            org_id=conversation.org_id,
+            run_id=run_id_for_message,
+            role=MessageRole.USER,
+            content_text=request.user_input,
+            content_format=request.content_format,
+            content=tuple(
+                part.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                for part in request.content
+            ),
+            attachments=tuple(
+                attachment.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                for attachment in request.attachments
+            ),
+            quote=request.quote_payload(),
+            metadata=cls.message_metadata(request),
+            parent_message_id=parent_id,
+            source_message_id=request.source_message_id,
+            branch_id=request.branch_id,
+            trace_id=context.trace_id,
         )

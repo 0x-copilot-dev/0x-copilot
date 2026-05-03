@@ -114,9 +114,11 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     safe_error_code TEXT,
     safe_error_message TEXT
 );
-ALTER TABLE agent_messages
-    ADD CONSTRAINT fk_agent_messages_run
-    FOREIGN KEY (run_id) REFERENCES agent_runs(id);
+DO $$ BEGIN
+    ALTER TABLE agent_messages
+        ADD CONSTRAINT fk_agent_messages_run
+        FOREIGN KEY (run_id) REFERENCES agent_runs(id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency
     ON agent_runs (org_id, user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
@@ -292,9 +294,11 @@ CREATE TABLE IF NOT EXISTS runtime_approval_requests (
     created_at TIMESTAMPTZ NOT NULL,
     decided_at TIMESTAMPTZ
 );
-ALTER TABLE runtime_tool_invocations
-    ADD CONSTRAINT fk_runtime_tool_invocations_approval
-    FOREIGN KEY (approval_id) REFERENCES runtime_approval_requests(id);
+DO $$ BEGIN
+    ALTER TABLE runtime_tool_invocations
+        ADD CONSTRAINT fk_runtime_tool_invocations_approval
+        FOREIGN KEY (approval_id) REFERENCES runtime_approval_requests(id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS idx_runtime_approval_requests_org_user_status_created
     ON runtime_approval_requests (org_id, requested_by_user_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_approval_requests_org_run_status
