@@ -1,5 +1,12 @@
+html,
+body,
 #root {
-  min-height: 100vh;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
 }
 
 h1,
@@ -546,7 +553,6 @@ p {
   font-size: 0.875rem;
   grid-template-columns: 16rem minmax(0, 1fr);
   height: 100dvh;
-  min-height: 100vh;
   overflow: hidden;
 }
 
@@ -743,8 +749,9 @@ p {
   overflow: hidden;
 }
 
-.aui-thread-root,
-.aui-thread-viewport {
+.aui-thread-root {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
@@ -752,16 +759,18 @@ p {
 .aui-thread-viewport {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: var(--space-xl);
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-xl) max(var(--space-xl), calc((100% - 48rem) / 2));
 }
 
 .aui-thread-footer {
-  margin-top: auto;
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
+  flex-shrink: 0;
+  background: var(--color-bg);
+  padding: var(--space-sm) max(var(--space-xl), calc((100% - 48rem) / 2))
+    var(--space-md);
 }
 
 .aui-planning-indicator {
@@ -2133,14 +2142,24 @@ p {
 
 .aui-scroll-bottom {
   align-self: center;
+  position: sticky;
+  bottom: var(--space-md);
+  margin-top: auto;
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   cursor: pointer;
   font: inherit;
-  margin: 0 auto var(--space-sm);
   padding: 0.35rem 0.7rem;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+  transition: opacity 150ms ease;
+  z-index: 2;
+}
+
+.aui-scroll-bottom[disabled] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-settings-panel header,

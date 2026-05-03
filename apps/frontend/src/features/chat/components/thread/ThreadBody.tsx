@@ -95,22 +95,22 @@ export function ThreadBody({
             visible={runIndicator.visible}
           />
         ) : null}
-        <ThreadPrimitive.ViewportFooter className="aui-thread-footer">
-          <ThreadPrimitive.ScrollToBottom
-            className="aui-scroll-bottom"
-            title="Scroll to bottom"
-          >
-            Scroll to bottom
-          </ThreadPrimitive.ScrollToBottom>
-          <AssistantComposer
-            connectors={connectors}
-            skills={skills}
-            onOpenMcpSettings={onOpenMcpSettings}
-            onOpenSkillsSettings={onOpenSkillsSettings}
-            onShowConnectors={onShowConnectors}
-          />
-        </ThreadPrimitive.ViewportFooter>
+        <ThreadPrimitive.ScrollToBottom
+          className="aui-scroll-bottom"
+          title="Scroll to bottom"
+        >
+          Scroll to bottom
+        </ThreadPrimitive.ScrollToBottom>
       </ThreadPrimitive.Viewport>
+      <div className="aui-thread-footer">
+        <AssistantComposer
+          connectors={connectors}
+          skills={skills}
+          onOpenMcpSettings={onOpenMcpSettings}
+          onOpenSkillsSettings={onOpenSkillsSettings}
+          onShowConnectors={onShowConnectors}
+        />
+      </div>
     </ThreadPrimitive.Root>
   );
 }
