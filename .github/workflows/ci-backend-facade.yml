@@ -1,0 +1,59 @@
+name: ci-backend-facade
+
+on:
+  pull_request:
+    paths:
+      - "services/backend-facade/**"
+      - "packages/service-contracts/**"
+      - ".github/workflows/ci-backend-facade.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/backend-facade/**"
+      - "packages/service-contracts/**"
+      - ".github/workflows/ci-backend-facade.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-backend-facade-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/backend-facade/requirements.txt
+
+      - name: Install tooling and service deps
+        run: |
+          python -m pip install --upgrade pip pip-audit cyclonedx-bom
+          python -m pip install ./packages/service-contracts
+          python -m pip install -r services/backend-facade/requirements.txt
+
+      - name: Audit Python dependencies (facade only)
+        run: pip-audit -r services/backend-facade/requirements.txt
+
+      - name: Run pytest (facade only)
+        run: |
+          cd services/backend-facade && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests
+
+      - name: Generate SBOM (facade)
+        run: |
+          mkdir -p artifacts/sbom
+          cyclonedx-py requirements services/backend-facade/requirements.txt -o artifacts/sbom/backend-facade.bom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-backend-facade
+          path: artifacts/sbom/backend-facade.bom.json

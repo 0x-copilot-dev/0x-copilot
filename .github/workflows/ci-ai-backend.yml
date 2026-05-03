@@ -1,0 +1,61 @@
+name: ci-ai-backend
+
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/**"
+      - "packages/service-contracts/**"
+      - "packages/api-types/**"
+      - ".github/workflows/ci-ai-backend.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/ai-backend/**"
+      - "packages/service-contracts/**"
+      - "packages/api-types/**"
+      - ".github/workflows/ci-ai-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-ai-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/ai-backend/requirements.txt
+
+      - name: Install tooling and service deps
+        run: |
+          python -m pip install --upgrade pip pip-audit cyclonedx-bom
+          python -m pip install ./packages/service-contracts
+          python -m pip install -r services/ai-backend/requirements.txt
+
+      - name: Audit Python dependencies (ai-backend only)
+        run: pip-audit -r services/ai-backend/requirements.txt
+
+      - name: Run pytest (ai-backend only)
+        run: |
+          cd services/ai-backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests
+
+      - name: Generate SBOM (ai-backend)
+        run: |
+          mkdir -p artifacts/sbom
+          cyclonedx-py requirements services/ai-backend/requirements.txt -o artifacts/sbom/ai-backend.bom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-ai-backend
+          path: artifacts/sbom/ai-backend.bom.json

@@ -1,0 +1,59 @@
+name: ci-backend
+
+on:
+  pull_request:
+    paths:
+      - "services/backend/**"
+      - "packages/service-contracts/**"
+      - ".github/workflows/ci-backend.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/backend/**"
+      - "packages/service-contracts/**"
+      - ".github/workflows/ci-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/backend/requirements.txt
+
+      - name: Install tooling and service deps
+        run: |
+          python -m pip install --upgrade pip pip-audit cyclonedx-bom
+          python -m pip install ./packages/service-contracts
+          python -m pip install -r services/backend/requirements.txt
+
+      - name: Audit Python dependencies (backend only)
+        run: pip-audit -r services/backend/requirements.txt
+
+      - name: Run pytest (backend only)
+        run: |
+          cd services/backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests
+
+      - name: Generate SBOM (backend)
+        run: |
+          mkdir -p artifacts/sbom
+          cyclonedx-py requirements services/backend/requirements.txt -o artifacts/sbom/backend.bom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-backend
+          path: artifacts/sbom/backend.bom.json
