@@ -17,15 +17,12 @@ from runtime_adapters.in_memory import (
     AsyncInMemoryRuntimeApiStore,
     InMemoryRuntimeApiStore,
 )
-from runtime_adapters.postgres import (
-    AsyncPostgresRuntimeApiStore,
-    PostgresRuntimeApiStore,
-)
+from runtime_adapters.postgres import PostgresRuntimeApiStore
 
 
 @dataclass(frozen=True)
 class RuntimePorts:
-    """Composed runtime persistence, event, and queue ports (sync)."""
+    """Composed runtime ports (sync test fakes — kept for in_memory backend)."""
 
     persistence: PersistencePort
     event_store: EventStorePort
@@ -35,13 +32,7 @@ class RuntimePorts:
 
 @dataclass(frozen=True)
 class AsyncRuntimePorts:
-    """Composed runtime persistence, event, and queue ports (async).
-
-    The store underneath owns its connection pool. Callers MUST ``await
-    store.open()`` before use and ``await store.close()`` on shutdown — the
-    factory does not do this so the lifecycle stays tied to the FastAPI
-    lifespan / worker entrypoint.
-    """
+    """Composed runtime ports (async)."""
 
     persistence: AsyncPersistencePort
     event_store: AsyncEventStorePort
@@ -49,7 +40,7 @@ class AsyncRuntimePorts:
     backend: str
     # Concrete store reference so the lifespan owner can call open()/close()
     # without re-introspecting the trio of ports.
-    store: AsyncPostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore
+    store: PostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore
 
 
 class RuntimeAdapterFactory:
@@ -59,6 +50,13 @@ class RuntimeAdapterFactory:
     def from_settings(
         cls, settings: RuntimeSettings, *, migrate: bool = True
     ) -> RuntimePorts:
+        """Build the sync port trio for the legacy ``in_memory`` backend.
+
+        ``postgres`` is no longer offered as a sync backend — it is async
+        only. Callers asking for postgres should use
+        :meth:`async_from_settings`.
+        """
+
         backend = settings.store.backend
         if backend == "in_memory":
             store = InMemoryRuntimeApiStore()
@@ -69,20 +67,11 @@ class RuntimeAdapterFactory:
                 backend=backend,
             )
         if backend == "postgres":
-            if settings.store.database_url is None:
-                raise AgentRuntimeError(
-                    RuntimeErrorCode.CONFIGURATION_ERROR,
-                    "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres.",
-                    retryable=False,
-                )
-            store = PostgresRuntimeApiStore(settings.store.database_url)
-            if migrate:
-                store.migrate()
-            return RuntimePorts(
-                persistence=store,
-                event_store=store,
-                queue=store,
-                backend=backend,
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_STORE_BACKEND=postgres requires the async wiring; "
+                "use RuntimeAdapterFactory.async_from_settings.",
+                retryable=False,
             )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -94,12 +83,12 @@ class RuntimeAdapterFactory:
     def async_from_settings(cls, settings: RuntimeSettings) -> AsyncRuntimePorts:
         """Build async runtime ports.
 
-        The store's pool is *not* opened here. Caller (FastAPI lifespan or
-        worker entrypoint) must:
+        The store's pool is *not* opened here. The caller (FastAPI lifespan
+        or worker entrypoint) must:
 
             ports = RuntimeAdapterFactory.async_from_settings(settings)
             await ports.store.open()
-            if migrate_needed: await ports.store.migrate()
+            await ports.store.migrate()
             try:
                 ...
             finally:
@@ -108,7 +97,7 @@ class RuntimeAdapterFactory:
 
         backend = settings.store.backend
         if backend == "in_memory_async":
-            store: AsyncPostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore = (
+            store: PostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore = (
                 AsyncInMemoryRuntimeApiStore()
             )
             return AsyncRuntimePorts(
@@ -118,14 +107,14 @@ class RuntimeAdapterFactory:
                 backend=backend,
                 store=store,
             )
-        if backend == "postgres_async":
+        if backend == "postgres":
             if settings.store.database_url is None:
                 raise AgentRuntimeError(
                     RuntimeErrorCode.CONFIGURATION_ERROR,
-                    "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres_async.",
+                    "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres.",
                     retryable=False,
                 )
-            store = AsyncPostgresRuntimeApiStore(settings.store.database_url)
+            store = PostgresRuntimeApiStore(settings.store.database_url)
             return AsyncRuntimePorts(
                 persistence=store,
                 event_store=store,
@@ -136,6 +125,6 @@ class RuntimeAdapterFactory:
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,
             f"Unsupported async runtime store backend '{backend}'. "
-            "Use 'in_memory_async' or 'postgres_async'.",
+            "Use 'in_memory_async' or 'postgres'.",
             retryable=False,
         )

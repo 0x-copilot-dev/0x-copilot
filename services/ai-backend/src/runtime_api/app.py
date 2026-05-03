@@ -19,7 +19,7 @@ from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
 
 
-_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres_async"})
+_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres"})
 
 
 class RuntimeApiAppFactory:

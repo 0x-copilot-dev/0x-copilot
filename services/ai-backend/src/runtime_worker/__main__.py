@@ -10,7 +10,7 @@ from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
 
 
-_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres_async"})
+_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres"})
 
 
 class RuntimeWorkerEntrypoint:
