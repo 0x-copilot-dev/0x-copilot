@@ -277,6 +277,7 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
     assert [event.event_type for event in store.events_by_run[run_id]] == [
         "run_queued",
         "run_started",
+        "model_call_started",
         "final_response",
         "run_completed",
     ]
@@ -1158,6 +1159,7 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     assert [event.event_type for event in events] == [
         "run_queued",
         "run_started",
+        "model_call_started",
         "model_delta",
         "model_delta",
         "model_delta",
@@ -1258,6 +1260,7 @@ def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
     assert [event.event_type for event in store.events_by_run[run_id]] == [
         "run_queued",
         "run_started",
+        "model_call_started",
         "run_failed",
     ]
     assert store.events_by_run[run_id][-1].summary == "Run timed out"

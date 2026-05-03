@@ -144,6 +144,7 @@ export type RuntimeApiEventType =
   | "approval_resolved"
   | "observation"
   | "error"
+  | "model_call_started"
   | "model_delta"
   | "final_response"
   | "heartbeat"
@@ -184,6 +185,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "approval_resolved",
   "observation",
   "error",
+  "model_call_started",
   "model_delta",
   "final_response",
   "heartbeat",
@@ -641,6 +643,7 @@ export interface RuntimeEventPayloadByType {
   approval_resolved: RuntimeLifecyclePayload;
   observation: RuntimeTextPayload;
   error: RuntimeTextPayload;
+  model_call_started: RuntimeLifecyclePayload;
   model_delta: RuntimeTextPayload;
   final_response: RuntimeTextPayload;
   heartbeat: RuntimeLifecyclePayload;

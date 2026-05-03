@@ -237,6 +237,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.RUN_CANCELLED,
             RuntimeApiEventType.RUN_COMPLETED,
             RuntimeApiEventType.RUN_FAILED,
+            RuntimeApiEventType.MODEL_CALL_STARTED,
         }:
             return RuntimeActivityKind.RUN
         return RuntimeActivityKind.EVENT
@@ -389,6 +390,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.RUN_STARTED,
             RuntimeApiEventType.TOOL_CALL_STARTED,
             RuntimeApiEventType.SUBAGENT_STARTED,
+            RuntimeApiEventType.MODEL_CALL_STARTED,
         }:
             return Values.Status.STARTED
         if event_type in {

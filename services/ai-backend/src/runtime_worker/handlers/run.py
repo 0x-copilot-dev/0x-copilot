@@ -169,6 +169,7 @@ class RuntimeRunHandler:
                 run,
                 tool_observation_index=tool_observation_index,
             )
+            await self._append_model_call_started(run, metrics, messages)
             if command.runtime_context.model_profile.supports_streaming and (
                 self._runtime_streamer_explicit
                 or callable(getattr(harness.agent, "astream", None))
@@ -641,6 +642,40 @@ class RuntimeRunHandler:
             else None,
             payload=payload or {self._Fields.STATUS: event_type.value},
             metadata=metadata,
+        )
+
+    async def _append_model_call_started(
+        self,
+        run: RunRecord,
+        metrics: AssistantRunMetrics,
+        messages: Sequence[Mapping[str, object]],
+    ) -> None:
+        """Mark the boundary between local prompt build and the LLM call.
+
+        Splits the previously opaque `run_started → first model_delta` gap into
+        prompt-build cost (`prompt_build_ms`) versus LangGraph + network + LLM
+        TTFT (which is then `t(model_delta) - t(model_call_started)`).
+        """
+
+        now = datetime.now(timezone.utc)
+        prompt_build_ms = max(
+            0, round((now - metrics.started_at).total_seconds() * 1000)
+        )
+        prompt_chars = sum(
+            len(message.get(self._Fields.CONTENT) or "")
+            for message in messages
+            if isinstance(message.get(self._Fields.CONTENT), str)
+        )
+        await self._append_lifecycle(
+            run,
+            RuntimeApiEventType.MODEL_CALL_STARTED,
+            "Model call started",
+            payload={
+                self._Fields.STATUS: (RuntimeApiEventType.MODEL_CALL_STARTED.value),
+                "prompt_build_ms": prompt_build_ms,
+                "message_count": len(messages),
+                "prompt_chars": prompt_chars,
+            },
         )
 
     @classmethod
