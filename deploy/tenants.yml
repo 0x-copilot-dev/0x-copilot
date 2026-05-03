@@ -1,0 +1,8 @@
+version: 1
+
+# Tenant registry consumed by .github/workflows/deploy.yml.
+# Adding a tenant here is necessary but not sufficient: the matching GitHub
+# Environments and the cloud IdP trust binding must also be configured.
+# See docs/ci-cd/multi-tenant-deploy.md for the full onboarding runbook.
+
+tenants: []

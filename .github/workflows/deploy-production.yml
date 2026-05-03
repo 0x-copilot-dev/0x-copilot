@@ -1,27 +1,33 @@
-name: deploy-production
+# Thin wrapper around deploy.yml for production promotions.
+# Production deploys are gated by:
+#   - GitHub Environment "tenant-<id>-production" (required reviewers, wait timer)
+#   - Staged-rollout policy enforced inside deploy.yml (canary -> early -> general)
+# Use force_deploy: true ONLY with documented risk acceptance and a second approver.
 
-# Manual production promotion. Configure GitHub Environment protection (required reviewers,
-# wait timers, deployment branches) under repo Settings > Environments > production.
+name: deploy-production
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: deploy-production
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-  id-token: write
+    inputs:
+      tenant_id:
+        description: Tenant ID (from deploy/tenants.yml)
+        type: string
+        required: true
+      release_sha:
+        description: Git SHA to promote (default = latest green main)
+        type: string
+        required: false
+      force_deploy:
+        description: Bypass staged-rollout policy (requires second approver)
+        type: boolean
+        default: false
 
 jobs:
-  promote:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Production deploy placeholder
-        run: |
-          echo "Production requires explicit approval via GitHub Environments."
-          echo "Never deploy floating :latest in regulated environments — use digest from deployment-manifest.json."
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tenant_id: ${{ inputs.tenant_id }}
+      environment: production
+      release_sha: ${{ inputs.release_sha }}
+      force_deploy: ${{ inputs.force_deploy }}
+    secrets: inherit

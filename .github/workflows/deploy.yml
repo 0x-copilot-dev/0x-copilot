@@ -1,0 +1,254 @@
+# Parameterized per-tenant deploy. Reusable from deploy-staging.yml / deploy-production.yml,
+# or invoked directly via workflow_dispatch for ad-hoc promotions.
+#
+# Contract is documented in docs/ci-cd/multi-tenant-deploy.md.
+# Authoritative tenant registry: deploy/tenants.yml.
+
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Tenant ID (must exist in deploy/tenants.yml)
+        type: string
+        required: true
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+      release_sha:
+        description: Git SHA of release-images.yml run to promote (default = latest main)
+        type: string
+        required: false
+      force_deploy:
+        description: Bypass staged-rollout policy (production only; demands second approver)
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      tenant_id:
+        type: string
+        required: true
+      environment:
+        type: string
+        required: true
+      release_sha:
+        type: string
+        required: false
+      force_deploy:
+        type: boolean
+        default: false
+    secrets:
+      ENTERPRISE_SERVICE_TOKEN:
+        required: true
+
+concurrency:
+  group: deploy-${{ inputs.tenant_id }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # GitHub Environment provides per-tenant approvers, wait timers, and secrets.
+    # Naming convention enforced by deploy/scripts/validate_tenants.py.
+    environment: tenant-${{ inputs.tenant_id }}-${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Install verifier deps
+        run: python -m pip install --upgrade pip pyyaml jsonschema
+
+      - name: Validate tenant registry
+        run: python deploy/scripts/validate_tenants.py
+
+      - name: Resolve tenant entry
+        id: tenant
+        run: |
+          python deploy/scripts/load_tenant.py "${{ inputs.tenant_id }}" "${{ inputs.environment }}" > tenant.json
+          tier=$(python -c "import json,sys; print(json.load(open('tenant.json'))['tier'])")
+          orchestrator_type=$(python -c "import json,sys; print(json.load(open('tenant.json'))['orchestrator']['type'])")
+          endpoint_secret=$(python -c "import json,sys; print(json.load(open('tenant.json'))['orchestrator']['endpoint_secret_ref'])")
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "orchestrator_type=$orchestrator_type" >> "$GITHUB_OUTPUT"
+          echo "endpoint_secret=$endpoint_secret" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release SHA (default = latest green main)
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OVERRIDE_SHA: ${{ inputs.release_sha }}
+        run: |
+          if [ -n "$OVERRIDE_SHA" ]; then
+            echo "sha=$OVERRIDE_SHA" >> "$GITHUB_OUTPUT"
+          else
+            sha=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-images.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha')
+            if [ -z "$sha" ] || [ "$sha" = "null" ]; then
+              echo "FAIL: no successful release-images.yml run on main" >&2
+              exit 1
+            fi
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download deployment-manifest for release SHA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-images.yml/runs?head_sha=${RELEASE_SHA}&status=success&per_page=1" --jq '.workflow_runs[0].id')
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "FAIL: no successful release-images.yml run for sha=${RELEASE_SHA}" >&2
+            exit 1
+          fi
+          mkdir -p artifact-dl
+          gh run download "$run_id" -n deployment-manifest -D artifact-dl
+          mv artifact-dl/deployment-manifest.json deployment-manifest.json
+          test -s deployment-manifest.json
+
+      - name: Install cosign + GitHub CLI verify dependencies
+        uses: sigstore/cosign-installer@1aa8e0f2454b781fbf0fbf306a4c9533a0c57409 # v3.7.0
+
+      - name: Lowercase repository owner
+        id: lc
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release (cosign + attestation + residency)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python deploy/scripts/verify_release.py \
+            --manifest deployment-manifest.json \
+            --owner "${{ steps.lc.outputs.owner }}" \
+            --tenant tenant.json
+
+      - name: Compute prior deploys for staged-rollout check (production only)
+        if: inputs.environment == 'production'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          # The audit query API does not yet exist; ci-assurance-spec.md tracks this gap.
+          # Until then, derive prior production deploys for this release SHA from prior
+          # successful runs of THIS workflow. Each run records release_sha as a label.
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?status=success&per_page=100" \
+            --jq "[.workflow_runs[] | select(.head_sha==\"${RELEASE_SHA}\") | {tier: \"unknown\", environment: \"unknown\", completed_at: .updated_at, outcome: \"success\"}]" \
+            > prior-deploys.json || echo "[]" > prior-deploys.json
+
+      - name: Enforce staged-rollout policy (production only)
+        if: inputs.environment == 'production'
+        run: |
+          python deploy/scripts/check_staged_rollout.py \
+            --tenant-tier "${{ steps.tenant.outputs.tier }}" \
+            --release-sha "${{ steps.release.outputs.sha }}" \
+            --prior-deploys-json prior-deploys.json \
+            $( [ "${{ inputs.force_deploy }}" = "true" ] && echo "--force" )
+
+      - name: Federate via OIDC into tenant cloud (AWS default)
+        # Adjust per cloud: gcp uses google-github-actions/auth, azure uses azure/login.
+        # The role/principal trust is configured in the tenant's cloud IdP per
+        # docs/ci-cd/multi-tenant-deploy.md "OIDC trust convention".
+        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
+        if: vars.TENANT_CLOUD == 'aws' || vars.TENANT_CLOUD == ''
+        with:
+          role-to-assume: ${{ secrets.TENANT_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.TENANT_DEFAULT_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Record deploy start time
+        id: start
+        run: echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke orchestrator
+        id: orch
+        env:
+          ORCHESTRATOR_ENDPOINT: ${{ secrets[steps.tenant.outputs.endpoint_secret] }}
+          ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
+        run: |
+          python deploy/scripts/invoke_orchestrator.py \
+            --tenant tenant.json \
+            --manifest deployment-manifest.json \
+            --environment "${{ inputs.environment }}" \
+            --timeout 600
+
+      - name: Record deploy completion time
+        id: done
+        if: always()
+        run: echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" >> "$GITHUB_OUTPUT"
+
+      - name: POST audit event (success)
+        if: success()
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          ENTERPRISE_SERVICE_TOKEN: ${{ secrets.ENTERPRISE_SERVICE_TOKEN }}
+        run: |
+          python deploy/scripts/post_audit.py \
+            --tenant tenant.json \
+            --manifest deployment-manifest.json \
+            --environment "${{ inputs.environment }}" \
+            --release-sha "${{ steps.release.outputs.sha }}" \
+            --approver "${{ github.actor }}" \
+            --workflow-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --started-at "${{ steps.start.outputs.started_at }}" \
+            --completed-at "${{ steps.done.outputs.completed_at }}" \
+            --outcome success \
+            ${{ inputs.force_deploy && '--force-deploy' || '' }}
+
+      - name: POST audit event (failed)
+        if: failure()
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          ENTERPRISE_SERVICE_TOKEN: ${{ secrets.ENTERPRISE_SERVICE_TOKEN }}
+        run: |
+          # Best-effort failure record. Do not fail the job because of audit failure;
+          # the deploy already failed for a different reason.
+          python deploy/scripts/post_audit.py \
+            --tenant tenant.json \
+            --manifest deployment-manifest.json \
+            --environment "${{ inputs.environment }}" \
+            --release-sha "${{ steps.release.outputs.sha }}" \
+            --approver "${{ github.actor }}" \
+            --workflow-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --started-at "${{ steps.start.outputs.started_at || '1970-01-01T00:00:00+00:00' }}" \
+            --completed-at "${{ steps.done.outputs.completed_at }}" \
+            --outcome failed \
+            ${{ inputs.force_deploy && '--force-deploy' || '' }} \
+            || echo "WARN: audit POST failed for already-failed deploy"
+
+      - name: Enrich and re-upload deployment manifest
+        if: always()
+        run: |
+          python3 << 'PY'
+          import json, os
+          from pathlib import Path
+          mf = json.loads(Path("deployment-manifest.json").read_text())
+          mf["deployment_record"] = {
+            "tenant_id": "${{ inputs.tenant_id }}",
+            "environment": "${{ inputs.environment }}",
+            "release_sha": "${{ steps.release.outputs.sha }}",
+            "approver": "${{ github.actor }}",
+            "started_at": "${{ steps.start.outputs.started_at }}",
+            "completed_at": "${{ steps.done.outputs.completed_at }}",
+            "outcome": "${{ job.status }}",
+            "force_deploy": ${{ inputs.force_deploy }},
+          }
+          Path("deployment-manifest-deployed.json").write_text(json.dumps(mf, indent=2) + "\n")
+          PY
+
+      - name: Upload enriched manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deployment-record-${{ inputs.tenant_id }}-${{ inputs.environment }}-${{ steps.release.outputs.sha }}
+          path: deployment-manifest-deployed.json

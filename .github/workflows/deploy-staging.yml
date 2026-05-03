@@ -1,27 +1,27 @@
-name: deploy-staging
+# Thin wrapper around deploy.yml for staging promotions.
+# For per-tenant fan-out, run deploy.yml directly via workflow_dispatch per tenant
+# or extend this file with a setup job that reads deploy/tenants.yml into a matrix.
 
-# Manual staging promotion. Wire your orchestrator (kubectl, Helm, etc.) using OIDC —
-# see docs/ci-cd/runner-trust.md. Requires a GitHub Environment named `staging`.
+name: deploy-staging
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: deploy-staging
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-  id-token: write
+    inputs:
+      tenant_id:
+        description: Tenant ID (from deploy/tenants.yml)
+        type: string
+        required: true
+      release_sha:
+        description: Git SHA to promote (default = latest green main)
+        type: string
+        required: false
 
 jobs:
-  promote:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Staging deploy placeholder
-        run: |
-          echo "Staging environment gate is active (configure reviewers/timeouts in repo Settings)."
-          echo "Promote digests from the deployment-manifest artifact produced by release-images.yml."
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tenant_id: ${{ inputs.tenant_id }}
+      environment: staging
+      release_sha: ${{ inputs.release_sha }}
+      force_deploy: false
+    secrets: inherit

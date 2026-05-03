@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-search/deploy/tenants.schema.json",
+  "title": "Tenant Registry",
+  "description": "Authoritative registry of tenants targeted by deploy workflows. Loaded by .github/workflows/deploy.yml.",
+  "type": "object",
+  "required": ["version", "tenants"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "tenants": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "tier",
+          "regions",
+          "environments",
+          "gh_environment_prefix",
+          "oidc",
+          "orchestrator"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+            "description": "Stable, URL-safe tenant identifier. Lowercase, hyphens, no leading/trailing hyphens."
+          },
+          "display_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tier": {
+            "type": "string",
+            "enum": ["canary", "early", "general"],
+            "description": "Rollout cohort. Production deploys roll out canary -> early -> general; later cohorts cannot precede earlier ones for the same release SHA."
+          },
+          "regions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z]{2,4}-[a-z]+-[0-9]$"
+            },
+            "description": "Cloud regions hosting this tenant. Drives data-residency checks before deploy."
+          },
+          "environments": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["staging", "production"]
+            }
+          },
+          "gh_environment_prefix": {
+            "type": "string",
+            "pattern": "^tenant-[a-z][a-z0-9-]*$",
+            "description": "Prefix for the GitHub Environment names. Combined with the environment to form e.g. tenant-acme-production."
+          },
+          "oidc": {
+            "type": "object",
+            "required": ["audience", "expected_subject_pattern"],
+            "additionalProperties": false,
+            "properties": {
+              "audience": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expected_subject_pattern": {
+                "type": "string",
+                "description": "OIDC subject pattern the tenant cloud IdP is configured to trust. Documented for review only; cloud IdP enforces it."
+              }
+            }
+          },
+          "orchestrator": {
+            "type": "object",
+            "required": ["type", "endpoint_secret_ref"],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["argo", "helm", "flux"]
+              },
+              "endpoint_secret_ref": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]+$",
+                "description": "Name of the GitHub Environment secret holding the orchestrator endpoint URL. Resolved at deploy time."
+              },
+              "namespace": {
+                "type": "string"
+              },
+              "release_name": {
+                "type": "string"
+              }
+            }
+          },
+          "data_residency": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allowed_image_registries": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "notes": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

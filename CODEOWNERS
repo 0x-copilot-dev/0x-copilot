@@ -5,4 +5,9 @@
 /services/ai-backend/ @enterprise-search/ai-runtime-owners @enterprise-search/security-reviewers
 /apps/frontend/ @enterprise-search/frontend-owners @enterprise-search/security-reviewers
 /.github/ @enterprise-search/security-reviewers
+/.github/workflows/ @enterprise-search/security-reviewers
+/.github/dependabot.yml @enterprise-search/security-reviewers
+/deploy/ @enterprise-search/security-reviewers
+/deploy/tenants.yml @enterprise-search/security-reviewers @enterprise-search/backend-owners
+/docs/ci-cd/ @enterprise-search/security-reviewers
 /docs/security/ @enterprise-search/security-reviewers

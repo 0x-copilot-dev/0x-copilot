@@ -1,0 +1,128 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+    reviewers:
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "ci(deps)"
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+
+  - package-ecosystem: pip
+    directory: /services/backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      backend-minor-patch:
+        update-types:
+          - minor
+          - patch
+    reviewers:
+      - enterprise-search/backend-owners
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "deps(backend)"
+      include: scope
+    labels:
+      - dependencies
+      - python
+      - backend
+
+  - package-ecosystem: pip
+    directory: /services/backend-facade
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      facade-minor-patch:
+        update-types:
+          - minor
+          - patch
+    reviewers:
+      - enterprise-search/backend-owners
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "deps(facade)"
+      include: scope
+    labels:
+      - dependencies
+      - python
+      - backend-facade
+
+  - package-ecosystem: pip
+    directory: /services/ai-backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ai-backend-minor-patch:
+        update-types:
+          - minor
+          - patch
+    reviewers:
+      - enterprise-search/ai-runtime-owners
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "deps(ai-backend)"
+      include: scope
+    labels:
+      - dependencies
+      - python
+      - ai-backend
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    reviewers:
+      - enterprise-search/frontend-owners
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "deps(npm)"
+      include: scope
+    labels:
+      - dependencies
+      - npm
+
+  - package-ecosystem: docker
+    directories:
+      - /services/backend
+      - /services/backend-facade
+      - /services/ai-backend
+      - /apps/frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    reviewers:
+      - enterprise-search/security-reviewers
+    commit-message:
+      prefix: "deps(docker)"
+      include: scope
+    labels:
+      - dependencies
+      - docker

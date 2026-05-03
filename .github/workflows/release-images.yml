@@ -1,6 +1,8 @@
 # Build and push service images to ghcr.io on main (path-filtered) or manual dispatch.
-# Publishes SBOM-adjacent evidence: image digests in deployment-manifest.json, Trivy SARIF (best-effort),
-# and build attestations (best-effort when the repository supports artifact attestations).
+# Publishes digest-pinned images, build provenance attestations (gating), cosign keyless
+# signatures (gating), and a deployment-manifest.json that references both image digests
+# and SBOM artifact IDs. Trivy CRITICAL findings fail the build; SARIF upload to GitHub
+# Security is best-effort (silently skipped without GitHub Advanced Security).
 
 name: release-images
 
@@ -22,21 +24,26 @@ on:
       - ".github/workflows/release-images.yml"
   workflow_dispatch:
 
+# cancel-in-progress=false: do not interrupt a build mid-push to GHCR.
 concurrency:
   group: release-images-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
+# Default permissions are read-only at workflow scope. Each job widens to only what it needs.
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
-  security-events: write
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
     strategy:
+      # Surface every component's outcome rather than masking; manifest job below requires all four.
       fail-fast: false
       matrix:
         include:
@@ -49,15 +56,15 @@ jobs:
           - dockerfile: apps/frontend/Dockerfile
             image_name: enterprise-search-frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Lowercase repository owner for GHCR
         id: lc
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -65,7 +72,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
           images: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}
           tags: |
@@ -74,7 +81,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -84,58 +91,156 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Provenance attestation must succeed; if it cannot, the artifact is not releasable.
       - name: Attest build provenance
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.28.0
+      - name: Install cosign
+        uses: sigstore/cosign-installer@1aa8e0f2454b781fbf0fbf306a4c9533a0c57409 # v3.7.0
+
+      # Keyless OIDC signing. Verifiers MUST check both the issuer and the subject identity.
+      - name: Cosign sign image (keyless OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            "ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}"
+
+      # Gating scan: any CRITICAL fixable vulnerability fails the build.
+      - name: Run Trivy vulnerability scanner (CRITICAL gate)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
           format: sarif
-          output: trivy-${{ matrix.image_name }}.sarif
-          severity: CRITICAL,HIGH
-          exit-code: "0"
+          output: trivy-${{ matrix.image_name }}-critical.sarif
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
 
-      - name: Upload Trivy SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+      # Triage scan: HIGH findings surface in the Security tab but do not block release.
+      - name: Run Trivy vulnerability scanner (HIGH triage)
+        if: always()
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-${{ matrix.image_name }}-high.sarif
+          severity: HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+
+      # SARIF upload requires GitHub Advanced Security to surface findings; tolerate orgs without it.
+      - name: Upload Trivy CRITICAL SARIF (best-effort surface)
+        uses: github/codeql-action/upload-sarif@0b1f0509b2ddb4dc7bd94367abfe7ad1d8a1b810 # v3.30.5
+        if: always()
         continue-on-error: true
         with:
-          sarif_file: trivy-${{ matrix.image_name }}.sarif
-          category: trivy-${{ matrix.image_name }}
+          sarif_file: trivy-${{ matrix.image_name }}-critical.sarif
+          category: trivy-${{ matrix.image_name }}-critical
+
+      - name: Upload Trivy HIGH SARIF (best-effort surface)
+        uses: github/codeql-action/upload-sarif@0b1f0509b2ddb4dc7bd94367abfe7ad1d8a1b810 # v3.30.5
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-${{ matrix.image_name }}-high.sarif
+          category: trivy-${{ matrix.image_name }}-high
 
       - name: Write image reference fragment
         run: |
           printf '%s' "ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}" > "${{ matrix.image_name }}.image-ref.txt"
 
       - name: Upload image reference fragment
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-image-${{ matrix.image_name }}
           path: ${{ matrix.image_name }}.image-ref.txt
 
   deployment-manifest:
     needs: build-and-push
+    # Require every matrix leg to succeed before assembling the manifest; partial releases are unsafe.
+    if: ${{ needs.build-and-push.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Lowercase repository owner
         id: lc
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Download image reference fragments
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-image-*
           merge-multiple: true
           path: fragments
 
+      # SBOMs are uploaded by the per-component CI workflows. Resolve their artifact IDs from the
+      # latest successful run on this commit so the manifest can record verifiable references.
+      - name: Resolve SBOM artifact IDs for this commit
+        id: sboms
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 << 'PY' >> "$GITHUB_ENV"
+          import json
+          import os
+          import subprocess
+
+          components = [
+              ("backend", "ci-backend", "sbom-backend"),
+              ("backend-facade", "ci-backend-facade", "sbom-backend-facade"),
+              ("ai-backend", "ci-ai-backend", "sbom-ai-backend"),
+              ("frontend", "ci-frontend", "sbom-frontend-npm"),
+          ]
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          commit = os.environ["COMMIT_SHA"]
+          out = []
+          for component, workflow, artifact_name in components:
+              try:
+                  raw = subprocess.check_output([
+                      "gh", "api",
+                      f"repos/{repo}/actions/workflows/{workflow}.yml/runs",
+                      "-f", f"head_sha={commit}",
+                      "-f", "status=completed",
+                      "-f", "per_page=1",
+                  ])
+                  runs = json.loads(raw).get("workflow_runs", [])
+                  if not runs:
+                      out.append({"component": component, "artifact_name": artifact_name, "artifact_id": None, "run_id": None, "note": "no completed CI run for this commit"})
+                      continue
+                  run_id = runs[0]["id"]
+                  arts = json.loads(subprocess.check_output([
+                      "gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts",
+                  ])).get("artifacts", [])
+                  match = next((a for a in arts if a["name"] == artifact_name), None)
+                  out.append({
+                      "component": component,
+                      "artifact_name": artifact_name,
+                      "artifact_id": match["id"] if match else None,
+                      "run_id": run_id,
+                      "note": None if match else "SBOM artifact missing",
+                  })
+              except Exception as exc:
+                  out.append({"component": component, "artifact_name": artifact_name, "artifact_id": None, "run_id": None, "note": f"lookup error: {exc}"})
+          payload = json.dumps(out)
+          # GitHub env: multiline value uses HEREDOC syntax
+          print("SBOM_REFERENCES<<__EOF__")
+          print(payload)
+          print("__EOF__")
+          PY
+
       - name: Build deployment-manifest.json
+        env:
+          IMAGE_OWNER: ${{ steps.lc.outputs.owner }}
         run: |
           python3 << 'PY'
           import json
@@ -151,21 +256,45 @@ jobs:
                   if reference:
                       images.append({"component": component, "reference": reference})
 
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          commit = os.environ["GITHUB_SHA"]
+          server = os.environ["GITHUB_SERVER_URL"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+
+          sbom_refs_raw = os.environ.get("SBOM_REFERENCES", "[]")
+          try:
+              sbom_refs = json.loads(sbom_refs_raw)
+          except json.JSONDecodeError:
+              sbom_refs = []
+
+          # Per signed image, expected cosign verify subject for downstream verifiers.
+          cosign_subject = f"https://github.com/{repo}/.github/workflows/release-images.yml@refs/heads/main"
+          oidc_issuer = "https://token.actions.githubusercontent.com"
+
           manifest = {
-              "schema": "enterprise-search/deployment-manifest/v1",
-              "git_sha": os.environ["GITHUB_SHA"],
-              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
-              "workflow_run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "schema": "enterprise-search/deployment-manifest/v2",
+              "git_sha": commit,
+              "workflow_run_id": run_id,
+              "workflow_run_url": f"{server}/{repo}/actions/runs/{run_id}",
               "registry_owner": os.environ["IMAGE_OWNER"],
               "images": sorted(images, key=lambda x: x["component"]),
+              "signing": {
+                  "tool": "cosign",
+                  "mode": "keyless",
+                  "oidc_issuer": oidc_issuer,
+                  "expected_subject_regex": cosign_subject + "$",
+              },
+              "attestation": {
+                  "tool": "actions/attest-build-provenance",
+                  "verification_command_example": "gh attestation verify <image>@<digest> --owner " + os.environ["IMAGE_OWNER"],
+              },
+              "sboms": sbom_refs,
           }
           Path("deployment-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
           PY
-        env:
-          IMAGE_OWNER: ${{ steps.lc.outputs.owner }}
 
       - name: Upload deployment manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deployment-manifest
           path: deployment-manifest.json

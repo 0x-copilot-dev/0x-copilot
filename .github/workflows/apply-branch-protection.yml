@@ -1,0 +1,93 @@
+# Apply deploy/branch-protection.json to the repository as a ruleset.
+# Manual dispatch only; the source of truth lives in git so changes are reviewable
+# before they take effect, but a repo admin must run this workflow to push them.
+#
+# Dry-run: leave dry_run=true (default) to print the diff without applying.
+# Apply:   set dry_run=false. Requires the calling actor to be a repo admin.
+
+name: apply-branch-protection
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the diff between repo and deploy/branch-protection.json without applying
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  administration: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Diff and (optionally) apply ruleset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python3 << 'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          desired = json.loads(Path("deploy/branch-protection.json").read_text())
+          desired.pop("$schema_note", None)
+          name = desired["name"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          existing_raw = subprocess.run(
+              ["gh", "api", f"repos/{repo}/rulesets"],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          rulesets = json.loads(existing_raw)
+          match = next((r for r in rulesets if r.get("name") == name), None)
+
+          if match is None:
+              print(f"Ruleset {name!r} does not exist on {repo}; would CREATE.")
+              if os.environ["DRY_RUN"].lower() == "true":
+                  return
+              subprocess.run(
+                  ["gh", "api", f"repos/{repo}/rulesets", "-X", "POST", "--input", "-"],
+                  input=json.dumps(desired), text=True, check=True,
+              )
+              print("CREATED")
+              return
+
+          rid = match["id"]
+          current = json.loads(subprocess.run(
+              ["gh", "api", f"repos/{repo}/rulesets/{rid}"],
+              capture_output=True, text=True, check=True,
+          ).stdout)
+
+          # Strip server-side metadata before diffing.
+          for key in ("id", "node_id", "_links", "source_type", "source", "current_user_can_bypass", "created_at", "updated_at"):
+              current.pop(key, None)
+
+          if current == desired:
+              print(f"Ruleset {name!r} already matches deploy/branch-protection.json. No-op.")
+              return
+
+          import difflib
+          a = json.dumps(current, indent=2, sort_keys=True).splitlines()
+          b = json.dumps(desired, indent=2, sort_keys=True).splitlines()
+          diff = "\n".join(difflib.unified_diff(a, b, fromfile="repo", tofile="desired", lineterm=""))
+          print(diff)
+
+          if os.environ["DRY_RUN"].lower() == "true":
+              print("\nDRY RUN: not applying. Re-run with dry_run=false.")
+              return
+
+          subprocess.run(
+              ["gh", "api", f"repos/{repo}/rulesets/{rid}", "-X", "PUT", "--input", "-"],
+              input=json.dumps(desired), text=True, check=True,
+          )
+          print(f"\nUPDATED ruleset {name!r} (id={rid})")
+
+          PY

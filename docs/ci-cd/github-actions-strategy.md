@@ -1,65 +1,37 @@
-# GitHub Actions Strategy
+# GitHub Actions strategy
 
-## CI/CD In Plain English
+## Intent
 
-CI checks every pull request before merge. CD deploys approved code after it lands on `main`.
+Path-filtered CI per deployable + a reproducible release pipeline that publishes a single signed artifact set per commit, promoted to many tenants via [deploy.yml](../../.github/workflows/deploy.yml).
 
-For this monorepo, CI/CD should be path-aware: a change to `services/ai-backend` should not force Mac or Windows builds unless shared contracts changed.
+A change to `services/ai-backend` should retest only `services/ai-backend` and any package it imports (`packages/service-contracts`, `packages/api-types`) — not `services/backend` or the frontend.
 
-## Pull Request CI
+## Workflows (implemented)
 
-Run on every pull request:
+- [.github/workflows/ci-repo.yml](../../.github/workflows/ci-repo.yml) — repo-wide lint, secret scan, tenant-registry lint.
+- [.github/workflows/ci-backend.yml](../../.github/workflows/ci-backend.yml), [ci-backend-facade.yml](../../.github/workflows/ci-backend-facade.yml), [ci-ai-backend.yml](../../.github/workflows/ci-ai-backend.yml), [ci-frontend.yml](../../.github/workflows/ci-frontend.yml) — path-filtered component CI.
+- [.github/workflows/release-images.yml](../../.github/workflows/release-images.yml) — GHCR publish on `main`, with cosign signing and provenance attestation.
+- [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml) — parameterized per-tenant deploy.
+- [.github/workflows/deploy-staging.yml](../../.github/workflows/deploy-staging.yml), [deploy-production.yml](../../.github/workflows/deploy-production.yml) — thin wrappers around `deploy.yml`.
 
-- Install dependencies for changed components.
-- Lint changed components.
-- Typecheck changed components.
-- Run unit tests for changed components.
-- Build changed apps/services.
-- Validate Docker builds for changed backend services.
+## Image registry
 
-## Deployment CD
+Each deployable has its own image:
 
-After merge to `main`:
+- `ghcr.io/<owner>/enterprise-search-backend`
+- `ghcr.io/<owner>/enterprise-search-backend-facade`
+- `ghcr.io/<owner>/enterprise-search-ai-backend`
+- `ghcr.io/<owner>/enterprise-search-frontend`
 
-- Build production Docker images for changed backend services.
-- Push images to GitHub Container Registry.
-- Deploy staging automatically.
-- Deploy production only through GitHub Environments with manual approval.
-
-## Docker Images
-
-Each deployable has its own image published by `release-images.yml`:
-
-- `ghcr.io/<org>/enterprise-search-backend`
-- `ghcr.io/<org>/enterprise-search-backend-facade`
-- `ghcr.io/<org>/enterprise-search-ai-backend`
-- `ghcr.io/<org>/enterprise-search-frontend`
-
-Dockerfiles should be reproducible, minimal, and scoped to their service. Do not bake secrets into images.
+(The lowercase repository owner is computed at build time; matches `release-images.yml`.)
 
 ## Secrets
 
-- Store secrets in GitHub Actions secrets or environment-level secrets.
-- Never commit `.env` files with real credentials.
-- CI should fail fast if required secrets are missing for deploy jobs.
-- Pull request CI should not require production secrets.
+- Pull-request CI does not require production secrets.
+- Image publish secrets (`GITHUB_TOKEN` with `packages: write`) are scoped to the `build-and-push` job in `release-images.yml`.
+- Deploy workflows use **OIDC federation** (no long-lived credentials) into the tenant cloud account. See [runner-trust.md](runner-trust.md) and [multi-tenant-deploy.md](multi-tenant-deploy.md).
+- Per-tenant secrets live in the GitHub Environment `tenant-<id>-<env>`. Adding a tenant requires creating those Environments and configuring the cloud IdP trust binding.
 
-## Desktop Builds
+## Authoritative spec
 
-Desktop build pipelines should come later:
-
-- Mac: macOS GitHub runners, or a dedicated Mac build service if signing/notarization requires it.
-- Windows: Windows GitHub runner for native/Electron/Tauri packaging.
-
-Do not block backend CI on desktop packaging unless the PR touches desktop app code or shared packages required by desktop apps.
-
-## Workflow layout (implemented)
-
-- `.github/workflows/ci-repo.yml` — repo-wide lint + secret scan.
-- `.github/workflows/ci-backend.yml`, `ci-backend-facade.yml`, `ci-ai-backend.yml`, `ci-frontend.yml` — path-filtered component CI.
-- `.github/workflows/release-images.yml` — GHCR publish on `main` (filtered paths).
-- `.github/workflows/deploy-staging.yml`, `deploy-production.yml` — manual environment gates (wire orchestrator per tenant).
-
-## Assurance specification
-
-For the consolidated description of CI/CD controls (locking, SBOM, Trivy, attestations, manifests), see **[`ci-assurance-spec.md`](ci-assurance-spec.md)**.
+All control details (gating vs. evidence-only, attestation, cosign, SBOM, Trivy gating, lock-drift, known gaps) live in [ci-assurance-spec.md](ci-assurance-spec.md). This document only states intent; the spec is the source of truth.
