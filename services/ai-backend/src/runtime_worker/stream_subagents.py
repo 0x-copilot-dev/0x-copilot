@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.api.constants import Keys, Messages
@@ -49,6 +50,10 @@ class StreamUpdateProcessor:
         # FIFO of supervisor call_ids whose subagents have started but whose
         # subgraph task ids are not yet linked. Per-run.
         self._unlinked_subagent_call_ids: dict[str, list[str]] = {}
+        # `(run_id, task_id) -> SUBAGENT_STARTED timestamp`. Used to stamp a
+        # `duration_ms` field on the matching SUBAGENT_COMPLETED payload so
+        # consumers don't have to join started/completed events themselves.
+        self._subagent_started_at: dict[tuple[str, str], datetime] = {}
 
     async def process(
         self,
@@ -86,6 +91,10 @@ class StreamUpdateProcessor:
             event_type=event_type,
             payload=payload,
         )
+        if event_type is RuntimeApiEventType.SUBAGENT_COMPLETED and task_id is not None:
+            duration_ms = self._subagent_duration_ms(run.run_id, task_id)
+            if duration_ms is not None:
+                payload["duration_ms"] = duration_ms
         subagent_id = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
         await self.event_producer.append_api_event(
             run=run,
@@ -95,6 +104,13 @@ class StreamUpdateProcessor:
             metadata=metadata,
             subagent_id=subagent_id,
         )
+
+    def _subagent_duration_ms(self, run_id: str, task_id: str) -> int | None:
+        started_at = self._subagent_started_at.pop((run_id, task_id), None)
+        if started_at is None:
+            return None
+        elapsed = datetime.now(timezone.utc) - started_at
+        return max(0, round(elapsed.total_seconds() * 1000))
 
     def _track_subagent_lifecycle(
         self,
@@ -115,6 +131,7 @@ class StreamUpdateProcessor:
             if subagent_name is None:
                 return
             self._subagent_name_by_call_id[(run_id, call_id)] = subagent_name
+            self._subagent_started_at[(run_id, call_id)] = datetime.now(timezone.utc)
             queue = self._unlinked_subagent_call_ids.setdefault(run_id, [])
             if call_id not in queue:
                 queue.append(call_id)

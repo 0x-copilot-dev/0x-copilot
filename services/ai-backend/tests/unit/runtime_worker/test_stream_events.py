@@ -662,3 +662,127 @@ def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
     )
     assert payload["display_title"] == payload["short_summary"]
     assert len(str(payload["short_summary"])) <= 120
+
+
+async def test_tool_result_carries_duration_ms_back_to_started_event() -> None:
+    """`tool_result` and `tool_call_completed` payloads should carry the wall-clock
+    elapsed time since `tool_call_started`. Lets perf consumers compute
+    "stream time excluding tool windows" without joining started/result events."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = TestFixtures.run_record()
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "web_search",
+            "id": "call_w1",
+            "index": 0,
+            "args": {"query": "langchain version"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_w1",
+            "content": "1.3.0",
+        },
+        delta=None,
+    )
+
+    started = next(
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    )
+    result = next(
+        e for e in producer.events if e["event_type"] is RuntimeApiEventType.TOOL_RESULT
+    )
+    completed = next(
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.TOOL_CALL_COMPLETED
+    )
+    assert "duration_ms" not in started["payload"]
+    assert isinstance(result["payload"]["duration_ms"], int)
+    assert result["payload"]["duration_ms"] >= 0
+    assert completed["payload"]["duration_ms"] == result["payload"]["duration_ms"]
+
+
+async def test_subagent_completed_carries_duration_ms_back_to_started_event() -> None:
+    """`subagent_completed` payload should carry elapsed time since
+    `subagent_started` so the UI / perf tooling can show "subagent X gated the
+    run" without recomputing from event timestamps."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_research",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+        payload={
+            "task_id": "call_research",
+            "subagent_name": "general-purpose",
+            "status": "completed",
+            "summary": "Research complete.",
+        },
+        metadata={},
+    )
+
+    started = next(
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.SUBAGENT_STARTED
+    )
+    completed = next(
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.SUBAGENT_COMPLETED
+    )
+    assert "duration_ms" not in started["payload"]
+    assert isinstance(completed["payload"]["duration_ms"], int)
+    assert completed["payload"]["duration_ms"] >= 0
+
+
+async def test_subagent_completed_without_started_omits_duration_ms() -> None:
+    """If a SUBAGENT_COMPLETED arrives without a matching SUBAGENT_STARTED on
+    this processor (e.g. event-store replay scenarios), we omit the field
+    rather than fabricate a misleading zero."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+        payload={
+            "task_id": "call_orphan",
+            "subagent_name": "general-purpose",
+            "status": "completed",
+            "summary": "Orphan completion.",
+        },
+        metadata={},
+    )
+
+    completed = producer.events[0]
+    assert "duration_ms" not in completed["payload"]

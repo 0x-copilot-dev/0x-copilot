@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
@@ -36,6 +37,7 @@ class ToolCallStreamState:
     short_summary: str | None = None
     started_emitted: bool = False
     pending_start: bool = False
+    started_at: datetime | None = None
 
 
 class StreamMessageProcessor:
@@ -122,6 +124,9 @@ class StreamMessageProcessor:
                     metadata=metadata,
                 )
                 return
+            duration_ms = self._tool_duration_ms(run.run_id, payload)
+            if duration_ms is not None:
+                payload["duration_ms"] = duration_ms
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -136,6 +141,8 @@ class StreamMessageProcessor:
                 Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
                 Keys.Field.STATUS: Values.Status.COMPLETED,
             }
+            if duration_ms is not None:
+                completed_payload["duration_ms"] = duration_ms
             if (
                 StreamTextHelper.extract(payload.get(Keys.Field.VISIBILITY))
                 == RuntimeEventVisibility.INTERNAL.value
@@ -195,6 +202,8 @@ class StreamMessageProcessor:
             parent_task_id=parent_task_id,
             subagent_id=subagent_id,
         )
+        if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
+            state.started_at = datetime.now(timezone.utc)
         state.started_emitted = True
 
     async def _append_task_tool_call_event(
@@ -427,6 +436,17 @@ class StreamMessageProcessor:
         if call_id is None:
             return None
         return self._tool_call_ids.get((run_id, call_id))
+
+    def _tool_duration_ms(
+        self,
+        run_id: str,
+        payload: Mapping[str, object],
+    ) -> int | None:
+        state = self.tool_call_state_for_payload(run_id, payload)
+        if state is None or state.started_at is None:
+            return None
+        elapsed = datetime.now(timezone.utc) - state.started_at
+        return max(0, round(elapsed.total_seconds() * 1000))
 
     @classmethod
     def apply_tool_visibility(cls, payload: JsonObject) -> None:
