@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
@@ -27,13 +29,32 @@ from backend_app.contracts import (
     UpdateSkillRequest,
 )
 from backend_app.service import McpRegistryService, SkillRegistryService
+from backend_app.store import PostgresConnectionPool
+
+
+class _AppServices:
+    """Typed accessors for service singletons attached to app state."""
+
+    @staticmethod
+    def mcp(application: FastAPI) -> McpRegistryService:
+        return application.state.mcp_service
+
+    @staticmethod
+    def skills(application: FastAPI) -> SkillRegistryService:
+        return application.state.skill_service
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    yield
+    PostgresConnectionPool.close_shared()
 
 
 def create_app(
     service: McpRegistryService | None = None,
     skill_service: SkillRegistryService | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Enterprise Search Backend")
+    app = FastAPI(title="Enterprise Search Backend", lifespan=_lifespan)
     app.state.mcp_service = service or McpRegistryService()
     app.state.skill_service = skill_service or SkillRegistryService()
 
@@ -47,7 +68,7 @@ def create_app(
         payload = payload.model_copy(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
-        return mcp_service(app).create_server(payload)
+        return _AppServices.mcp(app).create_server(payload)
 
     @app.get("/v1/mcp/servers", response_model=McpServerListResponse)
     def list_servers(
@@ -58,7 +79,7 @@ def create_app(
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return mcp_service(app).list_servers(
+        return _AppServices.mcp(app).list_servers(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
@@ -72,7 +93,7 @@ def create_app(
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        deleted = mcp_service(app).delete_server(
+        deleted = _AppServices.mcp(app).delete_server(
             org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
         )
         if not deleted:
@@ -91,7 +112,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return mcp_service(app).update_server(
+            return _AppServices.mcp(app).update_server(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -113,7 +134,9 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return mcp_service(app).start_auth(server_id=server_id, request=payload)
+            return _AppServices.mcp(app).start_auth(
+                server_id=server_id, request=payload
+            )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -128,7 +151,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return mcp_service(app).skip_auth(
+            return _AppServices.mcp(app).skip_auth(
                 org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
             )
         except ValueError as exc:
@@ -142,7 +165,7 @@ def create_app(
         error_description: str | None = None,
     ) -> McpServerResponse:
         try:
-            return mcp_service(app).complete_auth(
+            return _AppServices.mcp(app).complete_auth(
                 McpAuthCallbackRequest(
                     state=state,
                     code=code,
@@ -162,7 +185,7 @@ def create_app(
         identity = BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return mcp_service(app).list_internal_cards(
+        return _AppServices.mcp(app).list_internal_cards(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
@@ -182,7 +205,9 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return mcp_service(app).start_auth(server_id=server_id, request=payload)
+            return _AppServices.mcp(app).start_auth(
+                server_id=server_id, request=payload
+            )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -200,7 +225,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return mcp_service(app).create_internal_client_session(
+            return _AppServices.mcp(app).create_internal_client_session(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -224,7 +249,7 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return mcp_service(app).proxy_internal_rpc(
+            return _AppServices.mcp(app).proxy_internal_rpc(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -254,7 +279,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return mcp_service(app).upsert_token_for_test(
+            return _AppServices.mcp(app).upsert_token_for_test(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -272,7 +297,7 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return skills_service(app).create_skill(payload)
+            return _AppServices.skills(app).create_skill(payload)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -285,7 +310,7 @@ def create_app(
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return skills_service(app).list_skills(
+        return _AppServices.skills(app).list_skills(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
@@ -300,7 +325,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return skills_service(app).get_skill(
+            return _AppServices.skills(app).get_skill(
                 org_id=identity.org_id, user_id=identity.user_id, skill_id=skill_id
             )
         except ValueError as exc:
@@ -318,7 +343,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return skills_service(app).update_skill(
+            return _AppServices.skills(app).update_skill(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 skill_id=skill_id,
@@ -338,7 +363,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            deleted = skills_service(app).delete_skill(
+            deleted = _AppServices.skills(app).delete_skill(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 skill_id=skill_id,
@@ -358,7 +383,7 @@ def create_app(
         identity = BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return skills_service(app).list_internal_cards(
+        return _AppServices.skills(app).list_internal_cards(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
@@ -373,7 +398,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return skills_service(app).get_internal_bundle(
+            return _AppServices.skills(app).get_internal_bundle(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 skill_id=skill_id,
@@ -392,7 +417,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return skills_service(app).get_internal_bundle_by_name(
+            return _AppServices.skills(app).get_internal_bundle_by_name(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 name=name,
@@ -401,14 +426,6 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     return app
-
-
-def mcp_service(app: FastAPI) -> McpRegistryService:
-    return app.state.mcp_service
-
-
-def skills_service(app: FastAPI) -> SkillRegistryService:
-    return app.state.skill_service
 
 
 app = create_app()

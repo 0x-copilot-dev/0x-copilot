@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import json
@@ -50,13 +50,15 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
     TokenEnvelope,
-    normalize_skill_slug,
+    Validators,
+    _Fields,
 )
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
     InMemoryMcpStore,
     InMemorySkillStore,
+    PostgresConnectionPool,
     PostgresMcpStore,
     PostgresSkillStore,
 )
@@ -223,15 +225,17 @@ class McpRegistryService:
         )
         changes: dict[str, object] = {}
         if request.display_name is not None:
-            changes["display_name"] = request.display_name
-        if "oauth_client" in request.model_fields_set:
-            changes["oauth_client"] = self._oauth_client_config(request.oauth_client)
+            changes[_Fields.DISPLAY_NAME] = request.display_name
+        if _Fields.OAUTH_CLIENT in request.model_fields_set:
+            changes[_Fields.OAUTH_CLIENT] = self._oauth_client_config(
+                request.oauth_client
+            )
         if request.enabled is not None:
-            changes["enabled"] = request.enabled
+            changes[_Fields.ENABLED] = request.enabled
             if not request.enabled:
-                changes["health"] = McpServerHealth.DISABLED
+                changes[_Fields.HEALTH] = McpServerHealth.DISABLED
             elif record.health is McpServerHealth.DISABLED:
-                changes["health"] = McpServerHealth.HEALTHY
+                changes[_Fields.HEALTH] = McpServerHealth.HEALTHY
         if not changes:
             return McpServerResponse.from_record(record)
 
@@ -268,7 +272,7 @@ class McpRegistryService:
             raise ValueError("MCP server does not support OAuth authentication")
 
         verifier = token_urlsafe(64)
-        expires_at = datetime.now(UTC) + self.auth_session_ttl
+        expires_at = datetime.now(timezone.utc) + self.auth_session_ttl
         session = McpAuthSessionRecord(
             server_id=record.server_id,
             org_id=record.org_id,
@@ -307,7 +311,7 @@ class McpRegistryService:
 
     def complete_auth(self, request: McpAuthCallbackRequest) -> McpServerResponse:
         session = self.store.pop_auth_session(state=request.state)
-        if session is None or session.expires_at < datetime.now(UTC):
+        if session is None or session.expires_at < datetime.now(timezone.utc):
             raise ValueError("MCP auth session is invalid or expired")
         record = self._require_server_for_user(
             org_id=session.org_id,
@@ -442,12 +446,14 @@ class McpRegistryService:
     def _update_record(
         self, record: McpServerRecord, **changes: object
     ) -> McpServerRecord:
-        updated = record.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
+        updated = record.model_copy(
+            update={**changes, _Fields.UPDATED_AT: datetime.now(timezone.utc)}
+        )
         return self.store.update_server(updated)
 
     def _response_from_record(self, record: McpServerRecord) -> McpServerResponse:
         effective_record = record.model_copy(
-            update={"auth_state": self._effective_auth_state(record)}
+            update={_Fields.AUTH_STATE: self._effective_auth_state(record)}
         )
         return McpServerResponse.from_record(effective_record)
 
@@ -464,7 +470,7 @@ class McpRegistryService:
             return False
         if token.expires_at is None:
             return True
-        if token.expires_at > datetime.now(UTC) + timedelta(seconds=60):
+        if token.expires_at > datetime.now(timezone.utc) + timedelta(seconds=60):
             return True
         return token.encrypted_refresh_token is not None
 
@@ -496,9 +502,9 @@ class McpRegistryService:
         token = self.store.get_token(server_id=record.server_id)
         if token is None:
             raise ValueError("MCP server is not authenticated")
-        if token.expires_at is None or token.expires_at > datetime.now(UTC) + timedelta(
-            seconds=60
-        ):
+        if token.expires_at is None or token.expires_at > datetime.now(
+            timezone.utc
+        ) + timedelta(seconds=60):
             return token
         if token.encrypted_refresh_token is None:
             raise ValueError(
@@ -528,7 +534,7 @@ class McpRegistryService:
                 token_type=refreshed.token_type,
                 expires_at=refreshed.expires_at,
                 created_at=token.created_at,
-                updated_at=datetime.now(UTC),
+                updated_at=datetime.now(timezone.utc),
             )
         )
         return updated
@@ -580,7 +586,8 @@ class McpRegistryService:
     def _default_store(cls) -> InMemoryMcpStore | PostgresMcpStore:
         database_url = os.environ.get("DATABASE_URL", "").strip()
         if database_url:
-            return PostgresMcpStore(database_url=database_url)
+            pool = PostgresConnectionPool.shared(database_url)
+            return PostgresMcpStore(pool=pool)
         if TokenVaultFactory.environment() == "production":
             raise RuntimeError("Production requires a persistent MCP registry store")
         return InMemoryMcpStore()
@@ -611,8 +618,8 @@ class McpRegistryService:
                 server_id=record.server_id,
                 action=action,
                 metadata={
-                    "auth_state": record.auth_state.value,
-                    "health": record.health.value,
+                    _Fields.AUTH_STATE: record.auth_state.value,
+                    _Fields.HEALTH: record.health.value,
                 },
             )
         )
@@ -657,6 +664,7 @@ class SkillRegistryService:
         self, *, store: InMemorySkillStore | PostgresSkillStore | None = None
     ) -> None:
         self.store = store or self._default_store()
+        self._seeded_scopes: set[tuple[str, str]] = set()
 
     def create_skill(self, request: CreateSkillRequest) -> SkillResponse:
         self._ensure_preloaded_skills(org_id=request.org_id, user_id=request.user_id)
@@ -724,27 +732,27 @@ class SkillRegistryService:
             for value in (request.markdown, request.display_name, request.scope)
         ):
             raise ValueError("Preloaded skills can only be enabled or disabled")
-        changes: dict[str, object] = {"updated_at": datetime.now(UTC)}
+        changes: dict[str, object] = {_Fields.UPDATED_AT: datetime.now(timezone.utc)}
         if request.markdown is not None:
             manifest = SkillMarkdownParser.parse_manifest(request.markdown)
             if manifest.name != record.name:
                 raise ValueError("Skill name cannot change after creation")
             changes.update(
                 {
-                    "description": manifest.description,
-                    "markdown": request.markdown,
-                    "allowed_tools": manifest.allowed_tools,
-                    "compatibility": manifest.compatibility,
-                    "metadata": manifest.metadata,
-                    "version": record.version + 1,
+                    _Fields.DESCRIPTION: manifest.description,
+                    _Fields.MARKDOWN: request.markdown,
+                    _Fields.ALLOWED_TOOLS: manifest.allowed_tools,
+                    _Fields.COMPATIBILITY: manifest.compatibility,
+                    _Fields.METADATA: manifest.metadata,
+                    _Fields.VERSION: record.version + 1,
                 }
             )
         if request.display_name is not None:
-            changes["display_name"] = request.display_name
+            changes[_Fields.DISPLAY_NAME] = request.display_name
         if request.enabled is not None:
-            changes["enabled"] = request.enabled
+            changes[_Fields.ENABLED] = request.enabled
         if request.scope is not None:
-            changes["scope"] = request.scope
+            changes[_Fields.SCOPE] = request.scope
         updated = record.model_copy(update=changes)
         self.store.update_skill(updated)
         self._audit(updated, "skill_updated")
@@ -826,7 +834,7 @@ class SkillRegistryService:
         record = self.store.get_skill_by_name(
             org_id=org_id,
             user_id=user_id,
-            name=normalize_skill_slug(name),
+            name=Validators.normalize_skill_slug(name),
         )
         if record is None or not record.enabled:
             raise ValueError("Skill was not found for this scope")
@@ -834,7 +842,14 @@ class SkillRegistryService:
             org_id=org_id, user_id=user_id, skill_id=record.skill_id
         )
 
+    def seed_preloaded_skills(self, *, org_id: str, user_id: str) -> None:
+        """Public entry point for startup hooks that pre-seed a known scope."""
+        self._ensure_preloaded_skills(org_id=org_id, user_id=user_id)
+
     def _ensure_preloaded_skills(self, *, org_id: str, user_id: str) -> None:
+        scope_key = (org_id, user_id)
+        if scope_key in self._seeded_scopes:
+            return
         for markdown in PRELOADED_SKILL_MARKDOWNS:
             manifest = SkillMarkdownParser.parse_manifest(markdown)
             existing = self.store.get_skill_by_name(
@@ -868,19 +883,20 @@ class SkillRegistryService:
                 continue
             changes: dict[str, object] = {}
             if existing.markdown != markdown:
-                changes["markdown"] = markdown
-                changes["version"] = existing.version + 1
+                changes[_Fields.MARKDOWN] = markdown
+                changes[_Fields.VERSION] = existing.version + 1
             if existing.description != manifest.description:
-                changes["description"] = manifest.description
+                changes[_Fields.DESCRIPTION] = manifest.description
             if existing.allowed_tools != manifest.allowed_tools:
-                changes["allowed_tools"] = manifest.allowed_tools
+                changes[_Fields.ALLOWED_TOOLS] = manifest.allowed_tools
             if existing.compatibility != manifest.compatibility:
-                changes["compatibility"] = manifest.compatibility
+                changes[_Fields.COMPATIBILITY] = manifest.compatibility
             if existing.metadata != manifest.metadata:
-                changes["metadata"] = manifest.metadata
+                changes[_Fields.METADATA] = manifest.metadata
             if changes:
-                changes["updated_at"] = datetime.now(UTC)
+                changes[_Fields.UPDATED_AT] = datetime.now(timezone.utc)
                 self.store.update_skill(existing.model_copy(update=changes))
+        self._seeded_scopes.add(scope_key)
 
     def _require_visible_skill(
         self, *, org_id: str, user_id: str, skill_id: str
@@ -905,7 +921,10 @@ class SkillRegistryService:
                 user_id=record.user_id,
                 skill_id=record.skill_id,
                 action=action,
-                metadata={"name": record.name, "version": record.version},
+                metadata={
+                    _Fields.NAME: record.name,
+                    _Fields.VERSION: record.version,
+                },
             )
         )
 
@@ -929,40 +948,47 @@ class SkillRegistryService:
     def _default_store(cls) -> InMemorySkillStore | PostgresSkillStore:
         database_url = os.environ.get("DATABASE_URL", "").strip()
         if database_url:
-            return PostgresSkillStore(database_url=database_url)
+            pool = PostgresConnectionPool.shared(database_url)
+            return PostgresSkillStore(pool=pool)
         return InMemorySkillStore()
 
 
 class SkillMarkdownParser:
     """Minimal SKILL.md frontmatter parser for backend validation."""
 
+    _MANIFEST_KEYS = frozenset(
+        {
+            _Fields.NAME,
+            _Fields.DESCRIPTION,
+            _Fields.LICENSE,
+            _Fields.COMPATIBILITY,
+            _Fields.ALLOWED_TOOLS,
+            _Fields.METADATA,
+        }
+    )
+
     @classmethod
     def parse_manifest(cls, markdown: str) -> SkillManifestFields:
         frontmatter = cls._frontmatter(markdown)
         raw = cls._parse_fields(frontmatter)
-        metadata = dict(raw.get("metadata") or {})
+        metadata = dict(raw.get(_Fields.METADATA) or {})
         for key in tuple(raw):
-            if key not in {
-                "name",
-                "description",
-                "license",
-                "compatibility",
-                "allowed_tools",
-                "metadata",
-            }:
+            if key not in cls._MANIFEST_KEYS:
                 value = raw.pop(key)
                 if isinstance(value, str | int | float | bool) or value is None:
                     metadata[key] = value
         return SkillManifestFields(
-            name=str(raw.get("name", "")),
-            description=str(raw.get("description", "")),
-            license=raw.get("license") if isinstance(raw.get("license"), str) else None,
+            name=str(raw.get(_Fields.NAME, "")),
+            description=str(raw.get(_Fields.DESCRIPTION, "")),
+            license=raw.get(_Fields.LICENSE)
+            if isinstance(raw.get(_Fields.LICENSE), str)
+            else None,
             compatibility=tuple(
-                str(item) for item in cls._list(raw.get("compatibility"))
+                str(item) for item in cls._list(raw.get(_Fields.COMPATIBILITY))
             ),
             allowed_tools=tuple(
-                normalize_skill_slug(item)
-                for item in cls._list(raw.get("allowed_tools"))
+                Validators.normalize_skill_slug(item)
+                for item in cls._list(raw.get(_Fields.ALLOWED_TOOLS))
             ),
             metadata=metadata,
         )

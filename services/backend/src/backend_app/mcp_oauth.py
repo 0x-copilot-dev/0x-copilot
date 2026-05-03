@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -221,7 +221,7 @@ class RemoteMcpOAuthClient:
             Keys.OAuth.REQUIRED_SCOPES: self._scopes_from_metadata(
                 resource_metadata, auth_metadata, record
             ),
-            Keys.OAuth.DISCOVERED_AT: datetime.now(UTC).isoformat(),
+            Keys.OAuth.DISCOVERED_AT: datetime.now(timezone.utc).isoformat(),
         }
         merged = self._apply_configured_oauth_client(merged, record)
         if not self._has_required_metadata(merged):
@@ -256,7 +256,7 @@ class RemoteMcpOAuthClient:
                 Keys.OAuth.REDIRECT_URIS: registered.get(
                     Keys.OAuth.REDIRECT_URIS, [redirect_uri]
                 ),
-                Keys.OAuth.REGISTERED_AT: datetime.now(UTC).isoformat(),
+                Keys.OAuth.REGISTERED_AT: datetime.now(timezone.utc).isoformat(),
             }
             if isinstance(secret, str) and secret.strip():
                 client_record[Keys.OAuth.ENCRYPTED_CLIENT_SECRET] = token_vault.encrypt(
@@ -279,7 +279,7 @@ class RemoteMcpOAuthClient:
             Keys.OAuth.TOKEN_ENDPOINT_AUTH_METHOD: (
                 configured.token_endpoint_auth_method
             ),
-            Keys.OAuth.REGISTERED_AT: datetime.now(UTC).isoformat(),
+            Keys.OAuth.REGISTERED_AT: datetime.now(timezone.utc).isoformat(),
         }
         if configured.encrypted_client_secret is not None:
             client_record[Keys.OAuth.ENCRYPTED_CLIENT_SECRET] = (
@@ -515,4 +515,4 @@ class RemoteMcpOAuthClient:
             return None
         if not isinstance(value, int) or value <= 0:
             raise McpOAuthError("OAuth token response has invalid expires_in")
-        return datetime.now(UTC) + timedelta(seconds=value)
+        return datetime.now(timezone.utc) + timedelta(seconds=value)

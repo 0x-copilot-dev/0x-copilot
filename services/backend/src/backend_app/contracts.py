@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 import re
 from typing import Any
@@ -14,6 +14,128 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+class _Fields:
+    """Flat constant pool for every field name referenced in validators or key lookups."""
+
+    ALLOWED_TOOLS = "allowed_tools"
+    AUTH_STATE = "auth_state"
+    AUTHORIZATION_ENDPOINT = "authorization_endpoint"
+    CLIENT_ID = "client_id"
+    CLIENT_SECRET = "client_secret"
+    CODE = "code"
+    COMPATIBILITY = "compatibility"
+    CREATED_AT = "created_at"
+    DESCRIPTION = "description"
+    DISPLAY_NAME = "display_name"
+    ENABLED = "enabled"
+    ERROR = "error"
+    ERROR_DESCRIPTION = "error_description"
+    HEALTH = "health"
+    LICENSE = "license"
+    MARKDOWN = "markdown"
+    METADATA = "metadata"
+    NAME = "name"
+    OAUTH_CLIENT = "oauth_client"
+    ORG_ID = "org_id"
+    PAYLOAD = "payload"
+    REDIRECT_URI = "redirect_uri"
+    SCOPE = "scope"
+    SERVER_ID = "server_id"
+    SESSION_ID = "session_id"
+    SKILL_ID = "skill_id"
+    SOURCE_TYPE = "source_type"
+    STATE = "state"
+    TOKEN_ENDPOINT = "token_endpoint"
+    TOKEN_ENDPOINT_AUTH_METHOD = "token_endpoint_auth_method"
+    UPDATED_AT = "updated_at"
+    URL = "url"
+    USER_ID = "user_id"
+    VERSION = "version"
+    VIRTUAL_PATH = "virtual_path"
+
+
+class Validators:
+    """Reusable input normalization and validation logic."""
+
+    _LOCAL_HOSTNAMES = {
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+    }
+
+    @staticmethod
+    def normalize_id(value: object) -> str:
+        text = Validators.normalize_text(value)
+        if not _ID_PATTERN.fullmatch(text):
+            raise ValueError("identifier contains unsupported characters")
+        return text
+
+    @staticmethod
+    def normalize_skill_slug(value: object) -> str:
+        text = (
+            Validators.normalize_text(value).lower().replace(" ", "_").replace("-", "_")
+        )
+        slug = re.sub(r"[^a-z0-9_]+", "_", text).strip("_")
+        if not slug or not _SLUG_PATTERN.fullmatch(slug):
+            raise ValueError("name must be a stable slug")
+        return slug
+
+    @staticmethod
+    def normalize_text(value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("value must be a string")
+        text = value.strip()
+        if not text:
+            raise ValueError("value must not be empty")
+        return text
+
+    @staticmethod
+    def validate_markdown(value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("value must be a string")
+        if not value.strip():
+            raise ValueError("value must not be empty")
+        return value
+
+    @staticmethod
+    def validate_public_mcp_url(value: object, *, allow_localhost: bool = False) -> str:
+        url = Validators.normalize_text(value)
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"https", "http"}:
+            raise ValueError("MCP URL must use http or https")
+        if parsed.scheme == "http" and not allow_localhost:
+            raise ValueError("MCP URL must use https")
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            raise ValueError("MCP URL must include a host")
+
+        if not allow_localhost:
+            try:
+                addr = ipaddress.ip_address(hostname)
+            except ValueError:
+                addr = None
+
+            if addr is not None:
+                if (
+                    addr.is_private
+                    or addr.is_loopback
+                    or addr.is_link_local
+                    or addr.is_reserved
+                    or addr.is_unspecified
+                ):
+                    raise ValueError(
+                        "MCP URL cannot target private or reserved networks"
+                    )
+            else:
+                if hostname in Validators._LOCAL_HOSTNAMES or hostname.endswith(
+                    ".local"
+                ):
+                    raise ValueError("MCP URL cannot target localhost")
+
+        return url
 
 
 class BackendContract(BaseModel):
@@ -69,27 +191,27 @@ class McpOAuthClientConfig(BackendContract):
     authorization_endpoint: str | None = None
     token_endpoint: str | None = None
 
-    @field_validator("client_id", "token_endpoint_auth_method")
+    @field_validator(_Fields.CLIENT_ID, _Fields.TOKEN_ENDPOINT_AUTH_METHOD)
     @classmethod
     def _normalize_required_text(cls, value: object) -> str:
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("scope")
+    @field_validator(_Fields.SCOPE)
     @classmethod
     def _normalize_scope(cls, value: object) -> str | None:
         if value is None:
             return None
-        scopes = normalize_text(value).split()
+        scopes = Validators.normalize_text(value).split()
         if not scopes:
             return None
         return " ".join(scopes)
 
-    @field_validator("authorization_endpoint", "token_endpoint")
+    @field_validator(_Fields.AUTHORIZATION_ENDPOINT, _Fields.TOKEN_ENDPOINT)
     @classmethod
     def _validate_optional_endpoint(cls, value: object) -> str | None:
         if value is None:
             return None
-        return validate_public_mcp_url(value)
+        return Validators.validate_public_mcp_url(value)
 
 
 class McpOAuthClientRequest(BackendContract):
@@ -100,34 +222,34 @@ class McpOAuthClientRequest(BackendContract):
     authorization_endpoint: str | None = None
     token_endpoint: str | None = None
 
-    @field_validator("client_id")
+    @field_validator(_Fields.CLIENT_ID)
     @classmethod
     def _normalize_client_id(cls, value: object) -> str:
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("client_secret", "token_endpoint_auth_method")
+    @field_validator(_Fields.CLIENT_SECRET, _Fields.TOKEN_ENDPOINT_AUTH_METHOD)
     @classmethod
     def _normalize_optional_text(cls, value: object) -> str | None:
         if value is None:
             return None
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("scope")
+    @field_validator(_Fields.SCOPE)
     @classmethod
     def _normalize_scope(cls, value: object) -> str | None:
         if value is None:
             return None
-        scopes = normalize_text(value).split()
+        scopes = Validators.normalize_text(value).split()
         if not scopes:
             return None
         return " ".join(scopes)
 
-    @field_validator("authorization_endpoint", "token_endpoint")
+    @field_validator(_Fields.AUTHORIZATION_ENDPOINT, _Fields.TOKEN_ENDPOINT)
     @classmethod
     def _validate_optional_endpoint(cls, value: object) -> str | None:
         if value is None:
             return None
-        return validate_public_mcp_url(value)
+        return Validators.validate_public_mcp_url(value)
 
 
 class McpServerRecord(BackendContract):
@@ -145,28 +267,28 @@ class McpServerRecord(BackendContract):
     required_scopes: tuple[str, ...] = ()
     last_discovery: dict[str, Any] = Field(default_factory=dict)
     oauth_client: McpOAuthClientConfig | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @field_validator("server_id", "org_id", "user_id")
+    @field_validator(_Fields.SERVER_ID, _Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("name")
+    @field_validator(_Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
-        return normalize_skill_slug(value)
+        return Validators.normalize_skill_slug(value)
 
-    @field_validator("display_name")
+    @field_validator(_Fields.DISPLAY_NAME)
     @classmethod
     def _normalize_display_name(cls, value: object) -> str:
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("url")
+    @field_validator(_Fields.URL)
     @classmethod
     def _validate_url(cls, value: object) -> str:
-        return validate_public_mcp_url(value)
+        return Validators.validate_public_mcp_url(value)
 
 
 class SkillManifestFields(BackendContract):
@@ -177,15 +299,15 @@ class SkillManifestFields(BackendContract):
     allowed_tools: tuple[str, ...] = ()
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("name")
+    @field_validator(_Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
-        return normalize_skill_slug(value)
+        return Validators.normalize_skill_slug(value)
 
-    @field_validator("description")
+    @field_validator(_Fields.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
 
 class SkillRecord(BackendContract):
@@ -204,28 +326,28 @@ class SkillRecord(BackendContract):
     allowed_tools: tuple[str, ...] = ()
     compatibility: tuple[str, ...] = ()
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @field_validator("skill_id", "org_id", "user_id")
+    @field_validator(_Fields.SKILL_ID, _Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("name")
+    @field_validator(_Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
-        return normalize_skill_slug(value)
+        return Validators.normalize_skill_slug(value)
 
-    @field_validator("display_name", "description", "virtual_path")
+    @field_validator(_Fields.DISPLAY_NAME, _Fields.DESCRIPTION, _Fields.VIRTUAL_PATH)
     @classmethod
     def _normalize_text(cls, value: object) -> str:
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("markdown")
+    @field_validator(_Fields.MARKDOWN)
     @classmethod
     def _validate_markdown(cls, value: object) -> str:
-        return validate_markdown(value)
+        return Validators.validate_markdown(value)
 
 
 class CreateSkillRequest(BackendContract):
@@ -236,22 +358,22 @@ class CreateSkillRequest(BackendContract):
     enabled: bool = True
     scope: SkillScope = SkillScope.USER
 
-    @field_validator("org_id", "user_id")
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("markdown")
+    @field_validator(_Fields.MARKDOWN)
     @classmethod
     def _normalize_markdown(cls, value: object) -> str:
-        return validate_markdown(value)
+        return Validators.validate_markdown(value)
 
-    @field_validator("display_name")
+    @field_validator(_Fields.DISPLAY_NAME)
     @classmethod
     def _normalize_display_name(cls, value: object) -> str | None:
         if value is None:
             return None
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
 
 class UpdateSkillRequest(BackendContract):
@@ -260,19 +382,19 @@ class UpdateSkillRequest(BackendContract):
     enabled: bool | None = None
     scope: SkillScope | None = None
 
-    @field_validator("display_name")
+    @field_validator(_Fields.DISPLAY_NAME)
     @classmethod
     def _normalize_optional_text(cls, value: object) -> str | None:
         if value is None:
             return None
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
-    @field_validator("markdown")
+    @field_validator(_Fields.MARKDOWN)
     @classmethod
     def _validate_optional_markdown(cls, value: object) -> str | None:
         if value is None:
             return None
-        return validate_markdown(value)
+        return Validators.validate_markdown(value)
 
 
 class SkillResponse(BackendContract):
@@ -355,15 +477,15 @@ class CreateMcpServerRequest(BackendContract):
     auth_mode: McpAuthMode = McpAuthMode.OAUTH2
     oauth_client: McpOAuthClientRequest | None = None
 
-    @field_validator("org_id", "user_id")
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("url")
+    @field_validator(_Fields.URL)
     @classmethod
     def _validate_url(cls, value: object) -> str:
-        return validate_public_mcp_url(value)
+        return Validators.validate_public_mcp_url(value)
 
 
 class UpdateMcpServerRequest(BackendContract):
@@ -371,12 +493,12 @@ class UpdateMcpServerRequest(BackendContract):
     enabled: bool | None = None
     oauth_client: McpOAuthClientRequest | None = None
 
-    @field_validator("display_name")
+    @field_validator(_Fields.DISPLAY_NAME)
     @classmethod
     def _normalize_display_name(cls, value: object) -> str | None:
         if value is None:
             return None
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
 
 class McpServerResponse(BackendContract):
@@ -425,12 +547,18 @@ class McpAuthSessionRecord(BackendContract):
     redirect_uri: str
     auth_url: str
     expires_at: datetime
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @field_validator("session_id", "server_id", "org_id", "user_id", "state")
+    @field_validator(
+        _Fields.SESSION_ID,
+        _Fields.SERVER_ID,
+        _Fields.ORG_ID,
+        _Fields.USER_ID,
+        _Fields.STATE,
+    )
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
 
 class McpAuthStartRequest(BackendContract):
@@ -438,15 +566,15 @@ class McpAuthStartRequest(BackendContract):
     user_id: str
     redirect_uri: str
 
-    @field_validator("org_id", "user_id")
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("redirect_uri")
+    @field_validator(_Fields.REDIRECT_URI)
     @classmethod
     def _validate_redirect_uri(cls, value: object) -> str:
-        return validate_public_mcp_url(value, allow_localhost=True)
+        return Validators.validate_public_mcp_url(value, allow_localhost=True)
 
 
 class McpAuthStartResponse(BackendContract):
@@ -461,17 +589,17 @@ class McpAuthCallbackRequest(BackendContract):
     error: str | None = None
     error_description: str | None = None
 
-    @field_validator("state")
+    @field_validator(_Fields.STATE)
     @classmethod
     def _normalize_state(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("code", "error", "error_description")
+    @field_validator(_Fields.CODE, _Fields.ERROR, _Fields.ERROR_DESCRIPTION)
     @classmethod
     def _normalize_optional_text(cls, value: object) -> str | None:
         if value is None:
             return None
-        return normalize_text(value)
+        return Validators.normalize_text(value)
 
     @model_validator(mode="after")
     def _require_code_or_error(self) -> "McpAuthCallbackRequest":
@@ -503,10 +631,10 @@ class InternalMcpAuthRequest(BackendContract):
     user_id: str
     redirect_uri: str
 
-    @field_validator("org_id", "user_id")
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
 
 class InternalMcpClientSession(BackendContract):
@@ -522,12 +650,12 @@ class InternalMcpRpcRequest(BackendContract):
     user_id: str
     payload: dict[str, Any]
 
-    @field_validator("org_id", "user_id")
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
     def _normalize_id(cls, value: object) -> str:
-        return normalize_id(value)
+        return Validators.normalize_id(value)
 
-    @field_validator("payload")
+    @field_validator(_Fields.PAYLOAD)
     @classmethod
     def _validate_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
         if not value:
@@ -548,8 +676,8 @@ class TokenEnvelope(BackendContract):
     encrypted_refresh_token: str | None = None
     token_type: str = "Bearer"
     expires_at: datetime | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AuditEventRecord(BackendContract):
@@ -559,7 +687,7 @@ class AuditEventRecord(BackendContract):
     server_id: str
     action: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SkillAuditEventRecord(BackendContract):
@@ -569,7 +697,7 @@ class SkillAuditEventRecord(BackendContract):
     skill_id: str
     action: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class OAuthTokenRequest(BackendContract):
@@ -584,76 +712,3 @@ class OAuthTokenRequest(BackendContract):
         if not self.access_token.strip():
             raise ValueError("access_token must not be empty")
         return self
-
-
-def normalize_id(value: object) -> str:
-    text = normalize_text(value)
-    if not _ID_PATTERN.fullmatch(text):
-        raise ValueError("identifier contains unsupported characters")
-    return text
-
-
-def normalize_skill_slug(value: object) -> str:
-    text = normalize_text(value).lower().replace(" ", "_").replace("-", "_")
-    slug = re.sub(r"[^a-z0-9_]+", "_", text).strip("_")
-    if not slug or not _SLUG_PATTERN.fullmatch(slug):
-        raise ValueError("name must be a stable slug")
-    return slug
-
-
-def normalize_text(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("value must be a string")
-    text = value.strip()
-    if not text:
-        raise ValueError("value must not be empty")
-    return text
-
-
-def validate_markdown(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("value must be a string")
-    if not value.strip():
-        raise ValueError("value must not be empty")
-    return value
-
-
-_LOCAL_HOSTNAMES = {
-    "localhost",
-    "localhost.localdomain",
-    "ip6-localhost",
-    "ip6-loopback",
-}
-
-
-def validate_public_mcp_url(value: object, *, allow_localhost: bool = False) -> str:
-    url = normalize_text(value)
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"https", "http"}:
-        raise ValueError("MCP URL must use http or https")
-    if parsed.scheme == "http" and not allow_localhost:
-        raise ValueError("MCP URL must use https")
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        raise ValueError("MCP URL must include a host")
-
-    if not allow_localhost:
-        try:
-            addr = ipaddress.ip_address(hostname)
-        except ValueError:
-            addr = None
-
-        if addr is not None:
-            if (
-                addr.is_private
-                or addr.is_loopback
-                or addr.is_link_local
-                or addr.is_reserved
-                or addr.is_unspecified
-            ):
-                raise ValueError("MCP URL cannot target private or reserved networks")
-        else:
-            if hostname in _LOCAL_HOSTNAMES or hostname.endswith(".local"):
-                raise ValueError("MCP URL cannot target localhost")
-
-    return url

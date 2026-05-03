@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.delegation.subagents import (
@@ -173,5 +173,6 @@ class SubagentTestMixin:
         return AsyncSubagentLifecycle(
             catalog=self.make_catalog(definitions or (self.make_definition(),)),
             runner=runner or self.make_runner(),
-            clock=clock or self.MutableClock(datetime(2026, 4, 30, tzinfo=UTC)),
+            clock=clock
+            or self.MutableClock(datetime(2026, 4, 30, tzinfo=timezone.utc)),
         )

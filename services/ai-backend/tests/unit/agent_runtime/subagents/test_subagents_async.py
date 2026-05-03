@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -213,7 +213,7 @@ class TestSubagentsAndAsyncAgents(SubagentTestMixin):
         assert cancelled_check.error is not None
         assert cancelled_check.error.code == SubagentErrorCode.CANCELLED
 
-        clock = self.MutableClock(datetime(2026, 4, 30, tzinfo=UTC))
+        clock = self.MutableClock(datetime(2026, 4, 30, tzinfo=timezone.utc))
         timeout_lifecycle = self.make_lifecycle(
             definitions=(self.make_definition(timeout_seconds=1),),
             clock=clock,

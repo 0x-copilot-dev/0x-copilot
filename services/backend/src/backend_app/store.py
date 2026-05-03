@@ -18,6 +18,47 @@ from backend_app.contracts import (
 )
 
 
+class PostgresConnectionPool:
+    """Shared connection pool for all Postgres-backed stores.
+
+    Uses the singleton pattern so multiple store instances share the same pool.
+    Call ``close_shared`` during application shutdown.
+    """
+
+    _instance: PostgresConnectionPool | None = None
+
+    def __init__(
+        self, database_url: str, *, min_size: int = 2, max_size: int = 10
+    ) -> None:
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+
+        self._pool = ConnectionPool(
+            conninfo=database_url,
+            min_size=min_size,
+            max_size=max_size,
+            kwargs={"row_factory": dict_row},
+        )
+
+    def connection(self) -> Any:
+        return self._pool.connection()
+
+    def close(self) -> None:
+        self._pool.close()
+
+    @classmethod
+    def shared(cls, database_url: str, **kwargs: Any) -> PostgresConnectionPool:
+        if cls._instance is None:
+            cls._instance = cls(database_url, **kwargs)
+        return cls._instance
+
+    @classmethod
+    def close_shared(cls) -> None:
+        if cls._instance is not None:
+            cls._instance.close()
+            cls._instance = None
+
+
 @dataclass
 class InMemoryMcpStore:
     servers: dict[str, McpServerRecord] = field(default_factory=dict)
@@ -79,14 +120,10 @@ class InMemoryMcpStore:
 
 
 class PostgresMcpStore:
-    """PostgreSQL-backed MCP registry store.
+    """PostgreSQL-backed MCP registry store with connection pooling."""
 
-    Lazy-imports psycopg so unit tests and local in-memory runs do not require
-    a running Postgres client library.
-    """
-
-    def __init__(self, *, database_url: str) -> None:
-        self.database_url = database_url
+    def __init__(self, *, pool: PostgresConnectionPool) -> None:
+        self._pool = pool
 
     def create_server(self, record: McpServerRecord) -> McpServerRecord:
         with self._connect() as conn:
@@ -315,10 +352,7 @@ class PostgresMcpStore:
                 return tuple(self._row_to_server(row) for row in cur.fetchall())
 
     def _connect(self) -> Any:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        return self._pool.connection()
 
     @classmethod
     def _server_params(cls, record: McpServerRecord) -> dict[str, object]:
@@ -459,14 +493,10 @@ class InMemorySkillStore:
 
 
 class PostgresSkillStore:
-    """PostgreSQL-backed Skill registry store.
+    """PostgreSQL-backed Skill registry store with connection pooling."""
 
-    The import is intentionally lazy so unit tests and local in-memory runs do not
-    require a running Postgres client library.
-    """
-
-    def __init__(self, *, database_url: str) -> None:
-        self.database_url = database_url
+    def __init__(self, *, pool: PostgresConnectionPool) -> None:
+        self._pool = pool
 
     def create_skill(self, record: SkillRecord) -> SkillRecord:
         with self._connect() as conn:
@@ -607,10 +637,7 @@ class PostgresSkillStore:
                 return tuple(self._row_to_record(row) for row in cur.fetchall())
 
     def _connect(self) -> Any:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        return self._pool.connection()
 
     @classmethod
     def _record_params(cls, record: SkillRecord) -> dict[str, object]:

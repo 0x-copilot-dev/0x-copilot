@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from enterprise_service_contracts.headers import (
     ORG_HEADER,
@@ -35,7 +35,7 @@ class FakeAuthSessionCreator:
             server_name="drive_mcp",
             display_name="Drive MCP",
             auth_url=f"https://auth.example.com/{runtime_context.user_id}/{server_id}",
-            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
         )
 
 
