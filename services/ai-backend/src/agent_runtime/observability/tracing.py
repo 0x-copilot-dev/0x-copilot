@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import wraps
 from importlib import import_module
 import os
 from typing import Any, Callable, TypeVar
 from uuid import uuid4
-
-from agent_runtime.observability.constants import Keys, Patterns
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -18,18 +15,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 class TraceNames:
     """Stable public names used for tracing and log correlation."""
 
-    RUNTIME_CREATE_AGENT = "runtime.create_agent_runtime"
     RUNTIME_INVOKE = "runtime.invoke"
-    RUNTIME_STREAM = "runtime.stream"
-    TOOLS_LIST_CARDS = "tools.list_cards"
-    TOOLS_LOAD_SPEC = "tools.load_spec"
-    MCP_LIST_SERVERS = "mcp.list_servers"
-    MCP_LOAD_SERVER = "mcp.load_server"
-    SKILLS_DISCOVER_SOURCES = "skills.discover_sources"
-    MEMORY_PREPARE_PAYLOAD = "memory.prepare_payload"
-    SUBAGENTS_BUILD_HANDOFF = "subagents.build_handoff"
-    SUBAGENTS_START_TASK = "subagents.start_task"
-    STREAMS_NORMALIZE_CHUNK = "streams.normalize_chunk"
 
 
 class TraceRunTypes:
@@ -37,8 +23,6 @@ class TraceRunTypes:
 
     CHAIN = "chain"
     TOOL = "tool"
-    PARSER = "parser"
-    RETRIEVER = "retriever"
 
 
 @dataclass(frozen=True)
@@ -61,32 +45,6 @@ class TraceContext:
     """Resolve stable trace and correlation identifiers from runtime inputs."""
 
     @classmethod
-    def trace_id_for(cls, *, raw_event: Mapping[str, object], context: object) -> str:
-        """Prefer runtime context trace IDs, then raw event IDs, then generate one."""
-
-        context_trace_id = getattr(context, Keys.Field.TRACE_ID, None)
-        if isinstance(context_trace_id, str) and Patterns.ID.fullmatch(
-            context_trace_id
-        ):
-            return context_trace_id
-
-        raw_trace_id = raw_event.get(Keys.Raw.TRACE_ID)
-        if isinstance(raw_trace_id, str) and Patterns.ID.fullmatch(
-            raw_trace_id.strip()
-        ):
-            return raw_trace_id.strip()
-
-        metadata = raw_event.get(Keys.Raw.METADATA)
-        if isinstance(metadata, Mapping):
-            metadata_trace_id = metadata.get(Keys.Raw.TRACE_ID)
-            if isinstance(metadata_trace_id, str) and Patterns.ID.fullmatch(
-                metadata_trace_id.strip()
-            ):
-                return metadata_trace_id.strip()
-
-        return uuid4().hex
-
-    @classmethod
     def event_id(cls) -> str:
         """Return a stable unique event identifier."""
 
@@ -100,34 +58,6 @@ class TraceContext:
 
         encoded = str(value).encode("utf-8", errors="replace")
         return sha256(encoded).hexdigest()[:16]
-
-    @classmethod
-    def langsmith_extra_for(
-        cls, context: object, *, operation: str
-    ) -> dict[str, object]:
-        """Return safe dynamic metadata for optional LangSmith traces."""
-
-        request_id = getattr(context, "request_id", None)
-        run_id = getattr(context, "run_id", None)
-        trace_id = getattr(context, "trace_id", None)
-        parent_trace_id = getattr(context, "parent_trace_id", None)
-        metadata = {
-            "operation": operation,
-            "request_id": request_id,
-            "run_id": run_id,
-            "trace_id": trace_id,
-            "parent_trace_id": parent_trace_id,
-            "user_id_hash": cls.identity_hash(getattr(context, "user_id", "")),
-            "org_id_hash": cls.identity_hash(getattr(context, "org_id", "")),
-        }
-        return {
-            "tags": ("agent_runtime", f"run:{run_id}")
-            if run_id
-            else ("agent_runtime",),
-            "metadata": {
-                key: value for key, value in metadata.items() if value is not None
-            },
-        }
 
 
 class RuntimeTracer:
@@ -177,30 +107,17 @@ class RuntimeTracer:
             return None
         return traceable
 
+    @classmethod
+    def traced(
+        cls,
+        *,
+        name: str,
+        run_type: str = TraceRunTypes.CHAIN,
+        tags: tuple[str, ...] = (),
+        metadata: Mapping[str, object] | None = None,
+    ) -> Callable[[_F], _F]:
+        """Decorate a runtime boundary with optional LangSmith tracing."""
 
-def traced(
-    *,
-    name: str,
-    run_type: str = TraceRunTypes.CHAIN,
-    tags: tuple[str, ...] = (),
-    metadata: Mapping[str, object] | None = None,
-) -> Callable[[_F], _F]:
-    """Decorate a runtime boundary with optional LangSmith tracing."""
-
-    tracer = RuntimeTracer()
-
-    def decorator(func: _F) -> _F:
-        traced_func = tracer.traceable(
-            name=name,
-            run_type=run_type,
-            tags=tags,
-            metadata=metadata,
-        )(func)
-
-        @wraps(func)
-        def wrapper(*args: object, **kwargs: object) -> object:
-            return traced_func(*args, **kwargs)
-
-        return wrapper  # type: ignore[return-value]
-
-    return decorator
+        return cls().traceable(
+            name=name, run_type=run_type, tags=tags, metadata=metadata
+        )

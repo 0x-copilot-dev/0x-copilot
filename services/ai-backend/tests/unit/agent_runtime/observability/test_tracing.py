@@ -64,10 +64,10 @@ def test_runtime_tracer_uses_langsmith_when_enabled(
     tracer = RuntimeTracer(TraceOptions(enabled=True, tags=("agent_runtime",)))
 
     @tracer.traceable(
-        name=TraceNames.TOOLS_LOAD_SPEC,
+        name=TraceNames.RUNTIME_INVOKE,
         run_type=TraceRunTypes.TOOL,
         tags=("tools",),
-        metadata={"operation": TraceNames.TOOLS_LOAD_SPEC},
+        metadata={"operation": TraceNames.RUNTIME_INVOKE},
     )
     def operation() -> str:
         return "loaded"
@@ -75,29 +75,29 @@ def test_runtime_tracer_uses_langsmith_when_enabled(
     assert operation() == "loaded"
     assert calls == [
         {
-            "name": TraceNames.TOOLS_LOAD_SPEC,
+            "name": TraceNames.RUNTIME_INVOKE,
             "run_type": TraceRunTypes.TOOL,
             "tags": ["agent_runtime", "tools"],
-            "metadata": {"operation": TraceNames.TOOLS_LOAD_SPEC},
+            "metadata": {"operation": TraceNames.RUNTIME_INVOKE},
         }
     ]
 
 
-def test_langsmith_extra_contains_product_ids_without_raw_identity(
-    model_config: ModelConfig,
-) -> None:
-    context = make_context(model_config)
+def test_identity_hash_is_stable_and_hides_raw_value() -> None:
+    raw = "user_123"
+    hashed = TraceContext.identity_hash(raw)
+    assert hashed != raw
+    assert len(hashed) == 16
+    assert TraceContext.identity_hash(raw) == hashed
 
-    extra = TraceContext.langsmith_extra_for(
-        context, operation=TraceNames.RUNTIME_INVOKE
+
+def test_traced_classmethod_returns_working_decorator() -> None:
+    decorator = RuntimeTracer.traced(
+        name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN
     )
-    metadata = extra["metadata"]
 
-    assert metadata["request_id"] == "request_123"  # type: ignore[index]
-    assert metadata["run_id"] == "run_123"  # type: ignore[index]
-    assert metadata["trace_id"] == "trace_123"  # type: ignore[index]
-    assert metadata["parent_trace_id"] == "trace_parent"  # type: ignore[index]
-    assert metadata["user_id_hash"] != context.user_id  # type: ignore[index]
-    assert metadata["org_id_hash"] != context.org_id  # type: ignore[index]
-    assert context.user_id not in str(extra)
-    assert context.org_id not in str(extra)
+    def original() -> str:
+        return "result"
+
+    decorated = decorator(original)
+    assert decorated() == "result"

@@ -12,7 +12,6 @@ from agent_runtime.observability.tracing import (
     TraceNames,
     TraceOptions,
     TraceRunTypes,
-    traced,
 )
 
 __all__ = [
@@ -25,5 +24,4 @@ __all__ = [
     "TraceNames",
     "TraceOptions",
     "TraceRunTypes",
-    "traced",
 ]

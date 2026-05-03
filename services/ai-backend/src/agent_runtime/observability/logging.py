@@ -8,25 +8,28 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-_ID_EXTRA_CHARS = frozenset({".", "_", ":", "-"})
-_ALLOWED_METADATA_KEYS = frozenset(
-    {
-        "after_tokens",
-        "attempt",
-        "before_tokens",
-        "duration_ms",
-        "exception_type",
-        "fallback_used",
-        "message_count",
-        "resource_count",
-        "retry_count",
-        "safe_count",
-        "schema_name",
-        "token_count",
-        "tool_count",
-    }
-)
+from agent_runtime.observability.constants import Patterns
+from agent_runtime.validation import ValueNormalizer
+
+_logger = logging.getLogger("agent_runtime")
+
 _ALLOWED_METADATA_VALUE_TYPES = (str, int, float, bool)
+
+
+class _Fields:
+    """Canonical field-name constants for log record validators."""
+
+    EVENT = "event"
+    SUBSYSTEM = "subsystem"
+    OPERATION = "operation"
+    STATUS = "status"
+    REQUEST_ID = "request_id"
+    RUN_ID = "run_id"
+    TRACE_ID = "trace_id"
+    PARENT_TRACE_ID = "parent_trace_id"
+    ERROR_CODE = "error_code"
+    SAFE_MESSAGE = "safe_message"
+    METADATA = "metadata"
 
 
 class RuntimeLogLevel(StrEnum):
@@ -41,48 +44,49 @@ class RuntimeLogLevel(StrEnum):
 class RuntimeLogEvent(BaseModel):
     """Structured runtime log record with product and sub-trace IDs."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, validate_assignment=True)
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    event: str
+    event: str = Field(min_length=1)
     level: RuntimeLogLevel = RuntimeLogLevel.INFO
     request_id: str
     run_id: str
     trace_id: str
     parent_trace_id: str | None = None
-    subsystem: str
-    operation: str
-    status: str
+    subsystem: str = Field(min_length=1)
+    operation: str = Field(min_length=1)
+    status: str = Field(min_length=1)
     duration_ms: int | None = Field(default=None, ge=0)
     error_code: str | None = None
     retryable: bool | None = None
     safe_message: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("event", "subsystem", "operation", "status")
+    @field_validator(
+        _Fields.EVENT,
+        _Fields.SUBSYSTEM,
+        _Fields.OPERATION,
+        _Fields.STATUS,
+        mode="before",
+    )
     @classmethod
-    def _normalize_label(cls, value: object, info: ValidationInfo) -> str:
+    def _strip_label(cls, value: object, info: ValidationInfo) -> str:
         if not isinstance(value, str):
-            msg = f"{info.field_name} must be a string"
-            raise ValueError(msg)
-        normalized = value.strip()
-        if not normalized:
-            msg = f"{info.field_name} must not be empty"
-            raise ValueError(msg)
-        return normalized
+            raise ValueError(f"{info.field_name} must be a string")
+        return value.strip()
 
-    @field_validator("request_id", "run_id", "trace_id")
+    @field_validator(_Fields.REQUEST_ID, _Fields.RUN_ID, _Fields.TRACE_ID)
     @classmethod
     def _normalize_required_id(cls, value: object, info: ValidationInfo) -> str:
-        return LogValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
-    @field_validator("parent_trace_id")
+    @field_validator(_Fields.PARENT_TRACE_ID)
     @classmethod
     def _normalize_optional_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return LogValueNormalizer.normalize_id(value, "parent_trace_id")
+        return ValueNormalizer.normalize_id(value, _Fields.PARENT_TRACE_ID)
 
-    @field_validator("error_code", "safe_message")
+    @field_validator(_Fields.ERROR_CODE, _Fields.SAFE_MESSAGE)
     @classmethod
     def _normalize_optional_text(
         cls,
@@ -91,19 +95,12 @@ class RuntimeLogEvent(BaseModel):
     ) -> str | None:
         if value is None:
             return None
-        if not isinstance(value, str):
-            msg = f"{info.field_name} must be a string"
-            raise ValueError(msg)
-        normalized = value.strip()
-        if not normalized:
-            msg = f"{info.field_name} must not be empty"
-            raise ValueError(msg)
-        return normalized
+        return ValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
-    @field_validator("metadata", mode="before")
+    @field_validator(_Fields.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> dict[str, object]:
-        return LogValueNormalizer.redact_metadata(value)
+        return _MetadataRedactor.redact(value)
 
     def to_log_dict(self) -> dict[str, object]:
         """Return a JSON-serializable record without empty optional fields."""
@@ -111,43 +108,28 @@ class RuntimeLogEvent(BaseModel):
         return self.model_dump(mode="json", exclude_none=True)
 
 
-class LogValueNormalizer:
-    """Allowlist helpers for structured logging metadata."""
+class _MetadataRedactor:
+    """Denylist-based redaction for structured logging metadata."""
 
     @classmethod
-    def normalize_id(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            msg = f"{field_name} must be a string"
-            raise ValueError(msg)
-        normalized = value.strip()
-        if not normalized or not cls.is_safe_id(normalized):
-            msg = f"{field_name} contains unsupported characters"
-            raise ValueError(msg)
-        return normalized
-
-    @classmethod
-    def is_safe_id(cls, value: str) -> bool:
-        return value[0].isalnum() and all(
-            character.isalnum() or character in _ID_EXTRA_CHARS for character in value
-        )
-
-    @classmethod
-    def redact_metadata(cls, value: object) -> dict[str, object]:
+    def redact(cls, value: object) -> dict[str, object]:
         if not isinstance(value, dict):
             return {}
-        return {
-            key: item
-            for key, item in value.items()
-            if cls.is_allowed_metadata_item(key, item)
-        }
-
-    @classmethod
-    def is_allowed_metadata_item(cls, key: object, value: object) -> bool:
-        return (
-            isinstance(key, str)
-            and key in _ALLOWED_METADATA_KEYS
-            and (value is None or isinstance(value, _ALLOWED_METADATA_VALUE_TYPES))
-        )
+        result: dict[str, object] = {}
+        dropped: list[str] = []
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
+            if Patterns.SENSITIVE_KEY.search(key):
+                dropped.append(key)
+                continue
+            if item is not None and not isinstance(item, _ALLOWED_METADATA_VALUE_TYPES):
+                dropped.append(key)
+                continue
+            result[key] = item
+        if dropped:
+            _logger.debug("Dropped metadata keys from log event: %s", dropped)
+        return result
 
 
 class RuntimeLogger:

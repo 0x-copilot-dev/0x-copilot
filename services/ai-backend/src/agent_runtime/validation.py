@@ -13,8 +13,6 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from agent_runtime.observability.redaction import ObservabilityRedactor
-
 if TYPE_CHECKING:
     from agent_runtime.execution.contracts import AgentRuntimeContext
 
@@ -103,35 +101,40 @@ class ValueNormalizer:
 
     @classmethod
     def redact_json_object(cls, value: object) -> dict:
+        from agent_runtime.observability.redaction import ObservabilityRedactor
+
         return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
 
+    @staticmethod
+    def first_duplicate_name(names: Iterable[str]) -> str | None:
+        """Return the first alphabetically-sorted duplicate, or ``None``."""
+        counts = Counter(names)
+        duplicates = sorted(name for name, count in counts.items() if count > 1)
+        return duplicates[0] if duplicates else None
 
-def first_duplicate_name(names: Iterable[str]) -> str | None:
-    """Return the first alphabetically-sorted duplicate, or ``None``."""
-    counts = Counter(names)
-    duplicates = sorted(name for name, count in counts.items() if count > 1)
-    return duplicates[0] if duplicates else None
+    @staticmethod
+    def coerce_runtime_context(
+        context: object,
+        *,
+        correlation_id: str | None = None,
+    ) -> "AgentRuntimeContext":
+        """Validate and return an ``AgentRuntimeContext``, raising on failure."""
+        from agent_runtime.execution.contracts import (
+            AgentRuntimeContext,
+            RuntimeErrorCode,
+        )
+        from agent_runtime.execution.errors import AgentRuntimeError
 
+        if isinstance(context, AgentRuntimeContext):
+            return context
+        try:
+            from pydantic import ValidationError as _ValidationError
 
-def coerce_runtime_context(
-    context: object,
-    *,
-    correlation_id: str | None = None,
-) -> AgentRuntimeContext:
-    """Validate and return an ``AgentRuntimeContext``, raising on failure."""
-    from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
-    from agent_runtime.execution.errors import AgentRuntimeError
-
-    if isinstance(context, AgentRuntimeContext):
-        return context
-    try:
-        from pydantic import ValidationError as _ValidationError
-
-        return AgentRuntimeContext.model_validate(context)
-    except _ValidationError as exc:
-        raise AgentRuntimeError(
-            RuntimeErrorCode.VALIDATION_ERROR,
-            "Runtime context is invalid.",
-            retryable=False,
-            correlation_id=correlation_id,
-        ) from exc
+            return AgentRuntimeContext.model_validate(context)
+        except _ValidationError as exc:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Runtime context is invalid.",
+                retryable=False,
+                correlation_id=correlation_id,
+            ) from exc

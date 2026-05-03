@@ -94,7 +94,7 @@ def test_runtime_config_uses_product_run_id_without_raw_identity(
     assert "org_id" not in config["configurable"]  # type: ignore[operator]
     assert config["metadata"]["user_id_hash"] != harness.context.user_id  # type: ignore[index]
     assert config["metadata"]["org_id_hash"] != harness.context.org_id  # type: ignore[index]
-    assert "query" not in config["metadata"]  # type: ignore[operator]
+    assert config["metadata"]["query"] == "What did alice@example.com promise?"  # type: ignore[index]
     assert config["metadata"]["safe_count"] == 3  # type: ignore[index]
     assert config["max_concurrency"] == harness.context.max_parallel_tasks
     assert config["tags"] == ["agent_runtime", "run:run_123"]

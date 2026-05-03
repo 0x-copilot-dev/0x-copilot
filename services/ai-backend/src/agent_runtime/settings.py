@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_runtime.execution.contracts import (
     ModelConfig,
@@ -19,6 +20,47 @@ from agent_runtime.execution.contracts import (
     ModelThinkingMode,
     RuntimeContract,
 )
+
+
+class _EnvFields:
+    """Environment variable name constants."""
+
+    ENVIRONMENT = "RUNTIME_ENVIRONMENT"
+    DEFAULT_PROVIDER = "RUNTIME_DEFAULT_PROVIDER"
+    DEFAULT_MODEL = "RUNTIME_DEFAULT_MODEL"
+    DEFAULT_MAX_INPUT_TOKENS = "RUNTIME_DEFAULT_MAX_INPUT_TOKENS"
+    DEFAULT_TIMEOUT_SECONDS = "RUNTIME_DEFAULT_TIMEOUT_SECONDS"
+    DEFAULT_TEMPERATURE = "RUNTIME_DEFAULT_TEMPERATURE"
+    DEFAULT_SUPPORTS_STREAMING = "RUNTIME_DEFAULT_SUPPORTS_STREAMING"
+    MAX_RETRIES = "RUNTIME_MAX_RETRIES"
+    MAX_PARALLEL_RUNS = "RUNTIME_MAX_PARALLEL_RUNS"
+    MAX_PARALLEL_TASKS = "RUNTIME_MAX_PARALLEL_TASKS"
+    MAX_PARALLEL_SUBAGENTS = "RUNTIME_MAX_PARALLEL_SUBAGENTS"
+    WORKER_POLL_INTERVAL_SECONDS = "RUNTIME_WORKER_POLL_INTERVAL_SECONDS"
+    WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
+    START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
+    ALLOW_EMPTY_CAPABILITIES = "RUNTIME_ALLOW_EMPTY_CAPABILITIES"
+    STORE_BACKEND = "RUNTIME_STORE_BACKEND"
+    DATABASE_URL = "DATABASE_URL"
+    MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
+    MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
+    SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
+    SKILLS_CACHE_TTL_SECONDS = "SKILLS_CACHE_TTL_SECONDS"
+    OPENAI_API_KEY = "OPENAI_API_KEY"
+    ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+    GOOGLE_API_KEY = "GOOGLE_API_KEY"
+    DEFAULT_REASONING_ENABLED = "RUNTIME_DEFAULT_REASONING_ENABLED"
+    DEFAULT_REASONING_EFFORT = "RUNTIME_DEFAULT_REASONING_EFFORT"
+    DEFAULT_REASONING_SUMMARY = "RUNTIME_DEFAULT_REASONING_SUMMARY"
+    DEFAULT_REASONING_DISPLAY = "RUNTIME_DEFAULT_REASONING_DISPLAY"
+    DEFAULT_REASONING_BUDGET_TOKENS = "RUNTIME_DEFAULT_REASONING_BUDGET_TOKENS"
+    DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT = (
+        "RUNTIME_DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT"
+    )
+    DEFAULT_THINKING_MODE = "RUNTIME_DEFAULT_THINKING_MODE"
+
+    _BOOL_TRUTHY = frozenset({"1", "true", "yes", "on"})
+    _SDK_KEYS = (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
 
 
 class RuntimeEnvironment(StrEnum):
@@ -75,8 +117,14 @@ class RuntimeSkillSettings(RuntimeContract):
     cache_ttl_seconds: int = Field(default=60, ge=0, le=3600)
 
 
-class RuntimeSettings(RuntimeContract):
+class RuntimeSettings(BaseSettings):
     """Application-level settings consumed by API and worker components."""
+
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        frozen=True,
+        validate_assignment=True,
+    )
 
     environment: RuntimeEnvironment = RuntimeEnvironment.DEVELOPMENT
     default_model: ModelConfig
@@ -116,80 +164,8 @@ class RuntimeSettings(RuntimeContract):
             )
         )
         values.update(dict(environ if environ is not None else os.environ))
-        if environ is None:
-            cls._sync_provider_environment(values)
 
-        default_provider = cls._get(values, "RUNTIME_DEFAULT_PROVIDER", "openai")
-        default_timeout = cls._float(values, "RUNTIME_DEFAULT_TIMEOUT_SECONDS", 60)
-        default_model = ModelConfig(
-            provider=default_provider,
-            model_name=cls._get(values, "RUNTIME_DEFAULT_MODEL", "gpt-5.4-mini"),
-            max_input_tokens=cls._int(
-                values, "RUNTIME_DEFAULT_MAX_INPUT_TOKENS", 128000
-            ),
-            timeout_seconds=default_timeout,
-            temperature=cls._float(values, "RUNTIME_DEFAULT_TEMPERATURE", 0),
-            supports_streaming=cls._bool(
-                values, "RUNTIME_DEFAULT_SUPPORTS_STREAMING", True
-            ),
-            reasoning=cls._default_reasoning_config(values),
-        )
-        return cls(
-            environment=RuntimeEnvironment(
-                cls._get(
-                    values, "RUNTIME_ENVIRONMENT", RuntimeEnvironment.DEVELOPMENT.value
-                )
-            ),
-            default_model=default_model,
-            default_timeout_seconds=default_timeout,
-            execution=RuntimeExecutionSettings(
-                max_retries=cls._int(values, "RUNTIME_MAX_RETRIES", 2),
-                max_parallel_runs=cls._int(values, "RUNTIME_MAX_PARALLEL_RUNS", 4),
-                max_parallel_tasks=cls._int(values, "RUNTIME_MAX_PARALLEL_TASKS", 4),
-                max_parallel_subagents=cls._int(
-                    values, "RUNTIME_MAX_PARALLEL_SUBAGENTS", 4
-                ),
-                worker_poll_interval_seconds=cls._float(
-                    values,
-                    "RUNTIME_WORKER_POLL_INTERVAL_SECONDS",
-                    1,
-                ),
-                worker_lock_seconds=cls._int(values, "RUNTIME_WORKER_LOCK_SECONDS", 60),
-                start_in_process_worker=cls._bool(
-                    values,
-                    "RUNTIME_START_IN_PROCESS_WORKER",
-                    True,
-                ),
-                allow_empty_capabilities=cls._bool(
-                    values,
-                    "RUNTIME_ALLOW_EMPTY_CAPABILITIES",
-                    False,
-                ),
-            ),
-            store=RuntimeStoreSettings(
-                backend=cls._get(values, "RUNTIME_STORE_BACKEND", "in_memory").lower(),
-                database_url=cls._optional(values, "DATABASE_URL"),
-            ),
-            mcp=RuntimeMcpSettings(
-                backend_registry_url=cls._optional(values, "MCP_BACKEND_REGISTRY_URL"),
-                auth_redirect_uri=cls._get(
-                    values,
-                    "MCP_AUTH_REDIRECT_URI",
-                    "http://127.0.0.1:5173/mcp/oauth/callback",
-                ),
-            ),
-            skills=RuntimeSkillSettings(
-                backend_registry_url=cls._optional(
-                    values, "SKILLS_BACKEND_REGISTRY_URL"
-                ),
-                cache_ttl_seconds=cls._int(values, "SKILLS_CACHE_TTL_SECONDS", 60),
-            ),
-            openai=ProviderSettings(api_key=cls._optional(values, "OPENAI_API_KEY")),
-            anthropic=ProviderSettings(
-                api_key=cls._optional(values, "ANTHROPIC_API_KEY")
-            ),
-            gemini=ProviderSettings(api_key=cls._optional(values, "GOOGLE_API_KEY")),
-        )
+        return cls._from_env_values(values)
 
     def provider_settings(self, provider: str) -> ProviderSettings:
         """Return credential settings for a normalized provider slug."""
@@ -203,13 +179,20 @@ class RuntimeSettings(RuntimeContract):
         raise ValueError(f"Unsupported model provider: {provider}")
 
     @classmethod
-    def _sync_provider_environment(cls, values: Mapping[str, str]) -> None:
-        """Expose .env provider keys to SDKs that read credentials from os.environ."""
+    def configure_sdk_environment(cls, settings: "RuntimeSettings") -> None:
+        """Expose provider API keys to SDKs that read credentials from os.environ.
 
-        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
-            value = cls._optional(values, key)
-            if value is not None:
-                os.environ.setdefault(key, value)
+        Call this explicitly after ``load()`` in process entry points.
+        """
+
+        mapping = {
+            _EnvFields.OPENAI_API_KEY: settings.openai,
+            _EnvFields.ANTHROPIC_API_KEY: settings.anthropic,
+            _EnvFields.GOOGLE_API_KEY: settings.gemini,
+        }
+        for key, provider in mapping.items():
+            if provider.api_key is not None:
+                os.environ.setdefault(key, provider.api_key)
 
     @classmethod
     def _load_env_file(cls, path: Path) -> dict[str, str]:
@@ -226,101 +209,127 @@ class RuntimeSettings(RuntimeContract):
             }
         except Exception:
             logging.getLogger(__name__).warning(
-                "Failed to load env file %s via dotenv, falling back to manual parse",
+                "Failed to load env file %s via dotenv",
                 path,
                 exc_info=True,
             )
-            return cls._parse_env_file(path)
+            return {}
 
     @classmethod
-    def _parse_env_file(cls, path: Path) -> dict[str, str]:
-        values: dict[str, str] = {}
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", maxsplit=1)
-            values[key.strip()] = value.strip().strip('"').strip("'")
-        return values
+    def _env_str(cls, v: Mapping[str, str], key: str, default: str) -> str:
+        raw = v.get(key)
+        return raw.strip() if raw and raw.strip() else default
 
     @classmethod
-    def _get(cls, values: Mapping[str, str], key: str, default: str) -> str:
-        value = values.get(key)
-        if value is None or value.strip() == "":
-            return default
-        return value.strip()
+    def _env_opt(cls, v: Mapping[str, str], key: str) -> str | None:
+        raw = v.get(key)
+        return raw.strip() if raw and raw.strip() else None
 
     @classmethod
-    def _optional(cls, values: Mapping[str, str], key: str) -> str | None:
-        value = values.get(key)
-        if value is None or value.strip() == "":
-            return None
-        return value.strip()
+    def _from_env_values(cls, v: Mapping[str, str]) -> "RuntimeSettings":
+        """Assemble nested settings from a flat environment mapping."""
+
+        E = _EnvFields
+        _s = cls._env_str
+        _o = cls._env_opt
+        _truthy = E._BOOL_TRUTHY
+
+        timeout = float(_s(v, E.DEFAULT_TIMEOUT_SECONDS, "60"))
+
+        return cls(
+            environment=RuntimeEnvironment(
+                _s(v, E.ENVIRONMENT, RuntimeEnvironment.DEVELOPMENT.value)
+            ),
+            default_model=ModelConfig(
+                provider=_s(v, E.DEFAULT_PROVIDER, "openai"),
+                model_name=_s(v, E.DEFAULT_MODEL, "gpt-5.4-mini"),
+                max_input_tokens=int(_s(v, E.DEFAULT_MAX_INPUT_TOKENS, "128000")),
+                timeout_seconds=timeout,
+                temperature=float(_s(v, E.DEFAULT_TEMPERATURE, "0")),
+                supports_streaming=_s(v, E.DEFAULT_SUPPORTS_STREAMING, "true").lower()
+                in _truthy,
+                reasoning=cls._build_reasoning_config(v),
+            ),
+            default_timeout_seconds=timeout,
+            execution=RuntimeExecutionSettings(
+                max_retries=int(_s(v, E.MAX_RETRIES, "2")),
+                max_parallel_runs=int(_s(v, E.MAX_PARALLEL_RUNS, "4")),
+                max_parallel_tasks=int(_s(v, E.MAX_PARALLEL_TASKS, "4")),
+                max_parallel_subagents=int(_s(v, E.MAX_PARALLEL_SUBAGENTS, "4")),
+                worker_poll_interval_seconds=float(
+                    _s(v, E.WORKER_POLL_INTERVAL_SECONDS, "1")
+                ),
+                worker_lock_seconds=int(_s(v, E.WORKER_LOCK_SECONDS, "60")),
+                start_in_process_worker=_s(v, E.START_IN_PROCESS_WORKER, "true").lower()
+                in _truthy,
+                allow_empty_capabilities=_s(
+                    v, E.ALLOW_EMPTY_CAPABILITIES, "false"
+                ).lower()
+                in _truthy,
+            ),
+            store=RuntimeStoreSettings(
+                backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
+                database_url=_o(v, E.DATABASE_URL),
+            ),
+            mcp=RuntimeMcpSettings(
+                backend_registry_url=_o(v, E.MCP_BACKEND_REGISTRY_URL),
+                auth_redirect_uri=_s(
+                    v,
+                    E.MCP_AUTH_REDIRECT_URI,
+                    "http://127.0.0.1:5173/mcp/oauth/callback",
+                ),
+            ),
+            skills=RuntimeSkillSettings(
+                backend_registry_url=_o(v, E.SKILLS_BACKEND_REGISTRY_URL),
+                cache_ttl_seconds=int(_s(v, E.SKILLS_CACHE_TTL_SECONDS, "60")),
+            ),
+            openai=ProviderSettings(api_key=_o(v, E.OPENAI_API_KEY)),
+            anthropic=ProviderSettings(api_key=_o(v, E.ANTHROPIC_API_KEY)),
+            gemini=ProviderSettings(api_key=_o(v, E.GOOGLE_API_KEY)),
+        )
 
     @classmethod
-    def _int(cls, values: Mapping[str, str], key: str, default: int) -> int:
-        return int(cls._get(values, key, str(default)))
-
-    @classmethod
-    def _float(cls, values: Mapping[str, str], key: str, default: float) -> float:
-        return float(cls._get(values, key, str(default)))
-
-    @classmethod
-    def _bool(cls, values: Mapping[str, str], key: str, default: bool) -> bool:
-        value = cls._get(values, key, "true" if default else "false").lower()
-        return value in {"1", "true", "yes", "on"}
-
-    @classmethod
-    def _optional_bool(cls, values: Mapping[str, str], key: str) -> bool | None:
-        value = cls._optional(values, key)
-        if value is None:
-            return None
-        return value.lower() in {"1", "true", "yes", "on"}
-
-    @classmethod
-    def _optional_int(cls, values: Mapping[str, str], key: str) -> int | None:
-        value = cls._optional(values, key)
-        if value is None:
-            return None
-        return int(value)
-
-    @classmethod
-    def _default_reasoning_config(
-        cls, values: Mapping[str, str]
+    def _build_reasoning_config(
+        cls, v: Mapping[str, str]
     ) -> ModelReasoningConfig | None:
-        enabled = cls._optional_bool(values, "RUNTIME_DEFAULT_REASONING_ENABLED")
-        effort = cls._optional(values, "RUNTIME_DEFAULT_REASONING_EFFORT")
-        summary = cls._optional(values, "RUNTIME_DEFAULT_REASONING_SUMMARY")
-        display = cls._optional(values, "RUNTIME_DEFAULT_REASONING_DISPLAY")
-        budget_tokens = cls._optional_int(
-            values, "RUNTIME_DEFAULT_REASONING_BUDGET_TOKENS"
-        )
-        include_encrypted_content = cls._optional_bool(
-            values, "RUNTIME_DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT"
-        )
-        thinking_mode = cls._optional(values, "RUNTIME_DEFAULT_THINKING_MODE")
-        if (
-            enabled is None
-            and effort is None
-            and summary is None
-            and display is None
-            and budget_tokens is None
-            and include_encrypted_content is None
-            and thinking_mode is None
+        E = _EnvFields
+        _o = cls._env_opt
+        _truthy = E._BOOL_TRUTHY
+
+        enabled_raw = _o(v, E.DEFAULT_REASONING_ENABLED)
+        effort = _o(v, E.DEFAULT_REASONING_EFFORT)
+        summary = _o(v, E.DEFAULT_REASONING_SUMMARY)
+        display = _o(v, E.DEFAULT_REASONING_DISPLAY)
+        budget_raw = _o(v, E.DEFAULT_REASONING_BUDGET_TOKENS)
+        encrypted_raw = _o(v, E.DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT)
+        thinking_mode = _o(v, E.DEFAULT_THINKING_MODE)
+
+        if all(
+            x is None
+            for x in (
+                enabled_raw,
+                effort,
+                summary,
+                display,
+                budget_raw,
+                encrypted_raw,
+                thinking_mode,
+            )
         ):
             return None
+
+        enabled = enabled_raw.lower() in _truthy if enabled_raw else None
+
         return ModelReasoningConfig(
             enabled=True if enabled is None else enabled,
-            effort=ModelReasoningEffort(effort.lower()) if effort is not None else None,
-            summary=ModelReasoningSummary(summary.lower())
-            if summary is not None
-            else None,
-            display=ModelReasoningDisplay(display.lower())
-            if display is not None
-            else None,
-            budget_tokens=budget_tokens,
-            include_encrypted_content=bool(include_encrypted_content),
+            effort=ModelReasoningEffort(effort.lower()) if effort else None,
+            summary=ModelReasoningSummary(summary.lower()) if summary else None,
+            display=ModelReasoningDisplay(display.lower()) if display else None,
+            budget_tokens=int(budget_raw) if budget_raw else None,
+            include_encrypted_content=bool(
+                encrypted_raw and encrypted_raw.lower() in _truthy
+            ),
             thinking_mode=ModelThinkingMode(thinking_mode.lower())
-            if thinking_mode is not None
+            if thinking_mode
             else None,
         )
