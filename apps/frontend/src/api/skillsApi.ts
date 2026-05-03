@@ -6,30 +6,22 @@ import type {
 } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
-import { assertOk, jsonHeaders } from "./http";
+import { assertOk, httpDelete, httpGet, httpPost, jsonHeaders } from "./http";
 
 export async function listSkills(identity: RequestIdentity): Promise<Skill[]> {
-  const response = await fetch(`/v1/skills?${identityParams(identity)}`);
-  await assertOk(response);
-  const payload = (await response.json()) as SkillListResponse;
+  const payload = await httpGet<SkillListResponse>("/v1/skills", identity);
   return payload.skills;
 }
 
-export async function createSkill(
+export function createSkill(
   payload: Omit<CreateSkillRequest, "org_id" | "user_id">,
   identity: RequestIdentity,
 ): Promise<Skill> {
-  const response = await fetch("/v1/skills", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify({
-      ...payload,
-      org_id: identity.orgId,
-      user_id: identity.userId,
-    }),
+  return httpPost<Skill>("/v1/skills", {
+    ...payload,
+    org_id: identity.orgId,
+    user_id: identity.userId,
   });
-  await assertOk(response);
-  return (await response.json()) as Skill;
 }
 
 export async function updateSkill(
@@ -49,15 +41,9 @@ export async function updateSkill(
   return (await response.json()) as Skill;
 }
 
-export async function deleteSkill(
+export function deleteSkill(
   skillId: string,
   identity: RequestIdentity,
 ): Promise<void> {
-  const response = await fetch(
-    `/v1/skills/${skillId}?${identityParams(identity)}`,
-    {
-      method: "DELETE",
-    },
-  );
-  await assertOk(response);
+  return httpDelete(`/v1/skills/${skillId}`, identity);
 }

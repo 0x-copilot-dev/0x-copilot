@@ -7,19 +7,25 @@ import type {
   UpdateMcpServerRequest,
 } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
-import { identityParams } from "./config";
-import { assertOk, jsonHeaders } from "./http";
+import {
+  assertOk,
+  httpDelete,
+  httpGet,
+  httpPatchQuery,
+  httpPost,
+} from "./http";
 
 export async function listMcpServers(
   identity: RequestIdentity,
 ): Promise<McpServer[]> {
-  const response = await fetch(`/v1/mcp/servers?${identityParams(identity)}`);
-  await assertOk(response);
-  const payload = (await response.json()) as McpServerListResponse;
+  const payload = await httpGet<McpServerListResponse>(
+    "/v1/mcp/servers",
+    identity,
+  );
   return payload.servers;
 }
 
-export async function createMcpServer(
+export function createMcpServer(
   url: string,
   identity: RequestIdentity,
   oauthClient?: McpOAuthClientConfigRequest,
@@ -32,71 +38,53 @@ export async function createMcpServer(
   if (oauthClient !== undefined) {
     payload.oauth_client = oauthClient;
   }
-  const response = await fetch("/v1/mcp/servers", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload),
-  });
-  await assertOk(response);
-  return (await response.json()) as McpServer;
+  return httpPost<McpServer>("/v1/mcp/servers", payload);
 }
 
-export async function updateMcpServer(
+export function updateMcpServer(
   serverId: string,
   payload: UpdateMcpServerRequest,
   identity: RequestIdentity,
 ): Promise<McpServer> {
-  const response = await fetch(
-    `/v1/mcp/servers/${serverId}?${identityParams(identity)}`,
-    {
-      method: "PATCH",
-      headers: jsonHeaders(),
-      body: JSON.stringify(payload),
-    },
+  return httpPatchQuery<McpServer>(
+    `/v1/mcp/servers/${serverId}`,
+    payload,
+    identity,
   );
-  await assertOk(response);
-  return (await response.json()) as McpServer;
 }
 
-export async function deleteMcpServer(
+export function deleteMcpServer(
   serverId: string,
   identity: RequestIdentity,
 ): Promise<void> {
-  const response = await fetch(
-    `/v1/mcp/servers/${serverId}?${identityParams(identity)}`,
-    {
-      method: "DELETE",
-    },
-  );
-  await assertOk(response);
+  return httpDelete(`/v1/mcp/servers/${serverId}`, identity);
 }
 
-export async function startMcpAuth(
+export function startMcpAuth(
   serverId: string,
   identity: RequestIdentity,
 ): Promise<McpAuthStartResponse> {
-  const response = await fetch(`/v1/mcp/servers/${serverId}/auth/start`, {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify({
+  return httpPost<McpAuthStartResponse>(
+    `/v1/mcp/servers/${serverId}/auth/start`,
+    {
       org_id: identity.orgId,
       user_id: identity.userId,
       redirect_uri: `${window.location.origin}/mcp/oauth/callback`,
-    }),
-  });
-  await assertOk(response);
-  return (await response.json()) as McpAuthStartResponse;
+    },
+  );
 }
 
 export async function skipMcpAuth(
   serverId: string,
   identity: RequestIdentity,
 ): Promise<McpServer> {
+  const params = new URLSearchParams({
+    org_id: identity.orgId,
+    user_id: identity.userId,
+  });
   const response = await fetch(
-    `/v1/mcp/servers/${serverId}/auth/skip?${identityParams(identity)}`,
-    {
-      method: "POST",
-    },
+    `/v1/mcp/servers/${serverId}/auth/skip?${params}`,
+    { method: "POST" },
   );
   await assertOk(response);
   return (await response.json()) as McpServer;

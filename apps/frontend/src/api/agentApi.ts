@@ -17,7 +17,7 @@ import type {
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
-import { assertOk, jsonHeaders } from "./http";
+import { httpGet, httpPost, httpPostQuery } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
@@ -41,7 +41,7 @@ export class RuntimeStreamProtocolError extends Error {
   }
 }
 
-export async function createConversation(
+export function createConversation(
   identity: RequestIdentity,
   options: {
     title?: string | null;
@@ -58,62 +58,51 @@ export async function createConversation(
   if (options.idempotencyKey !== undefined) {
     payload.idempotency_key = options.idempotencyKey;
   }
-  const response = await fetch("/v1/agent/conversations", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload),
-  });
-  await assertOk(response);
-  return (await response.json()) as Conversation;
+  return httpPost<Conversation>("/v1/agent/conversations", payload);
 }
 
-export async function getConversation(
+export function getConversation(
   conversationId: string,
   identity: RequestIdentity,
 ): Promise<Conversation> {
-  const response = await fetch(
-    `/v1/agent/conversations/${conversationId}?${identityParams(identity)}`,
+  return httpGet<Conversation>(
+    `/v1/agent/conversations/${conversationId}`,
+    identity,
   );
-  await assertOk(response);
-  return (await response.json()) as Conversation;
 }
 
-export async function listConversations(
+export function listConversations(
   identity: RequestIdentity,
   options: { limit?: number; includeArchived?: boolean } = {},
 ): Promise<ConversationListResponse> {
-  const params = identityParams(identity);
-  params.set("limit", String(options.limit ?? 30));
-  if (options.includeArchived) {
-    params.set("include_archived", "true");
-  }
-  const response = await fetch(`/v1/agent/conversations?${params}`);
-  await assertOk(response);
-  return (await response.json()) as ConversationListResponse;
+  return httpGet<ConversationListResponse>(
+    "/v1/agent/conversations",
+    identity,
+    {
+      limit: String(options.limit ?? 30),
+      include_archived: options.includeArchived ? "true" : undefined,
+    },
+  );
 }
 
-export async function listMessages(
+export function listMessages(
   conversationId: string,
   identity: RequestIdentity,
 ): Promise<MessageListResponse> {
-  const params = identityParams(identity);
-  params.set("limit", "100");
-  const response = await fetch(
-    `/v1/agent/conversations/${conversationId}/messages?${params}`,
+  return httpGet<MessageListResponse>(
+    `/v1/agent/conversations/${conversationId}/messages`,
+    identity,
+    { limit: "100" },
   );
-  await assertOk(response);
-  return (await response.json()) as MessageListResponse;
 }
 
-export async function listModels(
+export function listModels(
   identity: RequestIdentity,
 ): Promise<ModelCatalogResponse> {
-  const response = await fetch(`/v1/agent/models?${identityParams(identity)}`);
-  await assertOk(response);
-  return (await response.json()) as ModelCatalogResponse;
+  return httpGet<ModelCatalogResponse>("/v1/agent/models", identity);
 }
 
-export async function createRun(
+export function createRun(
   conversationId: string,
   userInput: string,
   identity: RequestIdentity,
@@ -142,16 +131,10 @@ export async function createRun(
     regenerate_from_message_id: options.regenerateFromMessageId,
     branch_id: options.branchId,
   };
-  const response = await fetch("/v1/agent/runs", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload),
-  });
-  await assertOk(response);
-  return (await response.json()) as CreateRunResponse;
+  return httpPost<CreateRunResponse>("/v1/agent/runs", payload);
 }
 
-export async function cancelRun(
+export function cancelRun(
   runId: string,
   identity: RequestIdentity,
 ): Promise<CancelRunResponse> {
@@ -159,19 +142,14 @@ export async function cancelRun(
     requested_by_user_id: identity.userId,
     reason: "Cancelled from web chat",
   };
-  const response = await fetch(
-    `/v1/agent/runs/${runId}/cancel?${identityParams(identity)}`,
-    {
-      method: "POST",
-      headers: jsonHeaders(),
-      body: JSON.stringify(payload),
-    },
+  return httpPostQuery<CancelRunResponse>(
+    `/v1/agent/runs/${runId}/cancel`,
+    payload,
+    identity,
   );
-  await assertOk(response);
-  return (await response.json()) as CancelRunResponse;
 }
 
-export async function decideApproval(
+export function decideApproval(
   approvalId: string,
   decision: ApprovalDecisionRequest["decision"],
   identity: RequestIdentity,
@@ -185,28 +163,32 @@ export async function decideApproval(
     payload.reason = reason;
   }
   const params = new URLSearchParams({ org_id: identity.orgId });
-  const response = await fetch(
+  return fetch(
     `/v1/agent/approvals/${encodeURIComponent(approvalId)}/decision?${params}`,
     {
       method: "POST",
-      headers: jsonHeaders(),
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     },
-  );
-  await assertOk(response);
-  return (await response.json()) as ApprovalDecisionResponse;
+  ).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Request failed with ${response.status}`);
+    }
+    return (await response.json()) as ApprovalDecisionResponse;
+  });
 }
 
-export async function replayRunEvents(
+export function replayRunEvents(
   runId: string,
   identity: RequestIdentity,
   afterSequence = 0,
 ): Promise<RuntimeEventReplayResponse> {
-  const params = identityParams(identity);
-  params.set("after_sequence", String(afterSequence));
-  const response = await fetch(`/v1/agent/runs/${runId}/events?${params}`);
-  await assertOk(response);
-  return (await response.json()) as RuntimeEventReplayResponse;
+  return httpGet<RuntimeEventReplayResponse>(
+    `/v1/agent/runs/${runId}/events`,
+    identity,
+    { after_sequence: String(afterSequence) },
+  );
 }
 
 export function streamRunEvents({

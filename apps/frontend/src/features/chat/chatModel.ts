@@ -23,6 +23,7 @@ import {
   isToolCallPayload,
   isToolResultPayload,
 } from "@enterprise-search/api-types";
+import { asRecord, stringValue } from "./utils/jsonUtils";
 
 type ThreadMessageContent = Exclude<ThreadMessageLike["content"], string>;
 type ThreadMessageContentPart = ThreadMessageContent[number];
@@ -1583,38 +1584,11 @@ function preferredPresentation(
   current: RuntimeEventPresentation | null,
   next: RuntimeEventPresentation | null,
 ): RuntimeEventPresentation | null {
-  if (!current) {
-    return next;
-  }
-  if (!next) {
-    return current;
-  }
-  return presentationScore(current) > presentationScore(next) ? current : next;
-}
-
-function presentationScore(presentation: RuntimeEventPresentation): number {
-  let score = 0;
-  if (presentation.confidence === "high") {
-    score += 3;
-  } else if (presentation.confidence === "medium") {
-    score += 2;
-  } else if (presentation.confidence === "low") {
-    score += 1;
-  }
-  if (presentation.result_preview && presentation.result_preview.length > 0) {
-    score += 3;
-  }
-  if (
-    presentation.title !== "Working on step" &&
-    presentation.title !== "Checked source" &&
-    presentation.title !== "Assistant activity"
-  ) {
-    score += 2;
-  }
-  if (presentation.summary) {
-    score += 1;
-  }
-  return score;
+  if (!current) return next;
+  if (!next) return current;
+  const currentRows = current.result_preview?.length ?? 0;
+  const nextRows = next.result_preview?.length ?? 0;
+  return currentRows > nextRows ? current : next;
 }
 
 function presentationFromValue(
@@ -1845,10 +1819,6 @@ function jsonArgs(value: Record<string, unknown>): ThreadToolCallArgs {
   return value as ThreadToolCallArgs;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return isPlainRecord(value) ? value : {};
-}
-
 function recordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isPlainRecord) : [];
 }
@@ -1904,10 +1874,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function sameText(left: unknown, right: unknown): boolean {

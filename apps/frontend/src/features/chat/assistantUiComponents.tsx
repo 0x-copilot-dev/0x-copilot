@@ -37,9 +37,73 @@ import type {
   Skill,
   RuntimeEventPresentation,
 } from "@enterprise-search/api-types";
-import { isAssistantPerformanceMetrics } from "@enterprise-search/api-types";
 import { markdownLinkLabel } from "./markdownLinks";
 import { mcpServerInstructionPrompt, skillInstructionPrompt } from "./prompts";
+import {
+  asRecord,
+  compactRecord,
+  displayToolResult,
+  formatArgLabel,
+  formatDateTime,
+  formatInlineValue,
+  formatMilliseconds,
+  formatToolValue,
+  hasVisibleValue,
+  largeToolResultFromValue,
+  mcpContentText,
+  parseJsonObject,
+  parseJsonValue,
+  resultRowsFromValue,
+  searchSourcesFromValue,
+  shouldRenderBlockValue,
+  stringValue,
+  summarizeInlineString,
+  truncateText,
+  type LargeToolResult,
+  type SearchSource,
+} from "./utils/jsonUtils";
+import {
+  badgeToneForStatus,
+  emptyResultLabel,
+  formatAgentName,
+  humanizeIdentifier,
+  inlineMcpToolTitle,
+  inlineToolTitle,
+  isWebSearchTool,
+  mcpApprovalDescription,
+  mcpToolSummary,
+  mcpToolTitle,
+  safeConnectorDisplayName,
+  safeToolActionLabel,
+  safeVisibleText,
+  toolActionName,
+  toolActivityTitle,
+  toolDisplayName,
+  toolStatusLabel,
+} from "./utils/toolLabels";
+import {
+  hasComplexToolArgs,
+  hasRichToolResult,
+  shouldRenderFullMcpCard,
+  shouldRenderFullToolCard,
+  shouldShowToolDetails,
+  summarizeArgs,
+  summarizeArgsText,
+  summarizeParsedMainResult,
+} from "./utils/toolResultAnalysis";
+import {
+  activityParams,
+  activityTitle,
+  hasImportantSubagentActivity,
+  isTerminalAssistantStatus,
+  mcpActivityParams,
+  metricRows,
+  performanceMetricsFromMetadata,
+  subagentActivityRecord,
+  subagentActivityRecords,
+  type ActivityParam,
+  type SubagentActivityRecord,
+} from "./utils/activityDataBuilders";
 
 export function AssistantThreadList({
   collapsed,
@@ -288,7 +352,11 @@ export function ThreadBody({
               );
             }
             if (message.role === "system") {
-              return <SystemMessage />;
+              return (
+                <MessagePrimitive.Root className="aui-system-message">
+                  <MessagePrimitive.Parts components={{ Text: PlainText }} />
+                </MessagePrimitive.Root>
+              );
             }
             return (
               <AssistantMessage
@@ -366,12 +434,6 @@ type ActivityVariant =
   | "approval"
   | "connector"
   | "progress";
-
-type ActivityParam = {
-  label: string;
-  value: ReactNode;
-  block?: boolean;
-};
 
 function ActivityCard({
   title,
@@ -1411,14 +1473,6 @@ function UserEditComposer(): ReactElement {
   );
 }
 
-function SystemMessage(): ReactElement {
-  return (
-    <MessagePrimitive.Root className="aui-system-message">
-      <MessagePrimitive.Parts components={{ Text: PlainText }} />
-    </MessagePrimitive.Root>
-  );
-}
-
 function MarkdownText({ text, status }: TextMessagePartProps): ReactElement {
   const streaming = status.type === "running";
   return (
@@ -2088,70 +2142,6 @@ function ConnectorAuthTool({
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function performanceMetricsFromMetadata(
-  metadata: ThreadMessageLike["metadata"] | undefined,
-): AssistantPerformanceMetrics | null {
-  const metrics = metadata?.custom?.performance_metrics;
-  return isAssistantPerformanceMetrics(metrics) ? metrics : null;
-}
-
-function isTerminalAssistantStatus(
-  status: ThreadMessageLike["status"] | undefined,
-): boolean {
-  return status?.type === "complete" || status?.type === "incomplete";
-}
-
-function formatMilliseconds(value: number): string {
-  if (value < 1000) {
-    return `${Math.max(0, Math.round(value))}ms`;
-  }
-  return `${formatNumber(value / 1000)}s`;
-}
-
-function formatNumber(value: number): string {
-  return Number.isInteger(value)
-    ? String(value)
-    : value.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function metricRows(
-  metrics: AssistantPerformanceMetrics,
-): Array<{ label: string; value: string }> {
-  const rows: Array<{ label: string; value: string }> = [];
-  if (metrics.first_chunk_ms !== undefined) {
-    rows.push({
-      label: "First token",
-      value: formatMilliseconds(metrics.first_chunk_ms),
-    });
-  }
-  rows.push({
-    label: "Total",
-    value: formatMilliseconds(metrics.duration_ms),
-  });
-  if (metrics.usage?.output_per_second !== undefined) {
-    rows.push({
-      label: "Speed",
-      value: `${formatNumber(metrics.usage.output_per_second)} tok/s`,
-    });
-  }
-  return rows;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
 function toolDetailsContent(
   argsText: string | undefined,
   result: unknown,
@@ -2256,193 +2246,6 @@ function mcpAuthDetails(
   );
 }
 
-function shouldShowToolDetails(
-  argsText: string | undefined,
-  result: unknown,
-): boolean {
-  if (!argsText && result === undefined) {
-    return false;
-  }
-  if (largeToolResultFromValue(result)) {
-    return Boolean(argsText && hasComplexToolArgs(argsText));
-  }
-  return Boolean(
-    (argsText && hasComplexToolArgs(argsText)) || hasComplexToolResult(result),
-  );
-}
-
-function shouldRenderFullToolCard(
-  status: string,
-  isError: boolean | undefined,
-  result: unknown,
-): boolean {
-  return (
-    isError === true ||
-    status === "requires-action" ||
-    hasRichToolResult(result)
-  );
-}
-
-function shouldRenderFullMcpCard(
-  toolName: string,
-  status: string,
-  isError: boolean | undefined,
-  result: unknown,
-): boolean {
-  if (isError === true || status === "requires-action") {
-    return true;
-  }
-  if (status === "running") {
-    return false;
-  }
-  return toolName === "call_mcp_tool" && hasRichToolResult(result);
-}
-
-function hasRichToolResult(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (largeToolResultFromValue(value)) {
-    return false;
-  }
-  if (Array.isArray(value)) {
-    return value.length > 3;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 360 || trimmed.split(/\r\n|\r|\n/).length > 4;
-  }
-  const record = asRecord(value);
-  const keys = Object.keys(record);
-  if (keys.length === 0) {
-    return false;
-  }
-  const output = asRecord(record.output);
-  const content = output.content ?? record.content;
-  const text = mcpContentText(content) ?? stringValue(output.text);
-  if (text) {
-    const parsed = parseJsonObject(text);
-    if (Array.isArray(parsed?.results) || stringValue(parsed?.overview)) {
-      return true;
-    }
-    return text.length > 360 || text.split(/\r\n|\r|\n/).length > 4;
-  }
-  const informationalKeys = new Set([
-    "message",
-    "content",
-    "summary",
-    "status",
-  ]);
-  return keys.some((key) => !informationalKeys.has(key));
-}
-
-function hasComplexToolArgs(argsText: string): boolean {
-  const args = parseToolArgs(argsText);
-  if (args === null) {
-    return true;
-  }
-  return visibleToolArgEntries(args).some(([, value]) =>
-    isComplexToolValue(value),
-  );
-}
-
-function hasComplexToolResult(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 160 || trimmed.includes("\n");
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return false;
-  }
-  const record = asRecord(value);
-  const keys = Object.keys(record);
-  if (keys.length === 0) {
-    return false;
-  }
-  const messageOnly = keys.every((key) =>
-    ["message", "content", "summary"].includes(key),
-  );
-  return !messageOnly || keys.some((key) => isComplexToolValue(record[key]));
-}
-
-function isComplexToolValue(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  if (value && typeof value === "object") {
-    return true;
-  }
-  if (typeof value === "string") {
-    return value.length > 120 || value.includes("\n");
-  }
-  return false;
-}
-
-function summarizeArgsText(argsText?: string): string | null {
-  if (!argsText) {
-    return null;
-  }
-  return summarizeArgs(parseToolArgs(argsText));
-}
-
-function summarizeArgs(value: unknown): string | null {
-  const entries = visibleToolArgEntries(asRecord(value));
-  if (entries.length === 0) {
-    return null;
-  }
-  return entries
-    .slice(0, 3)
-    .map(
-      ([key, entry]) => `${formatArgLabel(key)}: ${formatInlineValue(entry)}`,
-    )
-    .join(" · ");
-}
-
-function activityParams(
-  argsText: string | undefined,
-  args: Record<string, unknown>,
-): ActivityParam[] {
-  const parsed = argsText ? parseToolArgs(argsText) : null;
-  return visibleToolArgEntries(parsed ?? args)
-    .slice(0, 5)
-    .map(([key, value]) => ({
-      label: formatArgLabel(key),
-      value: formatInlineValue(value),
-      block: false,
-    }));
-}
-
-function mcpActivityParams(
-  serverName: string | null,
-  toolName: string | null,
-  args: unknown,
-): ActivityParam[] {
-  const params: ActivityParam[] = [];
-  if (serverName) {
-    params.push({ label: "App", value: safeConnectorDisplayName(serverName) });
-  }
-  if (toolName) {
-    params.push({ label: "Action", value: safeToolActionLabel(toolName) });
-  }
-  if (args !== undefined && hasVisibleValue(args)) {
-    const displayArgs = parseJsonValue(args) ?? args;
-    if (!isComplexToolValue(displayArgs)) {
-      params.push({
-        label: "Input",
-        value: formatInlineValue(displayArgs),
-        block: false,
-      });
-    }
-  }
-  return params;
-}
-
 function safeMainResultSummary(value: ReactNode): ReactNode {
   if (typeof value !== "string") {
     return value;
@@ -2458,49 +2261,6 @@ function safeMainResultSummary(value: ReactNode): ReactNode {
     return summarizeInlineString(value);
   }
   return safeVisibleText(value);
-}
-
-function summarizeParsedMainResult(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "No results" : `${value.length} results`;
-  }
-  const record = asRecord(value);
-  const rows = resultRowsFromValue(record);
-  if (rows) {
-    return `${rows.length} results`;
-  }
-  const message =
-    stringValue(record.message) ??
-    stringValue(record.summary) ??
-    stringValue(record.overview);
-  return message ? safeVisibleText(message) : "Result returned";
-}
-
-function safeConnectorDisplayName(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  return safeVisibleText(humanizeIdentifier(value));
-}
-
-function safeToolActionLabel(value: string): string {
-  const normalized = value
-    .replace(/^call_mcp_tool$/i, "action")
-    .replace(/^auth_mcp$/i, "connect")
-    .replace(/^mcp_/i, "")
-    .replace(/_com$/i, "")
-    .replace(/^[a-z0-9]+_/, "");
-  return safeVisibleText(humanizeIdentifier(normalized));
-}
-
-function safeVisibleText(value: string): string {
-  return value
-    .replaceAll("/large_tool_results/", "saved result ")
-    .replace(/\bmcp[_-]/gi, "")
-    .replace(/_com\b/gi, "")
-    .replaceAll("_", " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function summarizeToolValue(value: unknown, toolName?: string): ReactNode {
@@ -2628,185 +2388,6 @@ function McpResultList({ results }: { results: unknown[] }): ReactElement {
   );
 }
 
-function mcpContentText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  for (const item of content) {
-    const record = asRecord(item);
-    const text = stringValue(record.text);
-    if (text) {
-      return text;
-    }
-  }
-  return null;
-}
-
-type SearchSource = {
-  title: string;
-  link: string | null;
-  snippet: string | null;
-  trust: string | null;
-};
-
-function searchSourcesFromValue(value: unknown): SearchSource[] | null {
-  const rows = resultRowsFromValue(value);
-  if (!rows) {
-    return null;
-  }
-  const sources = rows
-    .map((row) => {
-      const title =
-        stringValue(row.title) ??
-        stringValue(row.name) ??
-        stringValue(row.url) ??
-        stringValue(row.link);
-      if (!title) {
-        return null;
-      }
-      const link = stringValue(row.link) ?? stringValue(row.url);
-      return {
-        title,
-        link,
-        snippet:
-          stringValue(row.snippet) ??
-          stringValue(row.description) ??
-          stringValue(row.content),
-        trust: sourceTrustLabel(title, link),
-      };
-    })
-    .filter((source): source is SearchSource => source !== null);
-  return sources.length > 0 ? sources : null;
-}
-
-function resultRowsFromValue(value: unknown): Record<string, unknown>[] | null {
-  const parsed = parseJsonValue(value) ?? value;
-  if (Array.isArray(parsed)) {
-    const rows = parsed
-      .map(asRecord)
-      .filter((row) => Object.keys(row).length > 0);
-    return rows.length > 0 ? rows : null;
-  }
-  const record = asRecord(parsed);
-  for (const candidate of [
-    record.results,
-    record.items,
-    record.sources,
-    asRecord(record.output).results,
-    asRecord(record.output).items,
-  ]) {
-    if (Array.isArray(candidate)) {
-      const rows = candidate
-        .map(asRecord)
-        .filter((row) => Object.keys(row).length > 0);
-      if (rows.length > 0) {
-        return rows;
-      }
-    }
-  }
-  const text =
-    mcpContentText(record.content) ??
-    stringValue(record.text) ??
-    stringValue(asRecord(record.output).text);
-  if (text) {
-    const parsedText = parseJsonValue(text);
-    if (Array.isArray(parsedText)) {
-      const rows = parsedText
-        .map(asRecord)
-        .filter((row) => Object.keys(row).length > 0);
-      return rows.length > 0 ? rows : null;
-    }
-    const parsedRecord = asRecord(parsedText);
-    if (Array.isArray(parsedRecord.results)) {
-      const rows = parsedRecord.results
-        .map(asRecord)
-        .filter((row) => Object.keys(row).length > 0);
-      return rows.length > 0 ? rows : null;
-    }
-  }
-  return null;
-}
-
-function sourceTrustLabel(title: string, link: string | null): string | null {
-  const combined = `${title} ${link ?? ""}`.toLowerCase();
-  if (
-    combined.includes("docs.slack.dev") ||
-    combined.includes("slack.com/help") ||
-    combined.includes("modelcontextprotocol.io")
-  ) {
-    return "Official";
-  }
-  if (combined.includes("github.com")) {
-    return "Community";
-  }
-  return null;
-}
-
-function parseJsonValue(value: unknown): unknown | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  try {
-    return asRecord(JSON.parse(value) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-function compactRecord(
-  record: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const entries = Object.entries(record).filter(([, value]) =>
-    hasVisibleValue(value),
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : null;
-}
-
-function hasVisibleValue(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  if (typeof value === "object") {
-    return Object.keys(value).length > 0;
-  }
-  return true;
-}
-
-function displayToolResult(value: unknown): unknown {
-  const parsed = parseJsonValue(value) ?? value;
-  const parsedRecord = asRecord(parsed);
-  const output = asRecord(parsedRecord.output ?? parsed);
-  const content = output.content;
-  const text = mcpContentText(content) ?? stringValue(output.text);
-  if (text) {
-    return parseJsonValue(text) ?? text;
-  }
-  return parsed ?? value;
-}
-
 function loadedMcpServerSummary(value: unknown): ReactNode | null {
   const payload = displayToolResult(value);
   const loadedServer = asRecord(asRecord(payload).loaded_server);
@@ -2850,77 +2431,6 @@ function loadedMcpServerSummary(value: unknown): ReactNode | null {
   );
 }
 
-function emptyResultLabel(toolName?: string): string {
-  const normalized = toolName?.toLowerCase() ?? "";
-  if (normalized.includes("grep") || normalized.includes("search")) {
-    return "No matches found";
-  }
-  if (normalized.includes("ls") || normalized.includes("list")) {
-    return "No files found";
-  }
-  return "No results";
-}
-
-type SubagentActivityRecord = {
-  id: string;
-  kind: string;
-  title: string;
-  status: string;
-  summary: string | null;
-  inputSummary: string | null;
-  result: string | null;
-  isError: boolean;
-};
-
-function subagentActivityRecords(value: unknown): SubagentActivityRecord[] {
-  return Array.isArray(value)
-    ? value.map(subagentActivityRecord).filter(isSubagentActivityRecord)
-    : [];
-}
-
-function subagentActivityRecord(value: unknown): SubagentActivityRecord | null {
-  const record = asRecord(value);
-  const id = stringValue(record.id);
-  if (!id) {
-    return null;
-  }
-  return {
-    id,
-    kind: stringValue(record.kind) ?? "activity",
-    title: stringValue(record.title) ?? "Activity",
-    status: stringValue(record.status) ?? "running",
-    summary: stringValue(record.summary),
-    inputSummary: stringValue(record.input_summary),
-    result: stringValue(record.result),
-    isError: record.is_error === true,
-  };
-}
-
-function isSubagentActivityRecord(
-  value: SubagentActivityRecord | null,
-): value is SubagentActivityRecord {
-  return value !== null;
-}
-
-function hasImportantSubagentActivity(
-  activities: SubagentActivityRecord[],
-): boolean {
-  return activities.some(
-    (activity) =>
-      activity.isError ||
-      !["complete", "completed"].includes(activity.status.toLowerCase()),
-  );
-}
-
-function activityTitle(activity: SubagentActivityRecord): string {
-  if (activity.kind === "tool") {
-    return activity.isError
-      ? `Could not run ${toolDisplayName(activity.title)}`
-      : toolDisplayName(activity.title);
-  }
-  return activity.title;
-}
-
 function LargeToolResultNotice({
   compact = false,
 }: {
@@ -2938,143 +2448,6 @@ function LargeToolResultNotice({
       )}
     </div>
   );
-}
-
-type LargeToolResult = {
-  path: string;
-  callId: string | null;
-};
-
-function largeToolResultFromValue(value: unknown): LargeToolResult | null {
-  const text = largeToolResultText(value);
-  if (text === null) {
-    const path = largeToolResultPath(value);
-    return path ? { path, callId: null } : null;
-  }
-  const pathMatch = text.match(/(\/large_tool_results\/[A-Za-z0-9_-]+)/);
-  if (!pathMatch) {
-    return null;
-  }
-  const callMatch = text.match(/tool call\s+([A-Za-z0-9_-]+)/);
-  return {
-    path: pathMatch[1],
-    callId: callMatch?.[1] ?? null,
-  };
-}
-
-function largeToolResultText(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  const record = asRecord(value);
-  const output = asRecord(record.output);
-  return (
-    mcpContentText(record.content) ??
-    mcpContentText(output.content) ??
-    stringValue(record.content) ??
-    stringValue(output.content) ??
-    stringValue(output.text)
-  );
-}
-
-function largeToolResultPath(value: unknown): string | null {
-  if (typeof value === "string") {
-    const match = value.match(/(\/large_tool_results\/[A-Za-z0-9_-]+)/);
-    return match?.[1] ?? null;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const path = largeToolResultPath(item);
-      if (path) {
-        return path;
-      }
-    }
-    return null;
-  }
-  if (value && typeof value === "object") {
-    for (const entry of Object.values(value as Record<string, unknown>)) {
-      const path = largeToolResultPath(entry);
-      if (path) {
-        return path;
-      }
-    }
-  }
-  return null;
-}
-
-function parseToolArgs(argsText: string): Record<string, unknown> | null {
-  try {
-    return asRecord(JSON.parse(argsText) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-function visibleToolArgEntries(
-  args: Record<string, unknown>,
-): Array<[string, unknown]> {
-  return Object.entries(args).filter(([key, entry]) => {
-    return !hiddenToolArgKeys.has(key) && entry !== null && entry !== undefined;
-  });
-}
-
-const hiddenToolArgKeys = new Set([
-  "status",
-  "summary",
-  "delta",
-  "deltas",
-  "event_type",
-  "action_id",
-  "approval_id",
-  "approval_kind",
-  "auth_url",
-  "display_name",
-  "native_interrupt_id",
-  "presentation",
-  "server_id",
-  "server_name",
-  "source_tool_call_id",
-  "tool_name",
-]);
-
-function formatArgLabel(key: string): string {
-  return key.replaceAll("_", " ");
-}
-
-function formatInlineValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "[]" : `${value.length} items`;
-  }
-  if (typeof value === "string") {
-    return summarizeInlineString(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value && typeof value === "object") {
-    return "{...}";
-  }
-  return String(value);
-}
-
-function summarizeInlineString(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "empty";
-  }
-  const lineCount = trimmed.split(/\r\n|\r|\n/).length;
-  if (lineCount > 1) {
-    return `${lineCount} lines`;
-  }
-  return trimmed.length > 90 ? `${trimmed.slice(0, 87)}...` : trimmed;
-}
-
-function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  const truncated = value.slice(0, maxLength - 3).replace(/\s+\S*$/, "");
-  return `${truncated || value.slice(0, maxLength - 3)}...`;
 }
 
 function formatDetailValue(value: unknown): ReactNode {
@@ -3097,327 +2470,4 @@ function formatDetailValue(value: unknown): ReactNode {
     return <span>{String(value)}</span>;
   }
   return <pre>{formatToolValue(value)}</pre>;
-}
-
-function shouldRenderBlockValue(value: string): boolean {
-  return value.includes("\n") || value.length > 120;
-}
-
-function formatToolValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function toolActivityTitle(
-  toolName: string,
-  status: string,
-  isError: boolean | undefined,
-  _result: unknown,
-  _summary: string | null,
-): string {
-  const displayName = toolDisplayName(toolName);
-  if (isError || status === "incomplete") {
-    return `Could not run ${displayName}`;
-  }
-  if (status === "requires-action") {
-    return `${displayName} needs attention`;
-  }
-  return status === "running" ? `${displayName} running` : displayName;
-}
-
-function inlineToolTitle(
-  toolName: string,
-  status: string,
-  isError: boolean | undefined,
-  result: unknown,
-): string {
-  const displayName = toolDisplayName(toolName);
-  if (isError || status === "incomplete") {
-    return `${displayName} failed`;
-  }
-  if (status === "running") {
-    return toolRunningTitle(toolName, displayName);
-  }
-  if (result !== undefined) {
-    return toolCompletedTitle(toolName, displayName);
-  }
-  return displayName;
-}
-
-function toolDisplayName(toolName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (normalized === "ls" || normalized === "list_files") {
-    return "List files";
-  }
-  if (isWebSearchTool(normalized)) {
-    return "Search web";
-  }
-  if (
-    normalized === "grep" ||
-    normalized === "rg" ||
-    normalized === "search_files" ||
-    normalized === "file_search" ||
-    normalized === "list_files"
-  ) {
-    return "Search project files";
-  }
-  if (normalized === "read_file") {
-    return "Read file";
-  }
-  if (normalized === "shell") {
-    return "Run command";
-  }
-  return humanizeIdentifier(toolName || "tool");
-}
-
-function toolRunningTitle(toolName: string, displayName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (isWebSearchTool(normalized)) {
-    return "Searching the web";
-  }
-  if (isProjectSearchTool(normalized)) {
-    return "Searching project files";
-  }
-  if (normalized === "ls" || normalized === "list_files") {
-    return "Listing files";
-  }
-  return `Running ${displayName}`;
-}
-
-function toolCompletedTitle(toolName: string, displayName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (isWebSearchTool(normalized)) {
-    return "Searched the web";
-  }
-  if (isProjectSearchTool(normalized)) {
-    return "Searched project files";
-  }
-  if (normalized === "ls" || normalized === "list_files") {
-    return "Listed files";
-  }
-  return displayName;
-}
-
-function mcpToolTitle(toolName: string, requestedTool: string | null): string {
-  if (toolName === "load_mcp_server") {
-    return "Load MCP tools";
-  }
-  if (toolName === "auth_mcp") {
-    return "Authenticate MCP server";
-  }
-  return requestedTool ? humanizeIdentifier(requestedTool) : "Call MCP tool";
-}
-
-function inlineMcpToolTitle(
-  toolName: string,
-  requestedTool: string | null,
-  displayName: string | null,
-  status: string,
-): string {
-  if (toolName === "load_mcp_server") {
-    return displayName ? `Load ${displayName} tools` : "Load connector tools";
-  }
-  if (toolName === "auth_mcp") {
-    return displayName ? `Connect ${displayName}` : "Connect connector";
-  }
-  const action = toolActionName(requestedTool ?? toolName);
-  const connector = displayName ?? "connector";
-  if (status === "running") {
-    return `${capitalize(action)} ${connector}`;
-  }
-  return `${capitalizePastTense(action)} ${connector}`;
-}
-
-function mcpToolSummary(
-  toolName: string,
-  status: string,
-  serverName: string | null,
-  requestedTool: string | null,
-): string {
-  const connector = serverName ? humanizeIdentifier(serverName) : "connector";
-  const action = toolActionName(requestedTool ?? toolName);
-  if (status === "running") {
-    if (toolName === "load_mcp_server") {
-      return `Loading available tools from ${connector}.`;
-    }
-    return `${capitalize(action)} ${connector}.`;
-  }
-  if (status === "requires-action") {
-    return `Review ${connector} ${action} before it runs.`;
-  }
-  return `${connector} action completed.`;
-}
-
-function toolStatusLabel(status: string, isError?: boolean): string {
-  if (isError) {
-    return "Failed";
-  }
-  if (status === "requires-action") {
-    return "Waiting for permission";
-  }
-  if (status === "running") {
-    return "Running";
-  }
-  return "Done";
-}
-
-function badgeToneForStatus(
-  status: string,
-): "neutral" | "success" | "warning" | "danger" | "accent" {
-  const normalized = status.toLowerCase();
-  if (
-    normalized === "complete" ||
-    normalized === "completed" ||
-    normalized === "done" ||
-    normalized === "resolved"
-  ) {
-    return "success";
-  }
-  if (
-    normalized === "starting" ||
-    normalized === "working" ||
-    normalized === "still working" ||
-    normalized === "waiting" ||
-    normalized === "running" ||
-    normalized === "action required" ||
-    normalized === "waiting for permission"
-  ) {
-    return "warning";
-  }
-  if (
-    normalized === "could not complete" ||
-    normalized === "error" ||
-    normalized === "failed"
-  ) {
-    return "danger";
-  }
-  return "neutral";
-}
-
-function humanizeIdentifier(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "Tool";
-  }
-  const normalized = trimmed
-    .replace(/^mcp[_-]/i, "")
-    .replace(/[_-]mcp$/i, "")
-    .replace(/\bcom$/i, "")
-    .replace(/[_-]+/g, " ")
-    .trim();
-  return normalized
-    .split(/\s+/)
-    .map(formatBrandWord)
-    .join(" ")
-    .replace(/\bMcp\b/g, "MCP")
-    .replace(/\bApi\b/g, "API")
-    .replace(/\bUrl\b/g, "URL");
-}
-
-function formatBrandWord(value: string): string {
-  const brands: Record<string, string> = {
-    clickup: "ClickUp",
-    github: "GitHub",
-    gitlab: "GitLab",
-    slack: "Slack",
-    google: "Google",
-  };
-  const normalized = value.toLowerCase();
-  return (
-    brands[normalized] ?? value.replace(/^\w/, (letter) => letter.toUpperCase())
-  );
-}
-
-function formatAgentName(value: string): string {
-  return humanizeIdentifier(value);
-}
-
-function isWebSearchTool(toolName: string | undefined): boolean {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
-  return (
-    normalized === "web_search" ||
-    normalized === "duckduckgo_search" ||
-    normalized === "duckduckgo_search_results" ||
-    normalized === "search_web"
-  );
-}
-
-function isProjectSearchTool(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
-  return (
-    normalized === "grep" ||
-    normalized === "rg" ||
-    normalized === "search_files" ||
-    normalized === "file_search"
-  );
-}
-
-function toolActionName(toolName: string | null): string {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
-  if (!normalized) {
-    return "action";
-  }
-  if (
-    normalized.includes("search") ||
-    normalized.includes("filter") ||
-    normalized.includes("find") ||
-    normalized.includes("list")
-  ) {
-    return "search";
-  }
-  if (normalized.includes("read") || normalized.includes("get")) {
-    return "read";
-  }
-  if (
-    normalized.includes("create") ||
-    normalized.includes("post") ||
-    normalized.includes("send") ||
-    normalized.includes("update") ||
-    normalized.includes("delete")
-  ) {
-    return "modify";
-  }
-  return "action";
-}
-
-function mcpApprovalDescription(
-  displayName: string | null,
-  actionName: string,
-  readOnly: boolean | null,
-  fallback: unknown,
-): string {
-  const connector = displayName ?? "this connector";
-  if (readOnly === true) {
-    return `Enterprise Search wants to ${actionName} ${connector}. Read-only. No changes will be made.`;
-  }
-  if (readOnly === false) {
-    return `Enterprise Search wants to ${actionName} ${connector}. This action may change data.`;
-  }
-  return (
-    stringValue(fallback) ??
-    `Enterprise Search wants to run a ${connector} action.`
-  );
-}
-
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function capitalizePastTense(value: string): string {
-  if (value === "search") {
-    return "Searched";
-  }
-  if (value === "read") {
-    return "Read";
-  }
-  if (value === "modify") {
-    return "Updated";
-  }
-  return "Ran";
 }

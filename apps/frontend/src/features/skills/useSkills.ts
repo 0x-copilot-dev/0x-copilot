@@ -3,8 +3,9 @@ import type {
   SkillScope,
   UpdateSkillRequest,
 } from "@enterprise-search/api-types";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { RequestIdentity } from "../../api/config";
+import { requireIdentity, useResource } from "../../api/useResource";
 import {
   createSkill,
   deleteSkill,
@@ -29,40 +30,20 @@ export interface SkillState {
 }
 
 export function useSkills(identity: RequestIdentity | null): SkillState {
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    if (identity === null) {
-      setLoading(false);
-      return;
-    }
-    try {
-      setLoading(true);
-      setSkills(await listSkills(identity));
-      setError(null);
-    } catch (err) {
-      setError(errorMessage(err, "Could not load skills"));
-    } finally {
-      setLoading(false);
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const { data, loading, error, refresh } = useResource<Skill>(
+    identity,
+    listSkills,
+    "Could not load skills",
+  );
 
   const actions = useMemo(
     () => ({
-      refresh,
       async create(payload: {
         markdown: string;
         displayName?: string;
         enabled?: boolean;
         scope?: SkillScope;
       }): Promise<void> {
-        const currentIdentity = requireIdentity(identity);
         await createSkill(
           {
             markdown: payload.markdown,
@@ -70,7 +51,7 @@ export function useSkills(identity: RequestIdentity | null): SkillState {
             enabled: payload.enabled,
             scope: payload.scope,
           },
-          currentIdentity,
+          requireIdentity(identity),
         );
         await refresh();
       },
@@ -78,39 +59,20 @@ export function useSkills(identity: RequestIdentity | null): SkillState {
         skillId: string,
         payload: UpdateSkillRequest,
       ): Promise<void> {
-        const currentIdentity = requireIdentity(identity);
-        await updateSkill(skillId, payload, currentIdentity);
+        await updateSkill(skillId, payload, requireIdentity(identity));
         await refresh();
       },
       async remove(skillId: string): Promise<void> {
-        const currentIdentity = requireIdentity(identity);
-        await deleteSkill(skillId, currentIdentity);
+        await deleteSkill(skillId, requireIdentity(identity));
         await refresh();
       },
       async setEnabled(skillId: string, enabled: boolean): Promise<void> {
-        const currentIdentity = requireIdentity(identity);
-        await updateSkill(skillId, { enabled }, currentIdentity);
+        await updateSkill(skillId, { enabled }, requireIdentity(identity));
         await refresh();
       },
     }),
     [identity, refresh],
   );
 
-  return {
-    skills,
-    loading,
-    error,
-    ...actions,
-  };
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
-}
-
-function requireIdentity(identity: RequestIdentity | null): RequestIdentity {
-  if (identity === null) {
-    throw new Error("Session identity is not loaded.");
-  }
-  return identity;
+  return { skills: data, loading, error, refresh, ...actions };
 }

@@ -1,5 +1,4 @@
 import type {
-  AnchorHTMLAttributes,
   ButtonHTMLAttributes,
   HTMLAttributes,
   InputHTMLAttributes,
@@ -7,7 +6,6 @@ import type {
   ReactElement,
   ReactNode,
   SelectHTMLAttributes,
-  TextareaHTMLAttributes,
 } from "react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
@@ -64,7 +62,7 @@ export function useTheme(): ThemeContextValue {
   return context;
 }
 
-export function isThemeScheme(value: unknown): value is ThemeScheme {
+function isThemeScheme(value: unknown): value is ThemeScheme {
   return value === "dark" || value === "light" || value === "slate";
 }
 
@@ -87,25 +85,6 @@ export function Button({
       )}
       {...props}
     />
-  );
-}
-
-export function IconButton({
-  label,
-  children,
-  className,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  label: string;
-}): ReactElement {
-  return (
-    <button
-      className={classNames("ui-icon-button", className)}
-      aria-label={label}
-      {...props}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -144,15 +123,6 @@ export function TextInput({
   ...props
 }: InputHTMLAttributes<HTMLInputElement>): ReactElement {
   return <input className={classNames("ui-input", className)} {...props} />;
-}
-
-export function Textarea({
-  className,
-  ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement>): ReactElement {
-  return (
-    <textarea className={classNames("ui-textarea", className)} {...props} />
-  );
 }
 
 export function Select({
@@ -198,116 +168,6 @@ export function Field({
       {hint ? <small>{hint}</small> : null}
     </label>
   );
-}
-
-export function Dialog({
-  open,
-  title,
-  children,
-  footer,
-  onClose,
-}: {
-  open: boolean;
-  title: string;
-  children: ReactNode;
-  footer?: ReactNode;
-  onClose: () => void;
-}): ReactElement | null {
-  if (!open) {
-    return null;
-  }
-
-  return (
-    <div
-      className="ui-dialog-backdrop"
-      role="presentation"
-      onMouseDown={onClose}
-    >
-      <section
-        className="ui-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <h2>{title}</h2>
-          <IconButton label="Close dialog" onClick={onClose}>
-            ×
-          </IconButton>
-        </header>
-        <div className="ui-dialog__body">{children}</div>
-        {footer ? <footer>{footer}</footer> : null}
-      </section>
-    </div>
-  );
-}
-
-export function Tabs<TValue extends string>({
-  tabs,
-  value,
-  onChange,
-  className,
-}: {
-  tabs: Array<{ value: TValue; label: string }>;
-  value: TValue;
-  onChange: (value: TValue) => void;
-  className?: string;
-}): ReactElement {
-  return (
-    <div className={classNames("ui-tabs", className)} role="tablist">
-      {tabs.map((tab) => (
-        <button
-          key={tab.value}
-          className={tab.value === value ? "is-active" : undefined}
-          type="button"
-          role="tab"
-          aria-selected={tab.value === value}
-          onClick={() => onChange(tab.value)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function DropdownMenu({
-  trigger,
-  open,
-  children,
-  className,
-}: {
-  trigger: ReactNode;
-  open: boolean;
-  children: ReactNode;
-  className?: string;
-}): ReactElement {
-  return (
-    <div className={classNames("ui-dropdown", className)}>
-      {trigger}
-      {open ? <div className="ui-dropdown__menu">{children}</div> : null}
-    </div>
-  );
-}
-
-export function Sidebar({
-  children,
-  className,
-  ...props
-}: HTMLAttributes<HTMLElement>): ReactElement {
-  return (
-    <aside className={classNames("ui-sidebar", className)} {...props}>
-      {children}
-    </aside>
-  );
-}
-
-export function LinkButton({
-  className,
-  ...props
-}: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
-  return <a className={classNames("ui-link-button", className)} {...props} />;
 }
 
 export function classNames(
