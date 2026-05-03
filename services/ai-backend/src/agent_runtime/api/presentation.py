@@ -1,15 +1,23 @@
 """Card presentation metadata for user-facing runtime events.
 
-The generator runs in three layers:
+The generator always returns a complete envelope synchronously; the LLM is a
+polish layer on top. Resolution order:
 
 1. Deterministic templates — events whose presentation is fully derivable
-   from payload (approval/auth/error/delta) skip the LLM entirely.
+   from payload (approval / auth / error / tool_call_delta).
 2. Tool author templates — when a tool registers a `ToolDisplayTemplate`
    on its `ToolCard` / `McpServerCard` / `McpToolDescriptor`, the renderer
-   fills the template from the payload and skips the LLM.
-3. LLM path — for tool/progress events without registered templates, a
-   small fast OpenAI model (default `gpt-4.1-nano`, configured via
-   `RUNTIME_PRESENTATION_MODEL`) returns a strict-schema structured output.
+   fills the template from the payload.
+3. ``PayloadProjector`` — for `TOOL_RESULT` / `TOOL_CALL_COMPLETED`,
+   synthesizes ``result_preview`` rows from the tool output payload via
+   declared projection fields or field-name heuristics. Runs even on the
+   minimal-envelope path so tools without templates still get a body.
+4. Minimal envelope — humanized tool name + status, with projector body
+   when available. Always returns something so cards never render empty.
+
+LLM enrichment (``enrich_presentation_for_event``) is best-effort polish:
+when it succeeds it patches body fields on the existing card; when it
+times out or fails, the synchronous envelope already had a usable body.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_runtime.api.presentation_templates import (
     DeterministicTemplates,
+    PayloadProjector,
     PresentationOutput,
     ToolTemplateRenderer,
 )
@@ -126,11 +135,11 @@ class PresentationGenerator:
         metadata: JsonObject,
         timeline_fields: Mapping[str, object],
     ) -> JsonObject | None:
-        """Return a presentation built from templates only (no LLM call).
+        """Return a presentation built from templates + payload projection.
 
-        For LLM-eligible event types with no template match, returns the
-        deterministic ``_fallback`` so the card still renders something.
-        Returns ``None`` for event types that have no presentation at all.
+        Always returns a usable envelope for tool / progress event types so
+        cards never render empty. Returns ``None`` only for event types that
+        have no card at all (e.g. heartbeats, model deltas).
         """
 
         explicit = self._validated(metadata.get("presentation"))
@@ -166,17 +175,13 @@ class PresentationGenerator:
         if event_type not in self.llm_eligible_event_types:
             return None
 
-        # LLM-eligible with no template: render a low-confidence fallback so
-        # the SSE stream gets a card immediately. The background enrichment
-        # task will replace it via PRESENTATION_UPDATED.
-        context = self._context(
+        return self._minimal_envelope(
             event_type=event_type,
-            source=StreamEventSource.SYSTEM,
             payload=payload,
-            metadata=metadata,
             timeline_fields=timeline_fields,
+            group_key=group_key,
+            template=tool_template,
         )
-        return self._fallback(context)
 
     def event_eligible_for_enrichment(
         self,
@@ -184,10 +189,10 @@ class PresentationGenerator:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> bool:
-        """Return whether this event should trigger a background LLM enrichment.
+        """Return whether this event should trigger a background LLM polish pass.
 
-        False if a deterministic / tool template already produced a high-confidence
-        card, or if the event type isn't LLM-eligible at all.
+        False if a deterministic / tool template already rendered the card,
+        or if the event type isn't LLM-eligible at all.
         """
 
         if event_type not in self.llm_eligible_event_types:
@@ -660,80 +665,90 @@ class PresentationGenerator:
         *,
         group_key: str | None,
     ) -> JsonObject:
-        """Backfill deterministic group_key / debug_label / confidence on LLM output.
+        """Backfill deterministic group_key / debug_label on LLM output.
 
         Status_label and kind come from the LLM (constrained by the schema) but
-        we always set group_key + the fixed presentation defaults so cards are
-        consistent regardless of model variance.
+        we always set group_key + the fixed debug label so cards are consistent
+        regardless of model variance.
         """
 
         if group_key is not None and not validated.get("group_key"):
             validated["group_key"] = group_key
         validated.setdefault("debug_label", "Tool details")
-        validated.setdefault("confidence", "medium")
         return validated
 
-    @classmethod
-    def _fallback(cls, context: JsonObject) -> JsonObject:
-        status = str(context.get("status") or "").lower()
-        failed = (
-            status in {"failed", "error"} or context.get("event_type") == "run_failed"
-        )
-        waiting = context.get("event_type") in {
-            "approval_requested",
-            "mcp_auth_required",
+    _RESULT_EVENT_TYPES = frozenset(
+        {
+            RuntimeApiEventType.TOOL_RESULT,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
         }
-        done = status in {"completed", "complete", "done", "success", "succeeded"}
-        status_label = (
-            "Failed"
-            if failed
-            else "Waiting for permission"
-            if waiting
-            else "Done"
-            if done
-            else "Running"
+    )
+
+    def _minimal_envelope(
+        self,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        timeline_fields: Mapping[str, object],
+        group_key: str | None,
+        template: ToolDisplayTemplate | None,
+    ) -> JsonObject | None:
+        """Build a minimal envelope for tool events without a deterministic template.
+
+        Title comes from the projector's display_title hint or a humanized tool
+        name. Status / kind come from the event lifecycle. ``PayloadProjector``
+        fills ``result_preview`` for result events when the payload has rows.
+        """
+
+        title_hint = self._first_text(timeline_fields, ("display_title",))
+        tool_name = payload.get("tool_name")
+        humanized_tool = (
+            self._humanize_identifier(tool_name)
+            if isinstance(tool_name, str) and tool_name.strip()
+            else None
         )
-        kind = (
-            "error"
-            if failed
-            else "approval"
-            if context.get("event_type") == "approval_requested"
-            else "auth"
-            if context.get("event_type") == "mcp_auth_required"
-            else "result"
-            if done
-            else "progress"
-        )
-        return {
-            "title": cls._fallback_title(kind),
-            "summary": cls._fallback_summary(kind),
+        is_result = event_type in self._RESULT_EVENT_TYPES or self._payload_status(
+            payload
+        ) in {"completed", "complete", "done", "success", "succeeded"}
+        is_failed = self._payload_status(payload) in {"failed", "error"}
+        if is_failed:
+            status_label = "Failed"
+            kind = "error"
+            default_title = humanized_tool or "Step failed"
+        elif is_result:
+            status_label = "Done"
+            kind = "result"
+            default_title = humanized_tool or "Checked source"
+        else:
+            status_label = "Running"
+            kind = "progress"
+            default_title = humanized_tool or "Working on step"
+        title = title_hint or default_title
+        envelope: JsonObject = {
+            "title": title[:80],
             "status_label": status_label,
             "kind": kind,
-            "group_key": context.get("group_key"),
             "debug_label": "Tool details",
-            "confidence": "low",
         }
+        if group_key is not None:
+            envelope["group_key"] = group_key
+        if humanized_tool:
+            envelope["primary_entity"] = humanized_tool[:80]
+        if event_type in self._RESULT_EVENT_TYPES:
+            preview = PayloadProjector.project(payload=payload, template=template)
+            if preview:
+                envelope["result_preview"] = preview
+        return self._validated(envelope)
 
     @staticmethod
-    def _fallback_title(kind: str) -> str:
-        if kind == "approval":
-            return "Permission needed"
-        if kind == "auth":
-            return "Connect app"
-        if kind == "result":
-            return "Checked source"
-        if kind == "error":
-            return "Step failed"
-        return "Working on step"
+    def _payload_status(payload: JsonObject) -> str:
+        raw = payload.get("status")
+        return raw.lower() if isinstance(raw, str) else ""
 
     @staticmethod
-    def _fallback_summary(kind: str) -> str:
-        if kind == "approval":
-            return "Enterprise Search needs your permission before continuing."
-        if kind == "auth":
-            return "Enterprise Search needs permission to connect this app."
-        if kind == "result":
-            return "Enterprise Search finished this step."
-        if kind == "error":
-            return "Enterprise Search could not complete this step."
-        return "Enterprise Search is working on this step."
+    def _first_text(source: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None

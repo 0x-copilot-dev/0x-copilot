@@ -37,9 +37,6 @@ export function presentationFromArgs(
     action_label: stringValue(raw.action_label),
     result_preview: presentationRows(raw.result_preview),
     debug_label: stringValue(raw.debug_label),
-    confidence: stringValue(
-      raw.confidence,
-    ) as RuntimeEventPresentation["confidence"],
   };
 }
 

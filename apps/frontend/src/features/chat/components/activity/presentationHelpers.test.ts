@@ -19,7 +19,6 @@ function presentation(
     action_label: null,
     result_preview: [],
     debug_label: null,
-    confidence: "high",
     ...overrides,
   };
 }
@@ -60,7 +59,6 @@ describe("presentationFromArgs", () => {
         kind: "tool",
         summary: "found 3 results",
         result_preview: [{ title: "row 1" }],
-        confidence: "high",
       },
     });
     expect(result?.title).toBe("Repo search");

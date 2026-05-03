@@ -301,7 +301,6 @@ describe("applyRuntimeEvent", () => {
             },
           ],
           debug_label: "Tool details",
-          confidence: "high",
         },
         payload: {
           tool_name: "web_search",
@@ -327,7 +326,11 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
-  it("preserves richer presentation when later tool events are weaker", () => {
+  it("keeps the rich tool_result envelope when tool_call_completed lands without one", () => {
+    // Backend resolves a single coherent presentation per event and returns
+    // None for tool_call_completed (it carries no body the projector can
+    // build from). The reducer must keep the rich tool_result envelope
+    // rather than wiping it on the bare follow-up.
     let items: ChatItem[] = [];
 
     items = applyRuntimeEvent(
@@ -344,7 +347,6 @@ describe("applyRuntimeEvent", () => {
           status_label: "Done",
           kind: "result",
           result_preview: [{ title: "Fix onboarding", badge: "Open" }],
-          confidence: "high",
         },
         payload: {
           tool_name: "call_mcp_tool",
@@ -362,13 +364,6 @@ describe("applyRuntimeEvent", () => {
         event_type: "tool_call_completed",
         activity_kind: "tool",
         span_id: "call_123",
-        presentation: {
-          title: "Checked source",
-          summary: "Enterprise Search finished this step.",
-          status_label: "Done",
-          kind: "result",
-          confidence: "low",
-        },
         payload: {
           tool_name: "call_mcp_tool",
           call_id: "call_123",
@@ -1542,7 +1537,6 @@ describe("applyRuntimeEvent", () => {
           kind: "approval",
           group_key: "call_123",
           debug_label: "Tool details",
-          confidence: "high",
         },
         payload: {
           approval_id: "approval_123",

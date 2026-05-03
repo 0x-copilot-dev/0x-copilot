@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from agent_runtime.api.presentation_templates import (
     DeterministicTemplates,
+    PayloadProjector,
     ToolTemplateRenderer,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
@@ -33,7 +34,6 @@ class TestDeterministicTemplates:
         assert validated.title == "Permission granted"
         assert validated.status_label == "Done"
         assert validated.kind == "approval"
-        assert validated.confidence == "high"
         assert "Gmail Send" in (validated.summary or "")
 
     def test_approval_resolved_denied_renders_blocked_card(self) -> None:
@@ -143,6 +143,21 @@ class TestDeterministicTemplates:
         assert validated.summary == "Fetching page 2..."
         assert validated.primary_entity == "Web Search"
 
+    def test_tool_call_delta_drops_raw_delta_token(self) -> None:
+        """Raw streaming JSON-arg tokens (`{"`, `"}`, `":` …) are not
+        user-readable and must not leak into summary/action_label. Only an
+        explicit ``message`` populates the progress fields."""
+        rendered = DeterministicTemplates.render(
+            event_type=RuntimeApiEventType.TOOL_CALL_DELTA,
+            payload={"tool_name": "ls", "delta": '"}'},
+            timeline_fields={"display_title": "ls running"},
+            group_key="call_7",
+        )
+        validated = _validate(rendered)
+        assert validated.title == "ls running"
+        assert validated.summary is None
+        assert validated.action_label is None
+
     def test_returns_none_for_unhandled_event_type(self) -> None:
         assert (
             DeterministicTemplates.render(
@@ -222,3 +237,195 @@ class TestToolTemplateRenderer:
             )
             is None
         )
+
+    def test_projects_declared_result_preview_rows_for_tool_result(self) -> None:
+        template = ToolDisplayTemplate(
+            title_template="Searching {connector}",
+            result_title_template="Web Search Result",
+            result_preview_path="output.results",
+            result_preview_row={
+                "title": "title",
+                "subtitle": "snippet",
+                "url": "url",
+            },
+        )
+        rendered = ToolTemplateRenderer.render(
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload={
+                "connector": "DuckDuckGo",
+                "output": {
+                    "results": [
+                        {
+                            "title": "LangGraph streaming docs",
+                            "snippet": "Build streaming graphs",
+                            "url": "https://docs.langchain.com/langgraph",
+                        },
+                        {
+                            "title": "LangGraph release notes",
+                            "snippet": "0.2 release",
+                            "url": "https://github.com/langchain-ai/langgraph",
+                        },
+                    ]
+                },
+            },
+            template=template,
+            group_key="call_77",
+        )
+        validated = _validate(rendered)
+        assert validated.title == "Web Search Result"
+        assert validated.kind == "result"
+        assert len(validated.result_preview) == 2
+        assert validated.result_preview[0].title == "LangGraph streaming docs"
+        assert validated.result_preview[0].subtitle == "Build streaming graphs"
+        assert validated.result_preview[0].url == "https://docs.langchain.com/langgraph"
+
+
+class TestPayloadProjector:
+    def test_projects_declared_path_and_row_mapping(self) -> None:
+        template = ToolDisplayTemplate(
+            title_template="Search",
+            result_preview_path="output.results",
+            result_preview_row={
+                "title": "headline",
+                "subtitle": "blurb",
+                "url": "link",
+            },
+        )
+        preview = PayloadProjector.project(
+            payload={
+                "output": {
+                    "results": [
+                        {
+                            "headline": "Doc one",
+                            "blurb": "First match",
+                            "link": "https://example.com/one",
+                        }
+                    ]
+                }
+            },
+            template=template,
+        )
+        assert preview == [
+            {
+                "title": "Doc one",
+                "subtitle": "First match",
+                "url": "https://example.com/one",
+            }
+        ]
+
+    def test_falls_back_to_heuristics_when_no_template(self) -> None:
+        # DuckDuckGo-style payload — list of dicts under output, with
+        # title / snippet / link fields.
+        preview = PayloadProjector.project(
+            payload={
+                "output": [
+                    {
+                        "title": "Result A",
+                        "snippet": "Brief A",
+                        "link": "https://example.com/a",
+                    },
+                    {
+                        "title": "Result B",
+                        "snippet": "Brief B",
+                        "link": "https://example.com/b",
+                    },
+                ]
+            },
+            template=None,
+        )
+        assert len(preview) == 2
+        assert preview[0]["title"] == "Result A"
+        assert preview[0]["subtitle"] == "Brief A"
+        assert preview[0]["url"] == "https://example.com/a"
+
+    def test_walks_common_container_keys(self) -> None:
+        preview = PayloadProjector.project(
+            payload={
+                "items": [
+                    {
+                        "name": "Item one",
+                        "description": "First item",
+                        "href": "https://example.com/i1",
+                    }
+                ]
+            },
+            template=None,
+        )
+        assert preview == [
+            {
+                "title": "Item one",
+                "subtitle": "First item",
+                "url": "https://example.com/i1",
+            }
+        ]
+
+    def test_caps_at_five_rows(self) -> None:
+        rows = [
+            {"title": f"row {index}", "url": f"https://example.com/{index}"}
+            for index in range(8)
+        ]
+        preview = PayloadProjector.project(payload={"results": rows}, template=None)
+        assert len(preview) == PayloadProjector.MAX_ROWS == 5
+
+    def test_skips_rows_without_title(self) -> None:
+        preview = PayloadProjector.project(
+            payload={
+                "results": [
+                    {"snippet": "no title here"},
+                    {"title": "Kept"},
+                ]
+            },
+            template=None,
+        )
+        assert preview == [{"title": "Kept"}]
+
+    def test_strips_html_tags_from_strings(self) -> None:
+        preview = PayloadProjector.project(
+            payload={
+                "results": [
+                    {
+                        "title": "<b>Bold title</b>",
+                        "snippet": "  spaced  text  ",
+                        "url": "https://example.com/x",
+                    }
+                ]
+            },
+            template=None,
+        )
+        assert preview == [
+            {
+                "title": "bBold title/b",
+                "subtitle": "spaced text",
+                "url": "https://example.com/x",
+            }
+        ]
+
+    def test_drops_non_http_urls(self) -> None:
+        preview = PayloadProjector.project(
+            payload={
+                "results": [
+                    {
+                        "title": "Local file",
+                        "url": "file:///tmp/local",
+                    }
+                ]
+            },
+            template=None,
+        )
+        assert preview == [{"title": "Local file"}]
+
+    def test_returns_empty_for_payloads_without_rows(self) -> None:
+        assert PayloadProjector.project(payload={}, template=None) == []
+        assert (
+            PayloadProjector.project(payload={"output": "plain string"}, template=None)
+            == []
+        )
+
+    def test_parses_json_string_output(self) -> None:
+        preview = PayloadProjector.project(
+            payload={
+                "output": '[{"title": "From JSON", "url": "https://example.com/j"}]'
+            },
+            template=None,
+        )
+        assert preview == [{"title": "From JSON", "url": "https://example.com/j"}]

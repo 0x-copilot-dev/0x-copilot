@@ -7,31 +7,33 @@ import { argsTextFromRecord, hiddenToolArgKeys } from "./payloadHelpers";
 import { isToolCallPart, jsonArgs, payloadString } from "./recordHelpers";
 import type { ChatItem } from "./types";
 
+const TERMINAL_KINDS = new Set<RuntimeEventPresentation["kind"]>([
+  "result",
+  "error",
+  "approval",
+  "auth",
+]);
+
+function isTerminalKind(kind: RuntimeEventPresentation["kind"]): boolean {
+  return TERMINAL_KINDS.has(kind);
+}
+
+// Newer event for the same call_id wins, with one invariant: never regress
+// a terminal card back to progress. The backend now resolves a single
+// coherent presentation per event (deterministic templates → tool template
+// → payload projector → minimal envelope) and emits LLM polish as a
+// body-only patch. That makes the merge rule trivial — there is no longer
+// any "preliminary vs. enriched" race the client has to reconcile.
 export function preferredPresentation(
   current: RuntimeEventPresentation | null,
   next: RuntimeEventPresentation | null,
 ): RuntimeEventPresentation | null {
   if (!current) return next;
   if (!next) return current;
-  // Prefer the higher-confidence card. Backend marks template-rendered and
-  // LLM-enriched cards as `high` and the deterministic fallback as `low`,
-  // so a fallback never overwrites a real card and an enrichment always
-  // does.
-  const currentRank = confidenceRank(current.confidence);
-  const nextRank = confidenceRank(next.confidence);
-  if (currentRank !== nextRank) {
-    return currentRank > nextRank ? current : next;
+  if (isTerminalKind(current.kind) && !isTerminalKind(next.kind)) {
+    return current;
   }
-  const currentRows = current.result_preview?.length ?? 0;
-  const nextRows = next.result_preview?.length ?? 0;
-  return currentRows > nextRows ? current : next;
-}
-
-export function confidenceRank(value: string | null | undefined): number {
-  if (value === "high") return 2;
-  if (value === "medium") return 1;
-  if (value === "low") return 0;
-  return 0;
+  return next;
 }
 
 export function patchToolPartPresentation(
@@ -110,9 +112,6 @@ export function presentationFromValue(
         })
       : [],
     debug_label: stringValue(record.debug_label),
-    confidence: stringValue(
-      record.confidence,
-    ) as RuntimeEventPresentation["confidence"],
   };
 }
 

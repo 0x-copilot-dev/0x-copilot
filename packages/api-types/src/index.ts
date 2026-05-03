@@ -476,7 +476,6 @@ export type RuntimeEventPresentationStatus =
   | "Waiting for permission"
   | "Done"
   | "Failed";
-export type RuntimeEventPresentationConfidence = "low" | "medium" | "high";
 
 export interface RuntimeEventPresentationPreviewRow {
   title: string;
@@ -495,7 +494,6 @@ export interface RuntimeEventPresentation {
   action_label?: string | null;
   result_preview?: RuntimeEventPresentationPreviewRow[];
   debug_label?: string | null;
-  confidence?: RuntimeEventPresentationConfidence | null;
 }
 
 export interface RuntimeEventReplayResponse {
@@ -658,7 +656,7 @@ export type StructuredRuntimeEventEnvelope<
 };
 
 export type SkillScope = "user" | "org";
-export type SkillSourceType = "user" | "preloaded";
+export type SkillSourceType = "user" | "preloaded" | "system";
 
 export interface Skill {
   skill_id: string;

@@ -588,7 +588,6 @@ class RuntimeEventPresentation(RuntimeContract):
     action_label: str | None = Field(default=None, max_length=60)
     result_preview: tuple[RuntimeEventPresentationPreviewRow, ...] = ()
     debug_label: str | None = Field(default="Tool details", max_length=40)
-    confidence: Literal["low", "medium", "high"] | None = None
 
     @field_validator(
         _Fields.TITLE,

@@ -1,13 +1,17 @@
 """Runtime event producer helpers shared by API producers and workers.
 
-The producer attaches a card *preliminary* presentation synchronously, persists
-the event so SSE subscribers see it within milliseconds, then optionally
-spawns a background task to enrich the presentation via the small
-`PresentationGenerator` LLM. The enriched presentation is emitted as a
-separate `PRESENTATION_UPDATED` event whose payload carries the original
-`call_id` / `approval_id`; the frontend reducer merges it onto the existing
-card. See `agent_runtime.api.presentation.PresentationGenerator` for the
-three-layer template + LLM pipeline.
+The producer attaches a fully-formed *preliminary* presentation synchronously
+(title + status + body, via the projector chain in
+``PresentationGenerator``), persists the event so SSE subscribers see it
+within milliseconds, then optionally spawns a background LLM polish task.
+
+When the LLM polish succeeds, it is emitted as a separate
+``PRESENTATION_UPDATED`` event whose presentation merges *body fields*
+(``summary``, ``result_preview``, ``action_label``, ``primary_entity``)
+onto the preliminary. Title / status_label / kind are owned by the event
+lifecycle and not patched by the LLM — that way a polish race or timeout
+can never regress the card's lifecycle state. When the LLM times out, no
+patch event fires at all; the preliminary already had a usable body.
 """
 
 from __future__ import annotations
@@ -339,7 +343,18 @@ class RuntimeEventProducer:
                 event_type.value,
             )
             return
-        if enriched == preliminary:
+        if preliminary is None:
+            # Eligibility should always pair LLM-eligible events with a
+            # preliminary envelope. If that invariant breaks, skip the patch
+            # rather than emit a malformed body-only patch with no title.
+            logging.getLogger(__name__).warning(
+                "presentation.enrichment.missing_preliminary run=%s event=%s",
+                run.run_id,
+                event_type.value,
+            )
+            return
+        merged, patches = self._merge_polish(preliminary, enriched)
+        if not patches:
             logging.getLogger(__name__).debug(
                 "presentation.enrichment.unchanged run=%s event=%s",
                 run.run_id,
@@ -347,13 +362,13 @@ class RuntimeEventProducer:
             )
             return
         logging.getLogger(__name__).debug(
-            "presentation.enrichment.patch run=%s event=%s title=%s",
+            "presentation.enrichment.patch run=%s event=%s patches=%s",
             run.run_id,
             event_type.value,
-            (enriched.get("title") or "")[:60],
+            ",".join(patches),
         )
 
-        patch_payload: JsonObject = {"patches": ["presentation"]}
+        patch_payload: JsonObject = {"patches": list(patches)}
         for key in ("call_id", "approval_id", "source_tool_call_id"):
             value = payload.get(key)
             if isinstance(value, str) and value:
@@ -369,8 +384,8 @@ class RuntimeEventProducer:
                 event_type=RuntimeApiEventType.PRESENTATION_UPDATED,
                 trace_id=run.trace_id,
                 payload=patch_payload,
-                metadata={"presentation": enriched},
-                presentation=enriched,
+                metadata={"presentation": merged},
+                presentation=merged,
             )
             envelope = await self.event_store.append_event(patch_draft)
             await self.persistence.set_run_latest_sequence(
@@ -387,6 +402,42 @@ class RuntimeEventProducer:
                 run.run_id,
                 exc_info=True,
             )
+
+    # Body fields the LLM polish layer is allowed to refine. Title /
+    # status_label / kind / group_key / debug_label belong to the event's
+    # lifecycle and stay frozen at whatever the synchronous chain produced,
+    # so a polish race or timeout can never regress lifecycle state.
+    _POLISH_BODY_FIELDS: tuple[str, ...] = (
+        "summary",
+        "result_preview",
+        "action_label",
+        "primary_entity",
+    )
+
+    @classmethod
+    def _merge_polish(
+        cls,
+        preliminary: JsonObject | None,
+        enriched: JsonObject,
+    ) -> tuple[JsonObject, tuple[str, ...]]:
+        """Overlay body fields from ``enriched`` onto ``preliminary``.
+
+        Returns the merged envelope and the tuple of field names that
+        actually changed. Empty tuple means no patch event needs to fire.
+        """
+
+        merged: JsonObject = dict(preliminary or {})
+        patches: list[str] = []
+        for field in cls._POLISH_BODY_FIELDS:
+            new_value = enriched.get(field)
+            if new_value in (None, "", [], ()):
+                continue
+            current = merged.get(field)
+            if current == new_value:
+                continue
+            merged[field] = new_value
+            patches.append(field)
+        return merged, tuple(patches)
 
     def _track_intent(
         self,

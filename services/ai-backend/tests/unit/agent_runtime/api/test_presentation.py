@@ -123,7 +123,6 @@ async def test_presentation_generator_uses_valid_llm_json() -> None:
                 }
             ],
             "debug_label": "Tool details",
-            "confidence": "high",
         }
     )
 
@@ -155,7 +154,6 @@ async def test_presentation_generator_uses_valid_llm_json() -> None:
             }
         ],
         "debug_label": "Tool details",
-        "confidence": "high",
         "group_key": "call_123",
     }
 
@@ -188,7 +186,6 @@ async def test_approval_requested_uses_deterministic_template_without_calling_ll
     assert presentation is not None
     assert presentation["status_label"] == "Waiting for permission"
     assert presentation["kind"] == "approval"
-    assert presentation["confidence"] == "high"
     # Tool name humanized in the title, no raw protocol identifiers leaked.
     assert "Clickup Resolve Assignees" in presentation["title"]
     assert "mcp_clickup_com" not in str(presentation)
@@ -326,21 +323,29 @@ async def test_event_producer_attaches_presentation_metadata() -> None:
     )
 
     # Preliminary presentation is attached synchronously so the SSE stream
-    # gets a card immediately. Title is the deterministic fallback because
-    # TOOL_RESULT has no template registered for `web_search`.
+    # gets a card immediately. The minimal-envelope path always produces
+    # title + status + kind from the event lifecycle.
     assert envelope.presentation is not None
-    assert envelope.presentation.confidence == "low"
+    assert envelope.presentation.status_label == "Done"
+    assert envelope.presentation.kind == "result"
     assert envelope.event_type == RuntimeApiEventType.TOOL_RESULT
+    preliminary_title = envelope.presentation.title
 
-    # Background enrichment task replaces it via PRESENTATION_UPDATED.
+    # Background polish task patches body fields only via PRESENTATION_UPDATED.
+    # Title / status_label / kind are owned by the event lifecycle and stay
+    # frozen across the patch.
     await producer.flush_pending_enrichment(run_id=envelope.run_id)
     assert len(event_store.drafts) == 2
     patch = event_store.drafts[1]
     assert patch.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
     assert patch.presentation is not None
-    assert patch.presentation.title == "Searched the web"
+    assert patch.presentation.title == preliminary_title
+    assert patch.presentation.status_label == "Done"
+    assert patch.presentation.kind == "result"
+    assert patch.presentation.summary == "Found official sources."
     assert patch.payload["call_id"] == "call_123"
-    assert patch.payload["patches"] == ["presentation"]
+    # Patch list names the body fields the polish layer changed.
+    assert "summary" in patch.payload["patches"]
     assert persistence.latest_sequence_no == 2
 
 
@@ -414,7 +419,6 @@ async def test_event_producer_skips_enrichment_when_tool_template_renders() -> N
 
     assert envelope.presentation is not None
     assert envelope.presentation.title == "Found 7 results"
-    assert envelope.presentation.confidence == "high"
     assert len(event_store.drafts) == 1
     assert presenter_calls == []
 
@@ -435,10 +439,16 @@ async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_c
             await asyncio.sleep(2.0)
             return {
                 "title": "Stale STARTED",
+                "summary": "Stale running summary.",
                 "status_label": "Running",
                 "kind": "progress",
             }
-        return {"title": "Fresh RESULT", "status_label": "Done", "kind": "result"}
+        return {
+            "title": "Fresh RESULT",
+            "summary": "Fresh polished result summary.",
+            "status_label": "Done",
+            "kind": "result",
+        }
 
     producer = RuntimeEventProducer(
         persistence=persistence,
@@ -473,11 +483,17 @@ async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_c
         for draft in event_store.drafts
         if draft.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
     ]
-    # Exactly one PRESENTATION_UPDATED — the RESULT enrichment. The STARTED
-    # enrichment was cancelled before it could append a stale patch.
+    # Exactly one PRESENTATION_UPDATED — the RESULT polish. The STARTED
+    # polish was cancelled before it could append a stale patch.
     assert len(presentation_updates) == 1
     assert presentation_updates[0].presentation is not None
-    assert presentation_updates[0].presentation.title == "Fresh RESULT"
+    # Patch carries the polished body but keeps the preliminary's terminal
+    # lifecycle (kind=result, status=Done) — the LLM never owns those.
+    assert presentation_updates[0].presentation.kind == "result"
+    assert presentation_updates[0].presentation.status_label == "Done"
+    assert (
+        presentation_updates[0].presentation.summary == "Fresh polished result summary."
+    )
 
 
 async def test_event_producer_forwards_agent_intent_hint_into_presentation_prompt() -> (

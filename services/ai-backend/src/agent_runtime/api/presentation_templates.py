@@ -1,14 +1,25 @@
 """Deterministic presentation templates that render UI cards without an LLM call.
 
-`PresentationGenerator` consults these first, before falling back to the
-LLM-backed path. The intent is that the LLM is only used for `TOOL_CALL`,
-`TOOL_CALL_STARTED`, `TOOL_RESULT`, and `PROGRESS` when no tool author has
-registered a `ToolDisplayTemplate`. Every other event type is rendered from
-deterministic shape-driven builders here.
+`PresentationGenerator` consults these first; the LLM only ever runs as a
+polish layer on top of an already-complete envelope. The resolution chain is:
+
+1. `DeterministicTemplates` for events whose presentation is fully derivable
+   from the payload (approval / auth / error / tool_call_delta).
+2. `ToolTemplateRenderer` for events whose tool author registered a
+   `ToolDisplayTemplate` — fills title/summary placeholders from the payload.
+3. `PayloadProjector` for `TOOL_RESULT` / `TOOL_CALL_COMPLETED` — synthesizes
+   `result_preview` rows from the tool's output payload (either via the
+   tool's declared `result_preview_path` / `result_preview_row`, or via
+   field-name heuristics on common shapes). Runs after the tool template so
+   declared text wins, but the projector still fills the body if the
+   template didn't.
+4. Minimal envelope fallback — humanized tool name + status. Always returns
+   something so a card never renders empty.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from string import Formatter
 
@@ -32,9 +43,9 @@ class PresentationPreviewRowOutput(BaseModel):
 class PresentationOutput(BaseModel):
     """Structured-output schema returned by the small presentation LLM.
 
-    Only fields the LLM is responsible for. ``status_label``, ``kind``,
-    ``group_key``, ``debug_label`` and ``confidence`` are filled
-    deterministically by the generator.
+    Only fields the LLM polish layer is responsible for. ``status_label``,
+    ``kind``, ``group_key`` and ``debug_label`` are filled deterministically
+    by the generator and frozen across the patch event.
     """
 
     title: str = Field(min_length=1, max_length=80)
@@ -118,8 +129,7 @@ class DeterministicTemplates:
     """Render activity-card presentations from event payloads without an LLM.
 
     All builders return a dict that satisfies ``RuntimeEventPresentation``.
-    They are pure: same inputs → same outputs, no I/O. Templates are marked
-    ``confidence="high"`` so downstream patch logic prefers them over fallbacks.
+    They are pure: same inputs → same outputs, no I/O.
     """
 
     HANDLED = frozenset(
@@ -261,9 +271,9 @@ class DeterministicTemplates:
         # Prefer the projector's display_title if present, fall back to humanized tool name.
         title_hint = cls._text(timeline_fields.get("display_title"))
         title = title_hint or (f"Working on {tool}" if tool else "Working on step")
-        progress_message = cls._text(payload.get("message")) or cls._text(
-            payload.get("delta")
-        )
+        # Only use payload.message — payload.delta is the raw streaming JSON-arg
+        # token (`{"`, `":`, `"}`, etc.) and is not user-readable.
+        progress_message = cls._text(payload.get("message"))
         return cls._envelope(
             title=title[:80],
             summary=(progress_message[:240] if progress_message else None),
@@ -291,7 +301,6 @@ class DeterministicTemplates:
             "status_label": status_label,
             "kind": kind,
             "debug_label": "Tool details",
-            "confidence": "high",
         }
         if summary is not None:
             envelope["summary"] = summary
@@ -389,7 +398,6 @@ class ToolTemplateRenderer:
             "status_label": status_label,
             "kind": kind,
             "debug_label": "Tool details",
-            "confidence": "high",
         }
         if summary is not None:
             envelope["summary"] = summary[:240]
@@ -400,6 +408,10 @@ class ToolTemplateRenderer:
         )
         if primary_entity is not None:
             envelope["primary_entity"] = primary_entity[:80]
+        if event_type in cls._RESULT_EVENT_TYPES:
+            preview = PayloadProjector.project(payload=payload, template=template)
+            if preview:
+                envelope["result_preview"] = preview
         return envelope
 
     @staticmethod
@@ -436,3 +448,175 @@ class ToolTemplateRenderer:
             return None
         stripped = value.strip()
         return stripped or None
+
+
+class PayloadProjector:
+    """Synthesize result preview rows from a tool's output payload.
+
+    The projector tries (in order):
+
+    1. The tool's declared ``result_preview_path`` + ``result_preview_row``
+       on its ``ToolDisplayTemplate``.
+    2. A small list of common payload shapes — ``output``, ``results``,
+       ``items``, ``rows``, ``matches``, ``documents``, or a top-level list.
+       Each row is mapped to ``{title, subtitle, url, badge}`` via
+       field-name heuristics.
+
+    Output is capped at five rows. Strings are sanitized and length-bounded
+    so the result satisfies ``RuntimeEventPresentationPreviewRow``.
+    """
+
+    MAX_ROWS = 5
+    _CONTAINER_KEYS: tuple[str, ...] = (
+        "results",
+        "items",
+        "rows",
+        "matches",
+        "documents",
+        "sources",
+        "output",
+    )
+    _TITLE_KEYS: tuple[str, ...] = ("title", "name", "subject", "filename", "headline")
+    _SUBTITLE_KEYS: tuple[str, ...] = (
+        "snippet",
+        "description",
+        "preview",
+        "summary",
+        "excerpt",
+    )
+    _URL_KEYS: tuple[str, ...] = ("url", "link", "href", "permalink")
+    _BADGE_KEYS: tuple[str, ...] = ("source", "connector", "kind", "type")
+
+    @classmethod
+    def project(
+        cls,
+        *,
+        payload: Mapping[str, object],
+        template: ToolDisplayTemplate | None = None,
+    ) -> list[JsonObject]:
+        rows = cls._declared_rows(payload, template) or cls._heuristic_rows(payload)
+        preview: list[JsonObject] = []
+        for row in rows[: cls.MAX_ROWS]:
+            projected = cls._project_row(row, template)
+            if projected is not None:
+                preview.append(projected)
+        return preview
+
+    @classmethod
+    def _declared_rows(
+        cls,
+        payload: Mapping[str, object],
+        template: ToolDisplayTemplate | None,
+    ) -> list[Mapping[str, object]]:
+        if template is None or not template.result_preview_path:
+            return []
+        rows = cls._walk_path(payload, template.result_preview_path)
+        if isinstance(rows, list):
+            return [item for item in rows if isinstance(item, Mapping)]
+        return []
+
+    @classmethod
+    def _heuristic_rows(
+        cls, payload: Mapping[str, object]
+    ) -> list[Mapping[str, object]]:
+        candidates: list[object] = []
+        output = payload.get("output")
+        if output is not None:
+            candidates.append(output)
+        candidates.append(payload)
+        for candidate in candidates:
+            parsed = cls._parse_value(candidate)
+            if isinstance(parsed, list):
+                rows = [item for item in parsed if isinstance(item, Mapping)]
+                if rows:
+                    return rows
+            if isinstance(parsed, Mapping):
+                for key in cls._CONTAINER_KEYS:
+                    nested = parsed.get(key)
+                    parsed_nested = cls._parse_value(nested)
+                    if isinstance(parsed_nested, list):
+                        rows = [
+                            item for item in parsed_nested if isinstance(item, Mapping)
+                        ]
+                        if rows:
+                            return rows
+        return []
+
+    @classmethod
+    def _project_row(
+        cls,
+        row: Mapping[str, object],
+        template: ToolDisplayTemplate | None,
+    ) -> JsonObject | None:
+        declared = template.result_preview_row if template else None
+        title = cls._field_value(row, declared, "title", cls._TITLE_KEYS)
+        if title is None:
+            return None
+        projected: JsonObject = {"title": cls._clamp(title, 120)}
+        subtitle = cls._field_value(row, declared, "subtitle", cls._SUBTITLE_KEYS)
+        if subtitle is not None and subtitle != title:
+            projected["subtitle"] = cls._clamp(subtitle, 240)
+        url = cls._field_value(row, declared, "url", cls._URL_KEYS)
+        if url is not None and url.startswith(("http://", "https://")):
+            projected["url"] = cls._clamp(url, 500)
+        badge = cls._field_value(row, declared, "badge", cls._BADGE_KEYS)
+        if badge is not None:
+            projected["badge"] = cls._clamp(badge, 40)
+        return projected
+
+    @classmethod
+    def _field_value(
+        cls,
+        row: Mapping[str, object],
+        declared: dict[str, str] | None,
+        slot: str,
+        fallback_keys: tuple[str, ...],
+    ) -> str | None:
+        keys: tuple[str, ...]
+        if declared and isinstance(declared.get(slot), str):
+            keys = (declared[slot],)
+        else:
+            keys = fallback_keys
+        for key in keys:
+            value = row.get(key)
+            text = cls._safe_text(value)
+            if text is not None:
+                return text
+        return None
+
+    @classmethod
+    def _walk_path(cls, value: object, path: str) -> object:
+        current: object = value
+        for segment in path.split("."):
+            segment = segment.strip()
+            if not segment:
+                continue
+            if isinstance(current, str):
+                current = cls._parse_value(current)
+            if isinstance(current, Mapping):
+                current = current.get(segment)
+            else:
+                return None
+        return cls._parse_value(current)
+
+    @staticmethod
+    def _parse_value(value: object) -> object:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
+
+    @staticmethod
+    def _safe_text(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.replace("<", "").replace(">", "").split())
+        if not text or "/large_tool_results/" in text:
+            return None
+        return text
+
+    @staticmethod
+    def _clamp(text: str, limit: int) -> str:
+        return text if len(text) <= limit else text[:limit]

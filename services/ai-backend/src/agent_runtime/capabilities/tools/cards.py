@@ -61,12 +61,19 @@ class ToolDisplayTemplate(RuntimeContract):
     presentation LLM entirely. Placeholders use Python `str.format` syntax
     against the safe event payload (e.g. ``"Searching {connector} for {query}"``).
     Missing placeholders fall back to the generator's static default.
+
+    `result_preview_path` and `result_preview_row` declare how to project
+    rows out of the result payload for the card body. Without them, the
+    presentation layer falls back to heuristic field-name matching on
+    common shapes — see ``PayloadProjector``.
     """
 
     title_template: str = Field(min_length=1, max_length=240)
     summary_template: str | None = Field(default=None, max_length=480)
     result_title_template: str | None = Field(default=None, max_length=240)
     result_summary_template: str | None = Field(default=None, max_length=480)
+    result_preview_path: str | None = Field(default=None, max_length=120)
+    result_preview_row: dict[str, str] | None = Field(default=None)
 
 
 class ToolCard(RuntimeContract):
