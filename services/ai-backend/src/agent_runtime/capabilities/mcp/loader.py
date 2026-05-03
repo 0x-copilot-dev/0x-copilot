@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -119,7 +120,20 @@ class McpLoader:
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,
             )
-        except (AgentRuntimeError, McpClientError, Exception):
+        except (AgentRuntimeError, McpClientError, TimeoutError, ConnectionError):
+            return McpLoadResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=card.name,
+                correlation_id=runtime_context.trace_id,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Unexpected error loading MCP server %s",
+                card.name,
+                exc_info=True,
+            )
             return McpLoadResult.fail(
                 McpLoadErrorCode.CONNECTION_FAILED,
                 Messages.Loader.LOAD_FAILED,

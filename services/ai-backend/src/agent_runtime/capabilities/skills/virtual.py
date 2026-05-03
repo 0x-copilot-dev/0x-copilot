@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import os
@@ -22,6 +21,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
 
 
 class VirtualSkillCard(RuntimeContract):
@@ -109,12 +109,12 @@ class VirtualSkillRegistry:
     )
 
     def list_available_skills(self, context: object) -> tuple[VirtualSkillCard, ...]:
-        runtime_context = self._coerce_context(context)
+        runtime_context = coerce_runtime_context(context)
         cards = self._card_cache
         if cards is None:
             cards = self._collect_cards(runtime_context)
             self._card_cache = cards
-        duplicate = self._first_duplicate_name(cards)
+        duplicate = first_duplicate_name(card.name for card in cards)
         if duplicate is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -186,25 +186,6 @@ class VirtualSkillRegistry:
                         correlation_id=context.trace_id,
                     ) from exc
         return tuple(cards)
-
-    @classmethod
-    def _first_duplicate_name(cls, cards: Sequence[VirtualSkillCard]) -> str | None:
-        counts = Counter(card.name for card in cards)
-        duplicates = sorted(name for name, count in counts.items() if count > 1)
-        return duplicates[0] if duplicates else None
-
-    @classmethod
-    def _coerce_context(cls, context: object) -> AgentRuntimeContext:
-        if isinstance(context, AgentRuntimeContext):
-            return context
-        try:
-            return AgentRuntimeContext.model_validate(context)
-        except ValidationError as exc:
-            raise AgentRuntimeError(
-                RuntimeErrorCode.VALIDATION_ERROR,
-                "Runtime context is invalid.",
-                retryable=False,
-            ) from exc
 
 
 class BackendSkillServiceAuth:

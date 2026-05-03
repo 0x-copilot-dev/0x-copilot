@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,6 +10,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
 from agent_runtime.capabilities.tools.cards import (
     LoadedToolSpec,
     ToolCard,
@@ -66,9 +66,9 @@ class DynamicToolRegistry:
     def list_tool_cards(self, context: AgentRuntimeContext) -> tuple[ToolCard, ...]:
         """Return compact cards visible to the request context."""
 
-        runtime_context = ToolContextParser.coerce(context)
+        runtime_context = coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = ToolRegistryResolver.first_duplicate_name(entries)
+        duplicate_name = first_duplicate_name(entry.card.name for entry in entries)
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -87,7 +87,7 @@ class DynamicToolRegistry:
     def list_available_tools(self, context: object) -> tuple[ToolCard, ...]:
         """Runtime port adapter returning model-visible compact cards."""
 
-        return self.list_tool_cards(ToolContextParser.coerce(context))
+        return self.list_tool_cards(coerce_runtime_context(context))
 
     def resolve_tool(self, name: str) -> RegisteredTool | ToolLoadError:
         """Resolve a selected stable tool name to exactly one provider entry."""
@@ -145,32 +145,3 @@ class DynamicToolRegistry:
                     ) from exc
                 entries.append(RegisteredTool(provider=provider, card=card))
         return tuple(entries)
-
-
-class ToolRegistryResolver:
-    """Deterministic lookup helpers for registered tool entries."""
-
-    @classmethod
-    def first_duplicate_name(cls, entries: Sequence[RegisteredTool]) -> str | None:
-        counts = Counter(entry.card.name for entry in entries)
-        duplicate_names = sorted(name for name, count in counts.items() if count > 1)
-        if not duplicate_names:
-            return None
-        return duplicate_names[0]
-
-
-class ToolContextParser:
-    """Runtime context parser for registry boundaries."""
-
-    @classmethod
-    def coerce(cls, context: object) -> AgentRuntimeContext:
-        if isinstance(context, AgentRuntimeContext):
-            return context
-        try:
-            return AgentRuntimeContext.model_validate(context)
-        except ValidationError as exc:
-            raise AgentRuntimeError(
-                RuntimeErrorCode.VALIDATION_ERROR,
-                Messages.Errors.RUNTIME_CONTEXT_INVALID,
-                retryable=False,
-            ) from exc

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,6 +10,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
 from agent_runtime.delegation.subagents.constants import Keys, Messages
 from agent_runtime.delegation.subagents.contracts import (
     SubagentDefinition,
@@ -60,9 +60,11 @@ class DynamicSubagentCatalog:
     ) -> tuple[SubagentDefinition, ...]:
         """Return compact definitions visible to the request context."""
 
-        runtime_context = SubagentContextParser.coerce(context)
+        runtime_context = coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = SubagentCatalogResolver.first_duplicate_name(entries)
+        duplicate_name = first_duplicate_name(
+            entry.definition.name for entry in entries
+        )
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -85,7 +87,7 @@ class DynamicSubagentCatalog:
     ) -> tuple[SubagentDefinition, ...]:
         """Runtime port adapter returning model-visible compact subagent definitions."""
 
-        return self.list_subagent_definitions(SubagentContextParser.coerce(context))
+        return self.list_subagent_definitions(coerce_runtime_context(context))
 
     def resolve_subagent(
         self,
@@ -94,7 +96,7 @@ class DynamicSubagentCatalog:
     ) -> RegisteredSubagent | SubagentError:
         """Resolve a selected stable subagent name after rechecking visibility."""
 
-        runtime_context = SubagentContextParser.coerce(context)
+        runtime_context = coerce_runtime_context(context)
         try:
             normalized_name = SubagentValueNormalizer.normalize_slug(
                 name, Keys.Field.NAME
@@ -187,32 +189,3 @@ class SubagentPermissionPolicy:
         if not definition.required_scopes:
             return True
         return definition.required_scopes.issubset(context.permission_scopes)
-
-
-class SubagentCatalogResolver:
-    """Deterministic lookup helpers for registered subagent definitions."""
-
-    @classmethod
-    def first_duplicate_name(cls, entries: Sequence[RegisteredSubagent]) -> str | None:
-        counts = Counter(entry.definition.name for entry in entries)
-        duplicate_names = sorted(name for name, count in counts.items() if count > 1)
-        if not duplicate_names:
-            return None
-        return duplicate_names[0]
-
-
-class SubagentContextParser:
-    """Runtime context parser for catalog boundaries."""
-
-    @classmethod
-    def coerce(cls, context: object) -> AgentRuntimeContext:
-        if isinstance(context, AgentRuntimeContext):
-            return context
-        try:
-            return AgentRuntimeContext.model_validate(context)
-        except ValidationError as exc:
-            raise AgentRuntimeError(
-                RuntimeErrorCode.VALIDATION_ERROR,
-                Messages.Catalog.INVALID_CONTEXT,
-                retryable=False,
-            ) from exc

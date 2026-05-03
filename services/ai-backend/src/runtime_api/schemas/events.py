@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import uuid4
@@ -161,6 +162,9 @@ class RuntimeEventPresentationProjector:
         try:
             return RuntimeEventPresentation.model_validate(raw)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to validate presentation metadata", exc_info=True
+            )
             return None
 
     @classmethod

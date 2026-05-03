@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from agent_runtime.execution.contracts import JsonObject
-from agent_runtime.observability.redaction import ObservabilityRedactor
-from agent_runtime.persistence.constants import Messages, Patterns
-
 
 class OutboxStatus(StrEnum):
     """Durable runtime command lifecycle."""
@@ -118,55 +114,19 @@ class AuditOutcome(StrEnum):
 
 
 class PersistenceValueNormalizer:
-    """Normalize and redact values entering durable persistence records."""
+    """Normalize and redact values entering durable persistence records.
 
-    @classmethod
-    def normalize_id(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name)
-        if not Patterns.ID.fullmatch(normalized):
-            msg = Messages.Validation.id_contains_unsupported_characters(field_name)
-            raise ValueError(msg)
-        return normalized
+    All common methods delegate to the shared ``ValueNormalizer``.
+    """
 
-    @classmethod
-    def normalize_optional_id(cls, value: object, field_name: str) -> str | None:
-        if value is None:
-            return None
-        return cls.normalize_id(value, field_name)
+    from agent_runtime.validation import ValueNormalizer as _V
 
-    @classmethod
-    def normalize_slug(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.SLUG.fullmatch(normalized):
-            msg = Messages.Validation.stable_slug(field_name)
-            raise ValueError(msg)
-        return normalized
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    normalize_id = _V.normalize_id
+    normalize_optional_id = _V.normalize_optional_id
+    normalize_slug = _V.normalize_slug
+    normalize_optional_text = _V.normalize_optional_text
+    normalize_sha256 = _V.normalize_sha256
+    redact_json_object = _V.redact_json_object
 
-    @classmethod
-    def normalize_optional_text(cls, value: object, field_name: str) -> str | None:
-        if value is None:
-            return None
-        return cls.normalize_nonempty_string(value, field_name)
-
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            msg = Messages.Validation.string_required(field_name)
-            raise ValueError(msg)
-        normalized = value.strip()
-        if not normalized:
-            msg = Messages.Validation.nonempty_string(field_name)
-            raise ValueError(msg)
-        return normalized
-
-    @classmethod
-    def normalize_sha256(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.HASH.fullmatch(normalized):
-            msg = Messages.Validation.sha256(field_name)
-            raise ValueError(msg)
-        return normalized
-
-    @classmethod
-    def redact_json_object(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+    del _V

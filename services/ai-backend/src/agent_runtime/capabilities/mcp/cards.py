@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 import json
@@ -23,7 +23,6 @@ from agent_runtime.capabilities.mcp.constants import (
     Keys,
     Limits,
     Messages,
-    Patterns,
     Values,
 )
 
@@ -532,64 +531,23 @@ class McpLoadResult(RuntimeContract):
 
 
 class McpValueNormalizer:
-    """Normalization helpers used by Pydantic validators."""
+    """Normalization helpers used by Pydantic validators.
 
-    @classmethod
-    def normalize_slug(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.SLUG.fullmatch(normalized):
-            raise ValueError(Messages.Validation.stable_slug(field_name))
-        return normalized
+    All common methods delegate to the shared ``ValueNormalizer``.
+    """
 
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError(Messages.Validation.string_required(field_name))
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(Messages.Validation.nonempty_string(field_name))
-        return normalized
+    from agent_runtime.validation import ValueNormalizer as _V
 
-    @classmethod
-    def normalize_slug_set(cls, value: object, field_name: str) -> frozenset[str]:
-        values = cls.coerce_iterable(value, field_name)
-        return frozenset(cls.normalize_slug(item, field_name) for item in values)
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    normalize_slug = _V.normalize_slug
+    normalize_slug_set = _V.normalize_slug_set
+    normalize_scope = _V.normalize_scope
+    normalize_scope_set = _V.normalize_scope_set
+    normalize_id = _V.normalize_id
+    normalize_id_set = _V.normalize_id_set
+    coerce_iterable = _V.coerce_iterable
 
-    @classmethod
-    def normalize_scope_set(cls, value: object, field_name: str) -> frozenset[str]:
-        values = cls.coerce_iterable(value, field_name)
-        return frozenset(cls.normalize_scope(item, field_name) for item in values)
-
-    @classmethod
-    def normalize_scope(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.SCOPE.fullmatch(normalized):
-            raise ValueError(Messages.Validation.explicit_permission_scopes(field_name))
-        return normalized
-
-    @classmethod
-    def normalize_id_set(cls, value: object, field_name: str) -> frozenset[str]:
-        values = cls.coerce_iterable(value, field_name)
-        return frozenset(cls.normalize_id(item, field_name) for item in values)
-
-    @classmethod
-    def normalize_id(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name)
-        if not Patterns.ID.fullmatch(normalized):
-            raise ValueError(
-                Messages.Validation.id_contains_unsupported_characters(field_name)
-            )
-        return normalized
-
-    @classmethod
-    def coerce_iterable(cls, value: object, field_name: str) -> tuple[object, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            raise ValueError(Messages.Validation.iterable_not_string(field_name))
-        if not isinstance(value, Iterable):
-            raise ValueError(Messages.Validation.iterable_required(field_name))
-        return tuple(value)
+    del _V
 
 
 class McpSchemaValidator:

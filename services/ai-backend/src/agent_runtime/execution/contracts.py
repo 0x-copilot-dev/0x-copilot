@@ -26,15 +26,12 @@ from agent_runtime.execution.ports import (
     ToolRegistry,
 )
 from agent_runtime.observability.constants import Keys as ObservabilityKeys
-from agent_runtime.observability.constants import Patterns as ObservabilityPatterns
 from agent_runtime.observability.constants import Values as ObservabilityValues
 from agent_runtime.observability.redaction import ObservabilityRedactor
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
-_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SCOPE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?::[a-z0-9][a-z0-9_.-]*)*$")
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | dict[str, object] | list[object]
@@ -462,42 +459,25 @@ class StreamEvent(RuntimeContract):
 
 
 class StreamValueNormalizer:
-    """Normalization helpers used by streaming Pydantic validators."""
+    """Normalization helpers used by streaming Pydantic validators.
 
-    @classmethod
-    def normalize_id(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name)
-        if not _ID_PATTERN.fullmatch(normalized):
-            msg = f"{field_name} contains unsupported characters"
-            raise ValueError(msg)
-        return normalized
+    All common methods delegate to the shared ``ValueNormalizer``.
+    """
 
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        return _normalize_nonempty_string(value, field_name)
+    from agent_runtime.validation import ValueNormalizer as _V
 
-    @classmethod
-    def normalize_slug(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not ObservabilityPatterns.SLUG.fullmatch(normalized):
-            msg = f"{field_name} must be a stable slug"
-            raise ValueError(msg)
-        return normalized
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    normalize_id = _V.normalize_id
+    normalize_slug = _V.normalize_slug
+    redact_json_object = _V.redact_json_object
 
-    @classmethod
-    def redact_json_object(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+    del _V
 
 
 def _normalize_nonempty_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str):
-        msg = f"{field_name} must be a string"
-        raise ValueError(msg)
-    normalized = value.strip()
-    if not normalized:
-        msg = f"{field_name} must not be empty"
-        raise ValueError(msg)
-    return normalized
+    from agent_runtime.validation import ValueNormalizer
+
+    return ValueNormalizer.normalize_nonempty_string(value, field_name)
 
 
 def _normalize_runtime_id(value: object, field_name: str) -> str:
@@ -511,11 +491,9 @@ def _normalize_runtime_id(value: object, field_name: str) -> str:
 
 
 def _normalize_slug(value: object, field_name: str) -> str:
-    normalized = _normalize_nonempty_string(value, field_name).lower()
-    if not _SLUG_PATTERN.fullmatch(normalized):
-        msg = f"{field_name} must be a stable slug"
-        raise ValueError(msg)
-    return normalized
+    from agent_runtime.validation import ValueNormalizer
+
+    return ValueNormalizer.normalize_slug(value, field_name)
 
 
 def _normalize_slug_set(
@@ -524,8 +502,9 @@ def _normalize_slug_set(
     *,
     require_non_empty: bool = False,
 ) -> frozenset[str]:
-    values = _coerce_iterable(value, field_name)
-    normalized = frozenset(_normalize_slug(item, field_name) for item in values)
+    from agent_runtime.validation import ValueNormalizer
+
+    normalized = ValueNormalizer.normalize_slug_set(value, field_name)
     if require_non_empty and not normalized:
         msg = f"{field_name} must not be empty"
         raise ValueError(msg)
@@ -533,27 +512,18 @@ def _normalize_slug_set(
 
 
 def _normalize_scope_set(value: object, field_name: str) -> frozenset[str]:
-    values = _coerce_iterable(value, field_name)
-    normalized = frozenset(_normalize_scope(item, field_name) for item in values)
-    return normalized
+    from agent_runtime.validation import ValueNormalizer
+
+    return ValueNormalizer.normalize_scope_set(value, field_name)
 
 
 def _normalize_scope(value: object, field_name: str) -> str:
-    normalized = _normalize_nonempty_string(value, field_name).lower()
-    if not _SCOPE_PATTERN.fullmatch(normalized):
-        msg = f"{field_name} must contain explicit permission scopes"
-        raise ValueError(msg)
-    return normalized
+    from agent_runtime.validation import ValueNormalizer
+
+    return ValueNormalizer.normalize_scope(value, field_name)
 
 
 def _coerce_iterable(value: object, field_name: str) -> tuple[object, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        msg = f"{field_name} must be an iterable, not a string"
-        raise ValueError(msg)
-    try:
-        return tuple(value)  # type: ignore[arg-type]
-    except TypeError as exc:
-        msg = f"{field_name} must be an iterable"
-        raise ValueError(msg) from exc
+    from agent_runtime.validation import ValueNormalizer
+
+    return ValueNormalizer.coerce_iterable(value, field_name)

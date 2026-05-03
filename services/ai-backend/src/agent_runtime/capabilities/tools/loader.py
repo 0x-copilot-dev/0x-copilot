@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -65,6 +66,11 @@ class ToolLoader:
                 correlation_id=runtime_context.trace_id,
             )
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Unexpected error loading tool spec for %s",
+                resolution.card.name,
+                exc_info=True,
+            )
             return ToolLoadResult.fail(
                 ToolLoadErrorCode.CONNECTOR_UNAVAILABLE,
                 Messages.Errors.CONNECTOR_LOAD_FAILED,

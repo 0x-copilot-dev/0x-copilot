@@ -7,6 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TypeAlias
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agent_runtime.capabilities.skills.constants import Keys, Limits, Messages, Patterns
@@ -195,122 +196,21 @@ class SkillManifestParser:
         *,
         skill_path: Path | None,
     ) -> dict[str, object]:
-        parsed: dict[str, object] = {}
-        lines = frontmatter.splitlines()
-        index = 0
-
-        while index < len(lines):
-            line = lines[index]
-            if cls.should_skip_frontmatter_line(line):
-                index += 1
-                continue
-            if cls.is_malformed_top_level_line(line):
-                raise SkillManifestError(
-                    SkillErrorCode.MALFORMED_FRONTMATTER,
-                    Messages.Errors.FRONTMATTER_MALFORMED,
-                    skill_path=skill_path,
-                )
-
-            key, raw_value = line.split(Keys.Characters.COLON, maxsplit=1)
-            key = key.strip()
-            if not key:
-                raise SkillManifestError(
-                    SkillErrorCode.MALFORMED_FRONTMATTER,
-                    Messages.Errors.KEY_EMPTY,
-                    skill_path=skill_path,
-                )
-
-            inline_value = raw_value.strip()
-            if inline_value:
-                parsed[key] = cls.parse_scalar_or_inline_list(inline_value)
-                index += 1
-                continue
-
-            child_lines: list[str] = []
-            index += 1
-            while index < len(lines):
-                child = lines[index]
-                if child and not child.startswith(
-                    (Keys.Characters.SPACE, Keys.Characters.TAB)
-                ):
-                    break
-                child_lines.append(child)
-                index += 1
-
-            parsed[key] = cls.parse_block_value(child_lines, skill_path=skill_path)
-
-        return parsed
-
-    @classmethod
-    def parse_block_value(
-        cls,
-        lines: list[str],
-        *,
-        skill_path: Path | None,
-    ) -> object:
-        meaningful = [line.strip() for line in lines if line.strip()]
-        if not meaningful:
-            return None
-
-        if all(line.startswith(Keys.Frontmatter.LIST_PREFIX) for line in meaningful):
-            return [
-                cls.parse_scalar(line[len(Keys.Frontmatter.LIST_PREFIX) :].strip())
-                for line in meaningful
-            ]
-
-        parsed_mapping: dict[str, JsonScalar] = {}
-        for line in meaningful:
-            if Keys.Characters.COLON not in line or line.startswith(
-                Keys.Frontmatter.LIST_PREFIX
-            ):
-                raise SkillManifestError(
-                    SkillErrorCode.MALFORMED_FRONTMATTER,
-                    Messages.Errors.UNSUPPORTED_NESTED_VALUE,
-                    skill_path=skill_path,
-                )
-            key, raw_value = line.split(Keys.Characters.COLON, maxsplit=1)
-            parsed_mapping[SkillTextNormalizer.normalize_metadata_key(key)] = (
-                cls.parse_scalar(raw_value.strip())
+        try:
+            parsed = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as exc:
+            raise SkillManifestError(
+                SkillErrorCode.MALFORMED_FRONTMATTER,
+                Messages.Errors.FRONTMATTER_MALFORMED,
+                skill_path=skill_path,
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise SkillManifestError(
+                SkillErrorCode.MALFORMED_FRONTMATTER,
+                Messages.Errors.FRONTMATTER_MALFORMED,
+                skill_path=skill_path,
             )
-        return parsed_mapping
-
-    @classmethod
-    def parse_scalar_or_inline_list(cls, value: str) -> object:
-        if value.startswith(Keys.Characters.LEFT_BRACKET) and value.endswith(
-            Keys.Characters.RIGHT_BRACKET
-        ):
-            inner = value[1:-1].strip()
-            if not inner:
-                return []
-            return [
-                cls.parse_scalar(part.strip())
-                for part in inner.split(Keys.Characters.COMMA)
-            ]
-        return cls.parse_scalar(value)
-
-    @classmethod
-    def parse_scalar(cls, value: str) -> JsonScalar:
-        stripped = value.strip()
-        if cls.is_quoted_scalar(stripped):
-            return stripped[1:-1]
-
-        lowered = stripped.lower()
-        if lowered in SkillScalarValues.NULL:
-            return None
-        if lowered == SkillScalarValues.TRUE:
-            return True
-        if lowered == SkillScalarValues.FALSE:
-            return False
-
-        try:
-            return int(stripped)
-        except ValueError:
-            pass
-
-        try:
-            return float(stripped)
-        except ValueError:
-            return stripped
+        return parsed
 
     @classmethod
     def move_unknown_scalars_to_metadata(
@@ -340,27 +240,6 @@ class SkillManifestParser:
         if missing_required:
             return SkillErrorCode.MISSING_REQUIRED_FIELD
         return SkillErrorCode.INVALID_MANIFEST
-
-    @classmethod
-    def should_skip_frontmatter_line(cls, line: str) -> bool:
-        return not line.strip() or line.lstrip().startswith(
-            Keys.Frontmatter.COMMENT_PREFIX
-        )
-
-    @classmethod
-    def is_malformed_top_level_line(cls, line: str) -> bool:
-        return line.startswith((Keys.Characters.SPACE, Keys.Characters.TAB)) or (
-            Keys.Characters.COLON not in line
-        )
-
-    @classmethod
-    def is_quoted_scalar(cls, value: str) -> bool:
-        if len(value) < 2:
-            return False
-        return value[0] == value[-1] and value[0] in {
-            Keys.Characters.QUOTE_DOUBLE,
-            Keys.Characters.QUOTE_SINGLE,
-        }
 
 
 class SkillManifestReader:
@@ -493,23 +372,19 @@ class SkillAssetReferenceValidator:
 
 
 class SkillTextNormalizer:
-    """Reusable normalizers for skills Pydantic boundaries."""
+    """Reusable normalizers for skills Pydantic boundaries.
 
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError(Messages.Validation.string_required(field_name))
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(Messages.Validation.nonempty_string(field_name))
-        return normalized
+    Common methods delegate to the shared ``ValueNormalizer``;
+    skills-specific helpers (metadata keys, scalar checks) remain here.
+    """
 
-    @classmethod
-    def normalize_slug(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.SLUG.fullmatch(normalized):
-            raise ValueError(Messages.Validation.stable_slug(field_name))
-        return normalized
+    from agent_runtime.validation import ValueNormalizer as _V
+
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    normalize_slug = _V.normalize_slug
+    coerce_iterable = _V.coerce_iterable
+
+    del _V
 
     @classmethod
     def normalize_metadata_key(cls, value: object) -> str:
@@ -521,24 +396,5 @@ class SkillTextNormalizer:
         return normalized
 
     @classmethod
-    def coerce_iterable(cls, value: object, field_name: str) -> tuple[object, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            raise ValueError(Messages.Validation.iterable_not_string(field_name))
-        try:
-            return tuple(value)  # type: ignore[arg-type]
-        except TypeError as exc:
-            raise ValueError(Messages.Validation.iterable_required(field_name)) from exc
-
-    @classmethod
     def is_json_scalar(cls, value: object) -> bool:
         return value is None or isinstance(value, str | int | float | bool)
-
-
-class SkillScalarValues:
-    """Scalar values recognized by the lightweight frontmatter parser."""
-
-    FALSE = "false"
-    NULL = frozenset({"null", "none", "~"})
-    TRUE = "true"

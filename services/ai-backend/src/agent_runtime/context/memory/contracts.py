@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import TypeAlias
 from uuid import uuid4
@@ -312,7 +312,19 @@ class ManagedContextPayload(RuntimeContract):
 
 
 class MemoryValueNormalizer:
-    """Normalization helpers used by memory Pydantic validators."""
+    """Normalization helpers used by memory Pydantic validators.
+
+    Common methods delegate to the shared ``ValueNormalizer``;
+    memory-specific helpers (paths, namespaces, actor roles) and the
+    length-bounded ``normalize_id`` remain here.
+    """
+
+    from agent_runtime.validation import ValueNormalizer as _V
+
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    coerce_iterable = _V.coerce_iterable
+
+    del _V
 
     @classmethod
     def normalize_id(cls, value: object, field_name: str) -> str:
@@ -325,15 +337,6 @@ class MemoryValueNormalizer:
             raise ValueError(
                 Messages.Validation.id_contains_unsupported_characters(field_name)
             )
-        return normalized
-
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError(Messages.Validation.string_required(field_name))
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(Messages.Validation.nonempty_string(field_name))
         return normalized
 
     @classmethod
@@ -374,16 +377,6 @@ class MemoryValueNormalizer:
     ) -> frozenset[MemoryActorRole]:
         values = cls.coerce_iterable(value, field_name)
         return frozenset(MemoryActorRole(item) for item in values)
-
-    @classmethod
-    def coerce_iterable(cls, value: object, field_name: str) -> tuple[object, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            raise ValueError(Messages.Validation.iterable_not_string(field_name))
-        if not isinstance(value, Iterable):
-            raise ValueError(Messages.Validation.iterable_required(field_name))
-        return tuple(value)
 
 
 class MemoryRedactor:

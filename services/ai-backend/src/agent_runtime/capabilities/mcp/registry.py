@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,6 +10,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
     McpLoadErrorCode,
@@ -65,9 +65,9 @@ class DynamicMcpRegistry:
     ) -> tuple[McpServerCard, ...]:
         """Return compact MCP cards visible to the request context."""
 
-        runtime_context = self._coerce_context(context)
+        runtime_context = coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = self._first_duplicate_name(entries)
+        duplicate_name = first_duplicate_name(entry.card.name for entry in entries)
         if duplicate_name is not None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -86,7 +86,7 @@ class DynamicMcpRegistry:
     def list_available_servers(self, context: object) -> tuple[McpServerCard, ...]:
         """Runtime port adapter returning model-visible compact server cards."""
 
-        return self.list_server_cards(self._coerce_context(context))
+        return self.list_server_cards(coerce_runtime_context(context))
 
     def resolve_server(self, name: str) -> RegisteredMcpServer | McpLoadError:
         """Resolve a selected stable server name to exactly one provider entry."""
@@ -151,26 +151,3 @@ class DynamicMcpRegistry:
                     ) from exc
                 entries.append(RegisteredMcpServer(provider=provider, card=card))
         return tuple(entries)
-
-    @classmethod
-    def _first_duplicate_name(
-        cls, entries: Sequence[RegisteredMcpServer]
-    ) -> str | None:
-        counts = Counter(entry.card.name for entry in entries)
-        duplicate_names = sorted(name for name, count in counts.items() if count > 1)
-        if not duplicate_names:
-            return None
-        return duplicate_names[0]
-
-    @classmethod
-    def _coerce_context(cls, context: object) -> AgentRuntimeContext:
-        if isinstance(context, AgentRuntimeContext):
-            return context
-        try:
-            return AgentRuntimeContext.model_validate(context)
-        except ValidationError as exc:
-            raise AgentRuntimeError(
-                RuntimeErrorCode.VALIDATION_ERROR,
-                Messages.Registry.INVALID_CONTEXT,
-                retryable=False,
-            ) from exc
