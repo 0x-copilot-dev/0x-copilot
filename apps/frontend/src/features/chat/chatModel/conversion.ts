@@ -1,0 +1,252 @@
+import type {
+  Message,
+  RuntimeEventEnvelope,
+} from "@enterprise-search/api-types";
+import type { ThreadMessageLike } from "@assistant-ui/react";
+import { applyRuntimeEvent } from "./eventReducer";
+import { mergeMetadata, metadataFromMessage } from "./metadata";
+import { assistantMessageId } from "./recordHelpers";
+import { statusForMessage } from "./status";
+import type {
+  ChatItem,
+  ChatThreadMessage,
+  RuntimeEventsByRunId,
+  ThreadMessageContent,
+} from "./types";
+
+export function messagesToChatItems(
+  messages: Message[],
+  eventsByRunId: RuntimeEventsByRunId = new Map(),
+): ChatItem[] {
+  const items: ChatItem[] = [];
+  const persistedAssistantRunIds = new Set(
+    messages.flatMap((message) =>
+      message.status !== "deleted" &&
+      message.role === "assistant" &&
+      message.run_id
+        ? [message.run_id]
+        : [],
+    ),
+  );
+  const hydratedAssistantRuns = new Set<string>();
+  for (const message of messages) {
+    if (message.status === "deleted") {
+      continue;
+    }
+    if (message.role === "assistant" && message.run_id) {
+      if (hydratedAssistantRuns.has(message.run_id)) {
+        continue;
+      }
+      hydratedAssistantRuns.add(message.run_id);
+      const replayed = assistantItemFromEvents(
+        message,
+        eventsByRunId.get(message.run_id) ?? [],
+      );
+      items.push(replayed ?? messageToChatItem(message));
+      continue;
+    }
+    items.push(messageToChatItem(message));
+    if (
+      message.run_id &&
+      !persistedAssistantRunIds.has(message.run_id) &&
+      !hydratedAssistantRuns.has(message.run_id)
+    ) {
+      const replayed = syntheticAssistantItemFromEvents(
+        message,
+        eventsByRunId.get(message.run_id) ?? [],
+      );
+      if (replayed) {
+        hydratedAssistantRuns.add(message.run_id);
+        items.push(replayed);
+      }
+    }
+  }
+  return items;
+}
+
+export function optimisticUserMessage({
+  id,
+  text,
+  content,
+  parentId,
+  attachments,
+  metadata,
+  sourceMessageId,
+  branchId,
+}: {
+  id: string;
+  text: string;
+  content?: ThreadMessageContent;
+  parentId?: string | null;
+  attachments?: ChatThreadMessage["attachments"];
+  metadata?: ThreadMessageLike["metadata"];
+  sourceMessageId?: string | null;
+  branchId?: string | null;
+}): ChatItem {
+  return {
+    id,
+    kind: "message",
+    role: "user",
+    content: content ?? [{ type: "text", text }],
+    parentId,
+    attachments,
+    metadata,
+    sourceMessageId,
+    branchId,
+  };
+}
+
+export function chatItemsToThreadMessages(
+  items: ChatItem[],
+  activeRunId: string | null,
+): ChatThreadMessage[] {
+  return items.map((item): ChatThreadMessage => {
+    if (item.kind === "message") {
+      return {
+        id: item.id,
+        role: item.role,
+        content: item.content,
+        parentId: item.parentId ?? undefined,
+        attachments: item.attachments,
+        metadata: item.metadata,
+        status: statusForMessage(item, activeRunId),
+      };
+    }
+    return {
+      id: item.id,
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: item.text ? `${item.title}\n${item.text}` : item.title,
+        },
+      ],
+    };
+  });
+}
+
+export function threadMessagesToChatItems(
+  messages: readonly ChatThreadMessage[],
+): ChatItem[] {
+  return messages.map((message): ChatItem => {
+    const content =
+      typeof message.content === "string"
+        ? ([{ type: "text", text: message.content }] as ThreadMessageContent)
+        : (message.content as ThreadMessageContent);
+    return {
+      id: message.id ?? `local-${Date.now()}`,
+      kind: "message",
+      role: message.role,
+      content,
+      parentId: message.parentId ?? null,
+      attachments: message.attachments,
+      metadata: message.metadata,
+      status: message.status,
+    };
+  });
+}
+
+function messageToChatItem(message: Message): ChatItem {
+  return {
+    id: message.message_id,
+    kind: "message",
+    role:
+      message.role === "assistant" || message.role === "user"
+        ? message.role
+        : "system",
+    parentId: message.parent_message_id,
+    sourceMessageId: message.source_message_id ?? null,
+    branchId: message.branch_id ?? null,
+    runId: message.run_id ?? undefined,
+    content: contentFromMessage(message),
+    attachments: attachmentsFromMessage(message),
+    metadata: metadataFromMessage(message),
+  };
+}
+
+function assistantItemFromEvents(
+  message: Message,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  const runId = message.run_id;
+  if (runId === null) {
+    return null;
+  }
+  const assistant = replayedAssistantItem(runId, events);
+  return assistant && assistant.content.length > 0
+    ? {
+        ...assistant,
+        id: message.message_id,
+        parentId: message.parent_message_id,
+        sourceMessageId: message.source_message_id ?? null,
+        branchId: message.branch_id ?? null,
+        metadata: mergeMetadata(
+          assistant.metadata,
+          metadataFromMessage(message),
+        ),
+      }
+    : null;
+}
+
+function syntheticAssistantItemFromEvents(
+  message: Message,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  const runId = message.run_id;
+  if (runId === null) {
+    return null;
+  }
+  const assistant = replayedAssistantItem(runId, events);
+  return assistant && assistant.content.length > 0
+    ? {
+        ...assistant,
+        parentId: message.message_id,
+        sourceMessageId: message.source_message_id ?? null,
+        branchId: message.branch_id ?? null,
+      }
+    : null;
+}
+
+function replayedAssistantItem(
+  runId: string,
+  events: readonly RuntimeEventEnvelope[],
+): Extract<ChatItem, { kind: "message" }> | null {
+  if (events.length === 0) {
+    return null;
+  }
+  const replayed = [...events]
+    .sort((left, right) => left.sequence_no - right.sequence_no)
+    .reduce(
+      (current, event) => applyRuntimeEvent(current, event),
+      [] as ChatItem[],
+    );
+  return (
+    replayed.find(
+      (item): item is Extract<ChatItem, { kind: "message" }> =>
+        item.kind === "message" && item.id === assistantMessageId(runId),
+    ) ?? null
+  );
+}
+
+function contentFromMessage(message: Message): ThreadMessageContent {
+  if (message.content && message.content.length > 0) {
+    return message.content as ThreadMessageContent;
+  }
+  return [{ type: "text", text: message.content_text }];
+}
+
+function attachmentsFromMessage(
+  message: Message,
+): ChatThreadMessage["attachments"] {
+  if (!message.attachments || message.attachments.length === 0) {
+    return undefined;
+  }
+  return message.attachments.map((attachment) => ({
+    id: attachment.id,
+    type: attachment.type,
+    name: attachment.name,
+    contentType: attachment.content_type ?? undefined,
+    content: attachment.content,
+    status: { type: "complete" },
+  })) as ChatThreadMessage["attachments"];
+}
