@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from agent_runtime.api.service import RuntimeApiService
@@ -114,13 +115,15 @@ class TestInMemoryRegenerateMessage:
                 assistant_id="assistant_123",
             )
         )
-        first = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Original question",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        first = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id="org_123",
+                    user_id="user_123",
+                    user_input="Original question",
+                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
         assistant = store.append_message(
@@ -135,15 +138,17 @@ class TestInMemoryRegenerateMessage:
             )
         )
 
-        regenerated = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Regenerate",
-                regenerate_from_message_id=assistant.message_id,
-                branch_id="branch_retry",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+        regenerated = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id="org_123",
+                    user_id="user_123",
+                    user_input="Regenerate",
+                    regenerate_from_message_id=assistant.message_id,
+                    branch_id="branch_retry",
+                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
 

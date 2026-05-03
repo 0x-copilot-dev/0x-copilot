@@ -69,7 +69,7 @@ class StreamMessageProcessor:
         ] = {}
         self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
 
-    def process(
+    async def process(
         self,
         *,
         run: RunRecord,
@@ -81,7 +81,7 @@ class StreamMessageProcessor:
         parent_task_id = namespace.subagent_task_id
 
         for tool_call in StreamMessageParser.tool_call_chunks(message):
-            self.append_tool_call_chunk_event(
+            await self.append_tool_call_chunk_event(
                 run=run,
                 namespace=namespace,
                 tool_call=tool_call,
@@ -94,7 +94,7 @@ class StreamMessageProcessor:
             payload = self.tool_result_payload_with_state(run.run_id, payload)
             if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)
-                self._update_processor.append_task_lifecycle_event(
+                await self._update_processor.append_task_lifecycle_event(
                     run=run,
                     event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                     payload=self._update_processor.task_tool_result_payload(
@@ -109,7 +109,7 @@ class StreamMessageProcessor:
                     metadata=metadata,
                 )
                 return
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
                 event_type=RuntimeApiEventType.TOOL_RESULT,
@@ -129,7 +129,7 @@ class StreamMessageProcessor:
                 self.mark_internal_visibility(completed_payload)
             else:
                 self.apply_tool_visibility(completed_payload)
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
                 event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
@@ -138,7 +138,7 @@ class StreamMessageProcessor:
                 parent_task_id=parent_task_id,
             )
 
-    def append_tool_call_chunk_event(
+    async def append_tool_call_chunk_event(
         self,
         *,
         run: RunRecord,
@@ -149,7 +149,7 @@ class StreamMessageProcessor:
     ) -> None:
         state = self.tool_call_state(run.run_id, namespace, tool_call)
         if state.tool_name == Values.Tool.TASK:
-            self._append_task_tool_call_event(
+            await self._append_task_tool_call_event(
                 run=run,
                 state=state,
                 metadata=metadata,
@@ -170,7 +170,7 @@ class StreamMessageProcessor:
             payload[Keys.Field.STATUS] = Values.Status.RUNNING
         elif state.pending_start:
             state.pending_start = False
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.TOOL,
             event_type=event_type,
@@ -180,7 +180,7 @@ class StreamMessageProcessor:
         )
         state.started_emitted = True
 
-    def _append_task_tool_call_event(
+    async def _append_task_tool_call_event(
         self,
         *,
         run: RunRecord,
@@ -200,7 +200,7 @@ class StreamMessageProcessor:
         state.short_summary = StreamTextHelper.extract(
             payload.get(Keys.Field.SHORT_SUMMARY)
         )
-        self._update_processor.append_task_lifecycle_event(
+        await self._update_processor.append_task_lifecycle_event(
             run=run,
             event_type=RuntimeApiEventType.SUBAGENT_STARTED,
             payload=payload,

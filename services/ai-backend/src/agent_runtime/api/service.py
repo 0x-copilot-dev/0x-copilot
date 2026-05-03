@@ -225,7 +225,7 @@ class RuntimeApiService:
             has_more=len(records) == bounded_limit,
         )
 
-    def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
+    async def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
         """Persist a queued run and enqueue worker execution without invoking runtime inline."""
 
         request = self._request_with_runtime_context(request)
@@ -259,7 +259,7 @@ class RuntimeApiService:
                     "outcome": "success",
                 },
             )
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.RUNTIME,
                 event_type=RuntimeApiEventType.RUN_QUEUED,
@@ -347,7 +347,7 @@ class RuntimeApiService:
             has_more=False,
         )
 
-    def cancel_run(
+    async def cancel_run(
         self,
         *,
         org_id: str,
@@ -378,7 +378,7 @@ class RuntimeApiService:
                 run_id=run.run_id,
                 status=AgentRunStatus.CANCELLING,
             )
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.RUNTIME,
                 event_type=RuntimeApiEventType.RUN_CANCELLING,
@@ -416,7 +416,7 @@ class RuntimeApiService:
             latest_sequence_no=run.latest_sequence_no,
         )
 
-    def record_approval_decision(
+    async def record_approval_decision(
         self,
         *,
         org_id: str,
@@ -465,7 +465,7 @@ class RuntimeApiService:
             user_id=record.user_id,
             run_id=record.run_id,
         )
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,

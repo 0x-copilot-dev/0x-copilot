@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 
 from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
@@ -32,7 +33,7 @@ class RuntimeEventProducer:
         self.presentation_generator = presentation_generator or PresentationGenerator()
         self._on_event_appended = on_event_appended
 
-    def append_api_event(
+    async def append_api_event(
         self,
         *,
         run: RunRecord,
@@ -62,7 +63,7 @@ class RuntimeEventProducer:
             timeline_fields["summary"] = safe_summary
         if status is not None and (safe_status := status.strip()):
             timeline_fields["status"] = safe_status
-        card_presentation = self.presentation_generator.presentation_for_event(
+        card_presentation = await self.presentation_generator.presentation_for_event(
             run=run,
             event_type=event_type,
             source=source,
@@ -72,21 +73,21 @@ class RuntimeEventProducer:
         )
         if card_presentation is not None:
             safe_metadata = {**safe_metadata, "presentation": card_presentation}
-        envelope = self.event_store.append_event(
-            RuntimeEventDraft(
-                run_id=run.run_id,
-                conversation_id=run.conversation_id,
-                source=source,
-                event_type=event_type,
-                trace_id=run.trace_id,
-                parent_task_id=parent_task_id,
-                payload=safe_payload,
-                metadata=safe_metadata,
-                presentation=card_presentation,
-                **timeline_fields,
-            )
+        draft = RuntimeEventDraft(
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            source=source,
+            event_type=event_type,
+            trace_id=run.trace_id,
+            parent_task_id=parent_task_id,
+            payload=safe_payload,
+            metadata=safe_metadata,
+            presentation=card_presentation,
+            **timeline_fields,
         )
-        self.persistence.set_run_latest_sequence(
+        envelope = await asyncio.to_thread(self.event_store.append_event, draft)
+        await asyncio.to_thread(
+            self.persistence.set_run_latest_sequence,
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )
@@ -94,7 +95,7 @@ class RuntimeEventProducer:
             self._on_event_appended(run.run_id)
         return envelope
 
-    def append_stream_event(
+    async def append_stream_event(
         self,
         *,
         run: RunRecord,
@@ -107,7 +108,7 @@ class RuntimeEventProducer:
             conversation_id=run.conversation_id,
             stream_event=stream_event,
         )
-        card_presentation = self.presentation_generator.presentation_for_event(
+        card_presentation = await self.presentation_generator.presentation_for_event(
             run=run,
             event_type=draft.event_type,
             source=draft.source,
@@ -131,8 +132,9 @@ class RuntimeEventProducer:
                     "metadata": {**draft.metadata, "presentation": card_presentation},
                 }
             )
-        envelope = self.event_store.append_event(draft)
-        self.persistence.set_run_latest_sequence(
+        envelope = await asyncio.to_thread(self.event_store.append_event, draft)
+        await asyncio.to_thread(
+            self.persistence.set_run_latest_sequence,
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )
@@ -140,7 +142,7 @@ class RuntimeEventProducer:
             self._on_event_appended(run.run_id)
         return envelope
 
-    def append_stream_events(
+    async def append_stream_events(
         self,
         *,
         run: RunRecord,
@@ -148,7 +150,9 @@ class RuntimeEventProducer:
     ) -> Sequence[RuntimeEventEnvelope]:
         """Append normalized runtime events in order for a worker batch."""
 
-        return tuple(
-            self.append_stream_event(run=run, stream_event=event)
-            for event in stream_events
-        )
+        envelopes: list[RuntimeEventEnvelope] = []
+        for event in stream_events:
+            envelopes.append(
+                await self.append_stream_event(run=run, stream_event=event)
+            )
+        return tuple(envelopes)

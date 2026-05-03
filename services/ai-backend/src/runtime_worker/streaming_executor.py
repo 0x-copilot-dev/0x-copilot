@@ -73,7 +73,7 @@ class StreamingExecutor:
                 result.final_result = candidate
                 metrics.record_usage_from(candidate)
             delta = stream_event_mapper.stream_delta(chunk)
-            stream_event_mapper.append_activity_events(
+            await stream_event_mapper.append_activity_events(
                 run=run,
                 chunk=chunk,
                 delta=delta,
@@ -108,7 +108,7 @@ class StreamingExecutor:
             if not active_subagent_tasks:
                 result.response_deltas.append(delta)
             metrics.record_model_delta(delta)
-            event_producer.append_api_event(
+            await event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.MODEL,
                 event_type=RuntimeApiEventType.MODEL_DELTA,

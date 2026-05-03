@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
@@ -19,16 +22,18 @@ from runtime_api.schemas import (
 )
 
 JsonObject = dict[str, object]
-LlmPresenter = Callable[[str], object]
+LlmPresenter = Callable[[str], object | Awaitable[object]]
+LLM_PRESENTATION_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass
 class PresentationGenerator:
     """Generate validated card presentation metadata from safe event context."""
 
-    llm_factory: Callable[[ModelConfig], object] = build_chat_model
+    llm_factory: Callable[[ModelConfig], BaseChatModel] = build_chat_model
     presenter: LlmPresenter | None = None
     cache: dict[str, JsonObject] = field(default_factory=dict)
+    llm_timeout_seconds: float = LLM_PRESENTATION_TIMEOUT_SECONDS
 
     generated_event_types = frozenset(
         {
@@ -45,7 +50,7 @@ class PresentationGenerator:
         }
     )
 
-    def presentation_for_event(
+    async def presentation_for_event(
         self,
         *,
         run: RunRecord,
@@ -84,30 +89,42 @@ class PresentationGenerator:
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        generated = self._generate(run.runtime_context.model_profile, context)
+        generated = await self._generate(run.runtime_context.model_profile, context)
         validated = self._validated(generated)
         if validated is None:
             validated = self._fallback(context)
         self.cache[cache_key] = validated
         return validated
 
-    def _generate(self, model_config: ModelConfig, context: JsonObject) -> object:
+    async def _generate(self, model_config: ModelConfig, context: JsonObject) -> object:
         prompt = self._prompt(context)
         if self.presenter is not None:
-            return self.presenter(prompt)
+            result = self.presenter(prompt)
+            if inspect.isawaitable(result):
+                return await result
+            return result
         try:
             model = self.llm_factory(model_config.model_copy(update={"temperature": 0}))
-            response = model.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You write concise, plain-text UI card metadata for an "
-                            "enterprise assistant. Return only valid JSON."
-                        )
-                    ),
-                    HumanMessage(content=prompt),
-                ]
+            response = await asyncio.wait_for(
+                model.ainvoke(
+                    [
+                        SystemMessage(
+                            content=(
+                                "You write concise, plain-text UI card metadata for an "
+                                "enterprise assistant. Return only valid JSON."
+                            )
+                        ),
+                        HumanMessage(content=prompt),
+                    ]
+                ),
+                timeout=self.llm_timeout_seconds,
             )
+        except (TimeoutError, asyncio.TimeoutError):
+            logging.getLogger(__name__).warning(
+                "LLM presentation generation timed out after %ss",
+                self.llm_timeout_seconds,
+            )
+            return None
         except Exception:
             logging.getLogger(__name__).warning(
                 "LLM presentation generation failed", exc_info=True

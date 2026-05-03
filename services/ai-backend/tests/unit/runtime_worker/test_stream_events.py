@@ -17,7 +17,7 @@ class RecordingEventProducer:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
 
-    def append_api_event(self, **kwargs: object) -> None:
+    async def append_api_event(self, **kwargs: object) -> None:
         self.events.append(kwargs)
 
 
@@ -298,13 +298,13 @@ def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
     assert payload["visibility"] == "internal"
 
 
-def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
+async def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
     producer = RecordingEventProducer()
     orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
     run = TestFixtures.run_record()
 
-    orchestrator.message_processor.append_tool_call_chunk_event(
+    await orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -316,7 +316,7 @@ def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
         metadata={},
         parent_task_id=None,
     )
-    orchestrator.message_processor.append_tool_call_chunk_event(
+    await orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -345,13 +345,15 @@ def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
     )
 
 
-def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> None:
+async def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> (
+    None
+):
     producer = RecordingEventProducer()
     orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
     run = TestFixtures.run_record()
 
-    orchestrator.message_processor.append_tool_call_chunk_event(
+    await orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -363,7 +365,7 @@ def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> 
         metadata={},
         parent_task_id=None,
     )
-    orchestrator.message_processor.append_tool_call_chunk_event(
+    await orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={

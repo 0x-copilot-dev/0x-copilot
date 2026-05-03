@@ -98,7 +98,7 @@ def test_runtime_event_presentation_sanitizes_text() -> None:
     assert presentation.summary == "Found useful sources."
 
 
-def test_presentation_generator_uses_valid_llm_json() -> None:
+async def test_presentation_generator_uses_valid_llm_json() -> None:
     generator = PresentationGenerator(
         presenter=lambda _: {
             "title": "Searched the web",
@@ -118,7 +118,7 @@ def test_presentation_generator_uses_valid_llm_json() -> None:
         }
     )
 
-    presentation = generator.presentation_for_event(
+    presentation = await generator.presentation_for_event(
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_RESULT,
         source=StreamEventSource.RUNTIME,
@@ -150,12 +150,12 @@ def test_presentation_generator_uses_valid_llm_json() -> None:
     }
 
 
-def test_presentation_generator_falls_back_on_invalid_llm_output() -> None:
+async def test_presentation_generator_falls_back_on_invalid_llm_output() -> None:
     generator = PresentationGenerator(
         presenter=lambda _: {"title": "", "status_label": "Finished", "kind": "tool"}
     )
 
-    presentation = generator.presentation_for_event(
+    presentation = await generator.presentation_for_event(
         run=run_record(),
         event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
         source=StreamEventSource.RUNTIME,
@@ -177,9 +177,9 @@ def test_presentation_generator_falls_back_on_invalid_llm_output() -> None:
     assert "clickup_resolve_assignees" not in str(presentation)
 
 
-def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> None:
+async def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> None:
     generator = PresentationGenerator()
-    presentation = generator.presentation_for_event(
+    presentation = await generator.presentation_for_event(
         run=run_record(),
         event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
         source=StreamEventSource.RUNTIME,
@@ -202,7 +202,7 @@ def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> Non
     assert "clickup_resolve_assignees" not in presentation_str
 
 
-def test_tool_call_completed_does_not_generate_weaker_presentation() -> None:
+async def test_tool_call_completed_does_not_generate_weaker_presentation() -> None:
     generator = PresentationGenerator(
         presenter=lambda _: {
             "title": "Weak completion",
@@ -211,7 +211,7 @@ def test_tool_call_completed_does_not_generate_weaker_presentation() -> None:
         }
     )
 
-    presentation = generator.presentation_for_event(
+    presentation = await generator.presentation_for_event(
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
         source=StreamEventSource.RUNTIME,
@@ -227,7 +227,7 @@ def test_tool_call_completed_does_not_generate_weaker_presentation() -> None:
     assert presentation is None
 
 
-def test_tool_result_context_includes_preview_rows() -> None:
+async def test_tool_result_context_includes_preview_rows() -> None:
     captured_prompt = ""
 
     def presenter(prompt: str) -> dict[str, object]:
@@ -248,7 +248,7 @@ def test_tool_result_context_includes_preview_rows() -> None:
         }
 
     generator = PresentationGenerator(presenter=presenter)
-    presentation = generator.presentation_for_event(
+    presentation = await generator.presentation_for_event(
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_RESULT,
         source=StreamEventSource.RUNTIME,
@@ -276,7 +276,7 @@ def test_tool_result_context_includes_preview_rows() -> None:
     assert "Slack Developer Docs" in captured_prompt
 
 
-def test_event_producer_attaches_presentation_metadata() -> None:
+async def test_event_producer_attaches_presentation_metadata() -> None:
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
     generator = PresentationGenerator(
@@ -294,7 +294,7 @@ def test_event_producer_attaches_presentation_metadata() -> None:
         presentation_generator=generator,
     )
 
-    envelope = producer.append_api_event(
+    envelope = await producer.append_api_event(
         run=run_record(),
         source=StreamEventSource.RUNTIME,
         event_type=RuntimeApiEventType.TOOL_RESULT,

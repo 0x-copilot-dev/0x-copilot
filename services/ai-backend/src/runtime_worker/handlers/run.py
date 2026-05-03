@@ -128,7 +128,9 @@ class RuntimeRunHandler:
         run = self.persistence.update_run_status(
             run_id=command.run_id, status=AgentRunStatus.RUNNING
         )
-        self._append_lifecycle(run, RuntimeApiEventType.RUN_STARTED, "Run started")
+        await self._append_lifecycle(
+            run, RuntimeApiEventType.RUN_STARTED, "Run started"
+        )
         metrics = AssistantRunMetrics.from_run(run)
 
         try:
@@ -165,7 +167,7 @@ class RuntimeRunHandler:
                     timeout=command.runtime_context.model_profile.timeout_seconds,
                 )
                 metrics.record_usage_from(result)
-                if self.stream_event_mapper.append_native_interrupt_events(
+                if await self.stream_event_mapper.append_native_interrupt_events(
                     run=run,
                     value=result,
                 ):
@@ -201,7 +203,7 @@ class RuntimeRunHandler:
                         trace_id=command.trace_id,
                     )
                 )
-                self._append_lifecycle(
+                await self._append_lifecycle(
                     run,
                     RuntimeApiEventType.FINAL_RESPONSE,
                     final_text,
@@ -215,7 +217,7 @@ class RuntimeRunHandler:
             failed = self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
             )
-            self._append_lifecycle(
+            await self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
             )
             return
@@ -223,7 +225,9 @@ class RuntimeRunHandler:
             failed = self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.FAILED
             )
-            self._append_lifecycle(failed, RuntimeApiEventType.RUN_FAILED, "Run failed")
+            await self._append_lifecycle(
+                failed, RuntimeApiEventType.RUN_FAILED, "Run failed"
+            )
             raise
 
         completed = self.persistence.update_run_status(
@@ -232,7 +236,7 @@ class RuntimeRunHandler:
         metrics_payload = metrics.to_payload(
             completed_at=completed.completed_at or datetime.now(timezone.utc)
         )
-        self._append_lifecycle(
+        await self._append_lifecycle(
             completed,
             RuntimeApiEventType.RUN_COMPLETED,
             "Run completed",
@@ -590,7 +594,7 @@ class RuntimeRunHandler:
             or bool(result.get(cls._Fields.INTERRUPTS))
         )
 
-    def _append_lifecycle(
+    async def _append_lifecycle(
         self,
         run: RunRecord,
         event_type: RuntimeApiEventType,
@@ -600,7 +604,7 @@ class RuntimeRunHandler:
         payload: dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=source,
             event_type=event_type,

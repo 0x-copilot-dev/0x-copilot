@@ -445,21 +445,28 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             run_id=first_run["run_id"],
             status=AgentRunStatus.RUNNING,
         )
-        producer.append_api_event(
-            run=running,
-            source=StreamEventSource.RUNTIME,
-            event_type=RuntimeApiEventType.RUN_STARTED,
-            payload={"message": "Worker started.", "authorization": self.Values.SECRET},
+        asyncio.run(
+            producer.append_api_event(
+                run=running,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.RUN_STARTED,
+                payload={
+                    "message": "Worker started.",
+                    "authorization": self.Values.SECRET,
+                },
+            )
         )
         completed = store.update_run_status(
             run_id=first_run["run_id"],
             status=AgentRunStatus.COMPLETED,
         )
-        producer.append_api_event(
-            run=completed,
-            source=StreamEventSource.RUNTIME,
-            event_type=RuntimeApiEventType.RUN_COMPLETED,
-            payload={"message": "Worker completed."},
+        asyncio.run(
+            producer.append_api_event(
+                run=completed,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.RUN_COMPLETED,
+                payload={"message": "Worker completed."},
+            )
         )
         store.mark_complete(
             result=RuntimeWorkerResult(

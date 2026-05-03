@@ -107,7 +107,7 @@ class RuntimeApiRoutes:
         return cls.service(request).list_models()
 
     @classmethod
-    def create_run(
+    async def create_run(
         cls, request: Request, payload: CreateRunRequest
     ) -> CreateRunResponse:
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
@@ -127,7 +127,7 @@ class RuntimeApiRoutes:
                     ),
                 }
             )
-        return cls.service(request).create_run(payload)
+        return await cls.service(request).create_run(payload)
 
     @classmethod
     def get_run(
@@ -187,7 +187,7 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def cancel_run(
+    async def cancel_run(
         cls,
         request: Request,
         run_id: str,
@@ -197,7 +197,7 @@ class RuntimeApiRoutes:
     ) -> CancelRunResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         payload = payload.model_copy(update={"requested_by_user_id": user_id})
-        return cls.service(request).cancel_run(
+        return await cls.service(request).cancel_run(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
@@ -205,7 +205,7 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def approval_decision(
+    async def approval_decision(
         cls,
         request: Request,
         approval_id: str,
@@ -220,7 +220,7 @@ class RuntimeApiRoutes:
             )
         if org_id is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id is required")
-        return cls.service(request).record_approval_decision(
+        return await cls.service(request).record_approval_decision(
             org_id=org_id,
             approval_id=approval_id,
             request=payload,

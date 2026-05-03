@@ -55,7 +55,7 @@ class StreamCustomProcessor:
     """
 
     @classmethod
-    def process(
+    async def process(
         cls,
         *,
         event_producer: RuntimeEventProducer,
@@ -68,7 +68,7 @@ class StreamCustomProcessor:
         payload = StreamMessageParser.safe_activity_payload(data)
         if not payload:
             return
-        event_producer.append_api_event(
+        await event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT
             if namespace.is_subagent
@@ -96,7 +96,7 @@ class StreamOrchestrator:
             event_producer, self.update_processor
         )
 
-    def append_activity_events(
+    async def append_activity_events(
         self,
         *,
         run: RunRecord,
@@ -124,7 +124,7 @@ class StreamOrchestrator:
             if event_type is None:
                 continue
             self.create_approval_request(run=run, payload=payload)
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
@@ -157,7 +157,7 @@ class StreamOrchestrator:
             }:
                 payload = self.payload_with_action_id(event_type, payload)
                 self.create_approval_request(run=run, payload=payload)
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
@@ -168,7 +168,7 @@ class StreamOrchestrator:
 
         if stream_type == _Fields.MESSAGES:
             message = StreamMessageParser.message_from_stream_payload(data)
-            self.message_processor.process(
+            await self.message_processor.process(
                 run=run,
                 namespace=namespace,
                 message=message,
@@ -182,7 +182,7 @@ class StreamOrchestrator:
         } or StreamMessageParser.contains_explicit_api_event(data):
             return
 
-        if stream_type == _Fields.UPDATES and self.update_processor.process(
+        if stream_type == _Fields.UPDATES and await self.update_processor.process(
             run=run,
             namespace=namespace,
             data=data,
@@ -190,7 +190,7 @@ class StreamOrchestrator:
         ):
             return
 
-        StreamCustomProcessor.process(
+        await StreamCustomProcessor.process(
             event_producer=self.event_producer,
             run=run,
             namespace=namespace,
@@ -253,7 +253,7 @@ class StreamOrchestrator:
             )
         )
 
-    def append_native_interrupt_events(
+    async def append_native_interrupt_events(
         self,
         *,
         run: RunRecord,
@@ -266,7 +266,7 @@ class StreamOrchestrator:
             if event_type is None:
                 continue
             self.create_approval_request(run=run, payload=payload)
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
                 event_type=event_type,

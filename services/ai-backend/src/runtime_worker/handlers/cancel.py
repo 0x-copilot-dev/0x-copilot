@@ -30,7 +30,7 @@ class RuntimeCancelHandler:
             run_id=command.run_id,
             status=AgentRunStatus.CANCELLED,
         )
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.RUN_CANCELLED,

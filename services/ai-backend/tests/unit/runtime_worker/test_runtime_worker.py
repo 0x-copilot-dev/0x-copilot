@@ -88,13 +88,15 @@ class _TestHelpers:
                 assistant_id="assistant_123",
             )
         )
-        response = service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Summarize launch risks.",
-                model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
+        response = asyncio.run(
+            service.create_run(
+                CreateRunRequest(
+                    conversation_id=conversation.conversation_id,
+                    org_id="org_123",
+                    user_id="user_123",
+                    user_input="Summarize launch risks.",
+                    model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
+                )
             )
         )
         return response.run_id
@@ -121,11 +123,13 @@ class _TestHelpers:
             payload["visibility"] = visibility.value
         if redaction_state is not None:
             payload["redaction_state"] = redaction_state.value
-        service.event_producer.append_api_event(
-            run=store.runs[run_id],
-            source=StreamEventSource.TOOL,
-            event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-            payload=payload,
+        asyncio.run(
+            service.event_producer.append_api_event(
+                run=store.runs[run_id],
+                source=StreamEventSource.TOOL,
+                event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
+                payload=payload,
+            )
         )
         result_payload: dict[str, object] = {
             "tool_name": tool_name,
@@ -142,11 +146,13 @@ class _TestHelpers:
             result_payload["visibility"] = visibility.value
         if redaction_state is not None:
             result_payload["redaction_state"] = redaction_state.value
-        service.event_producer.append_api_event(
-            run=store.runs[run_id],
-            source=StreamEventSource.TOOL,
-            event_type=RuntimeApiEventType.TOOL_RESULT,
-            payload=result_payload,
+        asyncio.run(
+            service.event_producer.append_api_event(
+                run=store.runs[run_id],
+                source=StreamEventSource.TOOL,
+                event_type=RuntimeApiEventType.TOOL_RESULT,
+                payload=result_payload,
+            )
         )
 
 
@@ -239,13 +245,15 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Original question",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Original question",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     assistant = store.append_message(
@@ -269,16 +277,18 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             parent_message_id=assistant.message_id,
         )
     )
-    edited = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Edited question",
-            parent_message_id=assistant.message_id,
-            source_message_id="sibling_user",
-            branch_id="branch_edit",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    edited = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Edited question",
+                parent_message_id=assistant.message_id,
+                source_message_id="sibling_user",
+                branch_id="branch_edit",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -317,13 +327,15 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Remember that the launch is on Tuesday.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Remember that the launch is on Tuesday.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     assistant = store.append_message(
@@ -338,14 +350,16 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         )
     )
 
-    follow_up = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="What day is the launch?",
-            parent_message_id=f"assistant-{first.run_id}",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="What day is the launch?",
+                parent_message_id=f"assistant-{first.run_id}",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -384,13 +398,15 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="What are my open Jira blockers?",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="What are my open Jira blockers?",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
@@ -405,14 +421,16 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Which one is highest priority?",
-            parent_message_id=assistant.message_id,
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Which one is highest priority?",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -456,13 +474,15 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Find blockers.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Find blockers.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
@@ -477,14 +497,16 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Show full details for the first result.",
-            parent_message_id=assistant.message_id,
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Show full details for the first result.",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     handler = RuntimeRunHandler(
@@ -531,13 +553,15 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Find blockers.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Find blockers.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(
@@ -557,14 +581,16 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    sibling = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Different branch question.",
-            parent_message_id=assistant.message_id,
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    sibling = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Different branch question.",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(
@@ -574,14 +600,16 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         call_id="call_sibling",
         output={"issues": [{"key": "SIBLING-999"}]},
     )
-    follow_up = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Continue from the original answer.",
-            parent_message_id=assistant.message_id,
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Continue from the original answer.",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -616,13 +644,15 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             assistant_id="assistant_123",
         )
     )
-    first = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Search sensitive logs.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    first = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Search sensitive logs.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(
@@ -651,14 +681,16 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="What did the logs say?",
-            parent_message_id=assistant.message_id,
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    follow_up = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="What did the logs say?",
+                parent_message_id=assistant.message_id,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -694,13 +726,15 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
             assistant_id="assistant_123",
         )
     )
-    current = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Search now.",
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    current = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Search now.",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
     _TestHelpers.append_tool_observation(
@@ -739,35 +773,37 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
             assistant_id="assistant_123",
         )
     )
-    response = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Review the launch brief.",
-            content=[
-                {"type": "text", "text": "Review the launch brief."},
-                {
-                    "type": "document",
-                    "filename": "launch-plan.md",
-                    "mime_type": "text/markdown",
-                    "text": "Launch plan risks",
-                },
-            ],
-            attachments=[
-                {
-                    "id": "attachment_1",
-                    "type": "document",
-                    "name": "brief.txt",
-                    "content_type": "text/plain",
-                    "size": 12,
-                    "content": [{"type": "text", "text": "Budget risk"}],
-                }
-            ],
-            quote={"text": "quoted selection", "source": "assistant_1"},
-            branch_id="branch_edit",
-            branch={"replace_from_message_id": "assistant_old"},
-            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+    response = asyncio.run(
+        service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Review the launch brief.",
+                content=[
+                    {"type": "text", "text": "Review the launch brief."},
+                    {
+                        "type": "document",
+                        "filename": "launch-plan.md",
+                        "mime_type": "text/markdown",
+                        "text": "Launch plan risks",
+                    },
+                ],
+                attachments=[
+                    {
+                        "id": "attachment_1",
+                        "type": "document",
+                        "name": "brief.txt",
+                        "content_type": "text/plain",
+                        "size": 12,
+                        "content": [{"type": "text", "text": "Budget risk"}],
+                    }
+                ],
+                quote={"text": "quoted selection", "source": "assistant_1"},
+                branch_id="branch_edit",
+                branch={"replace_from_message_id": "assistant_old"},
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
         )
     )
 
@@ -1397,13 +1433,15 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
         queue=store,
         settings=settings,
     )
-    service.record_approval_decision(
-        org_id=run.org_id,
-        approval_id=approval_id,
-        request=ApprovalDecisionRequest(
-            decision="approved",
-            decided_by_user_id=run.user_id,
-        ),
+    asyncio.run(
+        service.record_approval_decision(
+            org_id=run.org_id,
+            approval_id=approval_id,
+            request=ApprovalDecisionRequest(
+                decision="approved",
+                decided_by_user_id=run.user_id,
+            ),
+        )
     )
 
     class NoopRunHandler:

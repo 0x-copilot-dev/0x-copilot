@@ -137,13 +137,13 @@ class RuntimeApprovalHandler:
                 )
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
-            self._complete_run_with_result(running, final_text, metrics)
+            await self._complete_run_with_result(running, final_text, metrics)
         except Exception:
             failed = self.persistence.update_run_status(
                 run_id=run.run_id,
                 status=AgentRunStatus.FAILED,
             )
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=failed,
                 source=StreamEventSource.SYSTEM,
                 event_type=RuntimeApiEventType.RUN_FAILED,
@@ -171,7 +171,7 @@ class RuntimeApprovalHandler:
         )
         return StreamingExecutor.compose_final(result)
 
-    def _complete_run_with_result(
+    async def _complete_run_with_result(
         self,
         run: RunRecord,
         final_text: str | None,
@@ -196,7 +196,7 @@ class RuntimeApprovalHandler:
                     trace_id=run.trace_id,
                 )
             )
-            self.event_producer.append_api_event(
+            await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,
                 event_type=RuntimeApiEventType.FINAL_RESPONSE,
@@ -212,7 +212,7 @@ class RuntimeApprovalHandler:
             run_id=run.run_id,
             status=AgentRunStatus.COMPLETED,
         )
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=completed,
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.RUN_COMPLETED,

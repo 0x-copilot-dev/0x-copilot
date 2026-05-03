@@ -40,7 +40,7 @@ class StreamUpdateProcessor:
         self.event_producer = event_producer
         self._subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]] = set()
 
-    def process(
+    async def process(
         self,
         *,
         run: RunRecord,
@@ -48,7 +48,7 @@ class StreamUpdateProcessor:
         data: object,
         metadata: JsonObject,
     ) -> bool:
-        if self.append_subagent_lifecycle_events(
+        if await self.append_subagent_lifecycle_events(
             run=run,
             namespace=namespace,
             data=data,
@@ -57,7 +57,7 @@ class StreamUpdateProcessor:
             return True
         return False
 
-    def append_task_lifecycle_event(
+    async def append_task_lifecycle_event(
         self,
         *,
         run: RunRecord,
@@ -71,7 +71,7 @@ class StreamUpdateProcessor:
             if key in self._subagent_lifecycle_keys:
                 return
             self._subagent_lifecycle_keys.add(key)
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=event_type,
@@ -79,7 +79,7 @@ class StreamUpdateProcessor:
             metadata=metadata,
         )
 
-    def append_subagent_lifecycle_events(
+    async def append_subagent_lifecycle_events(
         self,
         *,
         run: RunRecord,
@@ -91,7 +91,7 @@ class StreamUpdateProcessor:
 
         emitted = False
         for payload in self.task_tool_call_payloads(data):
-            self.append_task_lifecycle_event(
+            await self.append_task_lifecycle_event(
                 run=run,
                 event_type=RuntimeApiEventType.SUBAGENT_STARTED,
                 payload=payload,
@@ -99,7 +99,7 @@ class StreamUpdateProcessor:
             )
             emitted = True
         for payload in self.task_tool_result_payloads(data):
-            self.append_task_lifecycle_event(
+            await self.append_task_lifecycle_event(
                 run=run,
                 event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                 payload=payload,
@@ -114,7 +114,7 @@ class StreamUpdateProcessor:
             return True
         payload.setdefault(self._Fields.TASK_ID, namespace.subagent_task_id)
         payload.setdefault(self._Fields.STATUS, "running")
-        self.event_producer.append_api_event(
+        await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,
