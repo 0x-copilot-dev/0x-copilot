@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -28,7 +28,9 @@ from runtime_api.schemas import (
 )
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.run_metrics import AssistantRunMetrics
-from runtime_worker.stream_events import RuntimeStreamPartAdapter
+from runtime_worker.stream_events import StreamOrchestrator
+from runtime_worker.stream_messages import StreamTextHelper
+from runtime_worker.streaming_executor import StreamingExecutor
 from runtime_worker.tool_observations import (
     PriorToolResultLoader,
     ToolObservationIndex,
@@ -51,6 +53,36 @@ class RuntimeRunHandler:
             RuntimeApiEventType.MCP_AUTH_REQUIRED,
         }
     )
+
+    class _Fields:
+        ROLE = "role"
+        CONTENT = "content"
+        FINAL_RESPONSE = "final_response"
+        RESPONSE = "response"
+        OUTPUT = "output"
+        MESSAGES = "messages"
+        TEXT = "text"
+        FILENAME = "filename"
+        NAME = "name"
+        ID = "id"
+        CONTENT_TYPE = "content_type"
+        MIME_TYPE = "mime_type"
+        SIZE = "size"
+        FILE_ID = "file_id"
+        URL = "url"
+        TYPE = "type"
+        ACTION_REQUIRED = "action_required"
+        APPROVAL_REQUESTED = "approval_requested"
+        INTERRUPTS = "interrupts"
+        STATUS = "status"
+        DELTA = "delta"
+        MESSAGE = "message"
+        BRANCH = "branch"
+        REGENERATE_FROM_MESSAGE_ID = "regenerate_from_message_id"
+        REPLACE_FROM_MESSAGE_ID = "replace_from_message_id"
+        BRANCH_ID = "branch_id"
+        SOURCE_MESSAGE_ID = "source_message_id"
+        PARENT_MESSAGE_ID = "parent_message_id"
 
     def __init__(
         self,
@@ -78,7 +110,7 @@ class RuntimeRunHandler:
             event_store=self.event_store,
             on_event_appended=on_event_appended,
         )
-        self.stream_event_mapper = RuntimeStreamPartAdapter(self.event_producer)
+        self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
 
     async def handle(self, command: RuntimeRunCommand) -> None:
@@ -137,7 +169,7 @@ class RuntimeRunHandler:
                     run=run,
                     value=result,
                 ):
-                    result = {"action_required": True}
+                    result = {self._Fields.ACTION_REQUIRED: True}
             if self._is_action_interrupt(result):
                 self.persistence.update_run_status(
                     run_id=command.run_id,
@@ -146,7 +178,9 @@ class RuntimeRunHandler:
                 return
             final_text = self._extract_final_text(result)
             if final_text is not None:
-                metrics_payload = metrics.to_payload(completed_at=datetime.now(UTC))
+                metrics_payload = metrics.to_payload(
+                    completed_at=datetime.now(timezone.utc)
+                )
                 usage = metrics_payload.get("usage")
                 output_tokens = usage.get("output") if isinstance(usage, dict) else None
                 self.persistence.append_message(
@@ -158,7 +192,7 @@ class RuntimeRunHandler:
                         content_text=final_text,
                         parent_message_id=run.user_message_id,
                         branch_id=self._trace_text(
-                            command.runtime_context, "branch_id"
+                            command.runtime_context, self._Fields.BRANCH_ID
                         ),
                         metadata=AssistantRunMetrics.metadata(metrics_payload),
                         token_count=output_tokens
@@ -172,7 +206,7 @@ class RuntimeRunHandler:
                     RuntimeApiEventType.FINAL_RESPONSE,
                     final_text,
                     payload=AssistantRunMetrics.with_payload(
-                        {"message": final_text},
+                        {self._Fields.MESSAGE: final_text},
                         metrics_payload,
                     ),
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
@@ -196,14 +230,14 @@ class RuntimeRunHandler:
             run_id=command.run_id, status=AgentRunStatus.COMPLETED
         )
         metrics_payload = metrics.to_payload(
-            completed_at=completed.completed_at or datetime.now(UTC)
+            completed_at=completed.completed_at or datetime.now(timezone.utc)
         )
         self._append_lifecycle(
             completed,
             RuntimeApiEventType.RUN_COMPLETED,
             "Run completed",
             payload=AssistantRunMetrics.with_payload(
-                {"status": RuntimeApiEventType.RUN_COMPLETED.value},
+                {self._Fields.STATUS: RuntimeApiEventType.RUN_COMPLETED.value},
                 metrics_payload,
             ),
             metadata=AssistantRunMetrics.metadata(metrics_payload),
@@ -224,8 +258,8 @@ class RuntimeRunHandler:
         selected = self._selected_message_chain(records, run.user_message_id)
         messages = [
             {
-                "role": message.role.value,
-                "content": self._message_content_for_runtime(message),
+                self._Fields.ROLE: message.role.value,
+                self._Fields.CONTENT: self._message_content_for_runtime(message),
             }
             for message in selected
             if message.role
@@ -285,21 +319,22 @@ class RuntimeRunHandler:
             selected_messages=selected,
         )
 
-    @staticmethod
+    @classmethod
     def _insert_prior_tool_context(
+        cls,
         messages: list[dict[str, str]],
         prompt_context: str,
     ) -> None:
         insert_at = len(messages)
         for index in range(len(messages) - 1, -1, -1):
-            if messages[index]["role"] == MessageRole.USER.value:
+            if messages[index][cls._Fields.ROLE] == MessageRole.USER.value:
                 insert_at = index
                 break
         messages.insert(
             insert_at,
             {
-                "role": MessageRole.SYSTEM.value,
-                "content": prompt_context,
+                cls._Fields.ROLE: MessageRole.SYSTEM.value,
+                cls._Fields.CONTENT: prompt_context,
             },
         )
 
@@ -330,8 +365,12 @@ class RuntimeRunHandler:
     def _quote_context(cls, quote: Mapping[str, object] | None) -> str | None:
         if not quote:
             return None
-        text = cls._text(quote.get("text")) or cls._text(quote.get("message"))
-        source = cls._text(quote.get("source")) or cls._text(quote.get("message_id"))
+        text = StreamTextHelper.extract(
+            quote.get(cls._Fields.TEXT)
+        ) or StreamTextHelper.extract(quote.get(cls._Fields.MESSAGE))
+        source = StreamTextHelper.extract(
+            quote.get("source")
+        ) or StreamTextHelper.extract(quote.get("message_id"))
         parts: list[str] = []
         if text is not None:
             parts.append(cls._truncate(text))
@@ -348,9 +387,9 @@ class RuntimeRunHandler:
         summaries: list[str] = []
         normalized_content = content_text.strip()
         for part in parts:
-            part_type = cls._text(part.get("type")) or "part"
+            part_type = StreamTextHelper.extract(part.get(cls._Fields.TYPE)) or "part"
             text = cls._content_text(part)
-            if part_type == "text":
+            if part_type == cls._Fields.TEXT:
                 if text is not None and text.strip() != normalized_content:
                     summaries.append(cls._truncate(text))
                 continue
@@ -365,15 +404,15 @@ class RuntimeRunHandler:
         summaries: list[str] = []
         for attachment in attachments:
             name = (
-                cls._text(attachment.get("name"))
-                or cls._text(attachment.get("filename"))
-                or cls._text(attachment.get("id"))
+                StreamTextHelper.extract(attachment.get(cls._Fields.NAME))
+                or StreamTextHelper.extract(attachment.get(cls._Fields.FILENAME))
+                or StreamTextHelper.extract(attachment.get(cls._Fields.ID))
                 or "attachment"
             )
-            content_type = cls._text(attachment.get("content_type")) or cls._text(
-                attachment.get("mime_type")
-            )
-            text = cls._content_blocks_text(attachment.get("content"))
+            content_type = StreamTextHelper.extract(
+                attachment.get(cls._Fields.CONTENT_TYPE)
+            ) or StreamTextHelper.extract(attachment.get(cls._Fields.MIME_TYPE))
+            text = cls._content_blocks_text(attachment.get(cls._Fields.CONTENT))
             details = cls._details(attachment, content_type=content_type)
             suffix = f" ({details})" if details else ""
             if text is not None:
@@ -385,23 +424,25 @@ class RuntimeRunHandler:
     @classmethod
     def _branch_context(cls, message: MessageRecord) -> str | None:
         fields = {
-            "branch_id": message.branch_id,
-            "source_message_id": message.source_message_id,
+            cls._Fields.BRANCH_ID: message.branch_id,
+            cls._Fields.SOURCE_MESSAGE_ID: message.source_message_id,
         }
-        branch = message.metadata.get("branch")
+        branch = message.metadata.get(cls._Fields.BRANCH)
         if isinstance(branch, Mapping):
             for key in (
-                "regenerate_from_message_id",
-                "replace_from_message_id",
+                cls._Fields.REGENERATE_FROM_MESSAGE_ID,
+                cls._Fields.REPLACE_FROM_MESSAGE_ID,
             ):
-                value = cls._text(branch.get(key))
+                value = StreamTextHelper.extract(branch.get(key))
                 if value is not None:
                     fields[key] = value
-        regenerate = cls._text(message.metadata.get("regenerate_from_message_id"))
+        regenerate = StreamTextHelper.extract(
+            message.metadata.get(cls._Fields.REGENERATE_FROM_MESSAGE_ID)
+        )
         if regenerate is not None:
-            fields["regenerate_from_message_id"] = regenerate
+            fields[cls._Fields.REGENERATE_FROM_MESSAGE_ID] = regenerate
         if any(fields.values()) and message.parent_message_id is not None:
-            fields["parent_message_id"] = message.parent_message_id
+            fields[cls._Fields.PARENT_MESSAGE_ID] = message.parent_message_id
         lines = [f"- {key}: {value}" for key, value in fields.items() if value]
         return "\n".join(lines) if lines else None
 
@@ -412,8 +453,12 @@ class RuntimeRunHandler:
         part: Mapping[str, object],
         text: str | None,
     ) -> str:
-        name = cls._text(part.get("filename")) or cls._text(part.get("name"))
-        details = cls._details(part, content_type=cls._text(part.get("mime_type")))
+        name = StreamTextHelper.extract(
+            part.get(cls._Fields.FILENAME)
+        ) or StreamTextHelper.extract(part.get(cls._Fields.NAME))
+        details = cls._details(
+            part, content_type=StreamTextHelper.extract(part.get(cls._Fields.MIME_TYPE))
+        )
         title = f"- {part_type}"
         if name is not None:
             title = f"{title} {name}"
@@ -433,13 +478,13 @@ class RuntimeRunHandler:
         details: list[str] = []
         if content_type is not None:
             details.append(content_type)
-        size = payload.get("size")
+        size = payload.get(cls._Fields.SIZE)
         if isinstance(size, int):
             details.append(f"{size} bytes")
-        file_id = cls._text(payload.get("file_id"))
+        file_id = StreamTextHelper.extract(payload.get(cls._Fields.FILE_ID))
         if file_id is not None:
             details.append(f"file_id={file_id}")
-        url = cls._text(payload.get("url"))
+        url = StreamTextHelper.extract(payload.get(cls._Fields.URL))
         if url is not None:
             details.append(f"url={url}")
         return ", ".join(details)
@@ -447,9 +492,9 @@ class RuntimeRunHandler:
     @classmethod
     def _content_text(cls, payload: Mapping[str, object]) -> str | None:
         return (
-            cls._text(payload.get("text"))
-            or cls._text(payload.get("content"))
-            or cls._content_blocks_text(payload.get("content"))
+            StreamTextHelper.extract(payload.get(cls._Fields.TEXT))
+            or StreamTextHelper.extract(payload.get(cls._Fields.CONTENT))
+            or cls._content_blocks_text(payload.get(cls._Fields.CONTENT))
         )
 
     @classmethod
@@ -457,7 +502,9 @@ class RuntimeRunHandler:
         if isinstance(value, str):
             return value.strip() or None
         if isinstance(value, Mapping):
-            return cls._text(value.get("text")) or cls._text(value.get("content"))
+            return StreamTextHelper.extract(
+                value.get(cls._Fields.TEXT)
+            ) or StreamTextHelper.extract(value.get(cls._Fields.CONTENT))
         if not isinstance(value, Sequence) or isinstance(
             value,
             (str, bytes, bytearray),
@@ -518,78 +565,29 @@ class RuntimeRunHandler:
         messages: Sequence[object],
         metrics: AssistantRunMetrics,
     ) -> object:
-        final_result: object | None = None
-        response_deltas: list[str] = []
-        subagent_summaries: list[str] = []
-        active_subagent_tasks: set[str] = set()
-        completed_subagent_tasks: set[str] = set()
-        saw_task_subagent = False
         async with asyncio.timeout(
             command.runtime_context.model_profile.timeout_seconds
         ):
-            async for chunk in self.runtime_streamer(harness, messages):
-                metrics.record_usage_from(chunk)
-                latest_before = self.event_store.get_latest_sequence(run_id=run.run_id)
-                candidate = self.stream_event_mapper.stream_result_candidate(chunk)
-                if candidate is not None and not active_subagent_tasks:
-                    final_result = candidate
-                    metrics.record_usage_from(candidate)
-                delta = self.stream_event_mapper.stream_delta(chunk)
-                self.stream_event_mapper.append_activity_events(
-                    run=run, chunk=chunk, delta=delta
-                )
-                new_events = self.event_store.list_events_after(
-                    org_id=command.org_id,
-                    run_id=run.run_id,
-                    after_sequence=latest_before,
-                )
-                for event in new_events:
-                    if event.event_type in self.action_interrupt_events:
-                        return {"action_required": True}
-                    if (
-                        event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
-                        and event.task_id is not None
-                    ):
-                        active_subagent_tasks.add(event.task_id)
-                        saw_task_subagent = True
-                    if (
-                        event.event_type == RuntimeApiEventType.SUBAGENT_COMPLETED
-                        and event.task_id is not None
-                    ):
-                        active_subagent_tasks.discard(event.task_id)
-                        if event.task_id not in completed_subagent_tasks:
-                            completed_subagent_tasks.add(event.task_id)
-                            if event.summary:
-                                subagent_summaries.append(event.summary)
-                if delta is None:
-                    continue
-                if not active_subagent_tasks:
-                    response_deltas.append(delta)
-                metrics.record_model_delta(delta)
-                self._append_lifecycle(
-                    run,
-                    RuntimeApiEventType.MODEL_DELTA,
-                    delta,
-                    source=StreamEventSource.MODEL,
-                    payload={"delta": delta, "message": delta},
-                )
-        if final_result is not None:
-            return final_result
-        if response_deltas:
-            return {"content": "".join(response_deltas)}
-        if saw_task_subagent and subagent_summaries:
-            return {"content": "\n\n".join(subagent_summaries)}
-        return None
+            result = await StreamingExecutor.run(
+                stream=self.runtime_streamer(harness, messages),
+                run=run,
+                metrics=metrics,
+                event_store=self.event_store,
+                event_producer=self.event_producer,
+                stream_event_mapper=self.stream_event_mapper,
+                track_subagents=True,
+            )
+        return StreamingExecutor.compose_final(result)
 
     @classmethod
     def _is_action_interrupt(cls, result: object) -> bool:
-        interrupts = getattr(result, "interrupts", None)
+        interrupts = getattr(result, cls._Fields.INTERRUPTS, None)
         if interrupts:
             return True
         return isinstance(result, Mapping) and (
-            result.get("action_required") is True
-            or result.get("approval_requested") is True
-            or bool(result.get("interrupts"))
+            result.get(cls._Fields.ACTION_REQUIRED) is True
+            or result.get(cls._Fields.APPROVAL_REQUESTED) is True
+            or bool(result.get(cls._Fields.INTERRUPTS))
         )
 
     def _append_lifecycle(
@@ -610,7 +608,7 @@ class RuntimeRunHandler:
             status="completed"
             if event_type == RuntimeApiEventType.FINAL_RESPONSE
             else None,
-            payload=payload or {"status": event_type.value},
+            payload=payload or {self._Fields.STATUS: event_type.value},
             metadata=metadata,
         )
 
@@ -623,11 +621,16 @@ class RuntimeRunHandler:
         if isinstance(result, str):
             return result.strip() or None
         if isinstance(result, dict):
-            for key in ("final_response", "response", "output", "content"):
-                text = cls._text(result.get(key))
+            for key in (
+                cls._Fields.FINAL_RESPONSE,
+                cls._Fields.RESPONSE,
+                cls._Fields.OUTPUT,
+                cls._Fields.CONTENT,
+            ):
+                text = StreamTextHelper.extract(result.get(key))
                 if text is not None:
                     return text
-            messages = result.get("messages")
+            messages = result.get(cls._Fields.MESSAGES)
             if isinstance(messages, Sequence):
                 for message in reversed(messages):
                     text = cls._message_content(message)
@@ -638,8 +641,8 @@ class RuntimeRunHandler:
     @classmethod
     def _message_content(cls, message: object) -> str | None:
         if isinstance(message, Mapping):
-            return cls._content_to_text(message.get("content"))
-        return cls._content_to_text(getattr(message, "content", None))
+            return cls._content_to_text(message.get(cls._Fields.CONTENT))
+        return cls._content_to_text(getattr(message, cls._Fields.CONTENT, None))
 
     @classmethod
     def _content_to_text(cls, value: object) -> str | None:
@@ -653,18 +656,12 @@ class RuntimeRunHandler:
                 if isinstance(item, str):
                     parts.append(item)
                 elif isinstance(item, Mapping):
-                    text = item.get("text") or item.get("content")
+                    text = item.get(cls._Fields.TEXT) or item.get(cls._Fields.CONTENT)
                     if isinstance(text, str):
                         parts.append(text)
             text = "".join(parts).strip()
             return text or None
         return None
-
-    @classmethod
-    def _text(cls, value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        return value.strip() or None
 
     @classmethod
     def _trace_text(cls, context: AgentRuntimeContext, key: str) -> str | None:

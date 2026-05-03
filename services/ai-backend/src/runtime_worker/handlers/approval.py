@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
@@ -29,7 +29,9 @@ from runtime_api.schemas import (
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
-from runtime_worker.stream_events import RuntimeStreamPartAdapter
+from runtime_worker.stream_events import StreamOrchestrator
+from runtime_worker.stream_messages import StreamTextHelper
+from runtime_worker.streaming_executor import StreamingExecutor
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 AgentFactory = Callable[..., RuntimeHarness]
@@ -38,6 +40,16 @@ RuntimeResumer = Callable[[RuntimeHarness, object], AsyncIterator[object]]
 
 class RuntimeApprovalHandler:
     """Consume durable approval-resolution commands after the API records the decision."""
+
+    class _Fields:
+        APPROVAL_KIND = "approval_kind"
+        NATIVE_INTERRUPT_ID = "native_interrupt_id"
+        APPROVAL_ID = "approval_id"
+        DECISION = "decision"
+        DECISIONS = "decisions"
+        TYPE = "type"
+        STATUS = "status"
+        MESSAGE = "message"
 
     def __init__(
         self,
@@ -63,7 +75,7 @@ class RuntimeApprovalHandler:
             event_store=event_store,
             on_event_appended=on_event_appended,
         )
-        self.stream_event_mapper = RuntimeStreamPartAdapter(self.event_producer)
+        self.stream_event_mapper = StreamOrchestrator(self.event_producer)
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
         run = self.persistence.get_run(org_id=command.org_id, run_id=command.run_id)
@@ -84,8 +96,13 @@ class RuntimeApprovalHandler:
                 retryable=False,
             )
         metadata = approval.metadata
-        approval_kind = self._text(metadata.get("approval_kind"))
-        if metadata.get("native_interrupt_id") is None and approval_kind != "mcp_auth":
+        approval_kind = StreamTextHelper.extract(
+            metadata.get(self._Fields.APPROVAL_KIND)
+        )
+        if (
+            metadata.get(self._Fields.NATIVE_INTERRUPT_ID) is None
+            and approval_kind != "mcp_auth"
+        ):
             return
 
         resume = self._resume_payload(command, metadata)
@@ -122,7 +139,7 @@ class RuntimeApprovalHandler:
                 run=failed,
                 source=StreamEventSource.SYSTEM,
                 event_type=RuntimeApiEventType.RUN_FAILED,
-                payload={"status": RuntimeApiEventType.RUN_FAILED.value},
+                payload={self._Fields.STATUS: RuntimeApiEventType.RUN_FAILED.value},
                 summary="Run failed",
             )
             raise
@@ -135,47 +152,16 @@ class RuntimeApprovalHandler:
         resume: object,
         metrics: AssistantRunMetrics,
     ) -> object:
-        final_result: object | None = None
-        last_result: object | None = None
-        response_deltas: list[str] = []
-        async for chunk in self.runtime_resumer(harness, resume):
-            last_result = chunk
-            metrics.record_usage_from(chunk)
-            latest_before = self.event_store.get_latest_sequence(run_id=run.run_id)
-            candidate = self.stream_event_mapper.stream_result_candidate(chunk)
-            if candidate is not None:
-                final_result = candidate
-                metrics.record_usage_from(candidate)
-            delta = self.stream_event_mapper.stream_delta(chunk)
-            self.stream_event_mapper.append_activity_events(
-                run=run,
-                chunk=chunk,
-                delta=delta,
-            )
-            new_events = self.event_store.list_events_after(
-                org_id=run.org_id,
-                run_id=run.run_id,
-                after_sequence=latest_before,
-            )
-            for event in new_events:
-                if event.event_type in RuntimeRunHandler.action_interrupt_events:
-                    return {"action_required": True}
-            if delta is None:
-                continue
-            response_deltas.append(delta)
-            metrics.record_model_delta(delta)
-            self.event_producer.append_api_event(
-                run=run,
-                source=StreamEventSource.MODEL,
-                event_type=RuntimeApiEventType.MODEL_DELTA,
-                payload={"delta": delta, "message": delta},
-                summary=delta,
-            )
-        if final_result is not None:
-            return final_result
-        if response_deltas:
-            return {"content": "".join(response_deltas)}
-        return last_result
+        result = await StreamingExecutor.run(
+            stream=self.runtime_resumer(harness, resume),
+            run=run,
+            metrics=metrics,
+            event_store=self.event_store,
+            event_producer=self.event_producer,
+            stream_event_mapper=self.stream_event_mapper,
+            track_subagents=False,
+        )
+        return StreamingExecutor.compose_final(result)
 
     def _complete_run_with_result(
         self,
@@ -183,7 +169,7 @@ class RuntimeApprovalHandler:
         final_text: str | None,
         metrics: AssistantRunMetrics,
     ) -> None:
-        metrics_payload = metrics.to_payload(completed_at=datetime.now(UTC))
+        metrics_payload = metrics.to_payload(completed_at=datetime.now(timezone.utc))
         if final_text is not None:
             usage = metrics_payload.get("usage")
             output_tokens = usage.get("output") if isinstance(usage, dict) else None
@@ -207,7 +193,7 @@ class RuntimeApprovalHandler:
                 source=StreamEventSource.SYSTEM,
                 event_type=RuntimeApiEventType.FINAL_RESPONSE,
                 payload=AssistantRunMetrics.with_payload(
-                    {"message": final_text},
+                    {self._Fields.MESSAGE: final_text},
                     metrics_payload,
                 ),
                 metadata=AssistantRunMetrics.metadata(metrics_payload),
@@ -223,7 +209,7 @@ class RuntimeApprovalHandler:
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.RUN_COMPLETED,
             payload=AssistantRunMetrics.with_payload(
-                {"status": RuntimeApiEventType.RUN_COMPLETED.value},
+                {self._Fields.STATUS: RuntimeApiEventType.RUN_COMPLETED.value},
                 metrics_payload,
             ),
             metadata=AssistantRunMetrics.metadata(metrics_payload),
@@ -236,26 +222,22 @@ class RuntimeApprovalHandler:
         command: RuntimeApprovalResolvedCommand,
         metadata: Mapping[str, object],
     ) -> dict[str, object]:
-        if cls._text(metadata.get("approval_kind")) == "mcp_auth":
+        if (
+            StreamTextHelper.extract(metadata.get(cls._Fields.APPROVAL_KIND))
+            == "mcp_auth"
+        ):
             return {
-                "approval_id": command.approval_id,
-                "decision": "approved"
+                cls._Fields.APPROVAL_ID: command.approval_id,
+                cls._Fields.DECISION: "approved"
                 if command.decision is ApprovalDecision.APPROVED
                 else "rejected",
             }
         return {
-            "decisions": [
+            cls._Fields.DECISIONS: [
                 {
-                    "type": "approve"
+                    cls._Fields.TYPE: "approve"
                     if command.decision is ApprovalDecision.APPROVED
                     else "reject",
                 }
             ]
         }
-
-    @staticmethod
-    def _text(value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        text = value.strip()
-        return text or None

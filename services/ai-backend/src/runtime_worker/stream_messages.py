@@ -9,6 +9,44 @@ from agent_runtime.execution.contracts import JsonObject
 from runtime_api.schemas import RuntimeApiEventType
 
 
+class StreamTextHelper:
+    """Canonical text-extraction helper shared across stream processors."""
+
+    @staticmethod
+    def extract(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        return value.strip() or None
+
+
+class _Fields:
+    API_EVENT_TYPE = "api_event_type"
+    EVENT_TYPE = "event_type"
+    EVENT = "event"
+    TOOL_CALL_CHUNKS = "tool_call_chunks"
+    TOOL_CALLS = "tool_calls"
+    TYPE = "type"
+    TOOL = "tool"
+    TOOL_RESULT = "tool_result"
+    MESSAGES = "messages"
+    MESSAGE = "message"
+    TEXT = "text"
+    CONTENT = "content"
+    NAME = "name"
+    ID = "id"
+    TOOL_CALL_ID = "tool_call_id"
+    CALL_ID = "call_id"
+    TOOL_NAME = "tool_name"
+    STATUS = "status"
+    ARGS = "args"
+    SUMMARY = "summary"
+    INDEX = "index"
+    TASK_ID = "task_id"
+    SUBAGENT_ID = "subagent_id"
+    SUBAGENT_NAME = "subagent_name"
+    DISPLAY_TITLE = "display_title"
+
+
 class StreamMessageParser:
     """Normalize provider messages and JSON-ish stream payloads."""
 
@@ -71,15 +109,15 @@ class StreamMessageParser:
         payload = cls.payload_mapping(value)
         safe_payload: JsonObject = {}
         for key in (
-            "task_id",
-            "subagent_id",
-            "subagent_name",
-            "display_title",
-            "summary",
-            "message",
-            "status",
+            _Fields.TASK_ID,
+            _Fields.SUBAGENT_ID,
+            _Fields.SUBAGENT_NAME,
+            _Fields.DISPLAY_TITLE,
+            _Fields.SUMMARY,
+            _Fields.MESSAGE,
+            _Fields.STATUS,
         ):
-            text = cls.text(payload.get(key))
+            text = StreamTextHelper.extract(payload.get(key))
             if text is not None:
                 safe_payload[key] = text
         return safe_payload
@@ -89,9 +127,9 @@ class StreamMessageParser:
         cls, payload: Mapping[str, object]
     ) -> RuntimeApiEventType | None:
         value = (
-            payload.get("api_event_type")
-            or payload.get("event_type")
-            or payload.get("event")
+            payload.get(_Fields.API_EVENT_TYPE)
+            or payload.get(_Fields.EVENT_TYPE)
+            or payload.get(_Fields.EVENT)
         )
         if not isinstance(value, str):
             return None
@@ -103,10 +141,14 @@ class StreamMessageParser:
     @classmethod
     def tool_call_chunks(cls, message: object) -> tuple[object, ...]:
         if isinstance(message, Mapping):
-            value = message.get("tool_call_chunks") or message.get("tool_calls") or ()
+            value = (
+                message.get(_Fields.TOOL_CALL_CHUNKS)
+                or message.get(_Fields.TOOL_CALLS)
+                or ()
+            )
         else:
-            value = getattr(message, "tool_call_chunks", None) or getattr(
-                message, "tool_calls", ()
+            value = getattr(message, _Fields.TOOL_CALL_CHUNKS, None) or getattr(
+                message, _Fields.TOOL_CALLS, ()
             )
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
@@ -117,10 +159,10 @@ class StreamMessageParser:
     @classmethod
     def is_tool_result_message(cls, message: object) -> bool:
         if isinstance(message, Mapping):
-            return message.get("type") in {"tool", "tool_result"}
+            return message.get(_Fields.TYPE) in {_Fields.TOOL, _Fields.TOOL_RESULT}
         return (
-            bool(getattr(message, "tool_call_id", None))
-            or getattr(message, "type", None) == "tool"
+            bool(getattr(message, _Fields.TOOL_CALL_ID, None))
+            or getattr(message, _Fields.TYPE, None) == _Fields.TOOL
         )
 
     @classmethod
@@ -132,7 +174,7 @@ class StreamMessageParser:
     @classmethod
     def collect_update_messages(cls, value: object, messages: list[object]) -> None:
         if isinstance(value, Mapping):
-            raw_messages = value.get("messages")
+            raw_messages = value.get(_Fields.MESSAGES)
             if isinstance(raw_messages, Sequence) and not isinstance(
                 raw_messages,
                 (str, bytes, bytearray),
@@ -156,23 +198,23 @@ class StreamMessageParser:
         object_payload = cls.object_payload_mapping(value)
         if object_payload:
             return object_payload
-        return {"content": cls.json_value(value)}
+        return {_Fields.CONTENT: cls.json_value(value)}
 
     @classmethod
     def object_payload_mapping(cls, value: object) -> JsonObject:
         payload: JsonObject = {}
         for key in (
-            "type",
-            "name",
-            "id",
-            "tool_call_id",
-            "call_id",
-            "tool_name",
-            "content",
-            "status",
-            "args",
-            "summary",
-            "index",
+            _Fields.TYPE,
+            _Fields.NAME,
+            _Fields.ID,
+            _Fields.TOOL_CALL_ID,
+            _Fields.CALL_ID,
+            _Fields.TOOL_NAME,
+            _Fields.CONTENT,
+            _Fields.STATUS,
+            _Fields.ARGS,
+            _Fields.SUMMARY,
+            _Fields.INDEX,
         ):
             if not hasattr(value, key):
                 continue
@@ -205,7 +247,7 @@ class StreamMessageParser:
         parts: list[str] = []
         for item in values:
             if isinstance(item, Mapping):
-                text = item.get("text") or item.get("content")
+                text = item.get(_Fields.TEXT) or item.get(_Fields.CONTENT)
                 if isinstance(text, str):
                     parts.append(text)
             elif isinstance(item, str):
@@ -218,14 +260,14 @@ class StreamMessageParser:
         if isinstance(payload, tuple) and payload:
             return payload[0]
         if isinstance(payload, Mapping):
-            return payload.get("message") or payload
+            return payload.get(_Fields.MESSAGE) or payload
         return payload
 
     @classmethod
     def message_delta(cls, message: object) -> str | None:
         if isinstance(message, Mapping):
-            return cls.content_delta_to_text(message.get("content"))
-        return cls.content_delta_to_text(getattr(message, "content", None))
+            return cls.content_delta_to_text(message.get(_Fields.CONTENT))
+        return cls.content_delta_to_text(getattr(message, _Fields.CONTENT, None))
 
     @classmethod
     def content_delta_to_text(cls, value: object) -> str | None:
@@ -239,7 +281,7 @@ class StreamMessageParser:
                 if isinstance(item, str):
                     parts.append(item)
                 elif isinstance(item, Mapping):
-                    text = item.get("text") or item.get("content")
+                    text = item.get(_Fields.TEXT) or item.get(_Fields.CONTENT)
                     if isinstance(text, str):
                         parts.append(text)
             text = "".join(parts)
@@ -248,9 +290,7 @@ class StreamMessageParser:
 
     @classmethod
     def text(cls, value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        return value.strip() or None
+        return StreamTextHelper.extract(value)
 
     @classmethod
     def raw_text(cls, value: object) -> str | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from agent_runtime.api.constants import Keys, Values
+from agent_runtime.api.constants import Keys
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import StreamEventSource
@@ -12,23 +12,89 @@ from runtime_api.schemas import (
     ApprovalRequestRecord,
     RunRecord,
     RuntimeApiEventType,
-    RuntimeEventVisibility,
 )
+from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
-from runtime_worker.stream_subagents import SubagentEventProjector
-from runtime_worker.stream_tools import ToolCallStreamState
+from runtime_worker.stream_subagents import StreamUpdateProcessor
+from runtime_worker.stream_tools import StreamMessageProcessor
 
 
-class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
-    """Project LangGraph v2 StreamPart chunks into stable runtime API events."""
+class _Fields:
+    DATA = "data"
+    MESSAGES = "messages"
+    UPDATES = "updates"
+    CUSTOM = "custom"
+    VALUES = "values"
+    ACTION_ID = "action_id"
+    NATIVE_INTERRUPT_ID = "native_interrupt_id"
+    INTERRUPT = "__interrupt__"
+    INTERRUPTS = "interrupts"
+    VALUE = "value"
+    ID = "id"
+    INTERRUPT_ID = "interrupt_id"
+    ACTION_REQUESTS = "action_requests"
+    REVIEW_CONFIGS = "review_configs"
+    ACTION_NAME = "action_name"
+    ALLOWED_DECISIONS = "allowed_decisions"
+    ACTION_REQUIRED = "action_required"
+    SERVER_NAME = "server_name"
+    TOOL_NAME = "tool_name"
+    ARGUMENTS = "arguments"
+    DISPLAY_NAME = "display_name"
+    READ_ONLY = "read_only"
+    RISK_LEVEL = "risk_level"
+    GRANT_OPTIONS = "grant_options"
+    ACTION_INDEX = "action_index"
+    ACTION_COUNT = "action_count"
+
+
+class StreamCustomProcessor:
+    """Process custom and fallthrough stream events into progress payloads.
+
+    Standalone processor — no inheritance.
+    """
+
+    @classmethod
+    def process(
+        cls,
+        *,
+        event_producer: RuntimeEventProducer,
+        run: RunRecord,
+        namespace: StreamNamespace,
+        data: object,
+        metadata: dict[str, object],
+        parent_task_id: str | None,
+    ) -> None:
+        payload = StreamMessageParser.safe_activity_payload(data)
+        if not payload:
+            return
+        event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT
+            if namespace.is_subagent
+            else StreamEventSource.MAIN_AGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS
+            if namespace.is_subagent
+            else RuntimeApiEventType.PROGRESS,
+            payload=payload,
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+        )
+
+
+class StreamOrchestrator:
+    """Compose stream processors and route events by stream type.
+
+    Uses composition instead of deep inheritance — delegates to
+    StreamMessageProcessor, StreamUpdateProcessor, and StreamCustomProcessor.
+    """
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
-        self._tool_call_states: dict[
-            tuple[str, tuple[str, ...], str], ToolCallStreamState
-        ] = {}
-        self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
-        self._subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]] = set()
+        self.update_processor = StreamUpdateProcessor(event_producer)
+        self.message_processor = StreamMessageProcessor(
+            event_producer, self.update_processor
+        )
 
     def append_activity_events(
         self,
@@ -37,30 +103,30 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         chunk: object,
         delta: str | None,
     ) -> None:
-        part = self.stream_part(chunk)
+        part = StreamPartParser.stream_part(chunk)
         if part is None:
             return
 
-        stream_type = self.stream_type(part)
-        namespace = self.namespace_for(part)
-        data = part["data"]
+        stream_type = StreamPartParser.stream_type(part)
+        namespace = StreamPartParser.namespace_for(part)
+        data = part[_Fields.DATA]
         metadata = namespace.metadata(stream_type)
         parent_task_id = namespace.subagent_task_id
         source_tool_call_id = (
-            self.source_tool_call_id_for_payload(data)
-            if stream_type == "messages"
+            self._source_tool_call_id_for_payload(data)
+            if stream_type == _Fields.MESSAGES
             else None
         )
 
         native_payloads = self.native_interrupt_payloads(run, data)
         for payload in native_payloads:
-            event_type = self.api_event_type(payload)
+            event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
             self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
                 run=run,
-                source=self.source_for_event(event_type, namespace),
+                source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
                 payload=payload,
                 metadata=metadata,
@@ -69,8 +135,8 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         if native_payloads:
             return
 
-        for payload in self.explicit_api_payloads(data):
-            event_type = self.api_event_type(payload)
+        for payload in StreamMessageParser.explicit_api_payloads(data):
+            event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
             if (
@@ -93,16 +159,16 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                 self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
                 run=run,
-                source=self.source_for_event(event_type, namespace),
+                source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
                 payload=payload,
                 metadata=metadata,
                 parent_task_id=parent_task_id,
             )
 
-        if stream_type == "messages":
-            message = self.message_from_stream_payload(data)
-            self.append_message_activity_events(
+        if stream_type == _Fields.MESSAGES:
+            message = StreamMessageParser.message_from_stream_payload(data)
+            self.message_processor.process(
                 run=run,
                 namespace=namespace,
                 message=message,
@@ -110,12 +176,13 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             )
             return
 
-        if stream_type not in {"updates", "custom"} or self.contains_explicit_api_event(
-            data
-        ):
+        if stream_type not in {
+            _Fields.UPDATES,
+            _Fields.CUSTOM,
+        } or StreamMessageParser.contains_explicit_api_event(data):
             return
 
-        if stream_type == "updates" and self.append_subagent_lifecycle_events(
+        if stream_type == _Fields.UPDATES and self.update_processor.process(
             run=run,
             namespace=namespace,
             data=data,
@@ -123,113 +190,39 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         ):
             return
 
-        payload = self.safe_activity_payload(data)
-        if not payload:
-            return
-        self.event_producer.append_api_event(
+        StreamCustomProcessor.process(
+            event_producer=self.event_producer,
             run=run,
-            source=StreamEventSource.SUBAGENT
-            if namespace.is_subagent
-            else StreamEventSource.MAIN_AGENT,
-            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS
-            if namespace.is_subagent
-            else RuntimeApiEventType.PROGRESS,
-            payload=payload,
+            namespace=namespace,
+            data=data,
             metadata=metadata,
             parent_task_id=parent_task_id,
         )
 
-    def append_message_activity_events(
-        self,
-        *,
-        run: RunRecord,
-        namespace: StreamNamespace,
-        message: object,
-        delta: str | None,
-    ) -> None:
-        metadata = namespace.metadata("messages")
-        parent_task_id = namespace.subagent_task_id
-
-        for tool_call in self.tool_call_chunks(message):
-            self.append_tool_call_chunk_event(
-                run=run,
-                namespace=namespace,
-                tool_call=tool_call,
-                metadata=metadata,
-                parent_task_id=parent_task_id,
-            )
-
-        if self.is_tool_result_message(message):
-            payload = self.tool_result_payload(message)
-            payload = self.tool_result_payload_with_state(run.run_id, payload)
-            if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
-                state = self.tool_call_state_for_payload(run.run_id, payload)
-                self.append_task_lifecycle_event(
-                    run=run,
-                    event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
-                    payload=self.task_tool_result_payload(
-                        payload,
-                        subagent_name=state.subagent_name
-                        if state is not None
-                        else None,
-                        short_summary=state.short_summary
-                        if state is not None
-                        else None,
-                    ),
-                    metadata=metadata,
-                )
-                return
-            self.event_producer.append_api_event(
-                run=run,
-                source=StreamEventSource.TOOL,
-                event_type=RuntimeApiEventType.TOOL_RESULT,
-                payload=payload,
-                metadata=metadata,
-                parent_task_id=parent_task_id,
-            )
-            completed_payload = {
-                Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
-                Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
-                Keys.Field.STATUS: Values.Status.COMPLETED,
-            }
-            if (
-                self.text(payload.get(Keys.Field.VISIBILITY))
-                == RuntimeEventVisibility.INTERNAL.value
-            ):
-                self.mark_internal_visibility(completed_payload)
-            else:
-                self.apply_tool_visibility(completed_payload)
-            self.event_producer.append_api_event(
-                run=run,
-                source=StreamEventSource.TOOL,
-                event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
-                payload=completed_payload,
-                metadata=metadata,
-                parent_task_id=parent_task_id,
-            )
-
     @classmethod
     def stream_delta(cls, chunk: object) -> str | None:
-        part = cls.stream_part(chunk)
-        if part is None or cls.stream_type(part) != "messages":
+        part = StreamPartParser.stream_part(chunk)
+        if part is None or StreamPartParser.stream_type(part) != _Fields.MESSAGES:
             return None
-        if cls.namespace_for(part).is_subagent:
+        if StreamPartParser.namespace_for(part).is_subagent:
             return None
-        message = cls.message_from_stream_payload(part["data"])
-        if cls.tool_call_chunks(message) or cls.is_tool_result_message(message):
+        message = StreamMessageParser.message_from_stream_payload(part[_Fields.DATA])
+        if StreamMessageParser.tool_call_chunks(
+            message
+        ) or StreamMessageParser.is_tool_result_message(message):
             return None
-        return cls.message_delta(message)
+        return StreamMessageParser.message_delta(message)
 
     @classmethod
-    def source_tool_call_id_for_payload(cls, payload: object) -> str | None:
-        message = cls.message_from_stream_payload(payload)
-        if not cls.is_tool_result_message(message):
+    def _source_tool_call_id_for_payload(cls, payload: object) -> str | None:
+        message = StreamMessageParser.message_from_stream_payload(payload)
+        if not StreamMessageParser.is_tool_result_message(message):
             return None
-        message_payload = cls.payload_mapping(message)
+        message_payload = StreamMessageParser.payload_mapping(message)
         return (
-            cls.text(message_payload.get(Keys.Field.TOOL_CALL_ID))
-            or cls.text(message_payload.get(Keys.Field.CALL_ID))
-            or cls.text(message_payload.get(Keys.Field.ID))
+            StreamTextHelper.extract(message_payload.get(Keys.Field.TOOL_CALL_ID))
+            or StreamTextHelper.extract(message_payload.get(Keys.Field.CALL_ID))
+            or StreamTextHelper.extract(message_payload.get(Keys.Field.ID))
         )
 
     def create_approval_request(
@@ -238,7 +231,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         run: RunRecord,
         payload: dict[str, object],
     ) -> None:
-        approval_id = self.text(payload.get(Keys.Field.APPROVAL_ID))
+        approval_id = StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_ID))
         if approval_id is None:
             return
         if (
@@ -269,16 +262,16 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         namespace = StreamNamespace(())
         did_append = False
         for payload in self.native_interrupt_payloads(run, value):
-            event_type = self.api_event_type(payload)
+            event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
             self.create_approval_request(run=run, payload=payload)
             self.event_producer.append_api_event(
                 run=run,
-                source=self.source_for_event(event_type, namespace),
+                source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
                 payload=payload,
-                metadata=namespace.metadata("values"),
+                metadata=namespace.metadata(_Fields.VALUES),
             )
             did_append = True
         return did_append
@@ -289,15 +282,16 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         event_type: RuntimeApiEventType,
         payload: dict[str, object],
     ) -> dict[str, object]:
-        approval_id = cls.text(payload.get(Keys.Field.APPROVAL_ID)) or cls.text(
-            payload.get("action_id")
-        )
+        approval_id = StreamTextHelper.extract(
+            payload.get(Keys.Field.APPROVAL_ID)
+        ) or StreamTextHelper.extract(payload.get(_Fields.ACTION_ID))
         if approval_id is None:
             return payload
         normalized = {
             **payload,
             Keys.Field.APPROVAL_ID: approval_id,
-            "action_id": cls.text(payload.get("action_id")) or approval_id,
+            _Fields.ACTION_ID: StreamTextHelper.extract(payload.get(_Fields.ACTION_ID))
+            or approval_id,
         }
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
@@ -310,13 +304,13 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         value: object,
     ) -> tuple[dict[str, object], ...]:
         payloads: list[dict[str, object]] = []
-        for interrupt_index, interrupt in enumerate(cls.native_interrupts(value)):
-            interrupt_id = cls.native_interrupt_id(
+        for interrupt_index, interrupt in enumerate(cls._native_interrupts(value)):
+            interrupt_id = cls._native_interrupt_id(
                 interrupt,
                 fallback=f"interrupt:{run.run_id}:{interrupt_index}",
             )
-            interrupt_value = cls.native_interrupt_value(interrupt)
-            auth_payload = cls.native_auth_payload(interrupt_id, interrupt_value)
+            interrupt_value = cls._native_interrupt_value(interrupt)
+            auth_payload = cls._native_auth_payload(interrupt_id, interrupt_value)
             if auth_payload is not None:
                 payloads.append(auth_payload)
                 continue
@@ -329,14 +323,14 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         return tuple(payloads)
 
     @classmethod
-    def native_interrupts(cls, value: object) -> tuple[object, ...]:
-        raw = value.get("__interrupt__") if isinstance(value, Mapping) else None
+    def _native_interrupts(cls, value: object) -> tuple[object, ...]:
+        raw = value.get(_Fields.INTERRUPT) if isinstance(value, Mapping) else None
         if raw is None and isinstance(value, Mapping):
-            raw = value.get("interrupts")
+            raw = value.get(_Fields.INTERRUPTS)
         if raw is None:
-            raw = getattr(value, "interrupts", None)
+            raw = getattr(value, _Fields.INTERRUPTS, None)
         if raw is None:
-            raw = cls.payload_mapping(value).get("__interrupt__")
+            raw = StreamMessageParser.payload_mapping(value).get(_Fields.INTERRUPT)
         if raw is None:
             return ()
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
@@ -344,34 +338,40 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         return (raw,)
 
     @classmethod
-    def native_interrupt_value(cls, interrupt: object) -> object:
+    def _native_interrupt_value(cls, interrupt: object) -> object:
         if isinstance(interrupt, Mapping):
-            return interrupt.get("value") or interrupt
-        return getattr(interrupt, "value", interrupt)
+            return interrupt.get(_Fields.VALUE) or interrupt
+        return getattr(interrupt, _Fields.VALUE, interrupt)
 
     @classmethod
-    def native_interrupt_id(cls, interrupt: object, *, fallback: str) -> str:
+    def _native_interrupt_id(cls, interrupt: object, *, fallback: str) -> str:
         if isinstance(interrupt, Mapping):
-            value = interrupt.get("id") or interrupt.get("interrupt_id")
+            value = interrupt.get(_Fields.ID) or interrupt.get(_Fields.INTERRUPT_ID)
         else:
-            value = getattr(interrupt, "id", None)
-        return cls.text(value) or fallback
+            value = getattr(interrupt, _Fields.ID, None)
+        return StreamTextHelper.extract(value) or fallback
 
     @classmethod
-    def native_auth_payload(
+    def _native_auth_payload(
         cls,
         interrupt_id: str,
         interrupt_value: object,
     ) -> dict[str, object] | None:
-        payload = cls.payload_mapping(interrupt_value)
-        if cls.api_event_type(payload) is not RuntimeApiEventType.MCP_AUTH_REQUIRED:
+        payload = StreamMessageParser.payload_mapping(interrupt_value)
+        if (
+            StreamMessageParser.api_event_type(payload)
+            is not RuntimeApiEventType.MCP_AUTH_REQUIRED
+        ):
             return None
         normalized = cls.payload_with_action_id(
             RuntimeApiEventType.MCP_AUTH_REQUIRED,
             {
                 **payload,
-                "native_interrupt_id": interrupt_id,
-                "action_id": cls.text(payload.get("action_id")) or interrupt_id,
+                _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
+                _Fields.ACTION_ID: StreamTextHelper.extract(
+                    payload.get(_Fields.ACTION_ID)
+                )
+                or interrupt_id,
             },
         )
         normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
@@ -388,31 +388,37 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         payload = (
             interrupt_value
             if isinstance(interrupt_value, Mapping)
-            else cls.payload_mapping(interrupt_value)
+            else StreamMessageParser.payload_mapping(interrupt_value)
         )
-        action_requests = payload.get("action_requests")
+        action_requests = payload.get(_Fields.ACTION_REQUESTS)
         if not isinstance(action_requests, Sequence) or isinstance(
             action_requests, (str, bytes, bytearray)
         ):
             return ()
-        review_configs = cls.review_configs_by_action(payload.get("review_configs"))
+        review_configs = cls._review_configs_by_action(
+            payload.get(_Fields.REVIEW_CONFIGS)
+        )
         approvals: list[dict[str, object]] = []
         for index, raw_action in enumerate(action_requests):
             if not isinstance(raw_action, Mapping):
                 continue
             action = raw_action
-            action_name = cls.text(action.get("name"))
+            action_name = StreamTextHelper.extract(action.get(Keys.Field.NAME))
             if action_name != McpValues.ToolName.CALL_MCP_TOOL:
                 continue
-            args = action.get("args")
+            args = action.get(Keys.Field.ARGS)
             if not isinstance(args, Mapping):
                 args = {}
-            server_name = cls.text(args.get("server_name")) or "MCP server"
-            tool_name = cls.text(args.get("tool_name")) or "MCP tool"
-            arguments = args.get("arguments")
-            display_name = cls.connector_display_name(server_name)
-            action_label = cls.connector_action_name(tool_name)
-            read_only = cls.connector_action_is_read_only(tool_name)
+            server_name = (
+                StreamTextHelper.extract(args.get(_Fields.SERVER_NAME)) or "MCP server"
+            )
+            tool_name = (
+                StreamTextHelper.extract(args.get(_Fields.TOOL_NAME)) or "MCP tool"
+            )
+            arguments = args.get(_Fields.ARGUMENTS)
+            display_name = cls._connector_display_name(server_name)
+            action_label = cls._connector_action_name(tool_name)
+            read_only = cls._connector_action_is_read_only(tool_name)
             approval_id = (
                 interrupt_id if len(action_requests) == 1 else f"{interrupt_id}:{index}"
             )
@@ -422,27 +428,27 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
                     "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
                     "event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
                     Keys.Field.APPROVAL_ID: approval_id,
-                    "action_id": approval_id,
+                    _Fields.ACTION_ID: approval_id,
                     Keys.Field.APPROVAL_KIND: "mcp_tool",
-                    "native_interrupt_id": interrupt_id,
-                    "action_index": index,
-                    "action_count": len(action_requests),
-                    "server_name": server_name,
-                    "display_name": display_name,
-                    "tool_name": tool_name,
-                    "arguments": arguments if isinstance(arguments, dict) else {},
+                    _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
+                    _Fields.ACTION_INDEX: index,
+                    _Fields.ACTION_COUNT: len(action_requests),
+                    _Fields.SERVER_NAME: server_name,
+                    _Fields.DISPLAY_NAME: display_name,
+                    _Fields.TOOL_NAME: tool_name,
+                    _Fields.ARGUMENTS: arguments if isinstance(arguments, dict) else {},
                     "message": f"Allow {display_name} {action_label}?",
-                    "read_only": read_only,
-                    "risk_level": "low" if read_only else "medium",
-                    "status": "pending",
-                    "allowed_decisions": list(allowed_decisions),
-                    "grant_options": ["allow_once"],
+                    _Fields.READ_ONLY: read_only,
+                    _Fields.RISK_LEVEL: "low" if read_only else "medium",
+                    Keys.Field.STATUS: "pending",
+                    _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
+                    _Fields.GRANT_OPTIONS: ["allow_once"],
                 }
             )
         return tuple(approvals)
 
     @classmethod
-    def connector_display_name(cls, value: str) -> str:
+    def _connector_display_name(cls, value: str) -> str:
         normalized = value.strip()
         lowered = normalized.lower()
         if lowered.startswith("mcp_"):
@@ -455,12 +461,14 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
             return "Connector"
         acronyms = {"api", "url", "id", "mcp"}
         return " ".join(
-            word.upper() if word.lower() in acronyms else cls.connector_brand_word(word)
+            word.upper()
+            if word.lower() in acronyms
+            else cls._connector_brand_word(word)
             for word in words
         )
 
-    @classmethod
-    def connector_brand_word(cls, value: str) -> str:
+    @staticmethod
+    def _connector_brand_word(value: str) -> str:
         brands = {
             "clickup": "ClickUp",
             "github": "GitHub",
@@ -471,7 +479,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         return brands.get(value.lower(), value.capitalize())
 
     @classmethod
-    def connector_action_name(cls, tool_name: str) -> str:
+    def _connector_action_name(cls, tool_name: str) -> str:
         normalized = tool_name.lower()
         if any(term in normalized for term in ("search", "filter", "find", "list")):
             return "search"
@@ -485,7 +493,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         return "action"
 
     @classmethod
-    def connector_action_is_read_only(cls, tool_name: str) -> bool:
+    def _connector_action_is_read_only(cls, tool_name: str) -> bool:
         normalized = tool_name.lower()
         if any(
             term in normalized
@@ -495,7 +503,7 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         return True
 
     @classmethod
-    def review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:
+    def _review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:
         if not isinstance(value, Sequence) or isinstance(
             value, (str, bytes, bytearray)
         ):
@@ -504,10 +512,10 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
         for item in value:
             if not isinstance(item, Mapping):
                 continue
-            action_name = cls.text(item.get("action_name"))
+            action_name = StreamTextHelper.extract(item.get(_Fields.ACTION_NAME))
             if action_name is None:
                 continue
-            allowed = item.get("allowed_decisions")
+            allowed = item.get(_Fields.ALLOWED_DECISIONS)
             if isinstance(allowed, Sequence) and not isinstance(
                 allowed,
                 (str, bytes, bytearray),
@@ -519,17 +527,17 @@ class RuntimeStreamPartAdapter(SubagentEventProjector, StreamPartParser):
 
     @classmethod
     def stream_result_candidate(cls, chunk: object) -> object | None:
-        part = cls.stream_part(chunk)
+        part = StreamPartParser.stream_part(chunk)
         if (
             part is not None
-            and cls.stream_type(part) == "values"
-            and not cls.namespace_for(part).is_subagent
+            and StreamPartParser.stream_type(part) == _Fields.VALUES
+            and not StreamPartParser.namespace_for(part).is_subagent
         ):
-            return part["data"]
+            return part[_Fields.DATA]
         return None
 
     @classmethod
-    def source_for_event(
+    def _source_for_event(
         cls,
         event_type: RuntimeApiEventType,
         namespace: StreamNamespace,

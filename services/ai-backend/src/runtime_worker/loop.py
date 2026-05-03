@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
@@ -94,7 +94,8 @@ class RuntimeWorker:
     def _claim_next(self) -> RuntimeWorkerClaim | None:
         return self.queue.claim_next(
             worker_id=self.worker_id,
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=self.lock_seconds),
+            lock_expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=self.lock_seconds),
         )
 
     def _claim_batch(self) -> tuple[RuntimeWorkerClaim, ...]:
@@ -175,7 +176,7 @@ class RuntimeWorker:
             command_id=claim.command_id,
             succeeded=False,
             safe_error=error.to_envelope(),
-            retry_available_at=datetime.now(UTC)
+            retry_available_at=datetime.now(timezone.utc)
             + timedelta(seconds=self.retry_delay_seconds),
         )
         if error.retryable and claim.attempts <= self.settings.execution.max_retries:

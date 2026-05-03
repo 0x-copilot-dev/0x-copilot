@@ -9,6 +9,7 @@ import json
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.execution.contracts import AgentRuntimeContext, JsonObject
+from runtime_worker.stream_messages import StreamTextHelper
 from runtime_api.schemas import (
     MessageRecord,
     RuntimeApiEventType,
@@ -115,7 +116,9 @@ class ToolObservationIndexBuilder:
                 RuntimeApiEventType.TOOL_CALL_STARTED,
                 RuntimeApiEventType.TOOL_CALL_DELTA,
             }:
-                call_id = self._text(event.payload.get(Keys.Field.CALL_ID))
+                call_id = StreamTextHelper.extract(
+                    event.payload.get(Keys.Field.CALL_ID)
+                )
                 if call_id is not None:
                     calls_by_id[call_id] = event.payload
                 continue
@@ -124,7 +127,8 @@ class ToolObservationIndexBuilder:
             observation = self._observation_from_event(
                 event=event,
                 call_payload=calls_by_id.get(
-                    self._text(event.payload.get(Keys.Field.CALL_ID)) or ""
+                    StreamTextHelper.extract(event.payload.get(Keys.Field.CALL_ID))
+                    or ""
                 ),
             )
             if observation is not None:
@@ -141,16 +145,16 @@ class ToolObservationIndexBuilder:
             return None
         if event.redaction_state is RuntimeEventRedactionState.OFFLOADED:
             return None
-        call_id = self._text(event.payload.get(Keys.Field.CALL_ID))
+        call_id = StreamTextHelper.extract(event.payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return None
         tool_name = (
-            self._text(event.payload.get(Keys.Field.TOOL_NAME))
-            or self._text((call_payload or {}).get(Keys.Field.TOOL_NAME))
+            StreamTextHelper.extract(event.payload.get(Keys.Field.TOOL_NAME))
+            or StreamTextHelper.extract((call_payload or {}).get(Keys.Field.TOOL_NAME))
             or "unknown_tool"
         )
         result_preview = (
-            self._text(event.summary)
+            StreamTextHelper.extract(event.summary)
             or self._payload_preview(event.payload.get(Keys.Field.OUTPUT))
             or self._payload_preview(event.payload)
         )
@@ -210,13 +214,6 @@ class ToolObservationIndexBuilder:
         if not text:
             return None
         return cls._truncate(text, limit or cls.max_preview_chars)
-
-    @staticmethod
-    def _text(value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        text = value.strip()
-        return text or None
 
     @staticmethod
     def _truncate(value: str, limit: int) -> str:

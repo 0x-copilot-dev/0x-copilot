@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import JsonObject
 from runtime_api.schemas import (
@@ -13,10 +13,142 @@ from runtime_api.schemas import (
 )
 
 
+class TokenUsageExtractor:
+    """Extract token usage from LangChain AIMessage objects and raw mappings.
+
+    Prefers the native ``usage_metadata`` attribute on AIMessage (LangChain >=0.2)
+    before falling back to ``response_metadata`` and common mapping shapes.
+    """
+
+    class _Fields:
+        USAGE_METADATA = "usage_metadata"
+        RESPONSE_METADATA = "response_metadata"
+        USAGE = "usage"
+        TOKEN_USAGE = "token_usage"
+        INPUT_TOKENS = "input_tokens"
+        OUTPUT_TOKENS = "output_tokens"
+        TOTAL_TOKENS = "total_tokens"
+        PROMPT_TOKENS = "prompt_tokens"
+        COMPLETION_TOKENS = "completion_tokens"
+        PROMPT_TOKEN_COUNT = "prompt_token_count"
+        COMPLETION_TOKEN_COUNT = "completion_token_count"
+        TOTAL_TOKEN_COUNT = "total_token_count"
+        INPUT_TOKEN_DETAILS = "input_token_details"
+        PROMPT_TOKENS_DETAILS = "prompt_tokens_details"
+        CACHE_READ = "cache_read"
+        CACHED_TOKENS = "cached_tokens"
+
+    _USAGE_KEYS = frozenset(
+        {
+            _Fields.INPUT_TOKENS,
+            _Fields.OUTPUT_TOKENS,
+            _Fields.TOTAL_TOKENS,
+            _Fields.PROMPT_TOKENS,
+            _Fields.COMPLETION_TOKENS,
+            _Fields.PROMPT_TOKEN_COUNT,
+            _Fields.COMPLETION_TOKEN_COUNT,
+            _Fields.TOTAL_TOKEN_COUNT,
+        }
+    )
+
+    @classmethod
+    def extract(cls, value: object) -> tuple[Mapping[str, object], ...]:
+        """Return token-usage mappings found on *value*.
+
+        Uses ``usage_metadata`` directly when available (the LangChain-native
+        path), then falls back to ``response_metadata`` and common dict shapes.
+        Walks one level into mapping values and sequence items to find usage on
+        nested objects (e.g. stream chunk envelopes wrapping AIMessages).
+        """
+        candidates: list[Mapping[str, object]] = []
+        cls._extract_from_object(value, candidates)
+        if candidates:
+            return tuple(candidates)
+
+        if isinstance(value, Mapping):
+            for item in value.values():
+                cls._extract_from_object(item, candidates)
+                if isinstance(item, Sequence) and not isinstance(
+                    item, (str, bytes, bytearray)
+                ):
+                    for sub in item:
+                        cls._extract_from_object(sub, candidates)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for item in value:
+                cls._extract_from_object(item, candidates)
+
+        return tuple(candidates)
+
+    @classmethod
+    def _extract_from_object(
+        cls,
+        value: object,
+        candidates: list[Mapping[str, object]],
+    ) -> None:
+        usage_meta = getattr(value, cls._Fields.USAGE_METADATA, None)
+        if usage_meta is None and isinstance(value, Mapping):
+            usage_meta = value.get(cls._Fields.USAGE_METADATA)
+        if isinstance(usage_meta, Mapping) and cls._looks_like_usage(usage_meta):
+            candidates.append({str(k): v for k, v in usage_meta.items()})
+            return
+
+        response_meta = getattr(value, cls._Fields.RESPONSE_METADATA, None)
+        if response_meta is None and isinstance(value, Mapping):
+            response_meta = value.get(cls._Fields.RESPONSE_METADATA)
+        if isinstance(response_meta, Mapping):
+            normalized = {str(k): v for k, v in response_meta.items()}
+            cls._append_if_usage(normalized.get(cls._Fields.TOKEN_USAGE), candidates)
+            cls._append_if_usage(normalized.get(cls._Fields.USAGE), candidates)
+            cls._append_if_usage(normalized, candidates)
+
+        for attr in (cls._Fields.USAGE, cls._Fields.TOKEN_USAGE):
+            sub = getattr(value, attr, None)
+            if sub is None and isinstance(value, Mapping):
+                sub = value.get(attr)
+            cls._append_if_usage(sub, candidates)
+
+        if isinstance(value, Mapping):
+            normalized = {str(k): v for k, v in value.items()}
+            if cls._looks_like_usage(normalized):
+                candidates.append(normalized)
+
+    @classmethod
+    def _append_if_usage(
+        cls,
+        value: object,
+        candidates: list[Mapping[str, object]],
+    ) -> None:
+        if not isinstance(value, Mapping):
+            return
+        normalized = {str(k): v for k, v in value.items()}
+        if cls._looks_like_usage(normalized):
+            candidates.append(normalized)
+
+    @classmethod
+    def _looks_like_usage(cls, value: Mapping[str, object]) -> bool:
+        return any(key in value for key in cls._USAGE_KEYS)
+
+
 class AssistantRunMetrics:
     """Accumulate timing, chunk, and exact provider usage for one assistant run."""
 
     PERFORMANCE_KEY = "performance_metrics"
+
+    class _Fields:
+        INPUT_TOKENS = "input_tokens"
+        OUTPUT_TOKENS = "output_tokens"
+        TOTAL_TOKENS = "total_tokens"
+        PROMPT_TOKENS = "prompt_tokens"
+        COMPLETION_TOKENS = "completion_tokens"
+        PROMPT_TOKEN_COUNT = "prompt_token_count"
+        COMPLETION_TOKEN_COUNT = "completion_token_count"
+        TOTAL_TOKEN_COUNT = "total_token_count"
+        INPUT_TOKEN_DETAILS = "input_token_details"
+        PROMPT_TOKENS_DETAILS = "prompt_tokens_details"
+        CACHE_READ = "cache_read"
+        CACHED_TOKENS = "cached_tokens"
 
     def __init__(self, *, started_at: datetime) -> None:
         self.started_at = started_at
@@ -31,14 +163,14 @@ class AssistantRunMetrics:
     def from_run(cls, run: RunRecord) -> "AssistantRunMetrics":
         """Create metrics from the persisted run start timestamp."""
 
-        return cls(started_at=run.started_at or datetime.now(UTC))
+        return cls(started_at=run.started_at or datetime.now(timezone.utc))
 
     def record_model_delta(self, delta: str) -> None:
         """Record a non-empty top-level model text chunk."""
 
         if delta == "":
             return
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         self.chunk_count += 1
         if self.first_token_at is None:
             self.first_token_at = now
@@ -46,13 +178,13 @@ class AssistantRunMetrics:
     def record_usage_from(self, value: object) -> None:
         """Capture exact provider token usage when present in stream objects."""
 
-        for usage in self._usage_candidates(value):
+        for usage in TokenUsageExtractor.extract(value):
             self._merge_usage(usage)
 
     def to_payload(self, *, completed_at: datetime | None = None) -> JsonObject:
         """Return the public JSON metrics payload."""
 
-        end = completed_at or datetime.now(UTC)
+        end = completed_at or datetime.now(timezone.utc)
         duration_ms = self._duration_ms(self.started_at, end)
         first_token_ms = (
             self._duration_ms(self.started_at, self.first_token_at)
@@ -110,20 +242,20 @@ class AssistantRunMetrics:
     def _merge_usage(self, usage: Mapping[str, object]) -> None:
         input_tokens = self._token_value(
             usage,
-            "input_tokens",
-            "prompt_tokens",
-            "prompt_token_count",
+            self._Fields.INPUT_TOKENS,
+            self._Fields.PROMPT_TOKENS,
+            self._Fields.PROMPT_TOKEN_COUNT,
         )
         output_tokens = self._token_value(
             usage,
-            "output_tokens",
-            "completion_tokens",
-            "completion_token_count",
+            self._Fields.OUTPUT_TOKENS,
+            self._Fields.COMPLETION_TOKENS,
+            self._Fields.COMPLETION_TOKEN_COUNT,
         )
         total_tokens = self._token_value(
             usage,
-            "total_tokens",
-            "total_token_count",
+            self._Fields.TOTAL_TOKENS,
+            self._Fields.TOTAL_TOKEN_COUNT,
         )
         cached_input_tokens = self._cached_input_tokens(usage)
 
@@ -139,101 +271,6 @@ class AssistantRunMetrics:
             self.cached_input_tokens = cached_input_tokens
 
     @classmethod
-    def _usage_candidates(cls, value: object) -> tuple[Mapping[str, object], ...]:
-        candidates: list[Mapping[str, object]] = []
-        cls._collect_usage_candidates(value, candidates, seen=set())
-        return tuple(candidates)
-
-    @classmethod
-    def _collect_usage_candidates(
-        cls,
-        value: object,
-        candidates: list[Mapping[str, object]],
-        seen: set[int],
-    ) -> None:
-        identity = id(value)
-        if identity in seen:
-            return
-        seen.add(identity)
-
-        if isinstance(value, Mapping):
-            cls._collect_usage_from_mapping(value, candidates, seen)
-            return
-
-        if isinstance(value, Sequence) and not isinstance(
-            value, (str, bytes, bytearray)
-        ):
-            for item in value:
-                cls._collect_usage_candidates(item, candidates, seen)
-            return
-
-        cls._collect_usage_from_object(value, candidates, seen)
-
-    @classmethod
-    def _collect_usage_from_mapping(
-        cls,
-        value: Mapping[object, object],
-        candidates: list[Mapping[str, object]],
-        seen: set[int],
-    ) -> None:
-        normalized = {str(key): item for key, item in value.items()}
-        cls._append_usage_mapping(normalized.get("usage_metadata"), candidates)
-        response_metadata = normalized.get("response_metadata")
-        if isinstance(response_metadata, Mapping):
-            response = {str(key): item for key, item in response_metadata.items()}
-            cls._append_usage_mapping(response.get("token_usage"), candidates)
-            cls._append_usage_mapping(response.get("usage"), candidates)
-            cls._append_usage_mapping(response, candidates)
-        cls._append_usage_mapping(normalized.get("usage"), candidates)
-        cls._append_usage_mapping(normalized.get("token_usage"), candidates)
-        if cls._looks_like_usage(normalized):
-            candidates.append(normalized)
-        for item in normalized.values():
-            cls._collect_usage_candidates(item, candidates, seen)
-
-    @classmethod
-    def _collect_usage_from_object(
-        cls,
-        value: object,
-        candidates: list[Mapping[str, object]],
-        seen: set[int],
-    ) -> None:
-        for attr in ("usage_metadata", "response_metadata", "usage", "token_usage"):
-            if not hasattr(value, attr):
-                continue
-            item = getattr(value, attr)
-            cls._append_usage_mapping(item, candidates)
-            cls._collect_usage_candidates(item, candidates, seen)
-
-    @classmethod
-    def _append_usage_mapping(
-        cls,
-        value: object,
-        candidates: list[Mapping[str, object]],
-    ) -> None:
-        if not isinstance(value, Mapping):
-            return
-        normalized = {str(key): item for key, item in value.items()}
-        if cls._looks_like_usage(normalized):
-            candidates.append(normalized)
-
-    @classmethod
-    def _looks_like_usage(cls, value: Mapping[str, object]) -> bool:
-        return any(
-            key in value
-            for key in (
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "prompt_tokens",
-                "completion_tokens",
-                "prompt_token_count",
-                "completion_token_count",
-                "total_token_count",
-            )
-        )
-
-    @classmethod
     def _token_value(
         cls,
         value: Mapping[str, object],
@@ -247,15 +284,18 @@ class AssistantRunMetrics:
 
     @classmethod
     def _cached_input_tokens(cls, value: Mapping[str, object]) -> int | None:
-        for key in ("input_token_details", "prompt_tokens_details"):
+        for key in (
+            cls._Fields.INPUT_TOKEN_DETAILS,
+            cls._Fields.PROMPT_TOKENS_DETAILS,
+        ):
             details = value.get(key)
             if not isinstance(details, Mapping):
                 continue
             normalized = {str(item_key): item for item_key, item in details.items()}
             cached = cls._token_value(
                 normalized,
-                "cache_read",
-                "cached_tokens",
+                cls._Fields.CACHE_READ,
+                cls._Fields.CACHED_TOKENS,
             )
             if cached is not None:
                 return cached

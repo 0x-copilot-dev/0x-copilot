@@ -32,118 +32,122 @@ from runtime_api.schemas import (
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.loop import RuntimeWorker
-from runtime_worker.stream_events import StreamNamespace
+from runtime_worker.stream_parts import StreamNamespace
 
 
-def _settings(*, max_retries: int = 1, max_parallel_runs: int = 2) -> RuntimeSettings:
-    return RuntimeSettings.load(
-        environ={
-            "OPENAI_API_KEY": "sk-test",
-            "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            "RUNTIME_MAX_RETRIES": str(max_retries),
-            "RUNTIME_MAX_PARALLEL_RUNS": str(max_parallel_runs),
+class _TestSettings:
+    @staticmethod
+    def create(*, max_retries: int = 1, max_parallel_runs: int = 2) -> RuntimeSettings:
+        return RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+                "RUNTIME_MAX_RETRIES": str(max_retries),
+                "RUNTIME_MAX_PARALLEL_RUNS": str(max_parallel_runs),
+            }
+        )
+
+    @staticmethod
+    def runtime_context(run_id: str) -> AgentRuntimeContext:
+        return AgentRuntimeContext(
+            user_id="user_123",
+            org_id="org_123",
+            roles=["employee"],
+            model_profile={
+                "provider": "openai",
+                "model_name": "gpt-5.4-mini",
+                "max_input_tokens": 128000,
+                "timeout_seconds": 30,
+                "temperature": 0,
+                "supports_streaming": True,
+            },
+            run_id=run_id,
+            trace_id=f"trace_{run_id}",
+        )
+
+
+class _TestHelpers:
+    @staticmethod
+    def create_queued_run(
+        store: InMemoryRuntimeApiStore,
+        settings: RuntimeSettings,
+        *,
+        model: dict[str, object] | None = None,
+    ) -> str:
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+        )
+        conversation = service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
+        )
+        response = service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Summarize launch risks.",
+                model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+        return response.run_id
+
+    @staticmethod
+    def append_tool_observation(
+        service: RuntimeApiService,
+        store: InMemoryRuntimeApiStore,
+        *,
+        run_id: str,
+        tool_name: str = "jira_search",
+        call_id: str = "call_123",
+        args: dict[str, object] | None = None,
+        output: dict[str, object] | None = None,
+        visibility: RuntimeEventVisibility | None = None,
+        redaction_state: RuntimeEventRedactionState | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "args": args or {"assignee": "me", "status": "open"},
         }
-    )
-
-
-def _runtime_context(run_id: str) -> AgentRuntimeContext:
-    return AgentRuntimeContext(
-        user_id="user_123",
-        org_id="org_123",
-        roles=["employee"],
-        model_profile={
-            "provider": "openai",
-            "model_name": "gpt-5.4-mini",
-            "max_input_tokens": 128000,
-            "timeout_seconds": 30,
-            "temperature": 0,
-            "supports_streaming": True,
-        },
-        run_id=run_id,
-        trace_id=f"trace_{run_id}",
-    )
-
-
-def _create_queued_run(
-    store: InMemoryRuntimeApiStore,
-    settings: RuntimeSettings,
-    *,
-    model: dict[str, object] | None = None,
-) -> str:
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
-    )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+        if visibility is not None:
+            payload["visibility"] = visibility.value
+        if redaction_state is not None:
+            payload["redaction_state"] = redaction_state.value
+        service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.TOOL,
+            event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
+            payload=payload,
         )
-    )
-    response = service.create_run(
-        CreateRunRequest(
-            conversation_id=conversation.conversation_id,
-            org_id="org_123",
-            user_id="user_123",
-            user_input="Summarize launch risks.",
-            model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
+        result_payload: dict[str, object] = {
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "output": output
+            or {
+                "issues": [
+                    {"key": "AUTH-123", "priority": "P0"},
+                    {"key": "PAY-88", "priority": "P1"},
+                ]
+            },
+        }
+        if visibility is not None:
+            result_payload["visibility"] = visibility.value
+        if redaction_state is not None:
+            result_payload["redaction_state"] = redaction_state.value
+        service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.TOOL,
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload=result_payload,
         )
-    )
-    return response.run_id
-
-
-def _append_tool_observation(
-    service: RuntimeApiService,
-    store: InMemoryRuntimeApiStore,
-    *,
-    run_id: str,
-    tool_name: str = "jira_search",
-    call_id: str = "call_123",
-    args: dict[str, object] | None = None,
-    output: dict[str, object] | None = None,
-    visibility: RuntimeEventVisibility | None = None,
-    redaction_state: RuntimeEventRedactionState | None = None,
-) -> None:
-    payload: dict[str, object] = {
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "args": args or {"assignee": "me", "status": "open"},
-    }
-    if visibility is not None:
-        payload["visibility"] = visibility.value
-    if redaction_state is not None:
-        payload["redaction_state"] = redaction_state.value
-    service.event_producer.append_api_event(
-        run=store.runs[run_id],
-        source=StreamEventSource.TOOL,
-        event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-        payload=payload,
-    )
-    result_payload: dict[str, object] = {
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "output": output
-        or {
-            "issues": [
-                {"key": "AUTH-123", "priority": "P0"},
-                {"key": "PAY-88", "priority": "P1"},
-            ]
-        },
-    }
-    if visibility is not None:
-        result_payload["visibility"] = visibility.value
-    if redaction_state is not None:
-        result_payload["redaction_state"] = redaction_state.value
-    service.event_producer.append_api_event(
-        run=store.runs[run_id],
-        source=StreamEventSource.TOOL,
-        event_type=RuntimeApiEventType.TOOL_RESULT,
-        payload=result_payload,
-    )
 
 
 def test_stream_namespace_parses_documented_deep_agents_subagent_segments() -> None:
@@ -161,8 +165,8 @@ def test_stream_namespace_parses_documented_deep_agents_subagent_segments() -> N
 
 def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
     seen_messages: list[Sequence[object]] = []
 
     def fake_agent_factory(
@@ -221,7 +225,7 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
 
 def test_runtime_worker_builds_history_from_selected_branch() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -299,7 +303,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
 
 def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -366,7 +370,7 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
 
 def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -389,7 +393,7 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(service, store, run_id=first.run_id)
+    _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
     assistant = store.append_message(
         MessageRecord(
             message_id="assistant_with_jira_answer",
@@ -438,7 +442,7 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
 
 def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -461,7 +465,7 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(service, store, run_id=first.run_id)
+    _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
     assistant = store.append_message(
         MessageRecord(
             message_id="assistant_with_prior_tool",
@@ -513,7 +517,7 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
 
 def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -536,7 +540,7 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(
+    _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
@@ -563,7 +567,7 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(
+    _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=sibling.run_id,
@@ -598,7 +602,7 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
 
 def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -621,14 +625,14 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(
+    _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
         visibility=RuntimeEventVisibility.INTERNAL,
         output={"secret": "internal-only"},
     )
-    _append_tool_observation(
+    _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
@@ -676,7 +680,7 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
 
 def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -699,7 +703,7 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _append_tool_observation(
+    _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=current.run_id,
@@ -721,7 +725,7 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
 
 def test_runtime_worker_includes_structured_composer_context() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
+    settings = _TestSettings.create()
     service = RuntimeApiService(
         persistence=store,
         event_store=store,
@@ -788,8 +792,8 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
 
 def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(
@@ -924,8 +928,8 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
 
 def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(
         store,
         settings,
         model={
@@ -991,8 +995,8 @@ def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
 
 def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1073,8 +1077,8 @@ def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
 
 def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1156,8 +1160,8 @@ def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> 
 
 def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1273,8 +1277,8 @@ def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -
 
 def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1364,8 +1368,8 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
 
 def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
     run = store.update_run_status(
         run_id=run_id,
         status=AgentRunStatus.WAITING_FOR_APPROVAL,
@@ -1464,8 +1468,8 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
 
 def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1673,8 +1677,8 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
 
 def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1854,8 +1858,8 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
 
 def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1951,8 +1955,8 @@ def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> No
 
 def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2037,8 +2041,8 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
 
 def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings()
-    run_id = _create_queued_run(store, settings)
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2126,14 +2130,14 @@ def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
 
 def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings(max_retries=1)
+    settings = _TestSettings.create(max_retries=1)
     command = RuntimeRunCommand(
         run_id="run_retry",
         conversation_id="conversation_123",
         org_id="org_123",
         user_id="user_123",
         trace_id="trace_retry",
-        runtime_context=_runtime_context("run_retry"),
+        runtime_context=_TestSettings.runtime_context("run_retry"),
     )
     store.enqueue_run(command)
 
@@ -2166,7 +2170,7 @@ def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
 
 def test_runtime_worker_respects_max_parallel_runs() -> None:
     store = InMemoryRuntimeApiStore()
-    settings = _settings(max_parallel_runs=2)
+    settings = _TestSettings.create(max_parallel_runs=2)
     for run_id in ("run_1", "run_2"):
         store.enqueue_run(
             RuntimeRunCommand(
@@ -2175,7 +2179,7 @@ def test_runtime_worker_respects_max_parallel_runs() -> None:
                 org_id="org_123",
                 user_id="user_123",
                 trace_id=f"trace_{run_id}",
-                runtime_context=_runtime_context(run_id),
+                runtime_context=_TestSettings.runtime_context(run_id),
             )
         )
 

@@ -6,8 +6,11 @@ from types import SimpleNamespace
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_api.schemas import RunRecord
 from runtime_api.schemas import RuntimeApiEventType
-from runtime_worker.stream_events import RuntimeStreamPartAdapter
+from runtime_worker.stream_events import StreamOrchestrator
+from runtime_worker.stream_messages import StreamMessageParser
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
+from runtime_worker.stream_subagents import StreamUpdateProcessor
+from runtime_worker.stream_tools import StreamMessageProcessor
 
 
 class RecordingEventProducer:
@@ -18,32 +21,34 @@ class RecordingEventProducer:
         self.events.append(kwargs)
 
 
-def run_record() -> RunRecord:
-    return RunRecord(
-        run_id="run_123",
-        conversation_id="conversation_123",
-        org_id="org_123",
-        user_id="user_123",
-        user_message_id="message_123",
-        trace_id="trace_123",
-        model_provider="openai",
-        model_name="gpt-5.4-mini",
-        runtime_context=AgentRuntimeContext(
-            user_id="user_123",
-            org_id="org_123",
-            roles=["employee"],
-            model_profile={
-                "provider": "openai",
-                "model_name": "gpt-5.4-mini",
-                "max_input_tokens": 128000,
-                "timeout_seconds": 30,
-                "temperature": 0,
-                "supports_streaming": True,
-            },
+class TestFixtures:
+    @staticmethod
+    def run_record() -> RunRecord:
+        return RunRecord(
             run_id="run_123",
+            conversation_id="conversation_123",
+            org_id="org_123",
+            user_id="user_123",
+            user_message_id="message_123",
             trace_id="trace_123",
-        ),
-    )
+            model_provider="openai",
+            model_name="gpt-5.4-mini",
+            runtime_context=AgentRuntimeContext(
+                user_id="user_123",
+                org_id="org_123",
+                roles=["employee"],
+                model_profile={
+                    "provider": "openai",
+                    "model_name": "gpt-5.4-mini",
+                    "max_input_tokens": 128000,
+                    "timeout_seconds": 30,
+                    "temperature": 0,
+                    "supports_streaming": True,
+                },
+                run_id="run_123",
+                trace_id="trace_123",
+            ),
+        )
 
 
 def test_stream_part_parser_normalizes_namespace_metadata() -> None:
@@ -67,7 +72,7 @@ def test_stream_part_parser_normalizes_namespace_metadata() -> None:
 
 
 def test_explicit_api_payloads_are_collected_from_nested_payloads() -> None:
-    payloads = RuntimeStreamPartAdapter.explicit_api_payloads(
+    payloads = StreamMessageParser.explicit_api_payloads(
         {
             "model": {
                 "events": [
@@ -81,14 +86,14 @@ def test_explicit_api_payloads_are_collected_from_nested_payloads() -> None:
     )
 
     assert len(payloads) == 1
-    assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
+    assert StreamMessageParser.api_event_type(payloads[0]) is (
         RuntimeApiEventType.REASONING_SUMMARY_DELTA
     )
     assert payloads[0]["summary"] == "Checking source coverage"
 
 
 def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
-    payloads = RuntimeStreamPartAdapter.explicit_api_payloads(
+    payloads = StreamMessageParser.explicit_api_payloads(
         {
             "type": "tool",
             "content": json.dumps(
@@ -101,14 +106,14 @@ def test_explicit_api_payloads_are_collected_from_json_string_content() -> None:
     )
 
     assert len(payloads) == 1
-    assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
+    assert StreamMessageParser.api_event_type(payloads[0]) is (
         RuntimeApiEventType.REASONING_SUMMARY_DELTA
     )
     assert payloads[0]["summary"] == "Checking source coverage"
 
 
 def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None:
-    payloads = RuntimeStreamPartAdapter.explicit_api_payloads(
+    payloads = StreamMessageParser.explicit_api_payloads(
         (
             SimpleNamespace(
                 type="tool",
@@ -126,14 +131,14 @@ def test_explicit_api_payloads_are_collected_from_tool_message_objects() -> None
     )
 
     assert len(payloads) == 1
-    assert RuntimeStreamPartAdapter.api_event_type(payloads[0]) is (
+    assert StreamMessageParser.api_event_type(payloads[0]) is (
         RuntimeApiEventType.PROGRESS
     )
     assert payloads[0]["message"] == "Still working."
 
 
 def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
-    payloads = RuntimeStreamPartAdapter.native_tool_approval_payloads(
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
         interrupt_id="interrupt_123",
         interrupt_value={
             "action_requests": [
@@ -180,10 +185,14 @@ def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
 
 
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:
-    adapter = RuntimeStreamPartAdapter(event_producer=object())  # type: ignore[arg-type]
+    producer = object()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    processor = StreamMessageProcessor(
+        event_producer=producer, update_processor=update_processor
+    )  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
 
-    first = adapter.tool_call_state(
+    first = processor.tool_call_state(
         "run_123",
         namespace,
         {
@@ -193,7 +202,7 @@ def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> Non
             "args": {"delta": ""},
         },
     )
-    second = adapter.tool_call_state(
+    second = processor.tool_call_state(
         "run_123",
         namespace,
         {
@@ -203,21 +212,21 @@ def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> Non
     )
 
     assert second is first
-    payload = adapter.tool_call_payload_from_state(second)
+    payload = StreamMessageProcessor.tool_call_payload_from_state(second)
     assert payload["tool_name"] == "write_todos"
     assert payload["call_id"] == "call_123"
     assert payload["args"] == {"todos": "check prime"}
 
 
 def test_large_result_file_tools_are_internal_only_for_virtual_paths() -> None:
-    large_payload = RuntimeStreamPartAdapter.tool_call_payload(
+    large_payload = StreamMessageProcessor.tool_call_payload(
         {
             "name": "read_file",
             "id": "call_large",
             "args": {"file_path": "/large_tool_results/call_123"},
         }
     )
-    normal_payload = RuntimeStreamPartAdapter.tool_call_payload(
+    normal_payload = StreamMessageProcessor.tool_call_payload(
         {
             "name": "read_file",
             "id": "call_project",
@@ -230,10 +239,14 @@ def test_large_result_file_tools_are_internal_only_for_virtual_paths() -> None:
 
 
 def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
-    adapter = RuntimeStreamPartAdapter(event_producer=object())  # type: ignore[arg-type]
+    producer = object()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    processor = StreamMessageProcessor(
+        event_producer=producer, update_processor=update_processor
+    )  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
 
-    adapter.tool_call_state(
+    processor.tool_call_state(
         "run_123",
         namespace,
         {
@@ -242,7 +255,7 @@ def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
             "args": {"file_path": "/large_tool_results/call_123"},
         },
     )
-    payload = adapter.tool_result_payload_with_state(
+    payload = processor.tool_result_payload_with_state(
         "run_123",
         {
             "tool_name": "unknown_tool",
@@ -256,11 +269,11 @@ def test_large_result_file_tool_results_inherit_internal_visibility() -> None:
 
 def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
     producer = RecordingEventProducer()
-    adapter = RuntimeStreamPartAdapter(event_producer=producer)  # type: ignore[arg-type]
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
-    run = run_record()
+    run = TestFixtures.run_record()
 
-    adapter.append_tool_call_chunk_event(
+    orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -272,7 +285,7 @@ def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
         metadata={},
         parent_task_id=None,
     )
-    adapter.append_tool_call_chunk_event(
+    orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -303,11 +316,11 @@ def test_streamed_large_result_file_tool_does_not_emit_visible_start() -> None:
 
 def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> None:
     producer = RecordingEventProducer()
-    adapter = RuntimeStreamPartAdapter(event_producer=producer)  # type: ignore[arg-type]
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
     namespace = StreamNamespace.from_value(())
-    run = run_record()
+    run = TestFixtures.run_record()
 
-    adapter.append_tool_call_chunk_event(
+    orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -319,7 +332,7 @@ def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> 
         metadata={},
         parent_task_id=None,
     )
-    adapter.append_tool_call_chunk_event(
+    orchestrator.message_processor.append_tool_call_chunk_event(
         run=run,
         namespace=namespace,
         tool_call={
@@ -339,7 +352,7 @@ def test_streamed_normal_file_tool_emits_visible_start_after_path_is_known() -> 
 
 
 def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
-    started = RuntimeStreamPartAdapter.task_tool_call_payloads(
+    started = StreamUpdateProcessor.task_tool_call_payloads(
         {
             "model_request": {
                 "messages": [
@@ -359,7 +372,7 @@ def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
             }
         }
     )
-    completed = RuntimeStreamPartAdapter.task_tool_result_payloads(
+    completed = StreamUpdateProcessor.task_tool_result_payloads(
         {
             "tools": {
                 "messages": [
@@ -395,7 +408,7 @@ def test_task_tool_updates_project_to_subagent_lifecycle_payloads() -> None:
 
 
 def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
-    payload = RuntimeStreamPartAdapter.task_tool_call_payload(
+    payload = StreamUpdateProcessor.task_tool_call_payload(
         call_id="task_report",
         args_payload={
             "subagent_type": "general-purpose",

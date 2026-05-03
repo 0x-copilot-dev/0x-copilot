@@ -15,7 +15,7 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeEventVisibility,
 )
-from runtime_worker.stream_messages import StreamMessageParser
+from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
 
 
@@ -37,10 +37,12 @@ class ToolCallStreamState:
     pending_start: bool = False
 
 
-class ToolEventProjector(StreamMessageParser):
-    """Project provider tool-call chunks and tool-result messages."""
+class StreamMessageProcessor:
+    """Process message-type stream events: tool calls, tool results, text deltas.
 
-    event_producer: RuntimeEventProducer
+    Standalone processor — no inheritance. Uses StreamMessageParser as a utility
+    and delegates subagent lifecycle events to a supplied update_processor.
+    """
 
     internal_tool_names = frozenset({Values.Tool.WRITE_TODOS})
     large_result_artifact_tool_names = frozenset(
@@ -52,8 +54,89 @@ class ToolEventProjector(StreamMessageParser):
         }
     )
 
-    _tool_call_states: dict[tuple[str, tuple[str, ...], str], ToolCallStreamState]
-    _tool_call_ids: dict[tuple[str, str], ToolCallStreamState]
+    class _Fields:
+        INDEX = "index"
+
+    def __init__(
+        self,
+        event_producer: RuntimeEventProducer,
+        update_processor: object,
+    ) -> None:
+        self.event_producer = event_producer
+        self._update_processor = update_processor
+        self._tool_call_states: dict[
+            tuple[str, tuple[str, ...], str], ToolCallStreamState
+        ] = {}
+        self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
+
+    def process(
+        self,
+        *,
+        run: RunRecord,
+        namespace: StreamNamespace,
+        message: object,
+        delta: str | None,
+    ) -> None:
+        metadata = namespace.metadata("messages")
+        parent_task_id = namespace.subagent_task_id
+
+        for tool_call in StreamMessageParser.tool_call_chunks(message):
+            self.append_tool_call_chunk_event(
+                run=run,
+                namespace=namespace,
+                tool_call=tool_call,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
+
+        if StreamMessageParser.is_tool_result_message(message):
+            payload = self.tool_result_payload(message)
+            payload = self.tool_result_payload_with_state(run.run_id, payload)
+            if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
+                state = self.tool_call_state_for_payload(run.run_id, payload)
+                self._update_processor.append_task_lifecycle_event(
+                    run=run,
+                    event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                    payload=self._update_processor.task_tool_result_payload(
+                        payload,
+                        subagent_name=state.subagent_name
+                        if state is not None
+                        else None,
+                        short_summary=state.short_summary
+                        if state is not None
+                        else None,
+                    ),
+                    metadata=metadata,
+                )
+                return
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.TOOL,
+                event_type=RuntimeApiEventType.TOOL_RESULT,
+                payload=payload,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
+            completed_payload = {
+                Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
+                Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
+                Keys.Field.STATUS: Values.Status.COMPLETED,
+            }
+            if (
+                StreamTextHelper.extract(payload.get(Keys.Field.VISIBILITY))
+                == RuntimeEventVisibility.INTERNAL.value
+            ):
+                self.mark_internal_visibility(completed_payload)
+            else:
+                self.apply_tool_visibility(completed_payload)
+            self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.TOOL,
+                event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
+                payload=completed_payload,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
 
     def append_tool_call_chunk_event(
         self,
@@ -66,7 +149,7 @@ class ToolEventProjector(StreamMessageParser):
     ) -> None:
         state = self.tool_call_state(run.run_id, namespace, tool_call)
         if state.tool_name == Values.Tool.TASK:
-            self.append_task_tool_call_event(
+            self._append_task_tool_call_event(
                 run=run,
                 state=state,
                 metadata=metadata,
@@ -97,17 +180,45 @@ class ToolEventProjector(StreamMessageParser):
         )
         state.started_emitted = True
 
+    def _append_task_tool_call_event(
+        self,
+        *,
+        run: RunRecord,
+        state: ToolCallStreamState,
+        metadata: JsonObject,
+    ) -> None:
+        if state.started_emitted or state.call_id is None:
+            return
+        args = state.args or self.parse_args_text(state.args_text)
+        if not args:
+            return
+        payload = self._update_processor.task_tool_call_payload(
+            call_id=state.call_id,
+            args_payload=args,
+        )
+        state.subagent_name = StreamTextHelper.extract(payload.get("subagent_name"))
+        state.short_summary = StreamTextHelper.extract(
+            payload.get(Keys.Field.SHORT_SUMMARY)
+        )
+        self._update_processor.append_task_lifecycle_event(
+            run=run,
+            event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+            payload=payload,
+            metadata=metadata,
+        )
+        state.started_emitted = True
+
     @classmethod
     def tool_call_payload(cls, tool_call: object) -> JsonObject:
-        payload = cls.payload_mapping(tool_call)
+        payload = StreamMessageParser.payload_mapping(tool_call)
         tool_name = (
-            cls.text(payload.get(Keys.Field.NAME))
-            or cls.text(payload.get(Keys.Field.TOOL_NAME))
+            StreamTextHelper.extract(payload.get(Keys.Field.NAME))
+            or StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
             or Values.Tool.UNKNOWN_TOOL
         )
         call_id = (
-            cls.text(payload.get(Keys.Field.ID))
-            or cls.text(payload.get(Keys.Field.CALL_ID))
+            StreamTextHelper.extract(payload.get(Keys.Field.ID))
+            or StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
             or TraceContext.event_id()
         )
         args = payload.get(Keys.Field.ARGS, {})
@@ -122,7 +233,7 @@ class ToolEventProjector(StreamMessageParser):
             else "",
             Keys.Field.STATUS: payload.get(Keys.Field.STATUS, Values.Status.STARTED),
         }
-        summary = cls.text(payload.get(Keys.Field.SUMMARY))
+        summary = StreamTextHelper.extract(payload.get(Keys.Field.SUMMARY))
         if summary is not None:
             result[Keys.Field.SUMMARY] = summary
         cls.apply_tool_visibility(result)
@@ -134,13 +245,13 @@ class ToolEventProjector(StreamMessageParser):
         namespace: StreamNamespace,
         tool_call: object,
     ) -> ToolCallStreamState:
-        payload = self.payload_mapping(tool_call)
-        tool_name = self.text(payload.get(Keys.Field.NAME)) or self.text(
-            payload.get(Keys.Field.TOOL_NAME)
-        )
-        call_id = self.text(payload.get(Keys.Field.ID)) or self.text(
-            payload.get(Keys.Field.CALL_ID)
-        )
+        payload = StreamMessageParser.payload_mapping(tool_call)
+        tool_name = StreamTextHelper.extract(
+            payload.get(Keys.Field.NAME)
+        ) or StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
+        call_id = StreamTextHelper.extract(
+            payload.get(Keys.Field.ID)
+        ) or StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
         key = self.tool_call_state_key(run_id, namespace, payload, call_id)
         state_key = (run_id, namespace.parts, key)
         state = self._tool_call_states.get(state_key)
@@ -152,7 +263,7 @@ class ToolEventProjector(StreamMessageParser):
             self._tool_call_states[state_key] = state
         if tool_name is not None:
             state.tool_name = tool_name
-        summary = self.text(payload.get(Keys.Field.SUMMARY))
+        summary = StreamTextHelper.extract(payload.get(Keys.Field.SUMMARY))
         if summary is not None:
             state.summary = summary
         if call_id is not None:
@@ -161,15 +272,15 @@ class ToolEventProjector(StreamMessageParser):
         args = payload.get(Keys.Field.ARGS, {})
         if isinstance(args, Mapping):
             if Keys.Payload.DELTA in args:
-                delta = self.raw_text(args.get(Keys.Payload.DELTA))
+                delta = StreamMessageParser.raw_text(args.get(Keys.Payload.DELTA))
                 if delta is not None:
                     state.args_text += delta
                     state.last_delta = delta
             elif args:
-                state.args = self.payload_mapping(args)
+                state.args = StreamMessageParser.payload_mapping(args)
                 state.last_delta = ""
         else:
-            delta = self.raw_text(args)
+            delta = StreamMessageParser.raw_text(args)
             if delta is not None:
                 state.args_text += delta
                 state.last_delta = delta
@@ -182,7 +293,7 @@ class ToolEventProjector(StreamMessageParser):
         payload: Mapping[str, object],
         call_id: str | None,
     ) -> str:
-        index = payload.get("index")
+        index = payload.get(self._Fields.INDEX)
         if isinstance(index, int | str):
             normalized = str(index).strip()
             if normalized:
@@ -221,11 +332,11 @@ class ToolEventProjector(StreamMessageParser):
         args = state.args or cls.parse_args_text(state.args_text)
         if not args:
             return False
-        if cls.text(state.tool_name) != Values.Tool.READ_FILE:
+        if StreamTextHelper.extract(state.tool_name) != Values.Tool.READ_FILE:
             return True
         return (
-            cls.text(args.get(Keys.Field.FILE_PATH)) is not None
-            or cls.text(args.get(Keys.Field.PATH)) is not None
+            StreamTextHelper.extract(args.get(Keys.Field.FILE_PATH)) is not None
+            or StreamTextHelper.extract(args.get(Keys.Field.PATH)) is not None
         )
 
     @classmethod
@@ -236,20 +347,20 @@ class ToolEventProjector(StreamMessageParser):
             parsed = json.loads(value)
         except json.JSONDecodeError:
             return {}
-        return cls.payload_mapping(parsed)
+        return StreamMessageParser.payload_mapping(parsed)
 
     @classmethod
     def tool_result_payload(cls, message: object) -> JsonObject:
-        payload = cls.payload_mapping(message)
+        payload = StreamMessageParser.payload_mapping(message)
         tool_name = (
-            cls.text(payload.get(Keys.Field.NAME))
-            or cls.text(payload.get(Keys.Field.TOOL_NAME))
+            StreamTextHelper.extract(payload.get(Keys.Field.NAME))
+            or StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
             or Values.Tool.UNKNOWN_TOOL
         )
         call_id = (
-            cls.text(payload.get(Keys.Field.TOOL_CALL_ID))
-            or cls.text(payload.get(Keys.Field.ID))
-            or cls.text(payload.get(Keys.Field.CALL_ID))
+            StreamTextHelper.extract(payload.get(Keys.Field.TOOL_CALL_ID))
+            or StreamTextHelper.extract(payload.get(Keys.Field.ID))
+            or StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
             or TraceContext.event_id()
         )
         excluded = {
@@ -274,7 +385,7 @@ class ToolEventProjector(StreamMessageParser):
     def tool_result_payload_with_state(
         self, run_id: str, payload: JsonObject
     ) -> JsonObject:
-        call_id = self.text(payload.get(Keys.Field.CALL_ID))
+        call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return payload
         state = self._tool_call_ids.get((run_id, call_id))
@@ -295,14 +406,16 @@ class ToolEventProjector(StreamMessageParser):
         run_id: str,
         payload: Mapping[str, object],
     ) -> ToolCallStreamState | None:
-        call_id = self.text(payload.get(Keys.Field.CALL_ID))
+        call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return None
         return self._tool_call_ids.get((run_id, call_id))
 
     @classmethod
     def apply_tool_visibility(cls, payload: JsonObject) -> None:
-        if cls.is_internal_tool_name(cls.text(payload.get(Keys.Field.TOOL_NAME))):
+        if cls.is_internal_tool_name(
+            StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
+        ):
             cls.mark_internal_visibility(payload)
         if cls.is_large_result_artifact_payload(payload):
             cls.mark_internal_visibility(payload)
@@ -327,15 +440,15 @@ class ToolEventProjector(StreamMessageParser):
     @classmethod
     def is_large_result_artifact_payload(cls, payload: Mapping[str, object]) -> bool:
         if not cls.is_large_result_artifact_tool_name(
-            cls.text(payload.get(Keys.Field.TOOL_NAME))
+            StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
         ):
             return False
         args = payload.get(Keys.Field.ARGS)
         if not isinstance(args, Mapping):
             return False
-        path = cls.text(args.get(Keys.Field.FILE_PATH)) or cls.text(
-            args.get(Keys.Field.PATH)
-        )
+        path = StreamTextHelper.extract(
+            args.get(Keys.Field.FILE_PATH)
+        ) or StreamTextHelper.extract(args.get(Keys.Field.PATH))
         return bool(
             path and path.startswith(Values.VirtualPath.LARGE_TOOL_RESULTS_PREFIX)
         )
