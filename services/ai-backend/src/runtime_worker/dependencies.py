@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
-from agent_runtime.capabilities.skills.sources import SkillSourceConfig
+from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import (
     BackendSkillProvider,
     VirtualSkillRegistry,
@@ -19,6 +20,14 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
+
+
+# Built-in skills shipped with the runtime. The directory is resolved relative
+# to this file so wheel-installed deployments and local dev both work without
+# extra configuration. Each subdirectory under `skills/` must contain a
+# `SKILL.md` with YAML frontmatter (`name`, `description`, ...) per Anthropic's
+# Agent Skills spec.
+BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parent.parent.parent / "skills"
 
 
 class WebSearchToolRegistry:
@@ -73,10 +82,26 @@ class DefaultRuntimeDependenciesFactory:
         return RuntimeDependencies(
             tool_registry=WebSearchToolRegistry(),
             mcp_registry=mcp_registry,
-            skill_source_config=SkillSourceConfig(),
+            skill_source_config=self._skill_source_config(),
             skill_registry=self._skill_registry(_context),
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=EmptySubagentCatalog(),
+        )
+
+    def _skill_source_config(self) -> SkillSourceConfig:
+        """Built-in skills are exposed alongside any backend-registered ones.
+
+        Today only `search-subagent-logs` lives under `skills/` — it teaches
+        the supervisor to read `/subagents/<task_id>/...` files when asked
+        about a delegate's tool calls or queries. We register the directory
+        as a `SkillSource` (rather than as a legacy root) so explicit scope
+        / precedence settings are available later if more skills land.
+        """
+
+        if not BUILTIN_SKILLS_ROOT.is_dir():
+            return SkillSourceConfig()
+        return SkillSourceConfig(
+            sources=(SkillSource(path=BUILTIN_SKILLS_ROOT, precedence=0),),
         )
 
     def _validate_capability_mode(self, context: AgentRuntimeContext) -> None:
