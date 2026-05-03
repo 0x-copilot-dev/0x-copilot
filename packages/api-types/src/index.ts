@@ -146,7 +146,8 @@ export type RuntimeApiEventType =
   | "error"
   | "model_delta"
   | "final_response"
-  | "heartbeat";
+  | "heartbeat"
+  | "presentation_updated";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -186,6 +187,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "model_delta",
   "final_response",
   "heartbeat",
+  "presentation_updated",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -607,6 +609,13 @@ export interface RuntimeLifecyclePayload {
   [key: string]: unknown;
 }
 
+export interface PresentationUpdatedPayload {
+  call_id?: string;
+  approval_id?: string;
+  patches?: string[];
+  [key: string]: unknown;
+}
+
 export interface RuntimeEventPayloadByType {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
@@ -634,6 +643,7 @@ export interface RuntimeEventPayloadByType {
   model_delta: RuntimeTextPayload;
   final_response: RuntimeTextPayload;
   heartbeat: RuntimeLifecyclePayload;
+  presentation_updated: PresentationUpdatedPayload;
 }
 
 export type StructuredRuntimeEventEnvelope<

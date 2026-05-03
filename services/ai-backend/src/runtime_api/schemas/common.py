@@ -103,6 +103,7 @@ class RuntimeApiEventType(StrEnum):
     MODEL_DELTA = "model_delta"
     FINAL_RESPONSE = "final_response"
     HEARTBEAT = "heartbeat"
+    PRESENTATION_UPDATED = "presentation_updated"
 
     @classmethod
     def from_stream_event_type(

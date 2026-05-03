@@ -193,6 +193,8 @@ class RuntimeEventPresentationProjector:
 
         if event_type is RuntimeApiEventType.HEARTBEAT:
             return RuntimeActivityKind.HEARTBEAT
+        if event_type is RuntimeApiEventType.PRESENTATION_UPDATED:
+            return RuntimeActivityKind.EVENT
         if event_type in {
             RuntimeApiEventType.MODEL_DELTA,
             RuntimeApiEventType.FINAL_RESPONSE,

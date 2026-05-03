@@ -52,6 +52,23 @@ class ToolLoadErrorCode(StrEnum):
     MALFORMED_TOOL_SPEC = "malformed_tool_spec"
 
 
+class ToolDisplayTemplate(RuntimeContract):
+    """Deterministic title/summary templates rendered without an LLM call.
+
+    Authors register these on `ToolCard` (and on `McpServerCard` /
+    `McpToolDescriptor` for MCP tools) so the presentation layer can build
+    user-facing activity cards from payload fields alone, skipping the
+    presentation LLM entirely. Placeholders use Python `str.format` syntax
+    against the safe event payload (e.g. ``"Searching {connector} for {query}"``).
+    Missing placeholders fall back to the generator's static default.
+    """
+
+    title_template: str = Field(min_length=1, max_length=240)
+    summary_template: str | None = Field(default=None, max_length=480)
+    result_title_template: str | None = Field(default=None, max_length=240)
+    result_summary_template: str | None = Field(default=None, max_length=480)
+
+
 class ToolCard(RuntimeContract):
     """Compact model-visible summary used before loading a full tool spec."""
 
@@ -67,6 +84,7 @@ class ToolCard(RuntimeContract):
     risk_level: ToolRiskLevel = ToolRiskLevel.LOW
     load_cost: PositiveInt = Field(le=Limits.TOOL_LOAD_COST_MAX)
     enabled: bool = True
+    display: ToolDisplayTemplate | None = None
 
     @field_validator(Keys.Fields.NAME, Keys.Fields.CONNECTOR)
     @classmethod

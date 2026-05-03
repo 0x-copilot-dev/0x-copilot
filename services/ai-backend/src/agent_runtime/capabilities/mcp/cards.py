@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from agent_runtime.capabilities.mcp.constants import (
     Keys,
@@ -124,6 +125,7 @@ class McpServerCard(RuntimeContract):
     enabled: bool = True
     allowed_org_ids: frozenset[str] = Field(default_factory=frozenset)
     allowed_user_ids: frozenset[str] = Field(default_factory=frozenset)
+    display: ToolDisplayTemplate | None = None
 
     @field_validator(Keys.Field.NAME)
     @classmethod
@@ -272,6 +274,7 @@ class McpToolDescriptor(RuntimeContract):
     input_schema: JsonSchema
     output_shape: JsonSchema
     risk_level: McpRiskLevel = McpRiskLevel.LOW
+    display: ToolDisplayTemplate | None = None
 
     @field_validator(Keys.Field.NAME)
     @classmethod
