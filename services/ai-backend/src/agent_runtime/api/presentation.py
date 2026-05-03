@@ -238,12 +238,49 @@ class PresentationGenerator:
             return self.cache[cache_key]
 
         generated = await self._generate(context)
-        validated = self._validated(generated)
+        if isinstance(generated, Mapping):
+            # `PresentationOutput` only carries the LLM-generated fields. Fill
+            # status_label / kind deterministically from event_type + status so
+            # the result satisfies the `RuntimeEventPresentation` schema.
+            merged = {
+                **generated,
+                **self._deterministic_card_fields(
+                    event_type=event_type,
+                    payload=payload,
+                ),
+            }
+        else:
+            merged = generated
+        validated = self._validated(merged)
         if validated is None:
             return None
         enriched = self._with_deterministic_fields(validated, group_key=group_key)
         self.cache[cache_key] = enriched
         return enriched
+
+    @staticmethod
+    def _deterministic_card_fields(
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> dict[str, str]:
+        """Map event_type + payload status to a fixed status_label / kind pair."""
+
+        status = ""
+        raw_status = payload.get("status")
+        if isinstance(raw_status, str):
+            status = raw_status.lower()
+        if event_type is RuntimeApiEventType.TOOL_RESULT or status in {
+            "completed",
+            "complete",
+            "done",
+            "success",
+            "succeeded",
+        }:
+            return {"status_label": "Done", "kind": "result"}
+        if status in {"failed", "error"}:
+            return {"status_label": "Failed", "kind": "error"}
+        return {"status_label": "Running", "kind": "progress"}
 
     async def _generate(self, context: JsonObject) -> object:
         prompt = self._prompt(context)

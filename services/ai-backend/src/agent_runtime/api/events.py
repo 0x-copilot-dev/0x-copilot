@@ -263,6 +263,12 @@ class RuntimeEventProducer:
         preliminary: JsonObject | None,
     ) -> None:
         group_key = self.presentation_generator._group_key(payload, timeline_fields)
+        logging.getLogger(__name__).debug(
+            "presentation.enrichment.spawn run=%s event=%s group_key=%s",
+            run.run_id,
+            event_type.value,
+            group_key,
+        )
         if group_key is not None:
             cancel_key = (run.run_id, group_key)
             existing = self._pending_enrichment.pop(cancel_key, None)
@@ -320,12 +326,30 @@ class RuntimeEventProducer:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).debug(
                 "Presentation enrichment failed for run %s", run.run_id, exc_info=True
             )
             return
-        if enriched is None or enriched == preliminary:
+        if enriched is None:
+            logging.getLogger(__name__).debug(
+                "presentation.enrichment.empty run=%s event=%s",
+                run.run_id,
+                event_type.value,
+            )
             return
+        if enriched == preliminary:
+            logging.getLogger(__name__).debug(
+                "presentation.enrichment.unchanged run=%s event=%s",
+                run.run_id,
+                event_type.value,
+            )
+            return
+        logging.getLogger(__name__).debug(
+            "presentation.enrichment.patch run=%s event=%s title=%s",
+            run.run_id,
+            event_type.value,
+            (enriched.get("title") or "")[:60],
+        )
 
         patch_payload: JsonObject = {"patches": ["presentation"]}
         for key in ("call_id", "approval_id", "source_tool_call_id"):
@@ -356,7 +380,7 @@ class RuntimeEventProducer:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).debug(
                 "Presentation patch event append failed for run %s",
                 run.run_id,
                 exc_info=True,
