@@ -201,3 +201,16 @@ def test_subagent_checkpoint_suffix_keeps_tool_calls_in_continuing_messages() ->
     assert "Do NOT emit a checkpoint without an accompanying tool call" in suffix
     assert "treated as your final answer" in suffix
     assert "/subagents/<task_id>/" in suffix
+
+
+def test_web_search_planning_rule_present_in_suffix() -> None:
+    """The suffix must teach query planning so the per-tool budget is spent on
+    new angles rather than near-duplicate paraphrases. Pin the load-bearing
+    phrases so future edits cannot silently drop the rule."""
+
+    suffix = builder_module.WEB_SUBAGENT_CHECKPOINT_SUFFIX
+    assert "Plan web_search queries before issuing them" in suffix
+    assert "1–3 distinct queries" in suffix
+    assert "Do NOT paraphrase a query whose prior result was already usable" in suffix
+    assert "stop searching and answer with what you have" in suffix
+    assert "`web-search-discipline` skill" in suffix
