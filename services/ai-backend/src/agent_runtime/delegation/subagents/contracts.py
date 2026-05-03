@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, TypeAlias
 from uuid import uuid4
@@ -23,11 +23,11 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.delegation.subagents.constants import (
     Defaults,
-    Keys,
     Limits,
     Messages,
     Patterns,
     Values,
+    _Fields,
 )
 
 OutputSchema: TypeAlias = Mapping[str, Any]
@@ -74,16 +74,16 @@ class RuntimeContextReference(RuntimeContract):
     trace_id: str
     permission_scopes: frozenset[str] = Field(default_factory=frozenset)
 
-    @field_validator(Keys.Field.USER_ID, Keys.Field.ORG_ID, Keys.Field.TRACE_ID)
+    @field_validator(_Fields.USER_ID, _Fields.ORG_ID, _Fields.TRACE_ID)
     @classmethod
     def _normalize_id(cls, value: object, info: ValidationInfo) -> str:
         return SubagentValueNormalizer.normalize_id(value, info.field_name)
 
-    @field_validator(Keys.Field.PERMISSION_SCOPES, mode="before")
+    @field_validator(_Fields.PERMISSION_SCOPES, mode="before")
     @classmethod
     def _normalize_permission_scopes(cls, value: object) -> frozenset[str]:
         return SubagentValueNormalizer.normalize_scope_set(
-            value, Keys.Field.PERMISSION_SCOPES
+            value, _Fields.PERMISSION_SCOPES
         )
 
     @classmethod
@@ -121,37 +121,37 @@ class SubagentDefinition(RuntimeContract):
     )
     enabled: bool = True
 
-    @field_validator(Keys.Field.NAME)
+    @field_validator(_Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_slug(value, Keys.Field.NAME)
+        return SubagentValueNormalizer.normalize_slug(value, _Fields.NAME)
 
-    @field_validator(Keys.Field.DESCRIPTION)
+    @field_validator(_Fields.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
         return SubagentValueNormalizer.normalize_nonempty_string(
-            value, Keys.Field.DESCRIPTION
+            value, _Fields.DESCRIPTION
         )
 
-    @field_validator(Keys.Field.GRAPH_ID)
+    @field_validator(_Fields.GRAPH_ID)
     @classmethod
     def _normalize_graph_id(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_id(value, Keys.Field.GRAPH_ID)
+        return SubagentValueNormalizer.normalize_id(value, _Fields.GRAPH_ID)
 
     @field_validator(
-        Keys.Field.TOOLS,
-        Keys.Field.SKILLS,
+        _Fields.TOOLS,
+        _Fields.SKILLS,
         mode="before",
     )
     @classmethod
     def _normalize_slug_set(cls, value: object, info: ValidationInfo) -> frozenset[str]:
         return SubagentValueNormalizer.normalize_slug_set(value, info.field_name)
 
-    @field_validator(Keys.Field.REQUIRED_SCOPES, mode="before")
+    @field_validator(_Fields.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
         return SubagentValueNormalizer.normalize_scope_set(
-            value, Keys.Field.REQUIRED_SCOPES
+            value, _Fields.REQUIRED_SCOPES
         )
 
 
@@ -162,27 +162,27 @@ class SubagentOutputContract(RuntimeContract):
     required_fields: frozenset[str] = Field(
         default_factory=lambda: frozenset(
             {
-                Keys.Field.RESPONSE,
-                Keys.Field.EXECUTION_SUMMARY,
-                Keys.Field.PLAN_SUMMARY,
+                _Fields.RESPONSE,
+                _Fields.EXECUTION_SUMMARY,
+                _Fields.PLAN_SUMMARY,
             }
         )
     )
     json_schema: OutputSchema | None = None
 
-    @field_validator(Keys.Field.FORMAT)
+    @field_validator(_Fields.FORMAT)
     @classmethod
     def _normalize_format(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_slug(value, Keys.Field.FORMAT)
+        return SubagentValueNormalizer.normalize_slug(value, _Fields.FORMAT)
 
-    @field_validator(Keys.Field.REQUIRED_FIELDS, mode="before")
+    @field_validator(_Fields.REQUIRED_FIELDS, mode="before")
     @classmethod
     def _normalize_required_fields(cls, value: object) -> frozenset[str]:
         return SubagentValueNormalizer.normalize_slug_set(
-            value, Keys.Field.REQUIRED_FIELDS
+            value, _Fields.REQUIRED_FIELDS
         )
 
-    @field_validator(Keys.Field.JSON_SCHEMA)
+    @field_validator(_Fields.JSON_SCHEMA)
     @classmethod
     def _validate_json_schema(cls, value: OutputSchema | None) -> OutputSchema | None:
         if value is None:
@@ -205,24 +205,22 @@ class SubagentTask(RuntimeContract):
         default_factory=SubagentOutputContract
     )
 
-    @field_validator(Keys.Field.OBJECTIVE, Keys.Field.RELEVANT_SUMMARY)
+    @field_validator(_Fields.OBJECTIVE, _Fields.RELEVANT_SUMMARY)
     @classmethod
     def _normalize_task_text(cls, value: object, info: ValidationInfo) -> str:
         return SubagentValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
-    @field_validator(Keys.Field.CONSTRAINTS, mode="before")
+    @field_validator(_Fields.CONSTRAINTS, mode="before")
     @classmethod
     def _normalize_constraints(cls, value: object) -> tuple[str, ...]:
         return tuple(
-            SubagentValueNormalizer.normalize_nonempty_string(
-                item, Keys.Field.CONSTRAINTS
-            )
+            SubagentValueNormalizer.normalize_nonempty_string(item, _Fields.CONSTRAINTS)
             for item in SubagentValueNormalizer.coerce_iterable(
-                value, Keys.Field.CONSTRAINTS
+                value, _Fields.CONSTRAINTS
             )
         )
 
-    @field_validator(Keys.Field.ALLOWED_TOOLS, Keys.Field.ALLOWED_SKILLS, mode="before")
+    @field_validator(_Fields.ALLOWED_TOOLS, _Fields.ALLOWED_SKILLS, mode="before")
     @classmethod
     def _normalize_allowed_slugs(
         cls, value: object, info: ValidationInfo
@@ -237,16 +235,16 @@ class SubagentArtifact(RuntimeContract):
     artifact_type: str = "text"
     reference: str
 
-    @field_validator(Keys.Field.NAME, Keys.Field.ARTIFACT_TYPE)
+    @field_validator(_Fields.NAME, _Fields.ARTIFACT_TYPE)
     @classmethod
     def _normalize_slug_field(cls, value: object, info: ValidationInfo) -> str:
         return SubagentValueNormalizer.normalize_slug(value, info.field_name)
 
-    @field_validator(Keys.Field.REFERENCE)
+    @field_validator(_Fields.REFERENCE)
     @classmethod
     def _normalize_reference(cls, value: object) -> str:
         return SubagentValueNormalizer.normalize_nonempty_string(
-            value, Keys.Field.REFERENCE
+            value, _Fields.REFERENCE
         )
 
 
@@ -259,24 +257,24 @@ class SubagentError(RuntimeContract):
     task_id: str | None = None
     correlation_id: str = Field(default_factory=lambda: uuid4().hex)
 
-    @field_validator(Keys.Field.SAFE_MESSAGE)
+    @field_validator(_Fields.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
         return SubagentValueNormalizer.normalize_nonempty_string(
-            value, Keys.Field.SAFE_MESSAGE
+            value, _Fields.SAFE_MESSAGE
         )
 
-    @field_validator(Keys.Field.TASK_ID)
+    @field_validator(_Fields.TASK_ID)
     @classmethod
     def _normalize_optional_task_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return SubagentValueNormalizer.normalize_id(value, Keys.Field.TASK_ID)
+        return SubagentValueNormalizer.normalize_id(value, _Fields.TASK_ID)
 
-    @field_validator(Keys.Field.CORRELATION_ID)
+    @field_validator(_Fields.CORRELATION_ID)
     @classmethod
     def _normalize_correlation_id(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_id(value, Keys.Field.CORRELATION_ID)
+        return SubagentValueNormalizer.normalize_id(value, _Fields.CORRELATION_ID)
 
 
 class SubagentResult(RuntimeContract):
@@ -294,9 +292,9 @@ class SubagentResult(RuntimeContract):
     error: SubagentError | None = None
 
     @field_validator(
-        Keys.Field.RESPONSE,
-        Keys.Field.EXECUTION_SUMMARY,
-        Keys.Field.PLAN_SUMMARY,
+        _Fields.RESPONSE,
+        _Fields.EXECUTION_SUMMARY,
+        _Fields.PLAN_SUMMARY,
     )
     @classmethod
     def _normalize_optional_text(
@@ -308,17 +306,17 @@ class SubagentResult(RuntimeContract):
             return None
         return SubagentValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
-    @field_validator(Keys.Field.RECENT_MESSAGES, mode="before")
+    @field_validator(_Fields.RECENT_MESSAGES, mode="before")
     @classmethod
     def _normalize_recent_messages(cls, value: object) -> tuple[str, ...]:
         messages = tuple(
             SubagentValueNormalizer.normalize_nonempty_string(
                 item,
-                Keys.Field.RECENT_MESSAGES,
+                _Fields.RECENT_MESSAGES,
             )
             for item in SubagentValueNormalizer.coerce_iterable(
                 value,
-                Keys.Field.RECENT_MESSAGES,
+                _Fields.RECENT_MESSAGES,
             )
         )
         if len(messages) > Limits.RECENT_MESSAGES_MAX_COUNT:
@@ -392,7 +390,7 @@ class AsyncSubagentLaunch(RuntimeContract):
     run_id: str
     status: AsyncTaskStatus = AsyncTaskStatus.RUNNING
 
-    @field_validator(Keys.Field.THREAD_ID, Keys.Field.RUN_ID)
+    @field_validator(_Fields.THREAD_ID, _Fields.RUN_ID)
     @classmethod
     def _normalize_launch_id(cls, value: object, info: ValidationInfo) -> str:
         return SubagentValueNormalizer.normalize_id(value, info.field_name)
@@ -412,19 +410,19 @@ class AsyncTaskState(RuntimeContract):
     thread_id: str
     run_id: str
     status: AsyncTaskStatus
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deadline_at: datetime | None = None
 
-    @field_validator(Keys.Field.TASK_ID, Keys.Field.THREAD_ID, Keys.Field.RUN_ID)
+    @field_validator(_Fields.TASK_ID, _Fields.THREAD_ID, _Fields.RUN_ID)
     @classmethod
     def _normalize_state_id(cls, value: object, info: ValidationInfo) -> str:
         return SubagentValueNormalizer.normalize_id(value, info.field_name)
 
-    @field_validator(Keys.Field.SUBAGENT_NAME)
+    @field_validator(_Fields.SUBAGENT_NAME)
     @classmethod
     def _normalize_subagent_name(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_slug(value, Keys.Field.SUBAGENT_NAME)
+        return SubagentValueNormalizer.normalize_slug(value, _Fields.SUBAGENT_NAME)
 
     @model_validator(mode="after")
     def _validate_timestamps(self) -> "AsyncTaskState":

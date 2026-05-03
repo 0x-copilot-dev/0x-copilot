@@ -13,15 +13,15 @@ from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeRunHandle
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.observability.logging import (
-    LogValueNormalizer,
     RuntimeLogger,
     RuntimeLogLevel,
+    _MetadataRedactor,
 )
 from agent_runtime.observability.tracing import (
+    RuntimeTracer,
     TraceContext,
     TraceNames,
     TraceRunTypes,
-    traced,
 )
 
 
@@ -63,7 +63,7 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
     }
     if context.parent_trace_id is not None:
         metadata["parent_trace_id"] = context.parent_trace_id
-    metadata.update(LogValueNormalizer.redact_metadata(context.trace_metadata))
+        metadata.update(_MetadataRedactor.redact(context.trace_metadata))
 
     return {
         "configurable": {
@@ -211,7 +211,7 @@ class _TracedRuntimeCall:
 # ---------------------------------------------------------------------------
 
 
-@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 def invoke_runtime(
     harness: RuntimeHarness,
     messages: Sequence[object],
@@ -235,7 +235,7 @@ def invoke_runtime(
         )
 
 
-@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def ainvoke_runtime(
     harness: RuntimeHarness,
     messages: Sequence[object],
@@ -259,7 +259,7 @@ async def ainvoke_runtime(
         )
 
 
-@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def ainvoke_runtime_resume(
     harness: RuntimeHarness,
     resume: object,
@@ -283,7 +283,7 @@ async def ainvoke_runtime_resume(
         )
 
 
-@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def astream_runtime(
     harness: RuntimeHarness,
     messages: Sequence[object],
@@ -312,7 +312,7 @@ async def astream_runtime(
             yield chunk
 
 
-@traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
+@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def astream_runtime_resume(
     harness: RuntimeHarness,
     resume: object,

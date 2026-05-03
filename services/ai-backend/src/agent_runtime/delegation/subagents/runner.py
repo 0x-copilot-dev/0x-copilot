@@ -6,13 +6,13 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
 
 from pydantic import ValidationError
 
-from agent_runtime.delegation.subagents.constants import Limits, Messages
+from agent_runtime.delegation.subagents.constants import Limits, Messages, _Fields
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.delegation.subagents.contracts import (
     AsyncSubagentLaunch,
@@ -84,7 +84,7 @@ class AsyncSubagentLifecycle:
     runner: SubagentRunner
     store: InMemoryAsyncTaskStore = field(default_factory=InMemoryAsyncTaskStore)
     clock: Callable[[], datetime] = field(
-        default_factory=lambda: lambda: datetime.now(UTC)
+        default_factory=lambda: lambda: datetime.now(timezone.utc)
     )
     _queued_tasks: dict[str, tuple[SubagentDefinition, SubagentTask]] = field(
         default_factory=dict
@@ -430,9 +430,9 @@ class AsyncTaskLifecycleParser:
 
     @classmethod
     def has_oversized_result(cls, raw_result: Mapping[str, object]) -> bool:
-        response = raw_result.get("response")
-        execution_summary = raw_result.get("execution_summary")
-        plan_summary = raw_result.get("plan_summary")
+        response = raw_result.get(_Fields.RESPONSE)
+        execution_summary = raw_result.get(_Fields.EXECUTION_SUMMARY)
+        plan_summary = raw_result.get(_Fields.PLAN_SUMMARY)
         return (
             isinstance(response, str)
             and len(response) > Limits.RESULT_RESPONSE_MAX_LENGTH

@@ -10,8 +10,8 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.validation import coerce_runtime_context, first_duplicate_name
-from agent_runtime.delegation.subagents.constants import Keys, Messages
+from agent_runtime.validation import ValueNormalizer
+from agent_runtime.delegation.subagents.constants import Messages, _Fields
 from agent_runtime.delegation.subagents.contracts import (
     SubagentDefinition,
     SubagentError,
@@ -45,9 +45,7 @@ class DynamicSubagentCatalog:
 
     def __post_init__(self) -> None:
         for provider in self.providers:
-            if not callable(
-                getattr(provider, Keys.Method.LIST_SUBAGENT_DEFINITIONS, None)
-            ):
+            if not callable(getattr(provider, _Fields.LIST_SUBAGENT_DEFINITIONS, None)):
                 raise AgentRuntimeError(
                     RuntimeErrorCode.DEPENDENCY_ERROR,
                     Messages.Catalog.MISSING_LIST_DEFINITIONS,
@@ -60,9 +58,9 @@ class DynamicSubagentCatalog:
     ) -> tuple[SubagentDefinition, ...]:
         """Return compact definitions visible to the request context."""
 
-        runtime_context = coerce_runtime_context(context)
+        runtime_context = ValueNormalizer.coerce_runtime_context(context)
         entries = self._collect_entries()
-        duplicate_name = first_duplicate_name(
+        duplicate_name = ValueNormalizer.first_duplicate_name(
             entry.definition.name for entry in entries
         )
         if duplicate_name is not None:
@@ -87,7 +85,9 @@ class DynamicSubagentCatalog:
     ) -> tuple[SubagentDefinition, ...]:
         """Runtime port adapter returning model-visible compact subagent definitions."""
 
-        return self.list_subagent_definitions(coerce_runtime_context(context))
+        return self.list_subagent_definitions(
+            ValueNormalizer.coerce_runtime_context(context)
+        )
 
     def resolve_subagent(
         self,
@@ -96,11 +96,9 @@ class DynamicSubagentCatalog:
     ) -> RegisteredSubagent | SubagentError:
         """Resolve a selected stable subagent name after rechecking visibility."""
 
-        runtime_context = coerce_runtime_context(context)
+        runtime_context = ValueNormalizer.coerce_runtime_context(context)
         try:
-            normalized_name = SubagentValueNormalizer.normalize_slug(
-                name, Keys.Field.NAME
-            )
+            normalized_name = SubagentValueNormalizer.normalize_slug(name, _Fields.NAME)
         except ValueError:
             return SubagentError(
                 code=SubagentErrorCode.SUBAGENT_UNAVAILABLE,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 import re
 from typing import TypeAlias
@@ -26,7 +26,6 @@ from agent_runtime.execution.ports import (
     ToolRegistry,
 )
 from agent_runtime.observability.constants import Keys as ObservabilityKeys
-from agent_runtime.observability.constants import Values as ObservabilityValues
 from agent_runtime.observability.redaction import ObservabilityRedactor
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
@@ -81,29 +80,29 @@ class RuntimeRunStatus(StrEnum):
 class StreamEventSource(StrEnum):
     """Runtime subsystem that produced a stream event."""
 
-    MAIN_AGENT = ObservabilityValues.Source.MAIN_AGENT
-    SUBAGENT = ObservabilityValues.Source.SUBAGENT
-    TOOL = ObservabilityValues.Source.TOOL
-    MCP = ObservabilityValues.Source.MCP
-    SUMMARIZATION = ObservabilityValues.Source.SUMMARIZATION
-    SYSTEM = ObservabilityValues.Source.SYSTEM
-    RUNTIME = ObservabilityValues.Source.RUNTIME
-    MODEL = ObservabilityValues.Source.MODEL
+    MAIN_AGENT = "main_agent"
+    SUBAGENT = "subagent"
+    TOOL = "tool"
+    MCP = "mcp"
+    SUMMARIZATION = "summarization"
+    SYSTEM = "system"
+    RUNTIME = "runtime"
+    MODEL = "model"
 
 
 class StreamEventType(StrEnum):
     """User-safe event types emitted by the runtime."""
 
-    PROGRESS = ObservabilityValues.EventType.PROGRESS
-    TOOL_CALL = ObservabilityValues.EventType.TOOL_CALL
-    TOOL_RESULT = ObservabilityValues.EventType.TOOL_RESULT
-    CUSTOM = ObservabilityValues.EventType.CUSTOM
-    LIFECYCLE = ObservabilityValues.EventType.LIFECYCLE
-    SUBAGENT_UPDATE = ObservabilityValues.EventType.SUBAGENT_UPDATE
-    OBSERVATION = ObservabilityValues.EventType.OBSERVATION
-    ERROR = ObservabilityValues.EventType.ERROR
-    FINAL = ObservabilityValues.EventType.FINAL
-    FINAL_RESPONSE = ObservabilityValues.EventType.FINAL_RESPONSE
+    PROGRESS = "progress"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    CUSTOM = "custom"
+    LIFECYCLE = "lifecycle"
+    SUBAGENT_UPDATE = "subagent_update"
+    OBSERVATION = "observation"
+    ERROR = "error"
+    FINAL = "final"
+    FINAL_RESPONSE = "final_response"
 
 
 StreamSource = StreamEventSource
@@ -197,7 +196,7 @@ class RuntimeRunContext(RuntimeContract):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
     parent_trace_id: str | None = None
-    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: JsonObject = Field(default_factory=dict)
 
     @field_validator("request_id", "run_id", "trace_id", mode="before")
@@ -225,7 +224,7 @@ class RuntimeRunHandle(RuntimeContract):
     run_id: str
     trace_id: str
     status: RuntimeRunStatus = RuntimeRunStatus.ACCEPTED
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("request_id", "run_id", "trace_id")
     @classmethod
@@ -261,7 +260,7 @@ class AgentRuntimeContext(RuntimeContract):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
     parent_trace_id: str | None = None
-    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
@@ -432,7 +431,7 @@ class StreamEvent(RuntimeContract):
     parent_task_id: str | None = None
     payload: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(ObservabilityKeys.Field.EVENT_ID, ObservabilityKeys.Field.TRACE_ID)
     @classmethod
@@ -455,7 +454,7 @@ class StreamEvent(RuntimeContract):
     )
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return StreamValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
 
 
 class StreamValueNormalizer:
@@ -469,7 +468,6 @@ class StreamValueNormalizer:
     normalize_nonempty_string = _V.normalize_nonempty_string
     normalize_id = _V.normalize_id
     normalize_slug = _V.normalize_slug
-    redact_json_object = _V.redact_json_object
 
     del _V
 
