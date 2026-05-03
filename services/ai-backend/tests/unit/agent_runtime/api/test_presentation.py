@@ -149,13 +149,20 @@ async def test_presentation_generator_uses_valid_llm_json() -> None:
         ],
         "debug_label": "Tool details",
         "confidence": "high",
+        "group_key": "call_123",
     }
 
 
-async def test_presentation_generator_falls_back_on_invalid_llm_output() -> None:
-    generator = PresentationGenerator(
-        presenter=lambda _: {"title": "", "status_label": "Finished", "kind": "tool"}
-    )
+async def test_approval_requested_uses_deterministic_template_without_calling_llm() -> (
+    None
+):
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
+
+    generator = PresentationGenerator(presenter=recording_presenter)
 
     presentation = await generator.presentation_for_event(
         run=run_record(),
@@ -172,11 +179,15 @@ async def test_presentation_generator_falls_back_on_invalid_llm_output() -> None
     )
 
     assert presentation is not None
-    assert presentation["title"] == "Permission needed"
     assert presentation["status_label"] == "Waiting for permission"
     assert presentation["kind"] == "approval"
+    assert presentation["confidence"] == "high"
+    # Tool name humanized in the title, no raw protocol identifiers leaked.
+    assert "Clickup Resolve Assignees" in presentation["title"]
     assert "mcp_clickup_com" not in str(presentation)
     assert "clickup_resolve_assignees" not in str(presentation)
+    # The LLM presenter must not be consulted for deterministic event types.
+    assert presenter_calls == []
 
 
 async def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> None:
