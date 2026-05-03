@@ -131,6 +131,20 @@ class RuntimeRunHandler:
                 retryable=False,
                 correlation_id=command.trace_id,
             )
+        if run.conversation_id != command.conversation_id:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Run command conversation_id does not match persisted run.",
+                retryable=False,
+                correlation_id=command.trace_id,
+            )
+        if run.user_id != command.user_id:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Run command user_id does not match persisted run.",
+                retryable=False,
+                correlation_id=command.trace_id,
+            )
 
         run = await self.persistence.update_run_status(
             run_id=command.run_id, status=AgentRunStatus.RUNNING

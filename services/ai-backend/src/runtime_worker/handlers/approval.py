@@ -104,6 +104,12 @@ class RuntimeApprovalHandler:
                 "Approval command references an unknown approval.",
                 retryable=False,
             )
+        if approval.run_id != command.run_id:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Approval command run_id does not match persisted approval.",
+                retryable=False,
+            )
         metadata = approval.metadata
         approval_kind = StreamTextHelper.extract(
             metadata.get(self._Fields.APPROVAL_KIND)

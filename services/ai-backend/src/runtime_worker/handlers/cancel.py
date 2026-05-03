@@ -35,6 +35,13 @@ class RuntimeCancelHandler:
         )
 
     async def handle(self, command: RuntimeCancelCommand) -> None:
+        run = await self.persistence.get_run(
+            org_id=command.org_id, run_id=command.run_id
+        )
+        if run is None:
+            return
+        if run.user_id != command.requested_by_user_id:
+            return
         run = await self.persistence.update_run_status(
             run_id=command.run_id,
             status=AgentRunStatus.CANCELLED,
