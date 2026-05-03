@@ -112,7 +112,7 @@ jobs:
 
       # Gating scan: any CRITICAL fixable vulnerability fails the build.
       - name: Run Trivy vulnerability scanner (CRITICAL gate)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
           format: sarif
@@ -124,7 +124,7 @@ jobs:
       # Triage scan: HIGH findings surface in the Security tab but do not block release.
       - name: Run Trivy vulnerability scanner (HIGH triage)
         if: always()
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
           format: sarif
