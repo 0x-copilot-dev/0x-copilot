@@ -132,20 +132,37 @@ class StreamUpdateProcessor:
     ) -> str | None:
         """Resolve a LangGraph subagent subgraph task id to the supervisor `task` call_id.
 
-        The first child tool event in a subgraph claims the oldest unlinked
-        supervisor call_id; subsequent events for the same subgraph reuse the
-        established link. Returns None when no active subagent matches.
+        Linking strategy:
+
+        - Once a subgraph is linked, the same supervisor call_id is reused for
+          every subsequent event in that subgraph (cached lookup).
+        - For the FIRST event in a new subgraph, we link to a queued
+          supervisor call_id ONLY when exactly one subagent is currently
+          unlinked. With two or more unlinked subagents a naive FIFO pop is
+          racy: when the supervisor dispatches a fast subagent (e.g. one that
+          calls no internal tools) and a slow research subagent in parallel,
+          the slow subagent's first tool message can arrive at the processor
+          before the fast subagent's `SUBAGENT_COMPLETED` removes it from the
+          queue, and the slow subagent's tools end up wrongly attributed to
+          the fast subagent. Returning None here for ambiguous cases makes
+          early tool events orphan rather than mis-attributed; once one
+          subagent completes (its `_track_subagent_lifecycle` removes it
+          from the queue), the remaining subagent's subsequent tools link
+          correctly via this cache.
         """
 
         if subgraph_task_id is None:
             return None
         existing = self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
-        if existing is None:
-            queue = self._unlinked_subagent_call_ids.get(run_id)
-            if not queue:
-                return None
-            existing = queue.pop(0)
-            self._subagent_call_id_by_subgraph_id[(run_id, subgraph_task_id)] = existing
+        if existing is not None:
+            return existing
+        queue = self._unlinked_subagent_call_ids.get(run_id)
+        if not queue:
+            return None
+        if len(queue) != 1:
+            return None
+        existing = queue.pop(0)
+        self._subagent_call_id_by_subgraph_id[(run_id, subgraph_task_id)] = existing
         return existing
 
     def subagent_id_for_subgraph(

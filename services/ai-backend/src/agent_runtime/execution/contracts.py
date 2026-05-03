@@ -354,6 +354,12 @@ class RuntimeDependencies(RuntimeContract):
     prior_tool_result_loader: object | None = None
     memory_backend_factory: MemoryBackendFactory
     subagent_catalog: SubagentCatalog
+    # Optional read-only Deep Agents backend that exposes per-subagent execution
+    # traces under `/subagents/<task_id>/`. Constructed by the run handler from
+    # the event store + persistence ports; the factory wraps it with deepagents'
+    # `CompositeBackend` so the supervisor's `ls` and `read_file` tools can read
+    # it without affecting `/memories/`, `/skills/`, etc.
+    subagent_artifacts_backend: object | None = None
 
     @field_validator(
         "tool_registry",

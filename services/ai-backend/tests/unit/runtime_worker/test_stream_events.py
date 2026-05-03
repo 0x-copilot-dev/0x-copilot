@@ -502,16 +502,21 @@ async def test_subagent_id_for_subgraph_returns_none_without_active_subagent() -
     )
 
 
-async def test_subagent_id_for_subgraph_links_concurrent_subagents_in_fifo_order() -> (
-    None
-):
+async def test_subagent_id_for_subgraph_defers_ambiguous_links() -> None:
+    """When two subagents are dispatched in parallel and one finishes before
+    the other's first tool fires (e.g. an `is_prime` writer that emits no
+    tool calls plus a long research subagent), naive FIFO popping mis-
+    attributes the long subagent's tools to the writer. The defer-while-
+    ambiguous strategy returns None until exactly one subagent remains
+    unlinked, then locks onto it for the rest of that subgraph's events."""
+
     producer = RecordingEventProducer()
     update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
     run = TestFixtures.run_record()
 
     for call_id, name in [
-        ("call_first", "researcher"),
-        ("call_second", "writer"),
+        ("call_writer", "general-purpose"),
+        ("call_researcher", "general-purpose"),
     ]:
         await update_processor.append_task_lifecycle_event(
             run=run,
@@ -524,14 +529,62 @@ async def test_subagent_id_for_subgraph_links_concurrent_subagents_in_fifo_order
             metadata={},
         )
 
-    first_subgraph = update_processor.subagent_id_for_subgraph(
-        run_id=run.run_id, subgraph_task_id="subgraph-uuid-1"
+    # First tool event lands while BOTH subagents are still unlinked.
+    # We refuse to guess; orphan rather than mis-attribute.
+    deferred = update_processor.subagent_call_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="research-subgraph-uuid"
     )
-    second_subgraph = update_processor.subagent_id_for_subgraph(
-        run_id=run.run_id, subgraph_task_id="subgraph-uuid-2"
+    assert deferred is None
+
+    # The fast subagent (`call_writer`, no tool calls) completes first.
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+        payload={
+            "task_id": "call_writer",
+            "subagent_name": "general-purpose",
+            "status": "completed",
+        },
+        metadata={},
     )
-    assert first_subgraph == "researcher"
-    assert second_subgraph == "writer"
+
+    # Now only `call_researcher` is unlinked — the next subgraph event resolves.
+    later = update_processor.subagent_call_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="research-subgraph-uuid"
+    )
+    assert later == "call_researcher"
+
+    # Subsequent events on the same subgraph keep the link cached.
+    again = update_processor.subagent_call_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="research-subgraph-uuid"
+    )
+    assert again == "call_researcher"
+
+
+async def test_subagent_id_for_subgraph_links_immediately_when_only_one_subagent() -> (
+    None
+):
+    """Single-subagent dispatch is unambiguous: link on the first event."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_only",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+
+    resolved = update_processor.subagent_call_id_for_subgraph(
+        run_id=run.run_id, subgraph_task_id="some-subgraph-uuid"
+    )
+    assert resolved == "call_only"
 
 
 async def test_tool_event_inside_subagent_carries_subagent_id() -> None:

@@ -36,6 +36,7 @@ from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
+from agent_runtime.context.memory.subagent_trace import SubagentArtifactsBackend
 from runtime_worker.tool_observations import (
     PriorToolResultLoader,
     ToolObservationIndex,
@@ -308,15 +309,20 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex,
     ) -> RuntimeDependencies:
         dependencies = self.dependencies_factory(command.runtime_context)
-        if not tool_observation_index.has_observations:
-            return dependencies
-        return dependencies.model_copy(
-            update={
-                "prior_tool_result_loader": PriorToolResultLoader(
-                    tool_observation_index
-                )
-            }
-        )
+        update: dict[str, object] = {
+            "subagent_artifacts_backend": SubagentArtifactsBackend(
+                event_store=self.event_store,
+                persistence=self.persistence,
+                org_id=command.org_id,
+                conversation_id=command.conversation_id,
+                current_run_id=command.run_id,
+            ),
+        }
+        if tool_observation_index.has_observations:
+            update["prior_tool_result_loader"] = PriorToolResultLoader(
+                tool_observation_index
+            )
+        return dependencies.model_copy(update=update)
 
     async def _tool_observation_index(
         self,

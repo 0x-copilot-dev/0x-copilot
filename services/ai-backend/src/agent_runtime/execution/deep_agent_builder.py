@@ -30,17 +30,28 @@ _WEB_HARNESS_PROFILE_KEYS = (
     "openai",
 )
 # Layered onto every Deep Agents subagent prompt (and the supervisor) to keep
-# tool sequences bounded and surface intermediate progress. Without this the
-# auto-injected `general-purpose` subagent runs Deep Agents' default prompt,
-# which has no checkpoint discipline and tends to chain web_search calls
-# indefinitely on broad research tasks.
+# tool sequences bounded and surface intermediate progress. The earlier wording
+# (`pause and emit a checkpoint as a plain-text message before calling another
+# tool`) produced an AIMessage with `tool_calls=[]`, which Deep Agents'
+# subagent loop treats as the final answer — subagents terminated on the
+# checkpoint message and supervisors re-dispatched the same task. The current
+# wording requires the checkpoint to ride in the same AIMessage as the next
+# tool call so the loop continues, and reserves a tool-call-free message for
+# the explicit final answer.
 WEB_SUBAGENT_CHECKPOINT_SUFFIX = (
-    "After every 2 to 3 tool calls, pause and emit a short progress "
-    "checkpoint as a plain-text message before calling another tool. The "
-    "checkpoint should briefly state what you have learned so far, what is "
-    "still missing or uncertain, and whether you will call more tools or "
-    "stop and return your final answer. Do not chain more than 3 tool "
-    "calls without recording this checkpoint."
+    "When you call multiple tools, every 2 to 3 tool calls include a short "
+    "progress checkpoint as the assistant message's `content` while ALSO "
+    "calling your next tool in the SAME message. The checkpoint should "
+    "briefly state what you have learned so far, what is still missing, and "
+    "which tool you are about to call next. Do NOT emit a checkpoint without "
+    "an accompanying tool call — a message with no tool call is treated as "
+    "your final answer. When you genuinely have no more tools to call, write "
+    "your final answer instead of a checkpoint.\n\n"
+    "Subagent execution traces from this and prior turns are available "
+    "read-only at `/subagents/<task_id>/`. When the user asks about a "
+    "delegate's tools, queries, or conversation, run `ls /subagents/` and "
+    "`read_file` on the relevant `tool_calls.json` or `conversation.md` "
+    "rather than guessing or saying you cannot recall."
 )
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None

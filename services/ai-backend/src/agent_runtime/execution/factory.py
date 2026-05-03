@@ -93,6 +93,9 @@ def create_agent_runtime(
         runtime_dependencies.subagent_catalog.list_available_subagents(runtime_context)
     )
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
+    deep_backend = _composed_deep_backend(
+        runtime_dependencies.subagent_artifacts_backend
+    )
     skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
         runtime_dependencies.skill_source_config
     )
@@ -122,7 +125,9 @@ def create_agent_runtime(
                 model_config=runtime_context.model_profile,
                 system_prompt=model_instructions,
                 subagents=subagents,
-                memory_backend=(
+                memory_backend=deep_backend
+                if deep_backend is not None
+                else (
                     memory_backend
                     if isinstance(memory_backend, DeepAgentsBackend)
                     else None
@@ -362,6 +367,28 @@ def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
     if not isinstance(memory_backend, DeepAgentsBackend):
         return ()
     return tuple(str(path) for path in memory_backend.memory_paths)
+
+
+def _composed_deep_backend(
+    subagent_artifacts_backend: object | None,
+) -> object | None:
+    """Wrap the subagent artifacts backend in a deepagents `CompositeBackend`.
+
+    deepagents' `CompositeBackend` routes paths to per-prefix backends and
+    falls back to a default. Routing `/subagents/` to our read-only projection
+    keeps existing FS paths (`/memories/`, `/skills/`, etc.) backed by
+    deepagents' own `StateBackend` default.
+    """
+
+    if subagent_artifacts_backend is None:
+        return None
+    from deepagents.backends.composite import CompositeBackend
+    from deepagents.backends.state import StateBackend
+
+    return CompositeBackend(
+        default=StateBackend(),
+        routes={"/subagents/": subagent_artifacts_backend},
+    )
 
 
 def _parse_context(

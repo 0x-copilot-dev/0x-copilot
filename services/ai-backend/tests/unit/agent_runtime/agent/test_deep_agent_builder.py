@@ -185,3 +185,19 @@ def test_deep_agent_builder_configures_claude_budgeted_thinking(
         "type": "enabled",
         "budget_tokens": 10_000,
     }
+
+
+def test_subagent_checkpoint_suffix_keeps_tool_calls_in_continuing_messages() -> None:
+    """The suffix must instruct the model to package checkpoint text inside the
+    SAME assistant message as the next tool call. A tool-call-free message is
+    treated by Deep Agents' subagent loop as the final answer; if the
+    checkpoint goes out alone the subagent terminates prematurely and the
+    supervisor re-dispatches the same task (regression observed in
+    run 013e966edcc34634895c9068dc8cc697)."""
+
+    suffix = builder_module.WEB_SUBAGENT_CHECKPOINT_SUFFIX
+    assert "include a short progress checkpoint" in suffix
+    assert "ALSO calling your next tool in the SAME message" in suffix
+    assert "Do NOT emit a checkpoint without an accompanying tool call" in suffix
+    assert "treated as your final answer" in suffix
+    assert "/subagents/<task_id>/" in suffix
