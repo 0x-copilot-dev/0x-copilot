@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
@@ -11,12 +11,27 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 from starlette import status
 
+from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
     StreamEventSource,
 )
-from agent_runtime.api.constants import Messages
+from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.records import (
+    OutboxStatus,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+)
+from agent_runtime.persistence.schema.postgres import (
+    POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
+)
+from runtime_adapters.base import (
+    RuntimeAdapterHelpers,
+    StatusTransition,
+    _Fields,
+)
+from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
@@ -27,27 +42,86 @@ from runtime_api.schemas import (
     HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
+    RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
-    RuntimeApiEventType,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
 )
-from runtime_api.http.errors import RuntimeApiError
-from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
-from agent_runtime.persistence.records import OutboxStatus
-from agent_runtime.persistence.schema.postgres import (
-    POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
-)
-from runtime_adapters.base import (
-    message_for_run_request,
-    normalize_risk_class,
-    derive_action_summary,
-)
+
+
+class _Columns:
+    """SQL column-name constants for dict-row access."""
+
+    ACTIVITY_KIND = "activity_kind"
+    AGGREGATE_ID = "aggregate_id"
+    ARCHIVED_AT = "archived_at"
+    ASSISTANT_ID = "assistant_id"
+    ATTACHMENTS_JSON = "attachments_json"
+    ATTEMPTS = "attempts"
+    BRANCH_ID = "branch_id"
+    CANCELLED_AT = "cancelled_at"
+    COMPLETED_AT = "completed_at"
+    CONTENT_FORMAT = "content_format"
+    CONTENT_JSON = "content_json"
+    CONTENT_TEXT = "content_text"
+    CONVERSATION_ID = "conversation_id"
+    COUNT = "count"
+    CREATED_AT = "created_at"
+    DELETED_AT = "deleted_at"
+    DISPLAY_TITLE = "display_title"
+    EDITED_AT = "edited_at"
+    EVENT_TYPE = "event_type"
+    EXPIRES_AT = "expires_at"
+    ID = "id"
+    IDEMPOTENCY_KEY = "idempotency_key"
+    LATEST = "latest"
+    LATEST_SEQUENCE_NO = "latest_sequence_no"
+    LOCK_EXPIRES_AT = "lock_expires_at"
+    LOCKED_BY = "locked_by"
+    METADATA_JSON = "metadata_json"
+    METADATA_JSON_REDACTED = "metadata_json_redacted"
+    MODEL_NAME = "model_name"
+    MODEL_PROVIDER = "model_provider"
+    NEXT_SEQUENCE = "next_sequence"
+    ORG_ID = "org_id"
+    PARENT_EVENT_ID = "parent_event_id"
+    PARENT_MESSAGE_ID = "parent_message_id"
+    PARENT_SPAN_ID = "parent_span_id"
+    PARENT_TASK_ID = "parent_task_id"
+    PAYLOAD_JSON = "payload_json"
+    PAYLOAD_JSON_REDACTED = "payload_json_redacted"
+    PRESENTATION_JSON = "presentation_json"
+    QUOTE_JSON = "quote_json"
+    REDACTION_STATE = "redaction_state"
+    REQUEST_OPTIONS_JSON = "request_options_json"
+    REQUEST_PAYLOAD_JSON_REDACTED = "request_payload_json_redacted"
+    ROLE = "role"
+    RUN_ID = "run_id"
+    RUNTIME_CONTEXT_JSON = "runtime_context_json"
+    SAFE_ERROR_CODE = "safe_error_code"
+    SAFE_ERROR_MESSAGE = "safe_error_message"
+    SCHEMA_VERSION = "schema_version"
+    SEQUENCE_NO = "sequence_no"
+    SOURCE = "source"
+    SOURCE_MESSAGE_ID = "source_message_id"
+    SPAN_ID = "span_id"
+    STARTED_AT = "started_at"
+    STATUS = "status"
+    SUBAGENT_ID = "subagent_id"
+    SUMMARY = "summary"
+    TASK_ID = "task_id"
+    TITLE = "title"
+    TOKEN_COUNT = "token_count"
+    TRACE_ID = "trace_id"
+    UPDATED_AT = "updated_at"
+    USER_CONTENT_TEXT = "user_content_text"
+    USER_ID = "user_id"
+    USER_MESSAGE_ID = "user_message_id"
+    VISIBILITY = "visibility"
 
 
 class PostgresRuntimeApiStore:
@@ -83,6 +157,13 @@ class PostgresRuntimeApiStore:
 
         with self._pool.connection() as conn:
             conn.execute(POSTGRES_AGENT_RUNTIME_MIGRATION_SQL)
+            conn.execute(
+                """
+                ALTER TABLE runtime_events
+                    ADD COLUMN IF NOT EXISTS activity_kind TEXT,
+                    ADD COLUMN IF NOT EXISTS presentation_json JSONB;
+                """
+            )
             conn.commit()
 
     def create_conversation(
@@ -243,8 +324,8 @@ class PostgresRuntimeApiStore:
                 ).fetchone()
                 if existing is not None:
                     if (
-                        existing["conversation_id"],
-                        existing["user_content_text"],
+                        existing[_Columns.CONVERSATION_ID],
+                        existing[_Columns.USER_CONTENT_TEXT],
                     ) != (request.conversation_id, request.user_input):
                         raise RuntimeApiError(
                             RuntimeErrorCode.VALIDATION_ERROR,
@@ -276,7 +357,7 @@ class PostgresRuntimeApiStore:
                     """,
                     (org_id, conversation_id),
                 ).fetchone()
-                return row["id"] if row is not None else None
+                return row[_Columns.ID] if row is not None else None
 
             def _latest_asst(
                 org_id: str, conversation_id: str, run_id: str
@@ -290,9 +371,9 @@ class PostgresRuntimeApiStore:
                     """,
                     (org_id, conversation_id, run_id, MessageRole.ASSISTANT.value),
                 ).fetchone()
-                return row["id"] if row is not None else None
+                return row[_Columns.ID] if row is not None else None
 
-            user_message = message_for_run_request(
+            user_message = RuntimeAdapterHelpers.message_for_run_request(
                 request=request,
                 conversation=conversation,
                 get_message=_get_msg,
@@ -346,18 +427,14 @@ class PostgresRuntimeApiStore:
             existing = conn.execute(
                 "SELECT * FROM agent_runs WHERE id = %s", (run_id,)
             ).fetchone()
-            updates: dict[str, object] = {"status": status.value}
-            now = datetime.now(UTC)
-            if status == AgentRunStatus.RUNNING and existing["started_at"] is None:
-                updates["started_at"] = now
-            if status in {
-                AgentRunStatus.COMPLETED,
-                AgentRunStatus.FAILED,
-                AgentRunStatus.TIMED_OUT,
-            }:
-                updates["completed_at"] = now
-            if status == AgentRunStatus.CANCELLED:
-                updates["cancelled_at"] = now
+            timestamps = StatusTransition.timestamp_updates(
+                status,
+                already_started=existing[_Columns.STARTED_AT] is not None,
+            )
+            updates: dict[str, object] = {
+                _Columns.STATUS: status.value,
+                **timestamps,
+            }
             assignments = ", ".join(f"{key} = %s" for key in updates)
             row = conn.execute(
                 f"UPDATE agent_runs SET {assignments} WHERE id = %s RETURNING *",
@@ -415,8 +492,8 @@ class PostgresRuntimeApiStore:
     ) -> ApprovalRequestRecord:
         """Persist a pending approval request."""
 
-        risk_class = normalize_risk_class(record.metadata)
-        action_summary = derive_action_summary(record.metadata)
+        risk_class = RuntimeAdapterHelpers.normalize_risk_class(record.metadata)
+        action_summary = RuntimeAdapterHelpers.derive_action_summary(record.metadata)
         with self._pool.connection() as conn:
             existing = conn.execute(
                 """
@@ -429,15 +506,15 @@ class PostgresRuntimeApiStore:
             ).fetchone()
             if existing is not None:
                 return ApprovalRequestRecord(
-                    approval_id=existing["id"],
-                    run_id=existing["run_id"],
-                    conversation_id=existing["conversation_id"],
-                    org_id=existing["org_id"],
-                    user_id=existing["user_id"],
-                    status=existing["status"],
-                    created_at=existing["created_at"],
-                    expires_at=existing["expires_at"],
-                    metadata=existing["request_payload_json_redacted"] or {},
+                    approval_id=existing[_Columns.ID],
+                    run_id=existing[_Columns.RUN_ID],
+                    conversation_id=existing[_Columns.CONVERSATION_ID],
+                    org_id=existing[_Columns.ORG_ID],
+                    user_id=existing[_Columns.USER_ID],
+                    status=existing[_Columns.STATUS],
+                    created_at=existing[_Columns.CREATED_AT],
+                    expires_at=existing[_Columns.EXPIRES_AT],
+                    metadata=existing[_Columns.REQUEST_PAYLOAD_JSON_REDACTED] or {},
                 )
             conn.execute(
                 """
@@ -492,26 +569,26 @@ class PostgresRuntimeApiStore:
         if row is None:
             return None
         return ApprovalRequestRecord(
-            approval_id=row["id"],
-            run_id=row["run_id"],
-            conversation_id=row["conversation_id"],
-            org_id=row["org_id"],
-            user_id=row["user_id"],
-            status=row["status"],
-            created_at=row["created_at"],
-            expires_at=row["expires_at"],
-            metadata=row["request_payload_json_redacted"] or {},
+            approval_id=row[_Columns.ID],
+            run_id=row[_Columns.RUN_ID],
+            conversation_id=row[_Columns.CONVERSATION_ID],
+            org_id=row[_Columns.ORG_ID],
+            user_id=row[_Columns.USER_ID],
+            status=row[_Columns.STATUS],
+            created_at=row[_Columns.CREATED_AT],
+            expires_at=row[_Columns.EXPIRES_AT],
+            metadata=row[_Columns.REQUEST_PAYLOAD_JSON_REDACTED] or {},
         )
 
-    def write_audit_log(self, *, event_type: str, record: object) -> None:
+    def write_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
         """Append an audit record for security-relevant actions."""
 
-        data = record if isinstance(record, dict) else {"record": str(record)}
-        now = datetime.now(UTC)
-        metadata = (
-            data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-        )
-        audit_id = str(data.get("audit_event_id") or f"audit_{now.timestamp_ns()}")
+        data = record if isinstance(record, dict) else {_Fields.RECORD: str(record)}
+        now = datetime.now(timezone.utc)
+        raw_meta = data.get(_Fields.METADATA)
+        metadata = raw_meta if isinstance(raw_meta, dict) else {}
+        ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
+        audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
         with self._pool.connection() as conn:
             conn.execute(
                 """
@@ -523,19 +600,21 @@ class PostgresRuntimeApiStore:
                 """,
                 (
                     audit_id,
-                    str(data.get("org_id", "unknown")),
-                    data.get("user_id")
-                    if isinstance(data.get("user_id"), str)
+                    str(data.get(_Fields.ORG_ID, "unknown")),
+                    data.get(_Fields.USER_ID)
+                    if isinstance(data.get(_Fields.USER_ID), str)
                     else None,
-                    str(data.get("actor_type", "system")),
+                    str(data.get(_Fields.ACTOR_TYPE, "system")),
                     event_type,
-                    str(data.get("resource_type", "runtime")),
-                    str(data.get("resource_id", "unknown")),
-                    data.get("run_id") if isinstance(data.get("run_id"), str) else None,
-                    data.get("trace_id")
-                    if isinstance(data.get("trace_id"), str)
+                    str(data.get(_Fields.RESOURCE_TYPE, "runtime")),
+                    str(data.get(_Fields.RESOURCE_ID, "unknown")),
+                    data.get(_Fields.RUN_ID)
+                    if isinstance(data.get(_Fields.RUN_ID), str)
                     else None,
-                    str(data.get("outcome", "success")),
+                    data.get(_Fields.TRACE_ID)
+                    if isinstance(data.get(_Fields.TRACE_ID), str)
+                    else None,
+                    str(data.get(_Fields.OUTCOME, "success")),
                     Jsonb(metadata),
                     now,
                 ),
@@ -551,8 +630,9 @@ class PostgresRuntimeApiStore:
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while preserving audit/event evidence."""
 
-        now = datetime.now(UTC)
-        audit_event_id = f"history_delete_{now.timestamp_ns()}"
+        now = datetime.now(timezone.utc)
+        ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
+        audit_event_id = f"history_delete_{ts_ns}"
         with self._pool.connection() as conn:
             hold = conn.execute(
                 """
@@ -619,7 +699,9 @@ class PostgresRuntimeApiStore:
                 """,
                 (org_id, user_id),
             ).fetchone()
-            events_retained = int(events_row["count"]) if events_row is not None else 0
+            events_retained = (
+                int(events_row[_Columns.COUNT]) if events_row is not None else 0
+            )
             conn.execute(
                 """
                 INSERT INTO runtime_audit_log (
@@ -636,17 +718,17 @@ class PostgresRuntimeApiStore:
                     user_id,
                     Jsonb(
                         {
-                            "reason": reason,
-                            "conversations_archived": conversations_archived,
-                            "messages_tombstoned": messages_tombstoned,
-                            "runs_cancelled": runs_cancelled,
-                            "events_retained": events_retained,
+                            _Fields.REASON: reason,
+                            _Fields.CONVERSATIONS_ARCHIVED: conversations_archived,
+                            _Fields.MESSAGES_TOMBSTONED: messages_tombstoned,
+                            _Fields.RUNS_CANCELLED: runs_cancelled,
+                            _Fields.EVENTS_RETAINED: events_retained,
                         }
                     ),
                     now,
                 ),
             )
-            evidence_id = f"deletion_evidence_{now.timestamp_ns()}"
+            evidence_id = f"deletion_evidence_{ts_ns}"
             conn.execute(
                 """
                 INSERT INTO runtime_deletion_evidence (
@@ -696,10 +778,17 @@ class PostgresRuntimeApiStore:
                 """,
                 (event.run_id,),
             ).fetchone()
+            activity_kind = (
+                event.activity_kind
+                or RuntimeEventPresentationProjector.activity_kind_for(
+                    event_type=event.event_type,
+                    source=event.source,
+                )
+            )
             envelope = RuntimeEventEnvelope(
                 run_id=event.run_id,
                 conversation_id=event.conversation_id,
-                sequence_no=sequence_row["next_sequence"],
+                sequence_no=sequence_row[_Columns.NEXT_SEQUENCE],
                 source=event.source,
                 event_type=event.event_type,
                 trace_id=event.trace_id,
@@ -712,11 +801,7 @@ class PostgresRuntimeApiStore:
                 display_title=event.display_title,
                 summary=event.summary,
                 status=event.status,
-                activity_kind=event.activity_kind
-                or RuntimeEventPresentationProjector.activity_kind_for(
-                    event_type=event.event_type,
-                    source=event.source,
-                ),
+                activity_kind=activity_kind,
                 visibility=event.visibility,
                 redaction_state=event.redaction_state,
                 presentation=event.presentation,
@@ -730,18 +815,18 @@ class PostgresRuntimeApiStore:
                     source, event_type, parent_event_id, span_id, parent_span_id,
                     parent_task_id, task_id, subagent_id, display_title, summary, status,
                     trace_id, payload_json_redacted, metadata_json_redacted, visibility,
-                    redaction_state, created_at
+                    redaction_state, activity_kind, presentation_json, created_at
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
                     envelope.event_id,
                     envelope.run_id,
                     envelope.conversation_id,
-                    run["org_id"],
+                    run[_Columns.ORG_ID],
                     envelope.sequence_no,
                     envelope.event_protocol_version,
                     envelope.source.value,
@@ -760,6 +845,8 @@ class PostgresRuntimeApiStore:
                     Jsonb(envelope.metadata),
                     envelope.visibility.value,
                     envelope.redaction_state.value,
+                    envelope.activity_kind,
+                    Jsonb(envelope.presentation),
                     envelope.created_at,
                 ),
             )
@@ -794,7 +881,7 @@ class PostgresRuntimeApiStore:
                 "SELECT COALESCE(MAX(sequence_no), 0) AS latest FROM runtime_events WHERE run_id = %s",
                 (run_id,),
             ).fetchone()
-        return int(row["latest"])
+        return int(row[_Columns.LATEST])
 
     def enqueue_run(self, command: RuntimeRunCommand) -> None:
         """Enqueue a run command for workers."""
@@ -869,20 +956,20 @@ class PostgresRuntimeApiStore:
             conn.commit()
         if row is None:
             return None
-        payload = dict(row["payload_json"])
+        payload = dict(row[_Columns.PAYLOAD_JSON])
         return RuntimeWorkerClaim(
-            command_id=row["id"],
-            command_type=row["event_type"],
-            org_id=row["org_id"],
-            run_id=payload.get("run_id")
-            if isinstance(payload.get("run_id"), str)
-            else row["aggregate_id"],
-            approval_id=payload.get("approval_id")
-            if isinstance(payload.get("approval_id"), str)
+            command_id=row[_Columns.ID],
+            command_type=row[_Columns.EVENT_TYPE],
+            org_id=row[_Columns.ORG_ID],
+            run_id=payload.get(_Fields.RUN_ID)
+            if isinstance(payload.get(_Fields.RUN_ID), str)
+            else row[_Columns.AGGREGATE_ID],
+            approval_id=payload.get(_Fields.APPROVAL_ID)
+            if isinstance(payload.get(_Fields.APPROVAL_ID), str)
             else None,
-            locked_by=row["locked_by"],
-            lock_expires_at=row["lock_expires_at"],
-            attempts=row["attempts"],
+            locked_by=row[_Columns.LOCKED_BY],
+            lock_expires_at=row[_Columns.LOCK_EXPIRES_AT],
+            attempts=row[_Columns.ATTEMPTS],
             payload=payload,
         )
 
@@ -910,7 +997,7 @@ class PostgresRuntimeApiStore:
         aggregate_id: str,
         payload: dict[str, object],
     ) -> None:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         with self._pool.connection() as conn:
             conn.execute(
                 """
@@ -952,109 +1039,124 @@ class PostgresRuntimeApiStore:
     @classmethod
     def _conversation_record(cls, row: dict[str, object]) -> ConversationRecord:
         return ConversationRecord(
-            conversation_id=row["id"],
-            org_id=row["org_id"],
-            user_id=row["user_id"],
-            assistant_id=row["assistant_id"],
-            title=row["title"],
-            status=row["status"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            archived_at=row["archived_at"],
-            metadata=dict(row["metadata_json"]),
-            schema_version=row["schema_version"],
-            idempotency_key=row["idempotency_key"],
+            conversation_id=row[_Columns.ID],
+            org_id=row[_Columns.ORG_ID],
+            user_id=row[_Columns.USER_ID],
+            assistant_id=row[_Columns.ASSISTANT_ID],
+            title=row[_Columns.TITLE],
+            status=row[_Columns.STATUS],
+            created_at=row[_Columns.CREATED_AT],
+            updated_at=row[_Columns.UPDATED_AT],
+            archived_at=row[_Columns.ARCHIVED_AT],
+            metadata=dict(row[_Columns.METADATA_JSON]),
+            schema_version=row[_Columns.SCHEMA_VERSION],
+            idempotency_key=row[_Columns.IDEMPOTENCY_KEY],
         )
 
     @classmethod
     def _message_record(cls, row: dict[str, object]) -> MessageRecord:
         return MessageRecord(
-            message_id=row["id"],
-            conversation_id=row["conversation_id"],
-            org_id=row["org_id"],
-            run_id=row["run_id"],
-            role=row["role"],
-            content_text=row["content_text"],
-            content_format=row["content_format"],
-            content=tuple(dict(part) for part in row["content_json"]),
+            message_id=row[_Columns.ID],
+            conversation_id=row[_Columns.CONVERSATION_ID],
+            org_id=row[_Columns.ORG_ID],
+            run_id=row[_Columns.RUN_ID],
+            role=row[_Columns.ROLE],
+            content_text=row[_Columns.CONTENT_TEXT],
+            content_format=row[_Columns.CONTENT_FORMAT],
+            content=tuple(dict(part) for part in row[_Columns.CONTENT_JSON]),
             attachments=tuple(
-                dict(attachment) for attachment in row["attachments_json"]
+                dict(attachment) for attachment in row[_Columns.ATTACHMENTS_JSON]
             ),
-            quote=dict(row["quote_json"]) if row["quote_json"] is not None else None,
-            metadata=dict(row["metadata_json"]),
-            parent_message_id=row["parent_message_id"],
-            source_message_id=row["source_message_id"],
-            branch_id=row["branch_id"],
-            token_count=row["token_count"],
-            trace_id=row["trace_id"],
-            status=row["status"],
-            created_at=row["created_at"],
-            edited_at=row["edited_at"],
-            deleted_at=row["deleted_at"],
+            quote=dict(row[_Columns.QUOTE_JSON])
+            if row[_Columns.QUOTE_JSON] is not None
+            else None,
+            metadata=dict(row[_Columns.METADATA_JSON]),
+            parent_message_id=row[_Columns.PARENT_MESSAGE_ID],
+            source_message_id=row[_Columns.SOURCE_MESSAGE_ID],
+            branch_id=row[_Columns.BRANCH_ID],
+            token_count=row[_Columns.TOKEN_COUNT],
+            trace_id=row[_Columns.TRACE_ID],
+            status=row[_Columns.STATUS],
+            created_at=row[_Columns.CREATED_AT],
+            edited_at=row[_Columns.EDITED_AT],
+            deleted_at=row[_Columns.DELETED_AT],
         )
 
     @classmethod
     def _run_record(cls, row: dict[str, object]) -> RunRecord:
         safe_error = None
-        if row["safe_error_code"] is not None and row["safe_error_message"] is not None:
+        if (
+            row[_Columns.SAFE_ERROR_CODE] is not None
+            and row[_Columns.SAFE_ERROR_MESSAGE] is not None
+        ):
             safe_error = RuntimeErrorEnvelope(
-                code=row["safe_error_code"],
-                safe_message=row["safe_error_message"],
+                code=row[_Columns.SAFE_ERROR_CODE],
+                safe_message=row[_Columns.SAFE_ERROR_MESSAGE],
                 retryable=False,
-                correlation_id=row["trace_id"],
+                correlation_id=row[_Columns.TRACE_ID],
             )
         return RunRecord(
-            run_id=row["id"],
-            conversation_id=row["conversation_id"],
-            org_id=row["org_id"],
-            user_id=row["user_id"],
-            user_message_id=row["user_message_id"],
-            idempotency_key=row["idempotency_key"],
-            trace_id=row["trace_id"],
-            status=row["status"],
-            model_provider=row["model_provider"],
-            model_name=row["model_name"],
-            runtime_context=dict(row["runtime_context_json"]),
-            request_options=dict(row["request_options_json"]),
-            created_at=row["created_at"],
-            started_at=row["started_at"],
-            completed_at=row["completed_at"],
-            cancelled_at=row["cancelled_at"],
+            run_id=row[_Columns.ID],
+            conversation_id=row[_Columns.CONVERSATION_ID],
+            org_id=row[_Columns.ORG_ID],
+            user_id=row[_Columns.USER_ID],
+            user_message_id=row[_Columns.USER_MESSAGE_ID],
+            idempotency_key=row[_Columns.IDEMPOTENCY_KEY],
+            trace_id=row[_Columns.TRACE_ID],
+            status=row[_Columns.STATUS],
+            model_provider=row[_Columns.MODEL_PROVIDER],
+            model_name=row[_Columns.MODEL_NAME],
+            runtime_context=dict(row[_Columns.RUNTIME_CONTEXT_JSON]),
+            request_options=dict(row[_Columns.REQUEST_OPTIONS_JSON]),
+            created_at=row[_Columns.CREATED_AT],
+            started_at=row[_Columns.STARTED_AT],
+            completed_at=row[_Columns.COMPLETED_AT],
+            cancelled_at=row[_Columns.CANCELLED_AT],
             safe_error=safe_error,
-            latest_sequence_no=row["latest_sequence_no"],
+            latest_sequence_no=row[_Columns.LATEST_SEQUENCE_NO],
         )
 
     @classmethod
     def _event_envelope(cls, row: dict[str, object]) -> RuntimeEventEnvelope:
+        stored_activity = row.get(_Columns.ACTIVITY_KIND)
+        if stored_activity is None:
+            stored_activity = RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=RuntimeApiEventType(row[_Columns.EVENT_TYPE]),
+                source=StreamEventSource(row[_Columns.SOURCE]),
+            )
+
+        stored_presentation = row.get(_Columns.PRESENTATION_JSON)
+        if stored_presentation is not None:
+            presentation = dict(stored_presentation)
+        else:
+            presentation = RuntimeEventPresentationProjector.presentation_metadata(
+                dict(row[_Columns.METADATA_JSON_REDACTED])
+            )
+
         return RuntimeEventEnvelope(
-            event_id=row["id"],
-            run_id=row["run_id"],
-            conversation_id=row["conversation_id"],
-            sequence_no=row["sequence_no"],
-            source=row["source"],
-            event_type=row["event_type"],
-            trace_id=row["trace_id"],
-            parent_event_id=row["parent_event_id"],
-            span_id=row["span_id"],
-            parent_span_id=row["parent_span_id"],
-            parent_task_id=row["parent_task_id"],
-            task_id=row["task_id"],
-            subagent_id=row["subagent_id"],
-            display_title=row["display_title"],
-            summary=row["summary"],
-            status=row["status"],
-            activity_kind=RuntimeEventPresentationProjector.activity_kind_for(
-                event_type=RuntimeApiEventType(row["event_type"]),
-                source=StreamEventSource(row["source"]),
-            ),
-            visibility=row["visibility"],
-            redaction_state=row["redaction_state"],
-            presentation=RuntimeEventPresentationProjector.presentation_metadata(
-                dict(row["metadata_json_redacted"])
-            ),
-            payload=dict(row["payload_json_redacted"]),
-            metadata=dict(row["metadata_json_redacted"]),
-            created_at=row["created_at"],
+            event_id=row[_Columns.ID],
+            run_id=row[_Columns.RUN_ID],
+            conversation_id=row[_Columns.CONVERSATION_ID],
+            sequence_no=row[_Columns.SEQUENCE_NO],
+            source=row[_Columns.SOURCE],
+            event_type=row[_Columns.EVENT_TYPE],
+            trace_id=row[_Columns.TRACE_ID],
+            parent_event_id=row[_Columns.PARENT_EVENT_ID],
+            span_id=row[_Columns.SPAN_ID],
+            parent_span_id=row[_Columns.PARENT_SPAN_ID],
+            parent_task_id=row[_Columns.PARENT_TASK_ID],
+            task_id=row[_Columns.TASK_ID],
+            subagent_id=row[_Columns.SUBAGENT_ID],
+            display_title=row[_Columns.DISPLAY_TITLE],
+            summary=row[_Columns.SUMMARY],
+            status=row[_Columns.STATUS],
+            activity_kind=stored_activity,
+            visibility=row[_Columns.VISIBILITY],
+            redaction_state=row[_Columns.REDACTION_STATE],
+            presentation=presentation,
+            payload=dict(row[_Columns.PAYLOAD_JSON_REDACTED]),
+            metadata=dict(row[_Columns.METADATA_JSON_REDACTED]),
+            created_at=row[_Columns.CREATED_AT],
         )
 
     @classmethod

@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from starlette import status
 
-from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.api.constants import Messages
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.records import (
+    OutboxStatus,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+)
+from runtime_adapters.base import (
+    RuntimeAdapterHelpers,
+    StatusTransition,
+    _Fields,
+)
+from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
@@ -28,18 +40,6 @@ from runtime_api.schemas import (
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
-)
-from runtime_api.http.errors import RuntimeApiError
-from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.records import (
-    OutboxStatus,
-    RuntimeWorkerClaim,
-    RuntimeWorkerResult,
-)
-from runtime_adapters.base import (
-    RuntimeApiServiceTerminalStatuses,
-    message_for_run_request,
-    normalize_risk_class,
 )
 
 
@@ -62,7 +62,7 @@ class InMemoryRuntimeApiStore:
         self._queue_attempts: dict[str, int] = {}
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
-        self.audit_log: list[tuple[str, object]] = []
+        self.audit_log: list[tuple[str, dict[str, object]]] = []
         self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency_fingerprint: dict[
@@ -196,7 +196,7 @@ class InMemoryRuntimeApiStore:
                 run = self.runs[existing_run_id]
                 return run, self.messages[run.user_message_id], False
 
-        user_message = message_for_run_request(
+        user_message = RuntimeAdapterHelpers.message_for_run_request(
             request=request,
             conversation=conversation,
             get_message=lambda mid: self.messages.get(mid),
@@ -277,18 +277,10 @@ class InMemoryRuntimeApiStore:
         """Update run status and relevant timestamps."""
 
         run = self.runs[run_id]
-        updates: dict[str, object] = {"status": status}
-        if status == AgentRunStatus.RUNNING and run.started_at is None:
-            updates["started_at"] = datetime.now(UTC)
-        if status in {
-            AgentRunStatus.COMPLETED,
-            AgentRunStatus.FAILED,
-            AgentRunStatus.TIMED_OUT,
-        }:
-            updates["completed_at"] = datetime.now(UTC)
-        if status == AgentRunStatus.CANCELLED:
-            updates["cancelled_at"] = datetime.now(UTC)
-        updated = run.model_copy(update=updates)
+        timestamps = StatusTransition.timestamp_updates(
+            status, already_started=run.started_at is not None
+        )
+        updated = run.model_copy(update={"status": status, **timestamps})
         self.runs[run_id] = updated
         return updated
 
@@ -328,7 +320,9 @@ class InMemoryRuntimeApiStore:
         if existing is not None:
             return existing
         normalized_metadata = dict(record.metadata)
-        normalized_metadata["risk_level"] = normalize_risk_class(record.metadata)
+        normalized_metadata[_Fields.RISK_LEVEL] = (
+            RuntimeAdapterHelpers.normalize_risk_class(record.metadata)
+        )
         record = record.model_copy(update={"metadata": normalized_metadata})
         self.approval_requests[record.approval_id] = record
         return record
@@ -346,7 +340,7 @@ class InMemoryRuntimeApiStore:
             return None
         return approval
 
-    def write_audit_log(self, *, event_type: str, record: object) -> None:
+    def write_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
         """Append a deterministic audit record for assertions."""
 
         self.audit_log.append((event_type, record))
@@ -360,7 +354,7 @@ class InMemoryRuntimeApiStore:
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while preserving audit evidence."""
 
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         conversation_ids = {
             conversation.conversation_id
             for conversation in self.conversations.values()
@@ -400,7 +394,7 @@ class InMemoryRuntimeApiStore:
         for run_id, run in tuple(self.runs.items()):
             if run.org_id != org_id or run.user_id != user_id:
                 continue
-            if run.status not in RuntimeApiServiceTerminalStatuses:
+            if run.status not in StatusTransition.TERMINAL_STATUSES:
                 runs_cancelled += 1
                 self.runs[run_id] = run.model_copy(
                     update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
@@ -418,11 +412,11 @@ class InMemoryRuntimeApiStore:
             (
                 "user_history_deleted",
                 {
-                    "audit_event_id": audit_event_id,
-                    "org_id": org_id,
-                    "user_id": user_id,
-                    "reason": reason,
-                    "deleted_at": now.isoformat(),
+                    _Fields.AUDIT_EVENT_ID: audit_event_id,
+                    _Fields.ORG_ID: org_id,
+                    _Fields.USER_ID: user_id,
+                    _Fields.REASON: reason,
+                    _Fields.DELETED_AT: now.isoformat(),
                 },
             )
         )
@@ -542,7 +536,7 @@ class InMemoryRuntimeApiStore:
     ) -> RuntimeWorkerClaim | None:
         """Claim the next available queued command, respecting unexpired locks."""
 
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         for command_id in self._queue_order:
             status_value = self._queue_statuses[command_id]
             if status_value in {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER}:
@@ -573,7 +567,7 @@ class InMemoryRuntimeApiStore:
 
         self._queue_statuses[result.command_id] = OutboxStatus.RETRY
         self._queue_available_at[result.command_id] = (
-            result.retry_available_at or datetime.now(UTC)
+            result.retry_available_at or datetime.now(timezone.utc)
         )
         self._queue_claims.pop(result.command_id, None)
 
@@ -620,15 +614,15 @@ class InMemoryRuntimeApiStore:
         self._queue_order.append(command_id)
         self._queue_payloads[command_id] = {
             **payload,
-            "command_id": command_id,
-            "command_type": command_type,
-            "org_id": org_id,
-            "run_id": run_id,
-            "approval_id": approval_id,
+            _Fields.COMMAND_ID: command_id,
+            _Fields.COMMAND_TYPE: command_type,
+            _Fields.ORG_ID: org_id,
+            _Fields.RUN_ID: run_id,
+            _Fields.APPROVAL_ID: approval_id,
         }
         self._queue_statuses[command_id] = OutboxStatus.PENDING
         self._queue_attempts[command_id] = 0
-        self._queue_available_at[command_id] = datetime.now(UTC)
+        self._queue_available_at[command_id] = datetime.now(timezone.utc)
 
     def _claim_command(
         self,
@@ -641,11 +635,11 @@ class InMemoryRuntimeApiStore:
         self._queue_attempts[command_id] += 1
         return RuntimeWorkerClaim(
             command_id=command_id,
-            command_type=str(payload["command_type"]),
-            org_id=str(payload["org_id"]),
-            run_id=str(payload["run_id"]),
-            approval_id=payload["approval_id"]
-            if isinstance(payload["approval_id"], str)
+            command_type=str(payload[_Fields.COMMAND_TYPE]),
+            org_id=str(payload[_Fields.ORG_ID]),
+            run_id=str(payload[_Fields.RUN_ID]),
+            approval_id=payload[_Fields.APPROVAL_ID]
+            if isinstance(payload[_Fields.APPROVAL_ID], str)
             else None,
             locked_by=worker_id,
             lock_expires_at=lock_expires_at,
