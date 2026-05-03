@@ -12,6 +12,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     StreamEventSource,
 )
+from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -87,8 +88,8 @@ class RuntimeRunHandler:
     def __init__(
         self,
         *,
-        persistence: PersistencePort,
-        event_store: EventStorePort,
+        persistence: PersistencePort | AsyncPersistencePort,
+        event_store: EventStorePort | AsyncEventStorePort,
         dependencies_factory: RuntimeDependenciesFactory | None = None,
         settings: RuntimeSettings | None = None,
         agent_factory: AgentFactory = create_agent_runtime,

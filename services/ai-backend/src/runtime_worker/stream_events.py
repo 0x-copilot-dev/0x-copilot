@@ -123,7 +123,7 @@ class StreamOrchestrator:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
-            self.create_approval_request(run=run, payload=payload)
+            await self.create_approval_request(run=run, payload=payload)
             await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
@@ -156,7 +156,7 @@ class StreamOrchestrator:
                 RuntimeApiEventType.MCP_AUTH_REQUIRED,
             }:
                 payload = self.payload_with_action_id(event_type, payload)
-                self.create_approval_request(run=run, payload=payload)
+                await self.create_approval_request(run=run, payload=payload)
             await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
@@ -225,7 +225,7 @@ class StreamOrchestrator:
             or StreamTextHelper.extract(message_payload.get(Keys.Field.ID))
         )
 
-    def create_approval_request(
+    async def create_approval_request(
         self,
         *,
         run: RunRecord,
@@ -234,15 +234,13 @@ class StreamOrchestrator:
         approval_id = StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_ID))
         if approval_id is None:
             return
-        if (
-            self.event_producer.persistence.get_approval_request(
-                org_id=run.org_id,
-                approval_id=approval_id,
-            )
-            is not None
-        ):
+        existing = await self.event_producer.persistence.get_approval_request(
+            org_id=run.org_id,
+            approval_id=approval_id,
+        )
+        if existing is not None:
             return
-        self.event_producer.persistence.create_approval_request(
+        await self.event_producer.persistence.create_approval_request(
             record=ApprovalRequestRecord(
                 approval_id=approval_id,
                 run_id=run.run_id,
@@ -265,7 +263,7 @@ class StreamOrchestrator:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
-            self.create_approval_request(run=run, payload=payload)
+            await self.create_approval_request(run=run, payload=payload)
             await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),

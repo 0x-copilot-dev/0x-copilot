@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Sequence
 
+from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
+from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.presentation import PresentationGenerator
 from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+)
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -13,23 +19,28 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
 )
-from agent_runtime.api.ports import EventStorePort, PersistencePort
-from agent_runtime.api.presentation import PresentationGenerator
 
 
 class RuntimeEventProducer:
-    """Append redacted, ordered, UI-ready event envelopes through typed ports."""
+    """Append redacted, ordered, UI-ready event envelopes through async ports.
+
+    The producer's hot path is uniformly async. The constructor normalizes
+    incoming ports: an async store goes through directly, a sync store is
+    wrapped via ``adapt_*_to_async`` which bridges each call through
+    ``asyncio.to_thread``. Callers therefore don't have to know which kind
+    of port they're holding.
+    """
 
     def __init__(
         self,
         *,
-        persistence: PersistencePort,
-        event_store: EventStorePort,
+        persistence: PersistencePort | AsyncPersistencePort,
+        event_store: EventStorePort | AsyncEventStorePort,
         presentation_generator: PresentationGenerator | None = None,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
-        self.persistence = persistence
-        self.event_store = event_store
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
         self.presentation_generator = presentation_generator or PresentationGenerator()
         self._on_event_appended = on_event_appended
 
@@ -85,9 +96,8 @@ class RuntimeEventProducer:
             presentation=card_presentation,
             **timeline_fields,
         )
-        envelope = await asyncio.to_thread(self.event_store.append_event, draft)
-        await asyncio.to_thread(
-            self.persistence.set_run_latest_sequence,
+        envelope = await self.event_store.append_event(draft)
+        await self.persistence.set_run_latest_sequence(
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )
@@ -132,9 +142,8 @@ class RuntimeEventProducer:
                     "metadata": {**draft.metadata, "presentation": card_presentation},
                 }
             )
-        envelope = await asyncio.to_thread(self.event_store.append_event, draft)
-        await asyncio.to_thread(
-            self.persistence.set_run_latest_sequence,
+        envelope = await self.event_store.append_event(draft)
+        await self.persistence.set_run_latest_sequence(
             run_id=run.run_id,
             latest_sequence_no=envelope.sequence_no,
         )

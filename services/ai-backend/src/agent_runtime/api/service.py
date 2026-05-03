@@ -40,6 +40,10 @@ from runtime_api.schemas import (
 )
 from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.async_ports import (
+    AsyncEventStorePort,
+    AsyncPersistencePort,
+)
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
@@ -61,13 +65,15 @@ class RuntimeApiService:
     def __init__(
         self,
         *,
-        persistence: PersistencePort,
-        event_store: EventStorePort,
+        persistence: PersistencePort | AsyncPersistencePort,
+        event_store: EventStorePort | AsyncEventStorePort,
         queue: RuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         model_resolver: ModelConfigResolver | None = None,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
+        # Sync ports remain available for the (still-sync) service methods
+        # below. The async-only producer takes the same ports adapted to async.
         self.persistence = persistence
         self.event_store = event_store
         self.queue = queue

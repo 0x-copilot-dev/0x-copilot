@@ -17,7 +17,9 @@ class RecordingPersistence:
     def __init__(self) -> None:
         self.latest_sequence_no: int | None = None
 
-    def set_run_latest_sequence(self, *, run_id: str, latest_sequence_no: int) -> None:
+    async def set_run_latest_sequence(
+        self, *, run_id: str, latest_sequence_no: int
+    ) -> None:
         self.latest_sequence_no = latest_sequence_no
 
 
@@ -25,7 +27,7 @@ class RecordingEventStore:
     def __init__(self) -> None:
         self.draft: RuntimeEventDraft | None = None
 
-    def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
+    async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         self.draft = event
         return RuntimeEventEnvelope(
             run_id=event.run_id,

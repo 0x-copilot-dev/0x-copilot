@@ -19,6 +19,9 @@ from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
 
 
+_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres_async"})
+
+
 class RuntimeApiAppFactory:
     """Create a FastAPI app with dependency-inverted runtime API ports."""
 
@@ -26,11 +29,13 @@ class RuntimeApiAppFactory:
     def create_app(cls, service: RuntimeApiService | None = None) -> FastAPI:
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+            await cls.open_async_store(app)
             await cls.start_in_process_worker(app)
             try:
                 yield
             finally:
                 await cls.stop_in_process_worker(app)
+                await cls.close_async_store(app)
 
         app = FastAPI(title="Agent Runtime API", version="1", lifespan=lifespan)
         configured_service = service or cls.default_service(app)
@@ -55,11 +60,21 @@ class RuntimeApiAppFactory:
     def default_service(cls, app: FastAPI) -> RuntimeApiService:
         settings = RuntimeSettings.load()
         RuntimeSettings.configure_sdk_environment(settings)
-        ports = RuntimeAdapterFactory.from_settings(settings)
         event_bus = RuntimeEventBus.get_default()
-        app.state.runtime_ports = ports
         app.state.runtime_settings = settings
         app.state.runtime_event_bus = event_bus
+        if settings.store.backend in _ASYNC_BACKENDS:
+            async_ports = RuntimeAdapterFactory.async_from_settings(settings)
+            app.state.async_runtime_ports = async_ports
+            return RuntimeApiService(
+                persistence=async_ports.persistence,
+                event_store=async_ports.event_store,
+                queue=async_ports.queue,
+                settings=settings,
+                on_event_appended=event_bus.notify_sync,
+            )
+        ports = RuntimeAdapterFactory.from_settings(settings)
+        app.state.runtime_ports = ports
         return RuntimeApiService(
             persistence=ports.persistence,
             event_store=ports.event_store,
@@ -69,6 +84,25 @@ class RuntimeApiAppFactory:
         )
 
     @classmethod
+    async def open_async_store(cls, app: FastAPI) -> None:
+        """Open + migrate the async store on startup if one was configured."""
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        if async_ports is None:
+            return
+        await async_ports.store.open()
+        await async_ports.store.migrate()
+
+    @classmethod
+    async def close_async_store(cls, app: FastAPI) -> None:
+        """Close the async store on shutdown."""
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        if async_ports is None:
+            return
+        await async_ports.store.close()
+
+    @classmethod
     async def start_in_process_worker(cls, app: FastAPI) -> None:
         """Run a same-process worker for local in-memory debugging."""
 
@@ -76,6 +110,10 @@ class RuntimeApiAppFactory:
         ports = getattr(app.state, "runtime_ports", None)
         if settings is None or ports is None:
             return
+        # The in-process worker still uses sync port methods outside the
+        # event producer (Phase D moves that). For now, keep it gated to the
+        # sync in_memory backend; in_memory_async is for the API surface only
+        # until Phase D finishes the worker migration.
         if settings.store.backend != "in_memory":
             return
         if not settings.execution.start_in_process_worker:
