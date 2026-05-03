@@ -92,7 +92,46 @@ class PresentationGenerator:
         metadata: JsonObject,
         timeline_fields: Mapping[str, object],
     ) -> JsonObject | None:
-        """Return validated presentation JSON, or a safe fallback."""
+        """Return validated presentation JSON (preliminary + LLM enrichment).
+
+        Backwards-compatible single-call entry point. Producers should prefer
+        ``preliminary_presentation_for_event`` (synchronous, no LLM) followed
+        by a background ``enrich_presentation_for_event`` so events emit to
+        the SSE stream within milliseconds instead of blocking on the LLM.
+        """
+
+        preliminary = self.preliminary_presentation_for_event(
+            event_type=event_type,
+            payload=payload,
+            metadata=metadata,
+            timeline_fields=timeline_fields,
+        )
+        if not self.event_eligible_for_enrichment(event_type, payload, metadata):
+            return preliminary
+        enriched = await self.enrich_presentation_for_event(
+            run=run,
+            event_type=event_type,
+            source=source,
+            payload=payload,
+            metadata=metadata,
+            timeline_fields=timeline_fields,
+        )
+        return enriched or preliminary
+
+    def preliminary_presentation_for_event(
+        self,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        metadata: JsonObject,
+        timeline_fields: Mapping[str, object],
+    ) -> JsonObject | None:
+        """Return a presentation built from templates only (no LLM call).
+
+        For LLM-eligible event types with no template match, returns the
+        deterministic ``_fallback`` so the card still renders something.
+        Returns ``None`` for event types that have no presentation at all.
+        """
 
         explicit = self._validated(metadata.get("presentation"))
         if explicit is not None:
@@ -127,6 +166,56 @@ class PresentationGenerator:
         if event_type not in self.llm_eligible_event_types:
             return None
 
+        # LLM-eligible with no template: render a low-confidence fallback so
+        # the SSE stream gets a card immediately. The background enrichment
+        # task will replace it via PRESENTATION_UPDATED.
+        context = self._context(
+            event_type=event_type,
+            source=StreamEventSource.SYSTEM,
+            payload=payload,
+            metadata=metadata,
+            timeline_fields=timeline_fields,
+        )
+        return self._fallback(context)
+
+    def event_eligible_for_enrichment(
+        self,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        metadata: JsonObject,
+    ) -> bool:
+        """Return whether this event should trigger a background LLM enrichment.
+
+        False if a deterministic / tool template already produced a high-confidence
+        card, or if the event type isn't LLM-eligible at all.
+        """
+
+        if event_type not in self.llm_eligible_event_types:
+            return False
+        if metadata.get("presentation") is not None:
+            return False
+        if event_type in DeterministicTemplates.HANDLED:
+            return False
+        if self._resolve_tool_template(payload) is not None:
+            return False
+        return True
+
+    async def enrich_presentation_for_event(
+        self,
+        *,
+        run: RunRecord,
+        event_type: RuntimeApiEventType,
+        source: StreamEventSource,
+        payload: JsonObject,
+        metadata: JsonObject,
+        timeline_fields: Mapping[str, object],
+    ) -> JsonObject | None:
+        """Run only the LLM-backed presentation path. Returns ``None`` on miss."""
+
+        if event_type not in self.llm_eligible_event_types:
+            return None
+
+        group_key = self._group_key(payload, timeline_fields)
         context = self._context(
             event_type=event_type,
             source=source,
@@ -151,11 +240,10 @@ class PresentationGenerator:
         generated = await self._generate(context)
         validated = self._validated(generated)
         if validated is None:
-            validated = self._fallback(context)
-        else:
-            validated = self._with_deterministic_fields(validated, group_key=group_key)
-        self.cache[cache_key] = validated
-        return validated
+            return None
+        enriched = self._with_deterministic_fields(validated, group_key=group_key)
+        self.cache[cache_key] = enriched
+        return enriched
 
     async def _generate(self, context: JsonObject) -> object:
         prompt = self._prompt(context)

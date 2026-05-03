@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.presentation import PresentationGenerator
 from agent_runtime.execution.contracts import AgentRuntimeContext, StreamEventSource
@@ -25,14 +27,19 @@ class RecordingPersistence:
 
 class RecordingEventStore:
     def __init__(self) -> None:
-        self.draft: RuntimeEventDraft | None = None
+        self.drafts: list[RuntimeEventDraft] = []
+
+    @property
+    def draft(self) -> RuntimeEventDraft | None:
+        """Return the first appended draft (the original event, not patches)."""
+        return self.drafts[0] if self.drafts else None
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
-        self.draft = event
+        self.drafts.append(event)
         return RuntimeEventEnvelope(
             run_id=event.run_id,
             conversation_id=event.conversation_id,
-            sequence_no=1,
+            sequence_no=len(self.drafts),
             source=event.source,
             event_type=event.event_type,
             trace_id=event.trace_id,
@@ -318,9 +325,205 @@ async def test_event_producer_attaches_presentation_metadata() -> None:
         },
     )
 
+    # Preliminary presentation is attached synchronously so the SSE stream
+    # gets a card immediately. Title is the deterministic fallback because
+    # TOOL_RESULT has no template registered for `web_search`.
     assert envelope.presentation is not None
-    assert envelope.presentation.title == "Searched the web"
-    assert envelope.metadata["presentation"]["summary"] == "Found official sources."
-    assert event_store.draft is not None
-    assert event_store.draft.presentation is not None
-    assert persistence.latest_sequence_no == 1
+    assert envelope.presentation.confidence == "low"
+    assert envelope.event_type == RuntimeApiEventType.TOOL_RESULT
+
+    # Background enrichment task replaces it via PRESENTATION_UPDATED.
+    await producer.flush_pending_enrichment(run_id=envelope.run_id)
+    assert len(event_store.drafts) == 2
+    patch = event_store.drafts[1]
+    assert patch.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
+    assert patch.presentation is not None
+    assert patch.presentation.title == "Searched the web"
+    assert patch.payload["call_id"] == "call_123"
+    assert patch.payload["patches"] == ["presentation"]
+    assert persistence.latest_sequence_no == 2
+
+
+async def test_event_producer_skips_enrichment_for_deterministic_event_types() -> None:
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload={
+            "approval_id": "approval_123",
+            "tool_name": "gmail_send",
+            "status": "pending",
+        },
+    )
+    await producer.flush_pending_enrichment()
+
+    assert len(event_store.drafts) == 1
+    assert presenter_calls == []  # No LLM call for deterministic types.
+
+
+async def test_event_producer_skips_enrichment_when_tool_template_renders() -> None:
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
+
+    template = ToolDisplayTemplate(
+        title_template="Searching for {query}",
+        result_title_template="Found {count} results",
+    )
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(
+            presenter=recording_presenter,
+            tool_display_lookup=lambda name: template if name == "web_search" else None,
+        ),
+    )
+
+    envelope = await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_42",
+            "status": "completed",
+            "count": 7,
+        },
+    )
+    await producer.flush_pending_enrichment()
+
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Found 7 results"
+    assert envelope.presentation.confidence == "high"
+    assert len(event_store.drafts) == 1
+    assert presenter_calls == []
+
+
+async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_call_id() -> (
+    None
+):
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    async def slow_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        # The STARTED enrichment sleeps long enough that the RESULT event
+        # arrives and cancels it before it can patch the card. The RESULT
+        # enrichment returns immediately.
+        if "tool_call_started" in prompt:
+            await asyncio.sleep(2.0)
+            return {
+                "title": "Stale STARTED",
+                "status_label": "Running",
+                "kind": "progress",
+            }
+        return {"title": "Fresh RESULT", "status_label": "Done", "kind": "result"}
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=slow_presenter),
+    )
+
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
+        payload={"tool_name": "web_search", "call_id": "call_77"},
+    )
+    # Yield control so the STARTED enrichment task starts running and enters
+    # the asyncio.sleep above.
+    await asyncio.sleep(0)
+
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_77",
+            "status": "completed",
+        },
+    )
+    await producer.flush_pending_enrichment()
+
+    presentation_updates = [
+        draft
+        for draft in event_store.drafts
+        if draft.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
+    ]
+    # Exactly one PRESENTATION_UPDATED — the RESULT enrichment. The STARTED
+    # enrichment was cancelled before it could append a stale patch.
+    assert len(presentation_updates) == 1
+    assert presentation_updates[0].presentation is not None
+    assert presentation_updates[0].presentation.title == "Fresh RESULT"
+
+
+async def test_event_producer_forwards_agent_intent_hint_into_presentation_prompt() -> (
+    None
+):
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    captured_prompts: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        captured_prompts.append(prompt)
+        return {
+            "title": "Looking up Acme invoice",
+            "summary": "Searching Gmail for the Q3 Acme invoice.",
+            "status_label": "Done",
+            "kind": "result",
+        }
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    # First, the agent emits a model_delta that captures intent.
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.MODEL,
+        event_type=RuntimeApiEventType.MODEL_DELTA,
+        payload={"delta": "I'll search Gmail for the Q3 Acme invoice."},
+    )
+
+    # Then a tool result arrives — the LLM prompt should include intent_hint.
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "gmail_search",
+            "call_id": "call_99",
+            "status": "completed",
+        },
+    )
+    await producer.flush_pending_enrichment()
+
+    assert any(
+        "I'll search Gmail" in prompt and "agent_intent_hint" in prompt
+        for prompt in captured_prompts
+    )
