@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+from agent_runtime.api.async_ports import AsyncEventStorePort
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.api.ports import EventStorePort
 from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.schemas import (
     RunRecord,
@@ -55,7 +55,7 @@ class StreamingExecutor:
         stream: AsyncIterator[object],
         run: RunRecord,
         metrics: AssistantRunMetrics,
-        event_store: EventStorePort,
+        event_store: AsyncEventStorePort,
         event_producer: RuntimeEventProducer,
         stream_event_mapper: StreamOrchestrator,
         track_subagents: bool = False,
@@ -67,7 +67,7 @@ class StreamingExecutor:
         async for chunk in stream:
             result.last_chunk = chunk
             metrics.record_usage_from(chunk)
-            latest_before = event_store.get_latest_sequence(run_id=run.run_id)
+            latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
             candidate = stream_event_mapper.stream_result_candidate(chunk)
             if candidate is not None and not active_subagent_tasks:
                 result.final_result = candidate
@@ -78,7 +78,7 @@ class StreamingExecutor:
                 chunk=chunk,
                 delta=delta,
             )
-            new_events = event_store.list_events_after(
+            new_events = await event_store.list_events_after(
                 org_id=run.org_id,
                 run_id=run.run_id,
                 after_sequence=latest_before,

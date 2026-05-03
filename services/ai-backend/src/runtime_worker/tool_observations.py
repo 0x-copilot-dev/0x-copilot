@@ -56,7 +56,7 @@ class ToolObservationIndexBuilder:
     def __init__(self, event_store: EventStorePort) -> None:
         self.event_store = event_store
 
-    def build(
+    async def build(
         self,
         *,
         org_id: str,
@@ -67,7 +67,7 @@ class ToolObservationIndexBuilder:
         run_ids = self._prior_run_ids(selected_messages, current_run_id)
         observations: list[ToolObservation] = []
         for run_id in run_ids:
-            events = self.event_store.list_events_after(
+            events = await self.event_store.list_events_after(
                 org_id=org_id,
                 run_id=run_id,
                 after_sequence=0,

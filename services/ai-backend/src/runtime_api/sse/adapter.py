@@ -39,7 +39,7 @@ class RuntimeSseAdapter:
 
         latest_sequence = after_sequence
         while True:
-            replay = service.replay_events(
+            replay = await service.replay_events(
                 org_id=org_id,
                 user_id=user_id,
                 run_id=run_id,
@@ -54,7 +54,7 @@ class RuntimeSseAdapter:
                 return
             if not follow:
                 if not replay.events:
-                    yield cls.heartbeat_event(
+                    yield await cls.heartbeat_event(
                         service=service,
                         org_id=org_id,
                         user_id=user_id,
@@ -70,7 +70,7 @@ class RuntimeSseAdapter:
                 await asyncio.sleep(cls.FALLBACK_POLL_SECONDS)
 
     @classmethod
-    def heartbeat_event(
+    async def heartbeat_event(
         cls,
         *,
         service: RuntimeApiService,
@@ -79,7 +79,7 @@ class RuntimeSseAdapter:
         run_id: str,
         sequence_no: int,
     ) -> str:
-        run = service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        run = await service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
         payload = {Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT}
         metadata = {"transient": True}
         presentation = RuntimeEventPresentationProjector.presentation_fields(

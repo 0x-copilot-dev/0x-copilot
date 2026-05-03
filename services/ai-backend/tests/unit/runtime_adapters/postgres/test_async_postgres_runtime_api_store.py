@@ -294,30 +294,25 @@ class TestAsyncAdapterParity:
         self, store: AsyncPostgresRuntimeApiStore
     ) -> None:
         org_id, user_id, run_id, conv_id = await _seed_run(store)
-        command = RuntimeRunCommand(
-            run_id=run_id,
-            conversation_id=conv_id,
-            org_id=org_id,
-            user_id=user_id,
-            trace_id="trace",
-            runtime_context=_make_runtime_context(uuid4().hex),
+        await store.enqueue_run(
+            RuntimeRunCommand(
+                run_id=run_id,
+                conversation_id=conv_id,
+                org_id=org_id,
+                user_id=user_id,
+                trace_id="trace",
+                runtime_context=_make_runtime_context(uuid4().hex),
+            )
         )
-        await store.enqueue_run(command)
-        # The Postgres outbox is shared across tests; drain until we see ours
-        # (or fail loudly after a sane bound).
-        for _ in range(200):
-            claim = await store.claim_next(
-                worker_id="w1",
-                lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
-            )
-            assert claim is not None
-            await store.mark_complete(
-                result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
-            )
-            if claim.command_id == command.command_id:
-                assert claim.run_id == run_id
-                return
-        raise AssertionError("did not claim our enqueued command within 200 attempts")
+        claim = await store.claim_next(
+            worker_id="w1",
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+        assert claim is not None
+        assert claim.run_id == run_id
+        await store.mark_complete(
+            result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
+        )
 
     async def test_write_audit_log(self, store: AsyncPostgresRuntimeApiStore) -> None:
         org_id, user_id, _run_id, _conv_id = await _seed_run(store)

@@ -9,6 +9,10 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -65,8 +69,8 @@ class RuntimeApprovalHandler:
         runtime_resumer: RuntimeResumer = astream_runtime_resume,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
-        self.persistence = persistence
-        self.event_store = event_store
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
         self.settings = settings or RuntimeSettings.load()
         self.dependencies_factory = (
             dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
@@ -74,21 +78,23 @@ class RuntimeApprovalHandler:
         self.agent_factory = agent_factory
         self.runtime_resumer = runtime_resumer
         self.event_producer = RuntimeEventProducer(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
             on_event_appended=on_event_appended,
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
-        run = self.persistence.get_run(org_id=command.org_id, run_id=command.run_id)
+        run = await self.persistence.get_run(
+            org_id=command.org_id, run_id=command.run_id
+        )
         if run is None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 "Approval command references an unknown run.",
                 retryable=False,
             )
-        approval = self.persistence.get_approval_request(
+        approval = await self.persistence.get_approval_request(
             org_id=command.org_id,
             approval_id=command.approval_id,
         )
@@ -112,10 +118,10 @@ class RuntimeApprovalHandler:
             approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION
             and command.answer is not None
         ):
-            self._append_user_answer_message(run=run, command=command)
+            await self._append_user_answer_message(run=run, command=command)
 
         resume = self._resume_payload(command, metadata)
-        running = self.persistence.update_run_status(
+        running = await self.persistence.update_run_status(
             run_id=run.run_id,
             status=AgentRunStatus.RUNNING,
         )
@@ -132,7 +138,7 @@ class RuntimeApprovalHandler:
                 metrics=metrics,
             )
             if RuntimeRunHandler._is_action_interrupt(result):
-                self.persistence.update_run_status(
+                await self.persistence.update_run_status(
                     run_id=run.run_id,
                     status=AgentRunStatus.WAITING_FOR_APPROVAL,
                 )
@@ -140,7 +146,7 @@ class RuntimeApprovalHandler:
             final_text = RuntimeRunHandler._extract_final_text(result)
             await self._complete_run_with_result(running, final_text, metrics)
         except Exception:
-            failed = self.persistence.update_run_status(
+            failed = await self.persistence.update_run_status(
                 run_id=run.run_id,
                 status=AgentRunStatus.FAILED,
             )
@@ -182,7 +188,7 @@ class RuntimeApprovalHandler:
         if final_text is not None:
             usage = metrics_payload.get("usage")
             output_tokens = usage.get("output") if isinstance(usage, dict) else None
-            self.persistence.append_message(
+            await self.persistence.append_message(
                 MessageRecord(
                     conversation_id=run.conversation_id,
                     org_id=run.org_id,
@@ -209,7 +215,7 @@ class RuntimeApprovalHandler:
                 summary=final_text,
                 status="completed",
             )
-        completed = self.persistence.update_run_status(
+        completed = await self.persistence.update_run_status(
             run_id=run.run_id,
             status=AgentRunStatus.COMPLETED,
         )
@@ -225,7 +231,7 @@ class RuntimeApprovalHandler:
             summary="Run completed",
         )
 
-    def _append_user_answer_message(
+    async def _append_user_answer_message(
         self,
         *,
         run: RunRecord,
@@ -234,7 +240,7 @@ class RuntimeApprovalHandler:
         answer = command.answer
         if answer is None or not answer.strip():
             return
-        self.persistence.append_message(
+        await self.persistence.append_message(
             MessageRecord(
                 conversation_id=run.conversation_id,
                 org_id=run.org_id,

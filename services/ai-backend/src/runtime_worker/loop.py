@@ -8,12 +8,22 @@ from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
+from agent_runtime.api.async_ports import (
+    AsyncEventStorePort,
+    AsyncPersistencePort,
+    AsyncRuntimeQueuePort,
+)
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+    adapt_queue_to_async,
+)
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
@@ -30,9 +40,9 @@ class RuntimeWorker:
     def __init__(
         self,
         *,
-        persistence: PersistencePort,
-        event_store: EventStorePort,
-        queue: RuntimeQueuePort,
+        persistence: PersistencePort | AsyncPersistencePort,
+        event_store: EventStorePort | AsyncEventStorePort,
+        queue: RuntimeQueuePort | AsyncRuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         worker_id: str | None = None,
         lock_seconds: int = 60,
@@ -42,26 +52,28 @@ class RuntimeWorker:
         approval_handler: RuntimeApprovalHandler | None = None,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
-        self.persistence = persistence
-        self.event_store = event_store
-        self.queue = queue
+        # Worker is fully async on the inside. Sync ports get wrapped
+        # via to_thread; async ports pass through unchanged.
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
+        self.queue: AsyncRuntimeQueuePort = adapt_queue_to_async(queue)
         self.settings = settings or RuntimeSettings.load()
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.run_handler = run_handler or RuntimeRunHandler(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
             settings=self.settings,
             on_event_appended=on_event_appended,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
             settings=self.settings,
             on_event_appended=on_event_appended,
         )
@@ -71,7 +83,7 @@ class RuntimeWorker:
     async def run_once(self) -> bool:
         """Claim and process one command, returning whether work was found."""
 
-        claim = self._claim_next()
+        claim = await self._claim_next()
         if claim is None:
             return False
         async with self._semaphore:
@@ -83,7 +95,7 @@ class RuntimeWorker:
 
         processed = 0
         while True:
-            claims = self._claim_batch()
+            claims = await self._claim_batch()
             if not claims:
                 return processed
             await asyncio.gather(
@@ -91,17 +103,17 @@ class RuntimeWorker:
             )
             processed += len(claims)
 
-    def _claim_next(self) -> RuntimeWorkerClaim | None:
-        return self.queue.claim_next(
+    async def _claim_next(self) -> RuntimeWorkerClaim | None:
+        return await self.queue.claim_next(
             worker_id=self.worker_id,
             lock_expires_at=datetime.now(timezone.utc)
             + timedelta(seconds=self.lock_seconds),
         )
 
-    def _claim_batch(self) -> tuple[RuntimeWorkerClaim, ...]:
+    async def _claim_batch(self) -> tuple[RuntimeWorkerClaim, ...]:
         claims: list[RuntimeWorkerClaim] = []
         for _ in range(self.settings.execution.max_parallel_runs):
-            claim = self._claim_next()
+            claim = await self._claim_next()
             if claim is None:
                 break
             claims.append(claim)
@@ -129,7 +141,7 @@ class RuntimeWorker:
                 claim.command_type,
                 claim.run_id,
             )
-            self._mark_failure(claim=claim, error=exc)
+            await self._mark_failure(claim=claim, error=exc)
             return
         except Exception:
             self.logger.exception(
@@ -143,9 +155,9 @@ class RuntimeWorker:
                 "Runtime worker command failed safely.",
                 retryable=True,
             )
-            self._mark_failure(claim=claim, error=safe_error)
+            await self._mark_failure(claim=claim, error=safe_error)
             return
-        self.queue.mark_complete(
+        await self.queue.mark_complete(
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
         )
 
@@ -169,7 +181,7 @@ class RuntimeWorker:
             retryable=False,
         )
 
-    def _mark_failure(
+    async def _mark_failure(
         self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError
     ) -> None:
         result = RuntimeWorkerResult(
@@ -180,9 +192,9 @@ class RuntimeWorker:
             + timedelta(seconds=self.retry_delay_seconds),
         )
         if error.retryable and claim.attempts <= self.settings.execution.max_retries:
-            self.queue.mark_retry(result=result)
+            await self.queue.mark_retry(result=result)
             return
-        self.queue.mark_dead_letter(result=result)
+        await self.queue.mark_dead_letter(result=result)
 
     def _runtime_run_command(self, claim: RuntimeWorkerClaim) -> RuntimeRunCommand:
         payload = self._command_payload(claim)

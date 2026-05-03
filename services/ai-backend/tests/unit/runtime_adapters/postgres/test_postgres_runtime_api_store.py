@@ -52,11 +52,13 @@ class TestPostgresAdapterRunLifecycle:
             queue=store,
             settings=settings,
         )
-        conversation = service.create_conversation(
-            CreateConversationRequest(
-                org_id=f"org_{suffix}",
-                user_id=f"user_{suffix}",
-                assistant_id="assistant_test",
+        conversation = asyncio.run(
+            service.create_conversation(
+                CreateConversationRequest(
+                    org_id=f"org_{suffix}",
+                    user_id=f"user_{suffix}",
+                    assistant_id="assistant_test",
+                )
             )
         )
         run = asyncio.run(
@@ -106,16 +108,20 @@ class TestPostgresAdapterRunLifecycle:
         )
 
         assert asyncio.run(worker.run_until_idle()) >= 1
-        completed = service.get_run(
-            org_id=conversation.org_id,
-            user_id=conversation.user_id,
-            run_id=run.run_id,
+        completed = asyncio.run(
+            service.get_run(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                run_id=run.run_id,
+            )
         )
-        replay = service.replay_events(
-            org_id=conversation.org_id,
-            user_id=conversation.user_id,
-            run_id=run.run_id,
-            after_sequence=0,
+        replay = asyncio.run(
+            service.replay_events(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                run_id=run.run_id,
+                after_sequence=0,
+            )
         )
 
         assert completed.status == "completed"
@@ -150,11 +156,13 @@ class TestPostgresAdapterSyntheticParent:
             queue=store,
             settings=settings,
         )
-        conversation = service.create_conversation(
-            CreateConversationRequest(
-                org_id=f"org_{suffix}",
-                user_id=f"user_{suffix}",
-                assistant_id="assistant_test",
+        conversation = asyncio.run(
+            service.create_conversation(
+                CreateConversationRequest(
+                    org_id=f"org_{suffix}",
+                    user_id=f"user_{suffix}",
+                    assistant_id="assistant_test",
+                )
             )
         )
         first = asyncio.run(
@@ -192,10 +200,12 @@ class TestPostgresAdapterSyntheticParent:
                 )
             )
         )
-        messages = service.list_messages(
-            org_id=conversation.org_id,
-            user_id=conversation.user_id,
-            conversation_id=conversation.conversation_id,
+        messages = asyncio.run(
+            service.list_messages(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                conversation_id=conversation.conversation_id,
+            )
         ).messages
         follow_up_user = next(
             message

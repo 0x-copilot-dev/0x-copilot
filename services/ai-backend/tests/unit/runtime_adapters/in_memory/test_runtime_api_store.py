@@ -108,11 +108,13 @@ class TestInMemoryRegenerateMessage:
                 }
             ),
         )
-        conversation = service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
+        conversation = asyncio.run(
+            service.create_conversation(
+                CreateConversationRequest(
+                    org_id="org_123",
+                    user_id="user_123",
+                    assistant_id="assistant_123",
+                )
             )
         )
         first = asyncio.run(

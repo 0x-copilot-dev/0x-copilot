@@ -6,6 +6,10 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.contracts import StreamEventSource
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+)
 from runtime_api.schemas import (
     AgentRunStatus,
     RuntimeApiEventType,
@@ -22,16 +26,16 @@ class RuntimeCancelHandler:
         persistence: PersistencePort | AsyncPersistencePort,
         event_store: EventStorePort | AsyncEventStorePort,
     ) -> None:
-        self.persistence = persistence
-        self.event_store = event_store
-        # Producer self-normalizes sync/async ports.
+        # Always async on the inside (Phase D).
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
         self.event_producer = RuntimeEventProducer(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
         )
 
     async def handle(self, command: RuntimeCancelCommand) -> None:
-        run = self.persistence.update_run_status(
+        run = await self.persistence.update_run_status(
             run_id=command.run_id,
             status=AgentRunStatus.CANCELLED,
         )

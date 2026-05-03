@@ -42,11 +42,13 @@ class RuntimeEventTimelineTestMixin:
             queue=store,
             settings=settings,
         )
-        conversation = service.create_conversation(
-            CreateConversationRequest(
-                org_id=runtime_context_admin.org_id,
-                user_id=runtime_context_admin.user_id,
-                title=self.Values.CONVERSATION_TITLE,
+        conversation = asyncio.run(
+            service.create_conversation(
+                CreateConversationRequest(
+                    org_id=runtime_context_admin.org_id,
+                    user_id=runtime_context_admin.user_id,
+                    title=self.Values.CONVERSATION_TITLE,
+                )
             )
         )
         run_response = asyncio.run(

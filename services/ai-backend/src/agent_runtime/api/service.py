@@ -43,11 +43,17 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.async_ports import (
     AsyncEventStorePort,
     AsyncPersistencePort,
+    AsyncRuntimeQueuePort,
 )
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+    adapt_queue_to_async,
+)
 
 
 class RuntimeApiService:
@@ -67,21 +73,23 @@ class RuntimeApiService:
         *,
         persistence: PersistencePort | AsyncPersistencePort,
         event_store: EventStorePort | AsyncEventStorePort,
-        queue: RuntimeQueuePort,
+        queue: RuntimeQueuePort | AsyncRuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         model_resolver: ModelConfigResolver | None = None,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
-        # Sync ports remain available for the (still-sync) service methods
-        # below. The async-only producer takes the same ports adapted to async.
-        self.persistence = persistence
-        self.event_store = event_store
-        self.queue = queue
+        # The service is uniformly async on the inside. Sync ports get
+        # wrapped via to_thread; async ports pass through. This way every
+        # call site below uses `await self.persistence.*` and we never have
+        # to ask which kind of backend is configured.
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
+        self.queue: AsyncRuntimeQueuePort = adapt_queue_to_async(queue)
         self.settings = settings or RuntimeSettings.load()
         self.model_resolver = model_resolver or ModelConfigResolver(self.settings)
         self.event_producer = RuntimeEventProducer(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=self.persistence,
+            event_store=self.event_store,
             on_event_appended=on_event_appended,
         )
 
@@ -147,13 +155,13 @@ class RuntimeApiService:
             models=tuple(unique_models.values()),
         )
 
-    def create_conversation(
+    async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationResponse:
         """Create or idempotently return a conversation."""
 
-        conversation = self.persistence.create_conversation(request)
-        self.persistence.write_audit_log(
+        conversation = await self.persistence.create_conversation(request)
+        await self.persistence.write_audit_log(
             event_type="conversation_created",
             record={
                 "org_id": conversation.org_id,
@@ -165,7 +173,7 @@ class RuntimeApiService:
         )
         return conversation.to_response()
 
-    def get_conversation(
+    async def get_conversation(
         self,
         *,
         org_id: str,
@@ -174,13 +182,14 @@ class RuntimeApiService:
     ) -> ConversationResponse:
         """Return conversation metadata for the caller scope."""
 
-        return self._conversation_for_scope(
+        conversation = await self._conversation_for_scope(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
-        ).to_response()
+        )
+        return conversation.to_response()
 
-    def list_conversations(
+    async def list_conversations(
         self,
         *,
         org_id: str,
@@ -191,7 +200,7 @@ class RuntimeApiService:
         """Return scoped conversation metadata newest first."""
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
-        records = self.persistence.list_conversations(
+        records = await self.persistence.list_conversations(
             org_id=org_id,
             user_id=user_id,
             limit=bounded_limit,
@@ -202,7 +211,7 @@ class RuntimeApiService:
             has_more=len(records) == bounded_limit,
         )
 
-    def list_messages(
+    async def list_messages(
         self,
         *,
         org_id: str,
@@ -213,13 +222,13 @@ class RuntimeApiService:
     ) -> MessageListResponse:
         """Return ordered conversation history after validating caller scope."""
 
-        self._conversation_for_scope(
+        await self._conversation_for_scope(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
         )
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
-        records = self.persistence.list_messages(
+        records = await self.persistence.list_messages(
             org_id=org_id,
             conversation_id=conversation_id,
             limit=bounded_limit,
@@ -243,17 +252,21 @@ class RuntimeApiService:
                 http_status=status.HTTP_400_BAD_REQUEST,
                 retryable=False,
             )
-        conversation = self._conversation_for_scope(
+        conversation = await self._conversation_for_scope(
             org_id=context.org_id,
             user_id=context.user_id,
             conversation_id=request.conversation_id,
         )
-        run, user_message, created = self.persistence.create_run_with_user_message(
+        (
+            run,
+            user_message,
+            created,
+        ) = await self.persistence.create_run_with_user_message(
             request=request,
             conversation=conversation,
         )
         if created:
-            self.persistence.write_audit_log(
+            await self.persistence.write_audit_log(
                 event_type="run_created",
                 record={
                     "org_id": run.org_id,
@@ -271,7 +284,7 @@ class RuntimeApiService:
                 event_type=RuntimeApiEventType.RUN_QUEUED,
                 payload={Keys.Payload.MESSAGE: Messages.Event.RUN_QUEUED},
             )
-            self.queue.enqueue_run(
+            await self.queue.enqueue_run(
                 RuntimeRunCommand(
                     run_id=run.run_id,
                     conversation_id=run.conversation_id,
@@ -285,7 +298,7 @@ class RuntimeApiService:
             run=run, user_message_id=user_message.message_id
         )
 
-    def delete_user_history(
+    async def delete_user_history(
         self,
         *,
         org_id: str,
@@ -294,10 +307,10 @@ class RuntimeApiService:
     ) -> HistoryDeletionResponse:
         """Delete user-visible conversation history and persist deletion evidence."""
 
-        result = self.persistence.delete_user_history(
+        result = await self.persistence.delete_user_history(
             org_id=org_id, user_id=user_id, reason=reason
         )
-        self.persistence.write_audit_log(
+        await self.persistence.write_audit_log(
             event_type="user_history_deleted",
             record={
                 "org_id": org_id,
@@ -316,14 +329,15 @@ class RuntimeApiService:
         )
         return result
 
-    def get_run(self, *, org_id: str, user_id: str, run_id: str) -> RunStatusResponse:
+    async def get_run(
+        self, *, org_id: str, user_id: str, run_id: str
+    ) -> RunStatusResponse:
         """Return current run state."""
 
-        return self._run_for_scope(
-            org_id=org_id, user_id=user_id, run_id=run_id
-        ).to_response()
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        return run.to_response()
 
-    def replay_events(
+    async def replay_events(
         self,
         *,
         org_id: str,
@@ -333,9 +347,9 @@ class RuntimeApiService:
     ) -> RuntimeEventReplayResponse:
         """Return persisted events after a client sequence checkpoint."""
 
-        run = self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
         events = tuple(
-            self.event_store.list_events_after(
+            await self.event_store.list_events_after(
                 org_id=org_id,
                 run_id=run_id,
                 after_sequence=after_sequence,
@@ -343,7 +357,7 @@ class RuntimeApiService:
         )
         latest_sequence_no = max(
             (event.sequence_no for event in events),
-            default=self.event_store.get_latest_sequence(run_id=run_id),
+            default=await self.event_store.get_latest_sequence(run_id=run_id),
         )
         return RuntimeEventReplayResponse(
             run_id=run_id,
@@ -363,7 +377,7 @@ class RuntimeApiService:
     ) -> CancelRunResponse:
         """Persist a best-effort cancellation request and enqueue a worker command."""
 
-        run = self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
         if request.requested_by_user_id != user_id:
             raise RuntimeApiError(
                 RuntimeErrorCode.PERMISSION_DENIED,
@@ -380,7 +394,7 @@ class RuntimeApiService:
                 latest_sequence_no=run.latest_sequence_no,
             )
         if run.status != AgentRunStatus.CANCELLING:
-            run = self.persistence.update_run_status(
+            run = await self.persistence.update_run_status(
                 run_id=run.run_id,
                 status=AgentRunStatus.CANCELLING,
             )
@@ -393,8 +407,9 @@ class RuntimeApiService:
                     Keys.Payload.REASON: request.reason,
                 },
             )
-            run = self.persistence.get_run(org_id=org_id, run_id=run.run_id) or run
-            self.queue.enqueue_cancel(
+            refreshed = await self.persistence.get_run(org_id=org_id, run_id=run.run_id)
+            run = refreshed or run
+            await self.queue.enqueue_cancel(
                 RuntimeCancelCommand(
                     run_id=run.run_id,
                     org_id=run.org_id,
@@ -402,7 +417,7 @@ class RuntimeApiService:
                     reason=request.reason,
                 )
             )
-            self.persistence.write_audit_log(
+            await self.persistence.write_audit_log(
                 event_type="run_cancel_requested",
                 record={
                     "org_id": run.org_id,
@@ -431,7 +446,7 @@ class RuntimeApiService:
     ) -> ApprovalDecisionResponse:
         """Persist an approval decision and enqueue the worker resume command."""
 
-        approval = self.persistence.get_approval_request(
+        approval = await self.persistence.get_approval_request(
             org_id=org_id, approval_id=approval_id
         )
         if approval is None:
@@ -453,7 +468,7 @@ class RuntimeApiService:
             if request.decision.value == ApprovalStatus.APPROVED.value
             else ApprovalStatus.REJECTED
         )
-        record = self.persistence.record_approval_decision(
+        record = await self.persistence.record_approval_decision(
             record=ApprovalDecisionRecord(
                 approval_id=approval.approval_id,
                 run_id=approval.run_id,
@@ -466,7 +481,7 @@ class RuntimeApiService:
                 answer=request.answer,
             )
         )
-        run = self._run_for_scope(
+        run = await self._run_for_scope(
             org_id=record.org_id,
             user_id=record.user_id,
             run_id=record.run_id,
@@ -484,7 +499,7 @@ class RuntimeApiService:
                 Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
             },
         )
-        self.queue.enqueue_approval_resolved(
+        await self.queue.enqueue_approval_resolved(
             RuntimeApprovalResolvedCommand(
                 approval_id=record.approval_id,
                 run_id=record.run_id,
@@ -493,7 +508,7 @@ class RuntimeApiService:
                 answer=request.answer,
             )
         )
-        self.persistence.write_audit_log(
+        await self.persistence.write_audit_log(
             event_type="approval_decision_recorded",
             record={
                 "org_id": record.org_id,
@@ -608,14 +623,14 @@ class RuntimeApiService:
         )
         return request.model_copy(update={"runtime_context": runtime_context})
 
-    def _conversation_for_scope(
+    async def _conversation_for_scope(
         self,
         *,
         org_id: str,
         user_id: str,
         conversation_id: str,
     ):
-        conversation = self.persistence.get_conversation(
+        conversation = await self.persistence.get_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -629,8 +644,10 @@ class RuntimeApiService:
             )
         return conversation
 
-    def _run_for_scope(self, *, org_id: str, user_id: str, run_id: str) -> RunRecord:
-        run = self.persistence.get_run(org_id=org_id, run_id=run_id)
+    async def _run_for_scope(
+        self, *, org_id: str, user_id: str, run_id: str
+    ) -> RunRecord:
+        run = await self.persistence.get_run(org_id=org_id, run_id=run_id)
         if run is None or run.user_id != user_id:
             raise RuntimeApiError(
                 RuntimeErrorCode.CAPABILITY_NOT_FOUND,

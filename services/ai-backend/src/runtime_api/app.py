@@ -107,16 +107,16 @@ class RuntimeApiAppFactory:
         """Run a same-process worker for local in-memory debugging."""
 
         settings = getattr(app.state, "runtime_settings", None)
-        ports = getattr(app.state, "runtime_ports", None)
-        if settings is None or ports is None:
+        if settings is None:
             return
-        # The in-process worker still uses sync port methods outside the
-        # event producer (Phase D moves that). For now, keep it gated to the
-        # sync in_memory backend; in_memory_async is for the API surface only
-        # until Phase D finishes the worker migration.
-        if settings.store.backend != "in_memory":
+        if settings.store.backend not in {"in_memory", "in_memory_async"}:
             return
         if not settings.execution.start_in_process_worker:
+            return
+        ports = getattr(app.state, "runtime_ports", None) or getattr(
+            app.state, "async_runtime_ports", None
+        )
+        if ports is None:
             return
         event_bus = getattr(app.state, "runtime_event_bus", None)
         worker = RuntimeWorker(

@@ -33,7 +33,7 @@ class RuntimeApiRoutes:
     """Route handlers for the v1 agent runtime API."""
 
     @classmethod
-    def create_conversation(
+    async def create_conversation(
         cls,
         request: Request,
         payload: CreateConversationRequest,
@@ -43,10 +43,10 @@ class RuntimeApiRoutes:
             payload = payload.model_copy(
                 update={"org_id": identity.org_id, "user_id": identity.user_id}
             )
-        return cls.service(request).create_conversation(payload)
+        return await cls.service(request).create_conversation(payload)
 
     @classmethod
-    def list_conversations(
+    async def list_conversations(
         cls,
         request: Request,
         org_id: str | None = Query(None, min_length=1),
@@ -55,7 +55,7 @@ class RuntimeApiRoutes:
         include_archived: bool = False,
     ) -> ConversationListResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).list_conversations(
+        return await cls.service(request).list_conversations(
             org_id=org_id,
             user_id=user_id,
             limit=limit,
@@ -63,7 +63,7 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def get_conversation(
+    async def get_conversation(
         cls,
         request: Request,
         conversation_id: str,
@@ -71,14 +71,14 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).get_conversation(
+        return await cls.service(request).get_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
         )
 
     @classmethod
-    def get_messages(
+    async def get_messages(
         cls,
         request: Request,
         conversation_id: str,
@@ -88,7 +88,7 @@ class RuntimeApiRoutes:
         include_deleted: bool = False,
     ) -> MessageListResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).list_messages(
+        return await cls.service(request).list_messages(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -103,6 +103,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ModelCatalogResponse:
+        # list_models is pure in-memory (no port calls) — keep sync.
         cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.service(request).list_models()
 
@@ -130,7 +131,7 @@ class RuntimeApiRoutes:
         return await cls.service(request).create_run(payload)
 
     @classmethod
-    def get_run(
+    async def get_run(
         cls,
         request: Request,
         run_id: str,
@@ -138,12 +139,12 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> RunStatusResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).get_run(
+        return await cls.service(request).get_run(
             org_id=org_id, user_id=user_id, run_id=run_id
         )
 
     @classmethod
-    def get_events(
+    async def get_events(
         cls,
         request: Request,
         run_id: str,
@@ -152,7 +153,7 @@ class RuntimeApiRoutes:
         after_sequence: int = Query(0, ge=0),
     ) -> RuntimeEventReplayResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).replay_events(
+        return await cls.service(request).replay_events(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
@@ -227,7 +228,7 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def delete_user_history(
+    async def delete_user_history(
         cls,
         request: Request,
         org_id: str | None = Query(None, min_length=1),
@@ -235,7 +236,7 @@ class RuntimeApiRoutes:
         reason: str | None = Query(None),
     ) -> HistoryDeletionResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).delete_user_history(
+        return await cls.service(request).delete_user_history(
             org_id=org_id, user_id=user_id, reason=reason
         )
 

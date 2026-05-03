@@ -81,11 +81,13 @@ class _TestHelpers:
             queue=store,
             settings=settings,
         )
-        conversation = service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
+        conversation = asyncio.run(
+            service.create_conversation(
+                CreateConversationRequest(
+                    org_id="org_123",
+                    user_id="user_123",
+                    assistant_id="assistant_123",
+                )
             )
         )
         response = asyncio.run(
@@ -238,11 +240,13 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -298,7 +302,9 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = handler._messages_for_run(command, store.runs[edited.run_id])
+    messages = asyncio.run(
+        handler._messages_for_run(command, store.runs[edited.run_id])
+    )
 
     message_prompts = [
         message["content"].split("\n\n", maxsplit=1)[0] for message in messages
@@ -320,11 +326,13 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -373,7 +381,9 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = handler._messages_for_run(command, store.runs[follow_up.run_id])
+    messages = asyncio.run(
+        handler._messages_for_run(command, store.runs[follow_up.run_id])
+    )
 
     assert [message["content"] for message in messages] == [
         "Remember that the launch is on Tuesday.",
@@ -391,11 +401,13 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -439,9 +451,11 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = handler._messages_for_run(
-        store.run_commands[-1],
-        store.runs[follow_up.run_id],
+    messages = asyncio.run(
+        handler._messages_for_run(
+            store.run_commands[-1],
+            store.runs[follow_up.run_id],
+        )
     )
 
     assert [message["role"] for message in messages] == [
@@ -467,11 +481,13 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -516,7 +532,7 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
     )
     command = store.run_commands[-1]
     run = store.runs[follow_up.run_id]
-    index = handler._tool_observation_index(command, run)
+    index = asyncio.run(handler._tool_observation_index(command, run))
     dependencies = handler._dependencies_for_run(command, index)
 
     assert dependencies.prior_tool_result_loader is not None
@@ -546,11 +562,13 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -618,9 +636,11 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = handler._messages_for_run(
-        store.run_commands[-1],
-        store.runs[follow_up.run_id],
+    messages = asyncio.run(
+        handler._messages_for_run(
+            store.run_commands[-1],
+            store.runs[follow_up.run_id],
+        )
     )
     context = messages[-2]["content"]
 
@@ -637,11 +657,13 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     first = asyncio.run(
@@ -699,9 +721,11 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = handler._messages_for_run(
-        store.run_commands[-1],
-        store.runs[follow_up.run_id],
+    messages = asyncio.run(
+        handler._messages_for_run(
+            store.run_commands[-1],
+            store.runs[follow_up.run_id],
+        )
     )
 
     assert [message["role"] for message in messages] == ["user", "assistant", "user"]
@@ -719,11 +743,13 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     current = asyncio.run(
@@ -749,9 +775,11 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
         event_store=store,
         settings=settings,
     )
-    messages = handler._messages_for_run(
-        store.run_commands[-1],
-        store.runs[current.run_id],
+    messages = asyncio.run(
+        handler._messages_for_run(
+            store.run_commands[-1],
+            store.runs[current.run_id],
+        )
     )
 
     assert messages == ({"role": "user", "content": "Search now."},)
@@ -766,11 +794,13 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = service.create_conversation(
-        CreateConversationRequest(
-            org_id="org_123",
-            user_id="user_123",
-            assistant_id="assistant_123",
+    conversation = asyncio.run(
+        service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
+            )
         )
     )
     response = asyncio.run(
@@ -813,7 +843,9 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = handler._messages_for_run(command, store.runs[response.run_id])
+    messages = asyncio.run(
+        handler._messages_for_run(command, store.runs[response.run_id])
+    )
     content = messages[-1]["content"]
 
     assert "Review the launch brief." in content

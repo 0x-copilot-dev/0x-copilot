@@ -15,6 +15,10 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from runtime_adapters.async_wrappers import (
+    adapt_event_store_to_async,
+    adapt_persistence_to_async,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
@@ -97,8 +101,8 @@ class RuntimeRunHandler:
         runtime_streamer: RuntimeStreamer = astream_runtime,
         on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
-        self.persistence = persistence
-        self.event_store = event_store
+        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
+        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
         self.settings = settings or RuntimeSettings.load()
         self.dependencies_factory = (
             dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
@@ -117,7 +121,9 @@ class RuntimeRunHandler:
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
 
-        run = self.persistence.get_run(org_id=command.org_id, run_id=command.run_id)
+        run = await self.persistence.get_run(
+            org_id=command.org_id, run_id=command.run_id
+        )
         if run is None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
@@ -126,7 +132,7 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             )
 
-        run = self.persistence.update_run_status(
+        run = await self.persistence.update_run_status(
             run_id=command.run_id, status=AgentRunStatus.RUNNING
         )
         await self._append_lifecycle(
@@ -135,7 +141,7 @@ class RuntimeRunHandler:
         metrics = AssistantRunMetrics.from_run(run)
 
         try:
-            tool_observation_index = self._tool_observation_index(command, run)
+            tool_observation_index = await self._tool_observation_index(command, run)
             harness = self.agent_factory(
                 context=command.runtime_context,
                 dependencies=self._dependencies_for_run(
@@ -143,7 +149,7 @@ class RuntimeRunHandler:
                     tool_observation_index,
                 ),
             )
-            messages = self._messages_for_run(
+            messages = await self._messages_for_run(
                 command,
                 run,
                 tool_observation_index=tool_observation_index,
@@ -174,7 +180,7 @@ class RuntimeRunHandler:
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
             if self._is_action_interrupt(result):
-                self.persistence.update_run_status(
+                await self.persistence.update_run_status(
                     run_id=command.run_id,
                     status=AgentRunStatus.WAITING_FOR_APPROVAL,
                 )
@@ -186,7 +192,7 @@ class RuntimeRunHandler:
                 )
                 usage = metrics_payload.get("usage")
                 output_tokens = usage.get("output") if isinstance(usage, dict) else None
-                self.persistence.append_message(
+                await self.persistence.append_message(
                     MessageRecord(
                         conversation_id=command.conversation_id,
                         org_id=command.org_id,
@@ -215,7 +221,7 @@ class RuntimeRunHandler:
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
-            failed = self.persistence.update_run_status(
+            failed = await self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
             )
             await self._append_lifecycle(
@@ -223,7 +229,7 @@ class RuntimeRunHandler:
             )
             return
         except Exception:
-            failed = self.persistence.update_run_status(
+            failed = await self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.FAILED
             )
             await self._append_lifecycle(
@@ -231,7 +237,7 @@ class RuntimeRunHandler:
             )
             raise
 
-        completed = self.persistence.update_run_status(
+        completed = await self.persistence.update_run_status(
             run_id=command.run_id, status=AgentRunStatus.COMPLETED
         )
         metrics_payload = metrics.to_payload(
@@ -248,14 +254,14 @@ class RuntimeRunHandler:
             metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
 
-    def _messages_for_run(
+    async def _messages_for_run(
         self,
         command: RuntimeRunCommand,
         run: RunRecord,
         *,
         tool_observation_index: ToolObservationIndex | None = None,
     ) -> tuple[dict[str, str], ...]:
-        records = self.persistence.list_messages(
+        records = await self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
             limit=200,
@@ -272,7 +278,7 @@ class RuntimeRunHandler:
         ]
         observations = (
             tool_observation_index
-            or self._tool_observation_index_from_selected(
+            or await self._tool_observation_index_from_selected(
                 command,
                 run,
                 selected,
@@ -298,26 +304,26 @@ class RuntimeRunHandler:
             }
         )
 
-    def _tool_observation_index(
+    async def _tool_observation_index(
         self,
         command: RuntimeRunCommand,
         run: RunRecord,
     ) -> ToolObservationIndex:
-        records = self.persistence.list_messages(
+        records = await self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
             limit=200,
         )
         selected = self._selected_message_chain(records, run.user_message_id)
-        return self._tool_observation_index_from_selected(command, run, selected)
+        return await self._tool_observation_index_from_selected(command, run, selected)
 
-    def _tool_observation_index_from_selected(
+    async def _tool_observation_index_from_selected(
         self,
         command: RuntimeRunCommand,
         run: RunRecord,
         selected: Sequence[MessageRecord],
     ) -> ToolObservationIndex:
-        return ToolObservationIndexBuilder(self.event_store).build(
+        return await ToolObservationIndexBuilder(self.event_store).build(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
             current_run_id=run.run_id,

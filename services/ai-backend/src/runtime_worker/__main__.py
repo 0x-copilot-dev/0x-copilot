@@ -10,6 +10,9 @@ from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
 
 
+_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres_async"})
+
+
 class RuntimeWorkerEntrypoint:
     """Entrypoint helpers for the runtime worker process."""
 
@@ -23,6 +26,32 @@ class RuntimeWorkerEntrypoint:
         logger = logging.getLogger("runtime_worker")
         settings = RuntimeSettings.load()
         RuntimeSettings.configure_sdk_environment(settings)
+
+        if settings.store.backend in _ASYNC_BACKENDS:
+            async_ports = RuntimeAdapterFactory.async_from_settings(settings)
+            await async_ports.store.open()
+            await async_ports.store.migrate()
+            try:
+                worker = RuntimeWorker(
+                    persistence=async_ports.persistence,
+                    event_store=async_ports.event_store,
+                    queue=async_ports.queue,
+                    settings=settings,
+                    lock_seconds=settings.execution.worker_lock_seconds,
+                )
+                logger.info(
+                    "runtime worker started backend=%s worker_id=%s poll_interval=%s",
+                    async_ports.backend,
+                    worker.worker_id,
+                    settings.execution.worker_poll_interval_seconds,
+                )
+                await worker.run_forever(
+                    poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
+                )
+            finally:
+                await async_ports.store.close()
+            return
+
         ports = RuntimeAdapterFactory.from_settings(settings)
         worker = RuntimeWorker(
             persistence=ports.persistence,
