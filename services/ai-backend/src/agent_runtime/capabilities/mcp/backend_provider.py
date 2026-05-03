@@ -15,7 +15,8 @@ from enterprise_service_contracts.headers import (
 )
 import httpx
 
-from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthState,
     McpConnectionMetadata,
@@ -107,16 +108,10 @@ class BackendMcpProvider:
         for card in self.list_server_cards():
             if card.server_id == value or card.name == value:
                 return card
-        return McpServerCard(
-            server_id=value,
-            name=value,
-            display_name=value,
-            short_description="MCP server requires authentication.",
-            transport="http",
-            auth_mode="oauth2",
-            auth_state="unauthenticated",
-            health="healthy",
-            load_cost=1,
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            f"No MCP server card found for server_id or name '{value}'.",
+            retryable=False,
         )
 
 

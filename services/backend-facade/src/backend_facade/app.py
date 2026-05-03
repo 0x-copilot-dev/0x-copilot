@@ -359,18 +359,39 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
     ) -> StreamingResponse:
         identity = FacadeAuthenticator.authenticate_request(request)
 
-        async def event_stream() -> AsyncIterator[bytes]:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
+        client = httpx.AsyncClient(timeout=None)
+        try:
+            upstream = await client.send(
+                client.build_request(
                     "GET",
                     f"{settings_for(app).ai_backend_url}/v1/agent/runs/{run_id}/stream",
                     params=identity.scoped_params({"after_sequence": after_sequence}),
                     headers=FacadeAuthenticator.service_headers(identity),
-                ) as response:
-                    async for chunk in response.aiter_bytes():
-                        if await request.is_disconnected():
-                            break
-                        yield chunk
+                ),
+                stream=True,
+            )
+        except Exception:
+            await client.aclose()
+            raise
+
+        if upstream.status_code >= 400:
+            await upstream.aread()
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(
+                upstream.status_code,
+                _upstream_error_detail(upstream),
+            )
+
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    if await request.is_disconnected():
+                        break
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await client.aclose()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 

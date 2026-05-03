@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from agent_runtime.delegation.subagents.constants import Limits, Messages
+from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.delegation.subagents.contracts import (
     AsyncSubagentLaunch,
     AsyncTaskLifecycleResult,
@@ -84,17 +86,20 @@ class AsyncSubagentLifecycle:
     clock: Callable[[], datetime] = field(
         default_factory=lambda: lambda: datetime.now(UTC)
     )
+    _queued_tasks: dict[str, tuple[SubagentDefinition, SubagentTask]] = field(
+        default_factory=dict
+    )
 
     async def start(
         self,
         *,
-        context: object,
+        context: AgentRuntimeContext,
         subagent_name: str,
         task: SubagentTask,
     ) -> AsyncTaskLifecycleResult:
         """Start a subagent task or queue it when its concurrency limit is exhausted."""
 
-        resolution = self.catalog.resolve_subagent(subagent_name, context)  # type: ignore[arg-type]
+        resolution = self.catalog.resolve_subagent(subagent_name, context)
         if isinstance(resolution, SubagentError):
             return AsyncTaskLifecycleResult(error=resolution)
 
@@ -108,6 +113,7 @@ class AsyncSubagentLifecycle:
                 run_id=uuid4().hex,
             )
             self.store.save(state)
+            self._queued_tasks[state.task_id] = (definition, task)
             return AsyncTaskLifecycleResult.from_state(state)
 
         try:
@@ -128,6 +134,9 @@ class AsyncSubagentLifecycle:
                 correlation_id=task.runtime_context_ref.trace_id,
             )
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Subagent start failed unexpectedly", exc_info=True
+            )
             return AsyncTaskLifecycleResult.fail(
                 SubagentErrorCode.RUNNER_ERROR,
                 Messages.Lifecycle.RUNNER_ERROR,
@@ -176,11 +185,16 @@ class AsyncSubagentLifecycle:
                 ),
             )
         if state.status is AsyncTaskStatus.QUEUED:
+            await self._try_promote_queued(state.subagent_name)
+            state = self.store.get(task_id) or state
             return AsyncTaskLifecycleResult.from_state(state)
 
         try:
             raw_result = await self.runner.check(state)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Subagent check failed for task %s", state.task_id, exc_info=True
+            )
             failed = AsyncTaskStateTransition.with_status(
                 state,
                 AsyncTaskStatus.FAILED,
@@ -208,6 +222,7 @@ class AsyncSubagentLifecycle:
         )
         completed = AsyncTaskStateTransition.with_status(state, status, self.clock())
         self.store.save(completed)
+        await self._try_promote_queued(state.subagent_name)
         return AsyncTaskLifecycleResult.from_state(completed, result=result)
 
     async def update(
@@ -226,6 +241,9 @@ class AsyncSubagentLifecycle:
         try:
             await self.runner.update(state, task)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Subagent update failed for task %s", state.task_id, exc_info=True
+            )
             return AsyncTaskLifecycleResult.fail(
                 SubagentErrorCode.RUNNER_ERROR,
                 Messages.Lifecycle.RUNNER_ERROR,
@@ -261,6 +279,9 @@ class AsyncSubagentLifecycle:
             if state.status is AsyncTaskStatus.RUNNING:
                 await self.runner.cancel(state)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Subagent cancel failed for task %s", state.task_id, exc_info=True
+            )
             return AsyncTaskLifecycleResult.fail(
                 SubagentErrorCode.RUNNER_ERROR,
                 Messages.Lifecycle.RUNNER_ERROR,
@@ -280,6 +301,50 @@ class AsyncSubagentLifecycle:
         """List async task metadata stored outside message history."""
 
         return AsyncTaskLifecycleResult.from_tasks(self.store.list_states())
+
+    async def _try_promote_queued(self, definition_name: str) -> None:
+        """Promote the oldest QUEUED task to RUNNING if capacity is available."""
+        running_count = sum(
+            1
+            for s in self.store.list_states()
+            if s.subagent_name == definition_name
+            and s.status is AsyncTaskStatus.RUNNING
+        )
+        for state in self.store.list_states():
+            if (
+                state.subagent_name != definition_name
+                or state.status is not AsyncTaskStatus.QUEUED
+            ):
+                continue
+            pending = self._queued_tasks.get(state.task_id)
+            if pending is None:
+                continue
+            definition, task = pending
+            if running_count >= definition.concurrency_limit:
+                break
+            try:
+                raw_launch = await self.runner.start(definition, task)
+                launch = AsyncTaskLifecycleParser.parse_launch(raw_launch)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Failed to promote queued subagent task %s",
+                    state.task_id,
+                    exc_info=True,
+                )
+                continue
+            promoted = AsyncTaskState(
+                task_id=state.task_id,
+                subagent_name=state.subagent_name,
+                thread_id=launch.thread_id,
+                run_id=launch.run_id,
+                status=launch.status,
+                created_at=state.created_at,
+                updated_at=self.clock(),
+                deadline_at=state.deadline_at,
+            )
+            self.store.save(promoted)
+            self._queued_tasks.pop(state.task_id, None)
+            running_count += 1
 
 
 class AsyncTaskStateFactory:

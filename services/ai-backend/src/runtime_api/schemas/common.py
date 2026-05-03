@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from enum import StrEnum
 
-from agent_runtime.execution.contracts import JsonObject, StreamEventType
-from agent_runtime.api.constants import Messages, Patterns
-from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.execution.contracts import StreamEventType
 
 
 class ConversationStatus(StrEnum):
@@ -111,7 +110,7 @@ class RuntimeApiEventType(StrEnum):
     ) -> "RuntimeApiEventType":
         """Map normalized runtime stream events into API transport events."""
 
-        return {
+        mapping = {
             StreamEventType.PROGRESS: cls.PROGRESS,
             StreamEventType.TOOL_CALL: cls.TOOL_CALL,
             StreamEventType.TOOL_RESULT: cls.TOOL_RESULT,
@@ -122,7 +121,14 @@ class RuntimeApiEventType(StrEnum):
             StreamEventType.ERROR: cls.ERROR,
             StreamEventType.FINAL: cls.FINAL_RESPONSE,
             StreamEventType.FINAL_RESPONSE: cls.FINAL_RESPONSE,
-        }[event_type]
+        }
+        result = mapping.get(event_type)
+        if result is None:
+            logging.getLogger(__name__).warning(
+                "Unmapped stream event type: %s", event_type
+            )
+            return cls.PROGRESS
+        return result
 
 
 class ApprovalDecision(StrEnum):
@@ -141,47 +147,18 @@ class ApprovalStatus(StrEnum):
 
 
 class RuntimeApiValueNormalizer:
-    """Normalize and redact values entering API/domain contracts."""
+    """Normalize and redact values entering API/domain contracts.
 
-    @classmethod
-    def normalize_id(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name)
-        if not Patterns.ID.fullmatch(normalized):
-            msg = Messages.Validation.id_contains_unsupported_characters(field_name)
-            raise ValueError(msg)
-        return normalized
+    All common methods delegate to the shared ``ValueNormalizer``.
+    """
 
-    @classmethod
-    def normalize_optional_id(cls, value: object, field_name: str) -> str | None:
-        if value is None:
-            return None
-        return cls.normalize_id(value, field_name)
+    from agent_runtime.validation import ValueNormalizer as _V
 
-    @classmethod
-    def normalize_slug(cls, value: object, field_name: str) -> str:
-        normalized = cls.normalize_nonempty_string(value, field_name).lower()
-        if not Patterns.SLUG.fullmatch(normalized):
-            msg = Messages.Validation.stable_slug(field_name)
-            raise ValueError(msg)
-        return normalized
+    normalize_nonempty_string = _V.normalize_nonempty_string
+    normalize_id = _V.normalize_id
+    normalize_optional_id = _V.normalize_optional_id
+    normalize_slug = _V.normalize_slug
+    normalize_optional_text = _V.normalize_optional_text
+    redact_json_object = _V.redact_json_object
 
-    @classmethod
-    def normalize_nonempty_string(cls, value: object, field_name: str) -> str:
-        if not isinstance(value, str):
-            msg = Messages.Validation.string_required(field_name)
-            raise ValueError(msg)
-        normalized = value.strip()
-        if not normalized:
-            msg = Messages.Validation.nonempty_string(field_name)
-            raise ValueError(msg)
-        return normalized
-
-    @classmethod
-    def normalize_optional_text(cls, value: object, field_name: str) -> str | None:
-        if value is None:
-            return None
-        return cls.normalize_nonempty_string(value, field_name)
-
-    @classmethod
-    def redact_json_object(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+    del _V

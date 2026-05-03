@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -10,10 +11,8 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp.cards import (
-    LoadedMcpServer,
     McpLoadError,
     McpLoadErrorCode,
-    McpToolDescriptor,
     McpToolCallRequest,
     McpToolCallResult,
 )
@@ -49,36 +48,6 @@ class CallMcpTool:
         if isinstance(parsed_input, McpToolCallResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
 
-        loaded = await self.loader.load_server_by_name(
-            server_name=parsed_input.server_name,
-            runtime_context=self.runtime_context,
-        )
-        if loaded.error is not None:
-            return McpToolCallResult.fail_from_load_error(
-                loaded.error,
-                tool_name=parsed_input.tool_name,
-            ).model_dump(mode="json", exclude_none=True)
-
-        loaded_server = loaded.loaded_server
-        if loaded_server is None:
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.CONNECTION_FAILED,
-                Messages.Loader.LOAD_FAILED,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-
-        selected_tool = self._selected_tool(loaded_server, parsed_input.tool_name)
-        if selected_tool is None:
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.UNKNOWN_TOOL,
-                Messages.Registry.REQUESTED_TOOL_UNKNOWN,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-
         resolution = self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
             return McpToolCallResult.fail(
@@ -92,9 +61,12 @@ class CallMcpTool:
 
         try:
             client = resolution.provider.create_client(resolution.card)
-            output = await client.call_tool(
-                tool_name=parsed_input.tool_name,
-                arguments=parsed_input.arguments,
+            output = await asyncio.wait_for(
+                client.call_tool(
+                    tool_name=parsed_input.tool_name,
+                    arguments=parsed_input.arguments,
+                ),
+                timeout=self.loader.timeout_seconds,
             )
         except (McpTimeoutError, TimeoutError):
             return McpToolCallResult.fail(
@@ -137,16 +109,6 @@ class CallMcpTool:
             tool_name=parsed_input.tool_name,
             output=output,
         ).model_dump(mode="json", exclude_none=True)
-
-    @staticmethod
-    def _selected_tool(
-        loaded_server: LoadedMcpServer,
-        tool_name: str,
-    ) -> McpToolDescriptor | None:
-        return next(
-            (tool for tool in loaded_server.tools if tool.name == tool_name),
-            None,
-        )
 
     async def __call__(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime
 from enum import StrEnum
 import re
@@ -617,6 +618,14 @@ def validate_markdown(value: object) -> str:
     return value
 
 
+_LOCAL_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+}
+
+
 def validate_public_mcp_url(value: object, *, allow_localhost: bool = False) -> str:
     url = normalize_text(value)
     parsed = urlsplit(url)
@@ -627,13 +636,24 @@ def validate_public_mcp_url(value: object, *, allow_localhost: bool = False) -> 
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("MCP URL must include a host")
-    blocked_hosts = {"0.0.0.0", "127.0.0.1", "::1", "localhost"}
-    if not allow_localhost and hostname in blocked_hosts:
-        raise ValueError("MCP URL cannot target localhost")
-    if not allow_localhost and (
-        hostname.startswith("10.")
-        or hostname.startswith("192.168.")
-        or hostname.startswith("172.16.")
-    ):
-        raise ValueError("MCP URL cannot target private networks")
+
+    if not allow_localhost:
+        try:
+            addr = ipaddress.ip_address(hostname)
+        except ValueError:
+            addr = None
+
+        if addr is not None:
+            if (
+                addr.is_private
+                or addr.is_loopback
+                or addr.is_link_local
+                or addr.is_reserved
+                or addr.is_unspecified
+            ):
+                raise ValueError("MCP URL cannot target private or reserved networks")
+        else:
+            if hostname in _LOCAL_HOSTNAMES or hostname.endswith(".local"):
+                raise ValueError("MCP URL cannot target localhost")
+
     return url

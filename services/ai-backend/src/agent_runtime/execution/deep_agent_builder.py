@@ -46,9 +46,6 @@ def _ensure_web_harness_profiles_registered() -> None:
     _web_harness_profiles_registered = True
 
 
-_ensure_web_harness_profiles_registered()
-
-
 @runtime_checkable
 class DeepAgentsBackend(Protocol):
     """Backend protocol accepted by Deep Agents filesystem integration."""
@@ -92,6 +89,7 @@ class DeepAgentBuildRequest:
 def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     """Build a Deep Agents graph with an explicit, version-pinned API call."""
 
+    _ensure_web_harness_profiles_registered()
     kwargs: dict[str, object] = {
         "model": build_chat_model(request.model_config),
         "tools": list(request.tools),
@@ -108,9 +106,11 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     return create_deep_agent(**kwargs)
 
 
-def runtime_checkpointer() -> object:
-    """Return the shared LangGraph checkpointer used for resumable HITL runs."""
+def runtime_checkpointer(checkpointer: object | None = None) -> object:
+    """Return *checkpointer* if supplied, else the shared lazy singleton."""
 
+    if checkpointer is not None:
+        return checkpointer
     global _runtime_checkpointer
     if _runtime_checkpointer is None:
         try:

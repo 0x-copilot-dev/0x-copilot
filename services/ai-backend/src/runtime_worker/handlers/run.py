@@ -62,6 +62,7 @@ class RuntimeRunHandler:
         agent_factory: AgentFactory = create_agent_runtime,
         runtime_invoker: RuntimeInvoker = ainvoke_runtime,
         runtime_streamer: RuntimeStreamer = astream_runtime,
+        on_event_appended: Callable[[str], None] | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
@@ -75,6 +76,7 @@ class RuntimeRunHandler:
         self.event_producer = RuntimeEventProducer(
             persistence=self.persistence,
             event_store=self.event_store,
+            on_event_appended=on_event_appended,
         )
         self.stream_event_mapper = RuntimeStreamPartAdapter(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
@@ -175,19 +177,14 @@ class RuntimeRunHandler:
                     ),
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
-        except TimeoutError as exc:
+        except TimeoutError:
             failed = self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
             )
             self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
             )
-            raise AgentRuntimeError(
-                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
-                "Runtime invocation timed out.",
-                retryable=True,
-                correlation_id=command.trace_id,
-            ) from exc
+            return
         except Exception:
             failed = self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.FAILED
@@ -476,13 +473,6 @@ class RuntimeRunHandler:
                 if text is not None:
                     parts.append(text)
         text = "\n".join(part.strip() for part in parts if part.strip()).strip()
-        return text or None
-
-    @classmethod
-    def _text(cls, value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        text = value.strip()
         return text or None
 
     @classmethod

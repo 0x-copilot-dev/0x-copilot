@@ -78,18 +78,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_org_conversation_created
     ON agent_messages (org_id, conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_org_run
     ON agent_messages (org_id, run_id);
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS content_json JSONB NOT NULL DEFAULT '[]'::jsonb;
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb;
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS quote_json JSONB;
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS source_message_id TEXT;
-ALTER TABLE agent_messages
-    ADD COLUMN IF NOT EXISTS branch_id TEXT;
 
 CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
@@ -126,16 +114,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     safe_error_code TEXT,
     safe_error_message TEXT
 );
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fk_agent_messages_run'
-    ) THEN
-        ALTER TABLE agent_messages
-            ADD CONSTRAINT fk_agent_messages_run
-            FOREIGN KEY (run_id) REFERENCES agent_runs(id);
-    END IF;
-END $$;
+ALTER TABLE agent_messages
+    ADD CONSTRAINT fk_agent_messages_run
+    FOREIGN KEY (run_id) REFERENCES agent_runs(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency
     ON agent_runs (org_id, user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
@@ -311,16 +292,9 @@ CREATE TABLE IF NOT EXISTS runtime_approval_requests (
     created_at TIMESTAMPTZ NOT NULL,
     decided_at TIMESTAMPTZ
 );
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fk_runtime_tool_invocations_approval'
-    ) THEN
-        ALTER TABLE runtime_tool_invocations
-            ADD CONSTRAINT fk_runtime_tool_invocations_approval
-            FOREIGN KEY (approval_id) REFERENCES runtime_approval_requests(id);
-    END IF;
-END $$;
+ALTER TABLE runtime_tool_invocations
+    ADD CONSTRAINT fk_runtime_tool_invocations_approval
+    FOREIGN KEY (approval_id) REFERENCES runtime_approval_requests(id);
 CREATE INDEX IF NOT EXISTS idx_runtime_approval_requests_org_user_status_created
     ON runtime_approval_requests (org_id, requested_by_user_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_approval_requests_org_run_status
