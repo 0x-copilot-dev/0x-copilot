@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, PositiveInt
@@ -28,7 +28,7 @@ class AsyncTaskRecord(RuntimeContract):
     output_contract: JsonObject = Field(default_factory=dict)
     timeout_seconds: PositiveInt | None = None
     started_at: datetime | None = None
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
     safe_error_code: str | None = None
@@ -47,4 +47,4 @@ class SubagentResultRecord(RuntimeContract):
     artifacts: JsonObject = Field(default_factory=dict)
     recent_messages_ref: str | None = None
     error: JsonObject | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

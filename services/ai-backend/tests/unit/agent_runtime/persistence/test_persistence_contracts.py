@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -70,7 +70,7 @@ class TestPersistenceContracts(PersistenceContractsTestMixin):
             storage_uri="s3://runtime-payloads/tool-output",
             sha256=self.Values.SHA256,
             byte_size=42,
-            retention_until=datetime.now(UTC) + timedelta(days=7),
+            retention_until=datetime.now(timezone.utc) + timedelta(days=7),
         )
         tool = ToolInvocationRecord(
             run_id=self.Values.RUN_ID,

@@ -120,6 +120,9 @@ class PersistenceValueNormalizer:
     """
 
     from agent_runtime.validation import ValueNormalizer as _V
+    from agent_runtime.observability.redaction import (
+        ObservabilityRedactor as _Redactor,
+    )
 
     normalize_nonempty_string = _V.normalize_nonempty_string
     normalize_id = _V.normalize_id
@@ -127,6 +130,6 @@ class PersistenceValueNormalizer:
     normalize_slug = _V.normalize_slug
     normalize_optional_text = _V.normalize_optional_text
     normalize_sha256 = _V.normalize_sha256
-    redact_json_object = _V.redact_json_object
+    redact_json_object = _Redactor.redact_json_object
 
-    del _V
+    del _V, _Redactor

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt
@@ -21,7 +21,7 @@ class CompressionEventRecord(RuntimeContract):
     strategy: str
     payload_refs: JsonObject = Field(default_factory=dict)
     trace_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class CapabilitySnapshotRecord(RuntimeContract):
@@ -36,4 +36,4 @@ class CapabilitySnapshotRecord(RuntimeContract):
     scopes: JsonObject = Field(default_factory=dict)
     risk_class: str | None = None
     summary: str
-    loaded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    loaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

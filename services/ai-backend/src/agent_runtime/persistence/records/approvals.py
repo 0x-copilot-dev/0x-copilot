@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, field_validator
@@ -30,7 +30,7 @@ class PersistenceApprovalRequestRecord(RuntimeContract):
     decided_by_user_id: str | None = None
     decision_reason: str | None = None
     expires_at: datetime | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     decided_at: datetime | None = None
 
     @field_validator("request_payload", mode="before")

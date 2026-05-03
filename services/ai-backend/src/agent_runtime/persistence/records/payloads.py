@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, field_validator
@@ -33,7 +33,7 @@ class ContextPayloadRecord(RuntimeContract):
     mime_type: str | None = None
     redaction_state: PayloadRedactionState = PayloadRedactionState.OFFLOADED
     retention_until: datetime | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.SHA256)
     @classmethod

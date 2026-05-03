@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, field_validator
@@ -30,11 +30,11 @@ class OutboxEventRecord(RuntimeContract):
     payload: JsonObject = Field(default_factory=dict)
     status: OutboxStatus = OutboxStatus.PENDING
     attempts: NonNegativeInt = 0
-    available_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    available_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     locked_by: str | None = None
     lock_expires_at: datetime | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.EVENT_ID, Keys.Field.AGGREGATE_ID, Keys.Field.ORG_ID)
     @classmethod
@@ -72,7 +72,7 @@ class RuntimeWorkerClaim(RuntimeContract):
     lock_expires_at: datetime
     attempts: PositiveInt = 1
     payload: dict[str, object] = Field(default_factory=dict)
-    claimed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    claimed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(
         "claim_id",
@@ -103,7 +103,7 @@ class RuntimeWorkerResult(RuntimeContract):
     succeeded: bool
     safe_error: RuntimeErrorEnvelope | None = None
     retry_available_at: datetime | None = None
-    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.COMMAND_ID)
     @classmethod
@@ -118,7 +118,7 @@ class ConsumerCursorRecord(RuntimeContract):
     run_id: str
     last_sequence_no: NonNegativeInt = 0
     last_event_id: str | None = None
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.RUN_ID)
     @classmethod

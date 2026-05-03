@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, PositiveInt, field_validator
@@ -22,7 +22,7 @@ class CheckpointRecord(RuntimeContract):
     checkpoint_version: PositiveInt
     checkpoint_blob_ref: str
     metadata: JsonObject = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod

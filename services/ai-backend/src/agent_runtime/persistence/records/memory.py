@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, PositiveInt, field_validator
@@ -26,8 +26,8 @@ class MemoryScopeRecord(RuntimeContract):
     namespace_hash: str
     namespace: JsonObject = Field(default_factory=dict)
     policy_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator(Keys.Field.NAMESPACE_HASH)
     @classmethod
@@ -55,8 +55,8 @@ class MemoryItemRecord(RuntimeContract):
     version: PositiveInt = 1
     created_by_run_id: str | None = None
     updated_by_run_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: datetime | None = None
 
     @field_validator(Keys.Field.CHECKSUM)
