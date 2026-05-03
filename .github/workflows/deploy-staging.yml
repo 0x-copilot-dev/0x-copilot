@@ -1,0 +1,27 @@
+name: deploy-staging
+
+# Manual staging promotion. Wire your orchestrator (kubectl, Helm, etc.) using OIDC —
+# see docs/ci-cd/runner-trust.md. Requires a GitHub Environment named `staging`.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Staging deploy placeholder
+        run: |
+          echo "Staging environment gate is active (configure reviewers/timeouts in repo Settings)."
+          echo "Promote digests from the deployment-manifest artifact produced by release-images.yml."

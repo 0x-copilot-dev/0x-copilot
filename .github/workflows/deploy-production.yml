@@ -1,0 +1,27 @@
+name: deploy-production
+
+# Manual production promotion. Configure GitHub Environment protection (required reviewers,
+# wait timers, deployment branches) under repo Settings > Environments > production.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production deploy placeholder
+        run: |
+          echo "Production requires explicit approval via GitHub Environments."
+          echo "Never deploy floating :latest in regulated environments — use digest from deployment-manifest.json."
