@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -386,11 +386,11 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
 
         first_claim = store.claim_next(
             worker_id="worker_1",
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
         locked_claim = store.claim_next(
             worker_id="worker_2",
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
 
         assert first_claim is not None
@@ -402,12 +402,12 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             result=RuntimeWorkerResult(
                 command_id=first_claim.command_id,
                 succeeded=False,
-                retry_available_at=datetime.now(UTC),
+                retry_available_at=datetime.now(timezone.utc),
             )
         )
         retry_claim = store.claim_next(
             worker_id="worker_2",
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
 
         assert retry_claim is not None
@@ -422,7 +422,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert (
             store.claim_next(
                 worker_id="worker_3",
-                lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+                lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
             is None
         )
@@ -436,7 +436,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         first_run = self.create_run(client, conversation_id)
         first_claim = store.claim_next(
             worker_id="worker_1",
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
         assert first_claim is not None
         assert first_claim.run_id == first_run["run_id"]
@@ -512,7 +512,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         )
         second_claim = store.claim_next(
             worker_id="worker_2",
-            lock_expires_at=datetime.now(UTC) + timedelta(seconds=30),
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
 
         assert second_response.status_code == 200

@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys, Values
+from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     ConversationStatus,
     MessageRole,
     MessageStatus,
-    RuntimeApiValueNormalizer,
 )
+
+
+class _Fields:
+    CONTENT_TEXT = "content_text"
+    CONTENT_FORMAT = "content_format"
+    PARENT_MESSAGE_ID = "parent_message_id"
+    SOURCE_MESSAGE_ID = "source_message_id"
+    BRANCH_ID = "branch_id"
 
 
 class CreateConversationRequest(RuntimeContract):
@@ -30,26 +39,22 @@ class CreateConversationRequest(RuntimeContract):
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, Keys.Field.ASSISTANT_ID)
     @classmethod
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.TITLE, mode="before")
     @classmethod
     def _normalize_title(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(
-            value, Keys.Field.TITLE
-        )
+        return ValueNormalizer.normalize_optional_text(value, Keys.Field.TITLE)
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(
-            value, Keys.Field.IDEMPOTENCY_KEY
-        )
+        return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)
 
 
 class ConversationRecord(RuntimeContract):
@@ -61,8 +66,8 @@ class ConversationRecord(RuntimeContract):
     assistant_id: str
     title: str | None = None
     status: ConversationStatus = ConversationStatus.ACTIVE
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     archived_at: datetime | None = None
     metadata: JsonObject = Field(default_factory=dict)
     schema_version: PositiveInt = Values.SCHEMA_VERSION
@@ -76,14 +81,12 @@ class ConversationRecord(RuntimeContract):
     )
     @classmethod
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(
-            value, Keys.Field.IDEMPOTENCY_KEY
-        )
+        return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
     def to_response(self) -> "ConversationResponse":
         """Return the stable public conversation shape."""
@@ -147,7 +150,7 @@ class MessageRecord(RuntimeContract):
     token_count: NonNegativeInt | None = None
     trace_id: str | None = None
     status: MessageStatus = MessageStatus.CREATED
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
 
@@ -159,31 +162,29 @@ class MessageRecord(RuntimeContract):
     )
     @classmethod
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(
         Keys.Field.RUN_ID,
-        "parent_message_id",
-        "source_message_id",
-        "branch_id",
+        _Fields.PARENT_MESSAGE_ID,
+        _Fields.SOURCE_MESSAGE_ID,
+        _Fields.BRANCH_ID,
         Keys.Field.TRACE_ID,
         mode="before",
     )
     @classmethod
     def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
+        return ValueNormalizer.normalize_optional_id(value, info.field_name)
 
-    @field_validator("metadata", mode="before")
+    @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)
 
-    @field_validator("content_text", "content_format")
+    @field_validator(_Fields.CONTENT_TEXT, _Fields.CONTENT_FORMAT)
     @classmethod
     def _normalize_text(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_nonempty_string(
-            value, info.field_name
-        )
+        return ValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
     def to_response(self) -> "MessageResponse":
         """Return the stable public message shape."""

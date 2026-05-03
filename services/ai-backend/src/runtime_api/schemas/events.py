@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
 from pydantic import (
-    ConfigDict,
     Field,
     NonNegativeInt,
     PositiveInt,
@@ -24,14 +23,30 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
     RuntimeActivityKind,
     RuntimeApiEventType,
-    RuntimeApiValueNormalizer,
     RuntimeEventRedactionState,
     RuntimeEventVisibility,
 )
+
+
+class _Fields:
+    """Field name constants for presentation model validators and key references."""
+
+    TITLE = "title"
+    SUBTITLE = "subtitle"
+    URL = "url"
+    BADGE = "badge"
+    SUMMARY = "summary"
+    GROUP_KEY = "group_key"
+    PRIMARY_ENTITY = "primary_entity"
+    ACTION_LABEL = "action_label"
+    DEBUG_LABEL = "debug_label"
+    ACTIVITY_KIND = "activity_kind"
 
 
 class RuntimeEventPresentationProjector:
@@ -142,7 +157,7 @@ class RuntimeEventPresentationProjector:
             ),
             Keys.Field.SUMMARY: cls._summary_for(payload=payload, metadata=metadata),
             Keys.Field.STATUS: cls._status_for(event_type=event_type, payload=payload),
-            "activity_kind": cls.activity_kind_for(
+            _Fields.ACTIVITY_KIND: cls.activity_kind_for(
                 event_type=event_type, source=source
             ),
             Keys.Field.VISIBILITY: cls._visibility_for(source=source, payload=payload),
@@ -507,29 +522,6 @@ class RuntimeEventPresentationProjector:
         return normalized
 
 
-class RuntimeEventPayloadContract(RuntimeContract):
-    """Base for structured event payloads with additive provider metadata."""
-
-    model_config = ConfigDict(extra="allow", frozen=True, validate_assignment=True)
-
-
-class RuntimeTextPayload(RuntimeEventPayloadContract):
-    """Text-bearing model, progress, observation, and error payload."""
-
-    message: str | None = None
-    delta: str | None = None
-    summary: str | None = None
-    display_title: str | None = None
-
-
-class RuntimeLifecyclePayload(RuntimeEventPayloadContract):
-    """Lifecycle payload for run and heartbeat events."""
-
-    status: str | None = None
-    message: str | None = None
-    summary: str | None = None
-
-
 class AssistantUsageMetrics(RuntimeContract):
     """Exact provider token usage counts without secret-like field names."""
 
@@ -560,14 +552,16 @@ class RuntimeEventPresentationPreviewRow(RuntimeContract):
     url: str | None = Field(default=None, max_length=500)
     badge: str | None = Field(default=None, max_length=40)
 
-    @field_validator("title", "subtitle", "url", "badge", mode="before")
+    @field_validator(
+        _Fields.TITLE, _Fields.SUBTITLE, _Fields.URL, _Fields.BADGE, mode="before"
+    )
     @classmethod
     def _plain_text(cls, value: object, info: ValidationInfo) -> str | None:
         max_lengths = {
-            "title": 120,
-            "subtitle": 240,
-            "url": 500,
-            "badge": 40,
+            _Fields.TITLE: 120,
+            _Fields.SUBTITLE: 240,
+            _Fields.URL: 500,
+            _Fields.BADGE: 40,
         }
         return RuntimeEventPresentation.safe_text(
             value,
@@ -590,23 +584,23 @@ class RuntimeEventPresentation(RuntimeContract):
     confidence: Literal["low", "medium", "high"] | None = None
 
     @field_validator(
-        "title",
-        "summary",
-        "group_key",
-        "primary_entity",
-        "action_label",
-        "debug_label",
+        _Fields.TITLE,
+        _Fields.SUMMARY,
+        _Fields.GROUP_KEY,
+        _Fields.PRIMARY_ENTITY,
+        _Fields.ACTION_LABEL,
+        _Fields.DEBUG_LABEL,
         mode="before",
     )
     @classmethod
     def _safe_optional_text(cls, value: object, info: ValidationInfo) -> str | None:
         max_lengths = {
-            "title": 80,
-            "summary": 240,
-            "group_key": 160,
-            "primary_entity": 80,
-            "action_label": 60,
-            "debug_label": 40,
+            _Fields.TITLE: 80,
+            _Fields.SUMMARY: 240,
+            _Fields.GROUP_KEY: 160,
+            _Fields.PRIMARY_ENTITY: 80,
+            _Fields.ACTION_LABEL: 60,
+            _Fields.DEBUG_LABEL: 40,
         }
         return cls.safe_text(value, max_length=max_lengths[info.field_name])
 
@@ -620,191 +614,8 @@ class RuntimeEventPresentation(RuntimeContract):
         return text[:max_length]
 
 
-class ReasoningSummaryPayload(RuntimeEventPayloadContract):
-    """Reasoning summary payload displayed by Assistant UI reasoning parts."""
-
-    summary: str
-    message: str | None = None
-
-
-class ReasoningSummaryDeltaPayload(RuntimeEventPayloadContract):
-    """Incremental reasoning summary payload."""
-
-    delta: str
-    summary: str | None = None
-    message: str | None = None
-
-
-class ToolCallPayload(RuntimeEventPayloadContract):
-    """Structured tool call payload with stable call identity."""
-
-    tool_name: str
-    call_id: str
-    args: JsonObject = Field(default_factory=dict)
-    status: str | None = None
-    summary: str | None = None
-
-
-class ToolCallDeltaPayload(RuntimeEventPayloadContract):
-    """Incremental tool call payload."""
-
-    call_id: str
-    tool_name: str | None = None
-    delta: str | None = None
-    args_delta: JsonObject = Field(default_factory=dict)
-    status: str | None = None
-    summary: str | None = None
-
-
-class ToolResultPayload(RuntimeEventPayloadContract):
-    """Structured tool result payload with safe output details."""
-
-    tool_name: str
-    call_id: str
-    status: str | None = None
-    output: JsonObject = Field(default_factory=dict)
-    summary: str | None = None
-    safe_message: str | None = None
-
-
-class SubagentActivityPayload(RuntimeEventPayloadContract):
-    """Structured subagent lifecycle/progress payload."""
-
-    task_id: str
-    subagent_name: str | None = None
-    subagent_id: str | None = None
-    status: str | None = None
-    display_title: str | None = None
-    short_summary: str | None = None
-    summary: str | None = None
-    message: str | None = None
-
-
-class RuntimeEventEnvelope(RuntimeContract):
-    """Ordered transport event envelope shared by replay and streaming."""
-
-    event_protocol_version: PositiveInt = Values.EVENT_PROTOCOL_VERSION
-    event_id: str = Field(default_factory=lambda: uuid4().hex)
-    run_id: str
-    conversation_id: str
-    sequence_no: PositiveInt
-    source: StreamEventSource
-    event_type: RuntimeApiEventType
-    trace_id: str
-    parent_event_id: str | None = None
-    span_id: str | None = None
-    parent_span_id: str | None = None
-    parent_task_id: str | None = None
-    task_id: str | None = None
-    subagent_id: str | None = None
-    display_title: str | None = None
-    summary: str | None = None
-    status: str | None = None
-    activity_kind: RuntimeActivityKind
-    visibility: RuntimeEventVisibility = RuntimeEventVisibility.USER
-    redaction_state: RuntimeEventRedactionState = RuntimeEventRedactionState.REDACTED
-    presentation: RuntimeEventPresentation | None = None
-    payload: JsonObject = Field(default_factory=dict)
-    metadata: JsonObject = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-    @field_validator(
-        Keys.Field.EVENT_ID,
-        Keys.Field.RUN_ID,
-        Keys.Field.CONVERSATION_ID,
-        Keys.Field.TRACE_ID,
-        mode="before",
-    )
-    @classmethod
-    def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
-
-    @field_validator(
-        Keys.Field.PARENT_EVENT_ID,
-        Keys.Field.SPAN_ID,
-        Keys.Field.PARENT_SPAN_ID,
-        Keys.Field.PARENT_TASK_ID,
-        Keys.Field.TASK_ID,
-        Keys.Field.SUBAGENT_ID,
-        mode="before",
-    )
-    @classmethod
-    def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
-
-    @field_validator(
-        Keys.Field.DISPLAY_TITLE,
-        Keys.Field.SUMMARY,
-        Keys.Field.STATUS,
-        mode="before",
-    )
-    @classmethod
-    def _normalize_optional_text(
-        cls, value: object, info: ValidationInfo
-    ) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, info.field_name)
-
-    @field_validator(Keys.Field.PAYLOAD, Keys.Field.METADATA, mode="before")
-    @classmethod
-    def _redact_json_fields(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
-
-    @classmethod
-    def from_stream_event(
-        cls,
-        *,
-        run_id: str,
-        conversation_id: str,
-        sequence_no: int,
-        stream_event: StreamEvent,
-    ) -> "RuntimeEventEnvelope":
-        """Wrap an existing normalized runtime event in the API envelope."""
-
-        event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(
-            stream_event
-        )
-        payload = RuntimeEventPresentationProjector.payload_for_event(
-            event_type=event_type,
-            payload=stream_event.payload,
-        )
-        presentation = RuntimeEventPresentationProjector.presentation_fields(
-            event_type=event_type,
-            source=stream_event.source,
-            parent_task_id=stream_event.parent_task_id,
-            payload=payload,
-            metadata=stream_event.metadata,
-        )
-        return cls(
-            event_id=stream_event.event_id,
-            run_id=run_id,
-            conversation_id=conversation_id,
-            sequence_no=sequence_no,
-            source=stream_event.source,
-            event_type=event_type,
-            trace_id=stream_event.trace_id,
-            parent_task_id=stream_event.parent_task_id,
-            payload=payload,
-            metadata=stream_event.metadata,
-            presentation=RuntimeEventPresentationProjector.presentation_metadata(
-                stream_event.metadata
-            ),
-            created_at=stream_event.timestamp,
-            **presentation,
-        )
-
-
-class RuntimeEventReplayResponse(RuntimeContract):
-    """Replay response for persisted ordered events."""
-
-    run_id: str
-    events: tuple[RuntimeEventEnvelope, ...]
-    latest_sequence_no: NonNegativeInt
-    run_status: AgentRunStatus
-    has_more: bool = False
-
-
-class RuntimeEventDraft(RuntimeContract):
-    """Event data before the event store assigns per-run sequence number."""
+class _RuntimeEventBase(RuntimeContract):
+    """Shared fields and validators for event envelopes and drafts."""
 
     run_id: str
     conversation_id: str
@@ -827,10 +638,15 @@ class RuntimeEventDraft(RuntimeContract):
     payload: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
 
-    @field_validator(Keys.Field.RUN_ID, Keys.Field.CONVERSATION_ID, Keys.Field.TRACE_ID)
+    @field_validator(
+        Keys.Field.RUN_ID,
+        Keys.Field.CONVERSATION_ID,
+        Keys.Field.TRACE_ID,
+        mode="before",
+    )
     @classmethod
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(
         Keys.Field.PARENT_EVENT_ID,
@@ -843,7 +659,7 @@ class RuntimeEventDraft(RuntimeContract):
     )
     @classmethod
     def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
+        return ValueNormalizer.normalize_optional_id(value, info.field_name)
 
     @field_validator(
         Keys.Field.DISPLAY_TITLE,
@@ -855,22 +671,22 @@ class RuntimeEventDraft(RuntimeContract):
     def _normalize_optional_text(
         cls, value: object, info: ValidationInfo
     ) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, info.field_name)
+        return ValueNormalizer.normalize_optional_text(value, info.field_name)
 
     @field_validator(Keys.Field.PAYLOAD, Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)
 
     @classmethod
-    def from_stream_event(
+    def _build_from_stream_event(
         cls,
         *,
         run_id: str,
         conversation_id: str,
         stream_event: StreamEvent,
-    ) -> "RuntimeEventDraft":
-        """Create an appendable API event draft from a normalized runtime event."""
+    ) -> dict[str, object]:
+        """Return the common constructor kwargs from a normalized stream event."""
 
         event_type = RuntimeEventPresentationProjector.event_type_for_stream_event(
             stream_event
@@ -886,7 +702,7 @@ class RuntimeEventDraft(RuntimeContract):
             payload=payload,
             metadata=stream_event.metadata,
         )
-        return cls(
+        return dict(
             run_id=run_id,
             conversation_id=conversation_id,
             source=stream_event.source,
@@ -900,3 +716,72 @@ class RuntimeEventDraft(RuntimeContract):
             ),
             **presentation,
         )
+
+
+class RuntimeEventEnvelope(_RuntimeEventBase):
+    """Ordered transport event envelope shared by replay and streaming."""
+
+    event_protocol_version: PositiveInt = Values.EVENT_PROTOCOL_VERSION
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    sequence_no: PositiveInt
+    activity_kind: RuntimeActivityKind
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator(Keys.Field.EVENT_ID, mode="before")
+    @classmethod
+    def _normalize_event_id(cls, value: object, info: ValidationInfo) -> str:
+        return ValueNormalizer.normalize_id(value, info.field_name)
+
+    @classmethod
+    def from_stream_event(
+        cls,
+        *,
+        run_id: str,
+        conversation_id: str,
+        sequence_no: int,
+        stream_event: StreamEvent,
+    ) -> "RuntimeEventEnvelope":
+        """Wrap an existing normalized runtime event in the API envelope."""
+
+        kwargs = cls._build_from_stream_event(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            stream_event=stream_event,
+        )
+        return cls(
+            event_id=stream_event.event_id,
+            sequence_no=sequence_no,
+            created_at=stream_event.timestamp,
+            **kwargs,
+        )
+
+
+class RuntimeEventReplayResponse(RuntimeContract):
+    """Replay response for persisted ordered events."""
+
+    run_id: str
+    events: tuple[RuntimeEventEnvelope, ...]
+    latest_sequence_no: NonNegativeInt
+    run_status: AgentRunStatus
+    has_more: bool = False
+
+
+class RuntimeEventDraft(_RuntimeEventBase):
+    """Event data before the event store assigns per-run sequence number."""
+
+    @classmethod
+    def from_stream_event(
+        cls,
+        *,
+        run_id: str,
+        conversation_id: str,
+        stream_event: StreamEvent,
+    ) -> "RuntimeEventDraft":
+        """Create an appendable API event draft from a normalized runtime event."""
+
+        kwargs = cls._build_from_stream_event(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            stream_event=stream_event,
+        )
+        return cls(**kwargs)

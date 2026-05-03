@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field
@@ -21,7 +21,7 @@ class RuntimeRunCommand(RuntimeContract):
     user_id: str
     trace_id: str
     runtime_context: AgentRuntimeContext
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RuntimeCancelCommand(RuntimeContract):
@@ -32,7 +32,7 @@ class RuntimeCancelCommand(RuntimeContract):
     org_id: str
     requested_by_user_id: str
     reason: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RuntimeApprovalResolvedCommand(RuntimeContract):
@@ -43,4 +43,4 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     run_id: str
     org_id: str
     decision: ApprovalDecision
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

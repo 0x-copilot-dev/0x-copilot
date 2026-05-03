@@ -144,21 +144,3 @@ class ApprovalStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
-
-
-class RuntimeApiValueNormalizer:
-    """Normalize and redact values entering API/domain contracts.
-
-    All common methods delegate to the shared ``ValueNormalizer``.
-    """
-
-    from agent_runtime.validation import ValueNormalizer as _V
-
-    normalize_nonempty_string = _V.normalize_nonempty_string
-    normalize_id = _V.normalize_id
-    normalize_optional_id = _V.normalize_optional_id
-    normalize_slug = _V.normalize_slug
-    normalize_optional_text = _V.normalize_optional_text
-    redact_json_object = _V.redact_json_object
-
-    del _V

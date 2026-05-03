@@ -15,7 +15,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.routes import RuntimeApiRouter
-from runtime_api.sse.event_bus import get_event_bus
+from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
 
 
@@ -54,8 +54,9 @@ class RuntimeApiAppFactory:
     @classmethod
     def default_service(cls, app: FastAPI) -> RuntimeApiService:
         settings = RuntimeSettings.load()
+        RuntimeSettings.configure_sdk_environment(settings)
         ports = RuntimeAdapterFactory.from_settings(settings)
-        event_bus = get_event_bus()
+        event_bus = RuntimeEventBus.get_default()
         app.state.runtime_ports = ports
         app.state.runtime_settings = settings
         app.state.runtime_event_bus = event_bus

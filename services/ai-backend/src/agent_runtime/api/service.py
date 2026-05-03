@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from starlette import status
 
@@ -412,7 +412,7 @@ class RuntimeApiService:
         return CancelRunResponse(
             run_id=run.run_id,
             status=run.status,
-            cancel_requested_at=datetime.now(UTC),
+            cancel_requested_at=datetime.now(timezone.utc),
             latest_sequence_no=run.latest_sequence_no,
         )
 

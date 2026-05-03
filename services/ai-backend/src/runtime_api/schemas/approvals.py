@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import Field, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys
+from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     ApprovalDecision,
     ApprovalStatus,
-    RuntimeApiValueNormalizer,
 )
+
+
+class _Fields:
+    DECIDED_BY_USER_ID = "decided_by_user_id"
 
 
 class ApprovalDecisionRequest(RuntimeContract):
@@ -23,17 +27,15 @@ class ApprovalDecisionRequest(RuntimeContract):
     decided_by_user_id: str
     reason: str | None = None
 
-    @field_validator("decided_by_user_id")
+    @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
     def _normalize_decided_by_user_id(cls, value: object) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, "decided_by_user_id")
+        return ValueNormalizer.normalize_id(value, _Fields.DECIDED_BY_USER_ID)
 
     @field_validator(Keys.Field.REASON, mode="before")
     @classmethod
     def _normalize_reason(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(
-            value, Keys.Field.REASON
-        )
+        return ValueNormalizer.normalize_optional_text(value, Keys.Field.REASON)
 
 
 class ApprovalDecisionRecord(RuntimeContract):
@@ -47,7 +49,7 @@ class ApprovalDecisionRecord(RuntimeContract):
     status: ApprovalStatus
     decided_by_user_id: str
     reason: str | None = None
-    decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    decided_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ApprovalRequestRecord(RuntimeContract):
@@ -59,7 +61,7 @@ class ApprovalRequestRecord(RuntimeContract):
     org_id: str
     user_id: str
     status: ApprovalStatus = ApprovalStatus.PENDING
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
     metadata: JsonObject = Field(default_factory=dict)
 

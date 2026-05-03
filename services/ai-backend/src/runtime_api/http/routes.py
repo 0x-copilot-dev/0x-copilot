@@ -302,7 +302,7 @@ class RuntimeApiRouter:
             RuntimeApiRoutes.list_models,
             methods=["GET"],
             response_model=ModelCatalogResponse,
-            name="list_models",
+            name=Keys.RouteName.LIST_MODELS,
         )
         router.add_api_route(
             "/runs",
@@ -350,6 +350,6 @@ class RuntimeApiRouter:
             RuntimeApiRoutes.delete_user_history,
             methods=["DELETE"],
             response_model=HistoryDeletionResponse,
-            name="delete_user_history",
+            name=Keys.RouteName.DELETE_USER_HISTORY,
         )
         return router

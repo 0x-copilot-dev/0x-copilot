@@ -16,6 +16,15 @@ class RuntimeEventBus:
     when the worker appends an event, instead of polling every 250ms.
     """
 
+    _instance: RuntimeEventBus | None = None
+
+    @classmethod
+    def get_default(cls) -> RuntimeEventBus:
+        """Return (or create) the process-global event bus singleton."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
     def __init__(self) -> None:
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
 
@@ -39,6 +48,11 @@ class RuntimeEventBus:
             loop.call_soon_threadsafe(
                 lambda c=condition: asyncio.ensure_future(self._async_notify(c))
             )
+        else:
+            logger.warning(
+                "Notification dropped for run_id=%s: no running event loop",
+                run_id,
+            )
 
     async def wait(self, run_id: str, *, timeout: float = 5.0) -> None:
         condition = self._conditions[run_id]
@@ -55,13 +69,3 @@ class RuntimeEventBus:
     async def _async_notify(condition: asyncio.Condition) -> None:
         async with condition:
             condition.notify_all()
-
-
-_global_event_bus: RuntimeEventBus | None = None
-
-
-def get_event_bus() -> RuntimeEventBus:
-    global _global_event_bus
-    if _global_event_bus is None:
-        _global_event_bus = RuntimeEventBus()
-    return _global_event_bus

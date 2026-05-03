@@ -16,7 +16,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
 )
-from agent_runtime.api.constants import Messages
+from agent_runtime.api.constants import Keys, Messages
 from runtime_api.schemas import ApiErrorResponse
 
 
@@ -73,17 +73,7 @@ class RuntimeApiErrorMapper:
     ) -> JSONResponse:
         """Serialize Pydantic validation errors without raw internals."""
 
-        response = ApiErrorResponse(
-            code=RuntimeErrorCode.VALIDATION_ERROR,
-            safe_message=Messages.Error.INVALID_REQUEST,
-            retryable=False,
-            correlation_id=uuid4().hex,
-            details={"error_count": exc.error_count()},
-        )
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=response.model_dump(mode="json"),
-        )
+        return cls._validation_error_response(exc.error_count())
 
     @classmethod
     async def handle_request_validation_error(
@@ -93,17 +83,7 @@ class RuntimeApiErrorMapper:
     ) -> JSONResponse:
         """Serialize FastAPI request validation errors safely."""
 
-        response = ApiErrorResponse(
-            code=RuntimeErrorCode.VALIDATION_ERROR,
-            safe_message=Messages.Error.INVALID_REQUEST,
-            retryable=False,
-            correlation_id=uuid4().hex,
-            details={"error_count": len(exc.errors())},
-        )
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=response.model_dump(mode="json"),
-        )
+        return cls._validation_error_response(len(exc.errors()))
 
     @classmethod
     async def handle_unexpected_error(
@@ -124,5 +104,19 @@ class RuntimeApiErrorMapper:
         )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=response.model_dump(mode="json"),
+        )
+
+    @classmethod
+    def _validation_error_response(cls, error_count: int) -> JSONResponse:
+        response = ApiErrorResponse(
+            code=RuntimeErrorCode.VALIDATION_ERROR,
+            safe_message=Messages.Error.INVALID_REQUEST,
+            retryable=False,
+            correlation_id=uuid4().hex,
+            details={Keys.Field.ERROR_COUNT: error_count},
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
             content=response.model_dump(mode="json"),
         )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from pydantic import (
     ConfigDict,
@@ -21,7 +21,20 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
 )
 from agent_runtime.api.constants import Keys, Values
-from runtime_api.schemas.common import AgentRunStatus, RuntimeApiValueNormalizer
+from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.validation import ValueNormalizer
+from runtime_api.schemas.common import AgentRunStatus
+
+
+class _Fields:
+    PROVIDER = "provider"
+    MODEL_NAME = "model_name"
+    CONNECTOR_SCOPES = "connector_scopes"
+    CONTEXT = "context"
+    TRACE_METADATA = "trace_metadata"
+    CONTENT_FORMAT = "content_format"
+    REQUEST_OPTIONS = "request_options"
+    USER_MESSAGE_ID = "user_message_id"
 
 
 class ModelSelectionRequest(RuntimeContract):
@@ -35,15 +48,15 @@ class ModelSelectionRequest(RuntimeContract):
     supports_streaming: bool | None = None
     reasoning: ModelReasoningConfig | None = None
 
-    @field_validator("provider", mode="before")
+    @field_validator(_Fields.PROVIDER, mode="before")
     @classmethod
     def _normalize_provider(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, "provider")
+        return ValueNormalizer.normalize_optional_text(value, _Fields.PROVIDER)
 
-    @field_validator("model_name", mode="before")
+    @field_validator(_Fields.MODEL_NAME, mode="before")
     @classmethod
     def _normalize_model_name(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(value, "model_name")
+        return ValueNormalizer.normalize_optional_text(value, _Fields.MODEL_NAME)
 
 
 class ModelCatalogItem(RuntimeContract):
@@ -138,10 +151,15 @@ class RuntimeRequestContext(RuntimeContract):
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: tuple[str, ...] = ()
 
-    @field_validator("connector_scopes", "context", "trace_metadata", mode="before")
+    @field_validator(
+        _Fields.CONNECTOR_SCOPES,
+        _Fields.CONTEXT,
+        _Fields.TRACE_METADATA,
+        mode="before",
+    )
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)
 
 
 class CreateRunRequest(RuntimeContract):
@@ -171,33 +189,29 @@ class CreateRunRequest(RuntimeContract):
     @field_validator(Keys.Field.CONVERSATION_ID)
     @classmethod
     def _normalize_conversation_id(cls, value: object) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, Keys.Field.CONVERSATION_ID)
+        return ValueNormalizer.normalize_id(value, Keys.Field.CONVERSATION_ID)
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, mode="before")
     @classmethod
     def _normalize_optional_identity(
         cls, value: object, info: ValidationInfo
     ) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(value, info.field_name)
+        return ValueNormalizer.normalize_optional_id(value, info.field_name)
 
-    @field_validator(Keys.Field.USER_INPUT, "content_format")
+    @field_validator(Keys.Field.USER_INPUT, _Fields.CONTENT_FORMAT)
     @classmethod
     def _normalize_text(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_nonempty_string(
-            value, info.field_name
-        )
+        return ValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(
-            value, Keys.Field.IDEMPOTENCY_KEY
-        )
+        return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
-    @field_validator("request_options", mode="before")
+    @field_validator(_Fields.REQUEST_OPTIONS, mode="before")
     @classmethod
     def _redact_request_options(cls, value: object) -> JsonObject:
-        return RuntimeApiValueNormalizer.redact_json_object(value)
+        return ObservabilityRedactor.redact_json_object(value)
 
     @model_validator(mode="after")
     def _require_identity_or_context(self) -> "CreateRunRequest":
@@ -249,7 +263,7 @@ class RunRecord(RuntimeContract):
     model_name: str
     runtime_context: AgentRuntimeContext
     request_options: JsonObject = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
@@ -261,20 +275,18 @@ class RunRecord(RuntimeContract):
         Keys.Field.CONVERSATION_ID,
         Keys.Field.ORG_ID,
         Keys.Field.USER_ID,
-        "user_message_id",
+        _Fields.USER_MESSAGE_ID,
         Keys.Field.TRACE_ID,
         mode="before",
     )
     @classmethod
     def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(value, info.field_name)
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.IDEMPOTENCY_KEY, mode="before")
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_id(
-            value, Keys.Field.IDEMPOTENCY_KEY
-        )
+        return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
     def to_response(self) -> "RunStatusResponse":
         """Return the public run status shape."""
@@ -332,16 +344,12 @@ class CancelRunRequest(RuntimeContract):
     @field_validator(Keys.Field.REQUESTED_BY_USER_ID)
     @classmethod
     def _normalize_requested_by_user_id(cls, value: object) -> str:
-        return RuntimeApiValueNormalizer.normalize_id(
-            value, Keys.Field.REQUESTED_BY_USER_ID
-        )
+        return ValueNormalizer.normalize_id(value, Keys.Field.REQUESTED_BY_USER_ID)
 
     @field_validator(Keys.Field.REASON, mode="before")
     @classmethod
     def _normalize_reason(cls, value: object) -> str | None:
-        return RuntimeApiValueNormalizer.normalize_optional_text(
-            value, Keys.Field.REASON
-        )
+        return ValueNormalizer.normalize_optional_text(value, Keys.Field.REASON)
 
 
 class CancelRunResponse(RuntimeContract):

@@ -10,7 +10,7 @@ from runtime_api.schemas import (
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
-from runtime_worker.stream_events import RuntimeStreamPartAdapter
+from runtime_worker.stream_events import StreamOrchestrator as RuntimeStreamPartAdapter
 
 
 class RuntimeEventTimelineTestMixin:
