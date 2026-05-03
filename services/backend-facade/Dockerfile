@@ -12,7 +12,7 @@ COPY packages/service-contracts ./packages/service-contracts
 COPY services/backend-facade/requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir ./packages/service-contracts \
-    && python -m pip install --no-cache-dir -r requirements.txt
+    && python -m pip install --no-cache-dir -r requirements.txt --require-hashes
 
 COPY services/backend-facade/src ./src
 

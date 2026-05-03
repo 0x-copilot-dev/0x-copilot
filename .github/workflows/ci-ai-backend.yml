@@ -42,6 +42,9 @@ jobs:
           python -m pip install ./packages/service-contracts
           python -m pip install -r services/ai-backend/requirements.txt
 
+      - name: Verify installed dependency graph (pip check)
+        run: cd services/ai-backend && python -m pip check
+
       - name: Audit Python dependencies (ai-backend only)
         run: pip-audit -r services/ai-backend/requirements.txt
 

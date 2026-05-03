@@ -33,7 +33,9 @@ repos:
     hooks:
       - id: ruff-check
         args: ["--fix"]
+        exclude: "(^|/)requirements\\.txt$"
       - id: ruff-format
+        exclude: "(^|/)requirements\\.txt$"
 
   - repo: local
     hooks:
