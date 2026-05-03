@@ -18,6 +18,9 @@ from urllib.request import Request, urlopen
 from backend_app.contracts import (
     AuditEventRecord,
     CreateMcpServerRequest,
+    DeployAuditEventRecord,
+    DeployAuditEventResponse,
+    DeployAuditRequest,
     CreateSkillRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
@@ -56,6 +59,7 @@ from backend_app.contracts import (
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
+    InMemoryDeployAuditStore,
     InMemoryMcpStore,
     InMemorySkillStore,
     PostgresConnectionPool,
@@ -1026,3 +1030,46 @@ class SkillMarkdownParser:
             return tuple(value)  # type: ignore[arg-type]
         except TypeError as exc:
             raise ValueError("Skill manifest list fields must be iterable") from exc
+
+
+class DeployAuditService:
+    """Records CI-driven deploy audit events under the verified caller identity.
+
+    Tenant scoping: the caller's verified ``org_id`` (from the service token + headers) is
+    used as the audit row's ``org_id``. The body's ``tenant_id`` MUST equal that ``org_id``;
+    otherwise the request is rejected as a tenant boundary violation.
+    """
+
+    def __init__(self, *, store: InMemoryDeployAuditStore | None = None) -> None:
+        self.store = store or InMemoryDeployAuditStore()
+
+    def record(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: DeployAuditRequest,
+    ) -> DeployAuditEventResponse:
+        if request.tenant_id != org_id:
+            raise ValueError(
+                "tenant_id in body must match the caller's verified org_id",
+            )
+        record = DeployAuditEventRecord(
+            org_id=org_id,
+            user_id=user_id,
+            tenant_id=request.tenant_id,
+            environment=request.environment,
+            release_sha=request.release_sha,
+            image_digests=list(request.image_digests),
+            approver=request.approver,
+            workflow_run_url=request.workflow_run_url,
+            started_at=request.started_at,
+            completed_at=request.completed_at,
+            outcome=request.outcome,
+            force_deploy=request.force_deploy,
+        )
+        appended = self.store.append_deploy_audit(record)
+        return DeployAuditEventResponse(
+            audit_id=appended.audit_id,
+            received_at=appended.created_at,
+        )

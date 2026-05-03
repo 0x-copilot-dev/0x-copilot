@@ -9,6 +9,7 @@ from typing import Any
 
 from backend_app.contracts import (
     AuditEventRecord,
+    DeployAuditEventRecord,
     McpAuthSessionRecord,
     McpOAuthClientConfig,
     McpServerRecord,
@@ -705,3 +706,21 @@ class PostgresSkillStore:
         if isinstance(value, datetime):
             return value
         return datetime.fromisoformat(str(value))
+
+
+@dataclass
+class InMemoryDeployAuditStore:
+    """Deploy audit log used until a postgres-backed adapter is wired in.
+
+    The CI/CD assurance spec tracks postgres backing for deploy audit as a known gap.
+    The in-memory adapter is sufficient for local dev and tests; production must inject
+    a persistent adapter that mirrors this contract before claiming the control complete.
+    """
+
+    audit_events: list[DeployAuditEventRecord] = field(default_factory=list)
+
+    def append_deploy_audit(
+        self, record: DeployAuditEventRecord
+    ) -> DeployAuditEventRecord:
+        self.audit_events.append(record)
+        return record

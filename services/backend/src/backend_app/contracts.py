@@ -712,3 +712,81 @@ class OAuthTokenRequest(BackendContract):
         if not self.access_token.strip():
             raise ValueError("access_token must not be empty")
         return self
+
+
+class DeployImageDigest(BackendContract):
+    component: str = Field(min_length=1, max_length=128)
+    digest: str = Field(min_length=1, max_length=256)
+
+    @field_validator("digest")
+    @classmethod
+    def _digest_shape(cls, value: str) -> str:
+        if not value.startswith("sha256:") or len(value) != len("sha256:") + 64:
+            raise ValueError(
+                "digest must be a sha256 reference of the form sha256:<64 hex>"
+            )
+        try:
+            int(value.removeprefix("sha256:"), 16)
+        except ValueError as exc:
+            raise ValueError("digest hex portion must be valid hex") from exc
+        return value
+
+
+class DeployAuditRequest(BackendContract):
+    tenant_id: str = Field(min_length=1, max_length=64)
+    environment: str = Field(min_length=1, max_length=32)
+    release_sha: str = Field(min_length=7, max_length=64)
+    image_digests: list[DeployImageDigest] = Field(min_length=1, max_length=16)
+    approver: str = Field(min_length=1, max_length=128)
+    workflow_run_url: str = Field(min_length=1, max_length=512)
+    started_at: datetime
+    completed_at: datetime
+    outcome: str = Field(min_length=1, max_length=32)
+    force_deploy: bool = False
+
+    @field_validator("environment")
+    @classmethod
+    def _env_allowed(cls, value: str) -> str:
+        if value not in {"staging", "production"}:
+            raise ValueError("environment must be one of: staging, production")
+        return value
+
+    @field_validator("outcome")
+    @classmethod
+    def _outcome_allowed(cls, value: str) -> str:
+        if value not in {"success", "failed", "rolled_back", "offboarded"}:
+            raise ValueError(
+                "outcome must be one of: success, failed, rolled_back, offboarded"
+            )
+        return value
+
+    @field_validator("workflow_run_url")
+    @classmethod
+    def _run_url_shape(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+            raise ValueError("workflow_run_url must be an absolute http(s) URL")
+        return value
+
+
+class DeployAuditEventRecord(BackendContract):
+    audit_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str
+    user_id: str
+    tenant_id: str
+    environment: str
+    release_sha: str
+    image_digests: list[DeployImageDigest]
+    approver: str
+    workflow_run_url: str
+    started_at: datetime
+    completed_at: datetime
+    outcome: str
+    force_deploy: bool
+    actor_kind: str = "ci"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DeployAuditEventResponse(BackendContract):
+    audit_id: str
+    received_at: datetime

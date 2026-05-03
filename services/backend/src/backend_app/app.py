@@ -10,6 +10,8 @@ from backend_app.auth import BackendServiceAuthenticator
 from backend_app.contracts import (
     CreateMcpServerRequest,
     CreateSkillRequest,
+    DeployAuditEventResponse,
+    DeployAuditRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpRpcRequest,
@@ -28,7 +30,11 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
-from backend_app.service import McpRegistryService, SkillRegistryService
+from backend_app.service import (
+    DeployAuditService,
+    McpRegistryService,
+    SkillRegistryService,
+)
 from backend_app.store import PostgresConnectionPool
 
 
@@ -43,6 +49,10 @@ class _AppServices:
     def skills(application: FastAPI) -> SkillRegistryService:
         return application.state.skill_service
 
+    @staticmethod
+    def deploy_audit(application: FastAPI) -> DeployAuditService:
+        return application.state.deploy_audit_service
+
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
@@ -53,10 +63,12 @@ async def _lifespan(application: FastAPI):
 def create_app(
     service: McpRegistryService | None = None,
     skill_service: SkillRegistryService | None = None,
+    deploy_audit_service: DeployAuditService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Enterprise Search Backend", lifespan=_lifespan)
     app.state.mcp_service = service or McpRegistryService()
     app.state.skill_service = skill_service or SkillRegistryService()
+    app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()
 
     @app.post("/v1/mcp/servers", response_model=McpServerResponse)
     def create_server(
@@ -424,6 +436,30 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.post(
+        "/internal/v1/audit/deploy",
+        response_model=DeployAuditEventResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def internal_audit_deploy(
+        request: Request,
+        payload: DeployAuditRequest,
+    ) -> DeployAuditEventResponse:
+        # No query-string identity fallback: deploy audit is service-only and must come
+        # from a verified ENTERPRISE_SERVICE_TOKEN caller with x-enterprise-org-id /
+        # x-enterprise-user-id headers. Body's tenant_id must match the verified org_id.
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=payload.tenant_id, user_id=payload.approver
+        )
+        try:
+            return _AppServices.deploy_audit(app).record(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     return app
 
