@@ -36,6 +36,7 @@ class _EnvFields:
     MAX_PARALLEL_RUNS = "RUNTIME_MAX_PARALLEL_RUNS"
     MAX_PARALLEL_TASKS = "RUNTIME_MAX_PARALLEL_TASKS"
     MAX_PARALLEL_SUBAGENTS = "RUNTIME_MAX_PARALLEL_SUBAGENTS"
+    TOOL_CALL_BUDGET = "RUNTIME_TOOL_CALL_BUDGET"
     WORKER_POLL_INTERVAL_SECONDS = "RUNTIME_WORKER_POLL_INTERVAL_SECONDS"
     WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
     START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
@@ -92,6 +93,7 @@ class RuntimeExecutionSettings(RuntimeContract):
     max_parallel_runs: int = Field(default=4, ge=1, le=100)
     max_parallel_tasks: int = Field(default=4, ge=1, le=100)
     max_parallel_subagents: int = Field(default=4, ge=1, le=100)
+    tool_call_budget: int = Field(default=6, ge=1, le=100)
     worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
@@ -273,6 +275,7 @@ class RuntimeSettings(BaseSettings):
                 max_parallel_runs=int(_s(v, E.MAX_PARALLEL_RUNS, "4")),
                 max_parallel_tasks=int(_s(v, E.MAX_PARALLEL_TASKS, "4")),
                 max_parallel_subagents=int(_s(v, E.MAX_PARALLEL_SUBAGENTS, "4")),
+                tool_call_budget=int(_s(v, E.TOOL_CALL_BUDGET, "6")),
                 worker_poll_interval_seconds=float(
                     _s(v, E.WORKER_POLL_INTERVAL_SECONDS, "1")
                 ),

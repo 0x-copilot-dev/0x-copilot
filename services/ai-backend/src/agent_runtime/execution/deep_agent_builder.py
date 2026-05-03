@@ -47,6 +47,13 @@ WEB_SUBAGENT_CHECKPOINT_SUFFIX = (
     "an accompanying tool call — a message with no tool call is treated as "
     "your final answer. When you genuinely have no more tools to call, write "
     "your final answer instead of a checkpoint.\n\n"
+    "Bound any single tool to at most 5 invocations within one task: after 5 "
+    "calls of the same tool, stop calling that tool and return your final "
+    "answer summarizing what you found, even if your answer is incomplete or "
+    "uncertain. A partial answer with citations beats an exhausted budget. "
+    'Open-ended phrasing in the request ("many", "comprehensive", '
+    '"thorough") does not lift this cap — pick the most informative queries '
+    "and stop.\n\n"
     "Subagent execution traces from this and prior turns are available "
     "read-only at `/subagents/<task_id>/`. When the user asks about a "
     "delegate's tools, queries, or conversation, run `ls /subagents/` and "
