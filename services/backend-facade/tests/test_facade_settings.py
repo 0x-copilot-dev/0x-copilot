@@ -54,18 +54,102 @@ class TestFacadeSettings(FacadeAuthTestMixin):
         assert settings.ai_backend_url == "http://ai.local/"
 
     def test_facade_forwards_skill_list(self, monkeypatch) -> None:
+        """`/v1/skills` aggregates backend (user/preloaded) + ai-backend (system).
+
+        Both upstreams must be called even when the backend returns an empty
+        list — system skills come from the runtime, not the backend store.
+        """
+
         async def fake_forward_json(*args, **kwargs):
             assert args[1] == "GET"
             assert args[2] == "/v1/skills"
             return {"skills": []}
 
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            assert args[1] == "GET"
+            assert args[2] == "/internal/v1/skills/system"
+            return {"skills": []}
+
         monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
 
         assert response.status_code == 200
         assert response.json() == {"skills": []}
+
+    def test_facade_skill_list_concatenates_system_first_then_backend(
+        self, monkeypatch
+    ) -> None:
+        """System skills must lead the merged list so the settings UI can
+        render them at the top without re-sorting. Backend's payload follows
+        in its existing order — no shuffling of user/preloaded items."""
+
+        async def fake_forward_json(*args, **kwargs):
+            return {
+                "skills": [
+                    {
+                        "skill_id": "preloaded:org_123:user_123:report",
+                        "name": "report",
+                        "source_type": "preloaded",
+                    },
+                    {
+                        "skill_id": "user:abc",
+                        "name": "my-skill",
+                        "source_type": "user",
+                    },
+                ]
+            }
+
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            return {
+                "skills": [
+                    {
+                        "skill_id": "system:search-subagent-logs",
+                        "name": "search-subagent-logs",
+                        "source_type": "system",
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
+
+        assert response.status_code == 200
+        body = response.json()
+        names = [skill["name"] for skill in body["skills"]]
+        assert names == ["search-subagent-logs", "report", "my-skill"]
+
+    def test_facade_skill_list_tolerates_non_list_upstream_payload(
+        self, monkeypatch
+    ) -> None:
+        """A misshapen upstream response should not 500 the facade — drop
+        non-list/non-object items and merge what's valid."""
+
+        async def fake_forward_json(*args, **kwargs):
+            return {"skills": "not a list"}
+
+        async def fake_forward_json_to_ai(*args, **kwargs):
+            return {
+                "skills": [
+                    {"skill_id": "system:x", "name": "x", "source_type": "system"},
+                    "garbage-item",
+                ]
+            }
+
+        monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
+        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        client = TestClient(create_app(FacadeSettings()))
+
+        response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
+
+        assert response.status_code == 200
+        body = response.json()
+        assert [skill["name"] for skill in body["skills"]] == ["x"]
 
     def test_facade_preserves_upstream_error_detail(self, monkeypatch) -> None:
         class FakeAsyncClient:

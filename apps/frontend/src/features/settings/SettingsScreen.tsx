@@ -483,6 +483,14 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
         {skills.skills.map((skill) => {
           const isEditing = editingSkillId === skill.skill_id;
           const isPreloaded = skill.source_type === "preloaded";
+          const isSystem = skill.source_type === "system";
+          // System skills are runtime infrastructure (e.g. search-subagent-logs).
+          // They cannot be disabled or edited — disabling would break the
+          // supervisor's ability to fulfil the protocol the skill defines.
+          const isReadOnly = isPreloaded || isSystem;
+          const readOnlyHint = isSystem
+            ? "System Skills are required for runtime functionality and cannot be disabled."
+            : "Preloaded Skills are read-only.";
           return (
             <Card className="connector-settings-row" key={skill.skill_id}>
               <div className="connector-settings-row__main">
@@ -495,36 +503,43 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                     {skill.enabled ? "enabled" : "disabled"}
                   </Badge>
                   <Badge tone="neutral">{skill.scope}</Badge>
-                  <Badge tone="neutral">{skill.source_type}</Badge>
+                  <Badge tone={isSystem ? "accent" : "neutral"}>
+                    {skill.source_type}
+                  </Badge>
                 </div>
               </div>
               <div className="connector-settings-row__controls">
-                <Switch
-                  label={skill.enabled ? "Enabled" : "Disabled"}
-                  checked={skill.enabled}
-                  onChange={(event) =>
-                    void skills.setEnabled(skill.skill_id, event.target.checked)
-                  }
-                />
+                {isSystem ? (
+                  <span className="settings-meta">Always on</span>
+                ) : (
+                  <Switch
+                    label={skill.enabled ? "Enabled" : "Disabled"}
+                    checked={skill.enabled}
+                    onChange={(event) =>
+                      void skills.setEnabled(
+                        skill.skill_id,
+                        event.target.checked,
+                      )
+                    }
+                  />
+                )}
                 <span className="settings-meta">
                   Version {skill.version} - {skill.source_type}
                 </span>
                 <Button
                   type="button"
                   variant="secondary"
-                  title={
-                    isPreloaded ? "View skill markdown" : "Edit this skill"
-                  }
+                  title={isReadOnly ? "View skill markdown" : "Edit this skill"}
                   onClick={() => beginEdit(skill)}
                 >
-                  {isPreloaded ? "View markdown" : "Edit"}
+                  {isReadOnly ? "View markdown" : "Edit"}
                 </Button>
               </div>
-              {isEditing && isPreloaded ? (
+              {isEditing && isReadOnly ? (
                 <div className="skill-editor-form">
                   <Field
-                    label="Preloaded markdown"
-                    hint="Preloaded Skills are read-only."
+                    label={isSystem ? "System markdown" : "Preloaded markdown"}
+                    hint={readOnlyHint}
                   >
                     <textarea
                       className="skill-markdown-editor"
@@ -543,7 +558,7 @@ function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
                   </Button>
                 </div>
               ) : null}
-              {isEditing && !isPreloaded ? (
+              {isEditing && !isReadOnly ? (
                 <form
                   className="skill-editor-form"
                   onSubmit={(event) => void onSaveEdit(event)}

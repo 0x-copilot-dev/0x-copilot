@@ -267,14 +267,31 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
 
     @app.get("/v1/skills")
     async def list_skills(request: Request) -> dict[str, object]:
+        """Aggregate user/preloaded skills (backend) with system skills (ai-backend).
+
+        System skills live on the runtime's filesystem and are exposed via an
+        internal endpoint; backend never sees them. Returning a single merged
+        list keeps the settings page on one fetch and lets the UI section by
+        `source_type`. System skills lead so they render at the top.
+        """
+
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json(
+        backend_payload = await forward_json(
             app,
             "GET",
             "/v1/skills",
             params=identity.scoped_params(),
             identity=identity,
         )
+        system_payload = await forward_json_to_ai(
+            app,
+            "GET",
+            "/internal/v1/skills/system",
+            identity=identity,
+        )
+        backend_skills = _coerce_skill_list(backend_payload.get("skills"))
+        system_skills = _coerce_skill_list(system_payload.get("skills"))
+        return {"skills": [*system_skills, *backend_skills]}
 
     @app.get("/v1/skills/{skill_id}")
     async def get_skill(
@@ -512,6 +529,19 @@ async def _forward_json(
             status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object"
         )
     return payload
+
+
+def _coerce_skill_list(value: object) -> list[dict[str, object]]:
+    """Tolerate upstream payload variations when concatenating skill lists.
+
+    Both backend and ai-backend return `{"skills": [...]}`, but a future
+    upstream change should not produce a 500 here — drop non-list shapes and
+    non-object items so the merge is robust.
+    """
+
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _upstream_error_detail(response: httpx.Response) -> object:

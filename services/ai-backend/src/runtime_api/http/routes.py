@@ -27,6 +27,10 @@ from runtime_api.schemas import (
 )
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
+from runtime_api.system_skills import (
+    SystemSkillListResponse,
+    SystemSkillsProjector,
+)
 
 
 class RuntimeApiRoutes:
@@ -352,5 +356,43 @@ class RuntimeApiRouter:
             methods=["DELETE"],
             response_model=HistoryDeletionResponse,
             name=Keys.RouteName.DELETE_USER_HISTORY,
+        )
+        return router
+
+
+class InternalRuntimeApiRoutes:
+    """Internal-only routes consumed by the facade, never by browsers.
+
+    Lives off `/internal/v1/*`, mirroring backend's existing internal-only
+    namespace. Service-token auth is enforced when configured (production)
+    via the same `RuntimeServiceAuthenticator` used by the v1/agent routes.
+    """
+
+    @classmethod
+    def list_system_skills(cls, request: Request) -> SystemSkillListResponse:
+        # Force the service-token check in production. In development this
+        # returns None and the route remains open, mirroring how other v1/agent
+        # routes degrade for local dev without ENTERPRISE_SERVICE_TOKEN.
+        RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        return SystemSkillsProjector().list_skills()
+
+
+class InternalRuntimeApiRouter:
+    """Build the `/internal/v1/*` runtime router.
+
+    Kept separate from the public `/v1/agent` router so middleware, OpenAPI
+    grouping, and future internal-only auth changes can target one prefix
+    cleanly.
+    """
+
+    @classmethod
+    def create_router(cls) -> APIRouter:
+        router = APIRouter(prefix="/internal/v1", tags=["runtime-internal"])
+        router.add_api_route(
+            "/skills/system",
+            InternalRuntimeApiRoutes.list_system_skills,
+            methods=["GET"],
+            response_model=SystemSkillListResponse,
+            name="internal_list_system_skills",
         )
         return router

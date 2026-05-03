@@ -14,7 +14,7 @@ from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
-from runtime_api.http.routes import RuntimeApiRouter
+from runtime_api.http.routes import InternalRuntimeApiRouter, RuntimeApiRouter
 from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
 
@@ -41,6 +41,7 @@ class RuntimeApiAppFactory:
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
         app.include_router(RuntimeApiRouter.create_router())
+        app.include_router(InternalRuntimeApiRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )

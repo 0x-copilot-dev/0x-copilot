@@ -137,3 +137,37 @@ def test_skill_registry_seeds_preloaded_skills_as_read_only() -> None:
         assert "Preloaded skills" in str(exc)
     else:
         raise AssertionError("Preloaded Skills should be read-only")
+
+
+def test_skill_source_type_includes_system_value() -> None:
+    """`source_type=system` is a valid wire value the backend can pass-through.
+
+    Backend never persists or seeds system skills (those live on the runtime's
+    filesystem), but `SkillResponse` still must accept the value so the facade
+    can aggregate ai-backend's payload through this contract surface without
+    failing Pydantic validation.
+    """
+
+    from datetime import datetime, timezone
+
+    from backend_app.contracts import SkillResponse, SkillScope, SkillSourceType
+
+    assert SkillSourceType.SYSTEM == "system"
+    response = SkillResponse(
+        skill_id="system:search-subagent-logs",
+        name="search-subagent-logs",
+        display_name="Search Subagent Logs",
+        description="A test description.",
+        markdown="---\nname: search-subagent-logs\ndescription: A test description.\n---\n",
+        virtual_path="/skills/system/search-subagent-logs/SKILL.md",
+        enabled=True,
+        scope=SkillScope.USER,
+        source_type=SkillSourceType.SYSTEM,
+        version=1,
+        allowed_tools=("ls", "read_file"),
+        compatibility=(),
+        metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    assert response.source_type is SkillSourceType.SYSTEM

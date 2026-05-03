@@ -181,6 +181,7 @@ class SkillScope(StrEnum):
 class SkillSourceType(StrEnum):
     USER = "user"
     PRELOADED = "preloaded"
+    SYSTEM = "system"
 
 
 class McpOAuthClientConfig(BackendContract):
