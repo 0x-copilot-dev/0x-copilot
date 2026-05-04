@@ -17,7 +17,7 @@ import type {
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
-import { httpGet, httpPost, httpPostQuery } from "./http";
+import { correlationHeaders, httpGet, httpPost, httpPostQuery } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
@@ -171,7 +171,7 @@ export function decideApproval(
     `/v1/agent/approvals/${encodeURIComponent(approvalId)}/decision?${params}`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...correlationHeaders() },
       body: JSON.stringify(payload),
     },
   ).then(async (response) => {

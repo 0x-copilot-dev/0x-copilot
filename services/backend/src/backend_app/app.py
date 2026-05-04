@@ -30,6 +30,11 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
+from backend_app.observability import (
+    RequestContextMiddleware,
+    configure_logging,
+    emit_access_log,
+)
 from backend_app.service import (
     DeployAuditService,
     McpRegistryService,
@@ -64,8 +69,13 @@ def create_app(
     service: McpRegistryService | None = None,
     skill_service: SkillRegistryService | None = None,
     deploy_audit_service: DeployAuditService | None = None,
+    *,
+    configure_logging_on_create: bool = True,
 ) -> FastAPI:
+    if configure_logging_on_create:
+        configure_logging()
     app = FastAPI(title="Enterprise Search Backend", lifespan=_lifespan)
+    app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     app.state.mcp_service = service or McpRegistryService()
     app.state.skill_service = skill_service or SkillRegistryService()
     app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()

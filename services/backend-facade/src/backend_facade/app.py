@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from enterprise_service_contracts.headers import REQUEST_ID_HEADER
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 import httpx
 from pydantic import BaseModel, Field
 
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
+from backend_facade.observability import (
+    RequestContextMiddleware,
+    configure_logging,
+    current_context,
+    emit_access_log,
+)
 from backend_facade.settings import FacadeSettings
 
 
@@ -41,8 +48,15 @@ class FacadeRunRequest(BaseModel):
     request_context: dict[str, object] = Field(default_factory=dict)
 
 
-def create_app(settings: FacadeSettings | None = None) -> FastAPI:
+def create_app(
+    settings: FacadeSettings | None = None,
+    *,
+    configure_logging_on_create: bool = True,
+) -> FastAPI:
+    if configure_logging_on_create:
+        configure_logging()
     app = FastAPI(title="Enterprise Search Backend Facade")
+    app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     app.state.settings = settings or FacadeSettings.load()
 
     @app.get("/v1/session")
@@ -383,7 +397,7 @@ def create_app(settings: FacadeSettings | None = None) -> FastAPI:
                     "GET",
                     f"{settings_for(app).ai_backend_url}/v1/agent/runs/{run_id}/stream",
                     params=identity.scoped_params({"after_sequence": after_sequence}),
-                    headers=FacadeAuthenticator.service_headers(identity),
+                    headers=_outbound_headers(identity),
                 ),
                 stream=True,
             )
@@ -478,7 +492,7 @@ async def forward_json(
         params=params,
         json=json,
         expect_json=expect_json,
-        headers=FacadeAuthenticator.service_headers(identity),
+        headers=_outbound_headers(identity),
     )
 
 
@@ -497,8 +511,23 @@ async def forward_json_to_ai(
         path=path,
         params=params,
         json=json,
-        headers=FacadeAuthenticator.service_headers(identity),
+        headers=_outbound_headers(identity),
     )
+
+
+def _outbound_headers(identity: AuthenticatedIdentity) -> dict[str, str]:
+    """Augment service headers with current correlation IDs.
+
+    Identity headers come from the verified bearer token. Correlation headers
+    (request_id + W3C trace context) come from the inbound request so a single
+    user action stays one trace across facade -> backend / ai-backend.
+    """
+
+    headers = dict(FacadeAuthenticator.service_headers(identity))
+    ctx = current_context()
+    if ctx is not None and ctx.request_id:
+        headers[REQUEST_ID_HEADER] = ctx.request_id
+    return headers
 
 
 async def _forward_json(

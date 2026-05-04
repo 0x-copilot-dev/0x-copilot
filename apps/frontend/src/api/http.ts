@@ -1,6 +1,8 @@
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
 
+const REQUEST_ID_HEADER = "x-request-id";
+
 export async function assertOk(response: Response): Promise<void> {
   if (response.ok) {
     return;
@@ -9,8 +11,20 @@ export async function assertOk(response: Response): Promise<void> {
   throw new Error(detail || `Request failed with ${response.status}`);
 }
 
+export function newRequestId(): string {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "")
+      : Math.random().toString(16).slice(2).padEnd(32, "0");
+  return `req_${random}`;
+}
+
+export function correlationHeaders(): Record<string, string> {
+  return { [REQUEST_ID_HEADER]: newRequestId() };
+}
+
 export function jsonHeaders(): HeadersInit {
-  return { "content-type": "application/json" };
+  return { "content-type": "application/json", ...correlationHeaders() };
 }
 
 async function assertOkJson<T>(response: Response): Promise<T> {
@@ -39,7 +53,9 @@ export async function httpGet<T>(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<T> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`);
+  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+    headers: correlationHeaders(),
+  });
   return assertOkJson<T>(response);
 }
 
@@ -87,6 +103,7 @@ export async function httpDelete(
 ): Promise<void> {
   const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
     method: "DELETE",
+    headers: correlationHeaders(),
   });
   await assertOk(response);
 }

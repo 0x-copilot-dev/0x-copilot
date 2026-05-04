@@ -54,3 +54,24 @@ repos:
           - ts
           - tsx
           - yaml
+
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: v1.10.0
+    hooks:
+      - id: python-no-eval
+      - id: python-no-log-warn
+
+  - repo: local
+    hooks:
+      - id: forbid-content-logging-keywords
+        name: forbid LLM/PII content as logger keyword args
+        description: |
+          Structural defense against logging user prompts, model responses,
+          tool inputs/outputs, or request/response bodies. Loggers must take
+          typed metadata only -- emit identifiers, status, and counts, never
+          content. If you see this firing, route the field through metadata
+          with a non-content key (e.g. metadata={"input_tokens": n}).
+        entry: '\b(logger|log|_logger)\.(debug|info|warning|warn|error|exception|critical)\([^)]*\b(messages|prompt|prompt_text|completion|user_input|request_body|response_body|model_response|tool_input|tool_output|raw_payload)\s*='
+        language: pygrep
+        files: \.py$
+        exclude: ^services/.+/tests/

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
+from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
@@ -20,12 +20,10 @@ class RuntimeWorkerEntrypoint:
     async def amain() -> None:
         """Start the runtime worker loop."""
 
-        logging.basicConfig(
-            level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-        )
-        logger = logging.getLogger("runtime_worker")
         settings = RuntimeSettings.load()
+        LoggingConfigurator.configure(env=settings.environment.value)
         RuntimeSettings.configure_sdk_environment(settings)
+        logger = LoggingConfigurator.get_logger("runtime_worker")
 
         if settings.store.backend in _ASYNC_BACKENDS:
             async_ports = RuntimeAdapterFactory.async_from_settings(settings)
@@ -40,10 +38,12 @@ class RuntimeWorkerEntrypoint:
                     lock_seconds=settings.execution.worker_lock_seconds,
                 )
                 logger.info(
-                    "runtime worker started backend=%s worker_id=%s poll_interval=%s",
-                    async_ports.backend,
-                    worker.worker_id,
-                    settings.execution.worker_poll_interval_seconds,
+                    "worker_started",
+                    metadata={
+                        "backend": async_ports.backend,
+                        "worker_id": worker.worker_id,
+                        "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
+                    },
                 )
                 await worker.run_forever(
                     poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
@@ -61,10 +61,12 @@ class RuntimeWorkerEntrypoint:
             lock_seconds=settings.execution.worker_lock_seconds,
         )
         logger.info(
-            "runtime worker started backend=%s worker_id=%s poll_interval=%s",
-            ports.backend,
-            worker.worker_id,
-            settings.execution.worker_poll_interval_seconds,
+            "worker_started",
+            metadata={
+                "backend": ports.backend,
+                "worker_id": worker.worker_id,
+                "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
+            },
         )
         await worker.run_forever(
             poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
@@ -77,7 +79,7 @@ class RuntimeWorkerEntrypoint:
         try:
             asyncio.run(RuntimeWorkerEntrypoint.amain())
         except KeyboardInterrupt:
-            logging.getLogger("runtime_worker").info("runtime worker stopped")
+            LoggingConfigurator.get_logger("runtime_worker").info("worker_stopped")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,10 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.observability.http_logging import (
+    LoggingConfigurator,
+    RequestContextMiddleware,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
@@ -26,7 +30,15 @@ class RuntimeApiAppFactory:
     """Create a FastAPI app with dependency-inverted runtime API ports."""
 
     @classmethod
-    def create_app(cls, service: RuntimeApiService | None = None) -> FastAPI:
+    def create_app(
+        cls,
+        service: RuntimeApiService | None = None,
+        *,
+        configure_logging_on_create: bool = True,
+    ) -> FastAPI:
+        if configure_logging_on_create:
+            LoggingConfigurator.configure()
+
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await cls.open_async_store(app)
@@ -38,6 +50,7 @@ class RuntimeApiAppFactory:
                 await cls.close_async_store(app)
 
         app = FastAPI(title="Agent Runtime API", version="1", lifespan=lifespan)
+        app.add_middleware(RequestContextMiddleware)
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
         app.include_router(RuntimeApiRouter.create_router())
