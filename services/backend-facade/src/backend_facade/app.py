@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
+from backend_facade.auth_routes import register_auth_routes
 from backend_facade.deployment_profile import (
     DeploymentProfile,
     log_profile,
@@ -83,6 +84,8 @@ def create_app(
             "deployment_profile": resolved_deployment.name,
             "feature_toggles_hash": resolved_deployment.toggles_hash(),
         }
+
+    register_auth_routes(app)
 
     @app.post("/v1/telemetry/otlp/v1/traces")
     async def telemetry_otlp_traces(request: Request) -> Response:

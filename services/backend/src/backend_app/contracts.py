@@ -805,3 +805,413 @@ class DeployAuditEventRecord(BackendContract):
 class DeployAuditEventResponse(BackendContract):
     audit_id: str
     received_at: datetime
+
+
+# -----------------------------------------------------------------------------
+# Identity & Access (A1)
+#
+# Pydantic records for the user / org / role / auth-provider tables introduced
+# by services/backend/migrations/0004_identity_foundation.sql. No HTTP routes
+# yet — A2 onwards consume these records.
+# -----------------------------------------------------------------------------
+
+
+class _IdentityFields:
+    """Constant pool for identity-record field names referenced in validators."""
+
+    AUDIT_ID = "audit_id"
+    AUTH_KIND = "auth_kind"
+    DEPLOYMENT_KIND = "deployment_kind"
+    DISPLAY_NAME = "display_name"
+    EMAIL = "primary_email"
+    EMAIL_ATTEMPTED = "email_attempted"
+    KIND = "kind"
+    MEMBER_ID = "member_id"
+    NAME = "name"
+    ORG_ID = "org_id"
+    OUTCOME = "outcome"
+    PROVIDER_ID = "provider_id"
+    ROLE_ID = "role_id"
+    SLUG = "slug"
+    SOURCE = "source"
+    STATUS = "status"
+    USER_ID = "user_id"
+
+
+class OrganizationStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
+class OrganizationDeploymentKind(StrEnum):
+    SAAS = "saas"
+    SINGLE_TENANT = "single_tenant"
+
+
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    PENDING_INVITE = "pending_invite"
+
+
+class OrganizationMemberSource(StrEnum):
+    LOCAL = "local"
+    OIDC = "oidc"
+    SAML = "saml"
+    SCIM = "scim"
+    BOOTSTRAP = "bootstrap"
+
+
+class AuthProviderKind(StrEnum):
+    LOCAL = "local"
+    OIDC = "oidc"
+    SAML = "saml"
+    SCIM = "scim"
+
+
+class LoginAttemptKind(StrEnum):
+    LOCAL = "local"
+    OIDC = "oidc"
+    SAML = "saml"
+    MFA = "mfa"
+    SCIM_TOKEN = "scim_token"
+    API_KEY = "api_key"
+
+
+class LoginAttemptOutcome(StrEnum):
+    SUCCESS = "success"
+    BAD_PASSWORD = "bad_password"
+    UNKNOWN_USER = "unknown_user"
+    LOCKED_OUT = "locked_out"
+    MFA_FAILED = "mfa_failed"
+    PROVIDER_REJECTED = "provider_rejected"
+
+
+# Email is normalized to NFKC + lower for the unique-index lookup. CITEXT in
+# Postgres handles case-insensitivity at the DB level; this validator gives
+# the in-memory adapter and the request payloads the same semantics.
+class _IdentityValidators:
+    @staticmethod
+    def normalize_email(value: object) -> str:
+        text = Validators.normalize_text(value).lower()
+        if "@" not in text or text.startswith("@") or text.endswith("@"):
+            raise ValueError("invalid email address")
+        return text
+
+    @staticmethod
+    def normalize_optional_email(value: object) -> str | None:
+        if value is None:
+            return None
+        return _IdentityValidators.normalize_email(value)
+
+
+class OrganizationRecord(BackendContract):
+    org_id: str = Field(default_factory=lambda: f"org_{uuid4().hex}")
+    display_name: str
+    slug: str
+    deployment_kind: OrganizationDeploymentKind = OrganizationDeploymentKind.SAAS
+    status: OrganizationStatus = OrganizationStatus.ACTIVE
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator(_IdentityFields.ORG_ID)
+    @classmethod
+    def _normalize_org_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator(_IdentityFields.DISPLAY_NAME)
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str:
+        return Validators.normalize_text(value)
+
+    @field_validator(_IdentityFields.SLUG)
+    @classmethod
+    def _normalize_slug(cls, value: object) -> str:
+        text = Validators.normalize_text(value).lower()
+        if not _SLUG_PATTERN.fullmatch(text):
+            raise ValueError("slug must be lowercase alphanumerics, '-' or '_'")
+        return text
+
+
+class UserRecord(BackendContract):
+    user_id: str = Field(default_factory=lambda: f"usr_{uuid4().hex}")
+    org_id: str
+    primary_email: str
+    email_verified_at: datetime | None = None
+    display_name: str
+    status: UserStatus = UserStatus.ACTIVE
+    is_service_account: bool = False
+    last_seen_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator(_IdentityFields.USER_ID, _IdentityFields.ORG_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator(_IdentityFields.EMAIL)
+    @classmethod
+    def _normalize_email(cls, value: object) -> str:
+        return _IdentityValidators.normalize_email(value)
+
+    @field_validator(_IdentityFields.DISPLAY_NAME)
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str:
+        return Validators.normalize_text(value)
+
+
+class OrganizationMemberRecord(BackendContract):
+    member_id: str = Field(default_factory=lambda: f"mem_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    joined_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    invited_by_user_id: str | None = None
+    removed_at: datetime | None = None
+    source: OrganizationMemberSource = OrganizationMemberSource.LOCAL
+
+    @field_validator(
+        _IdentityFields.MEMBER_ID, _IdentityFields.ORG_ID, _IdentityFields.USER_ID
+    )
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class RoleRecord(BackendContract):
+    role_id: str = Field(default_factory=lambda: f"role_{uuid4().hex}")
+    org_id: str | None = None  # NULL only when is_system=True
+    name: str
+    display_name: str
+    description: str = ""
+    is_system: bool = False
+    permission_scopes: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator(_IdentityFields.ROLE_ID)
+    @classmethod
+    def _normalize_role_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator(_IdentityFields.NAME)
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        text = Validators.normalize_text(value).lower()
+        if not _SLUG_PATTERN.fullmatch(text):
+            raise ValueError("role name must be lowercase alphanumerics, '-' or '_'")
+        return text
+
+    @field_validator(_IdentityFields.DISPLAY_NAME)
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str:
+        return Validators.normalize_text(value)
+
+    @model_validator(mode="after")
+    def _system_role_invariants(self) -> "RoleRecord":
+        # Mirrors the DB CHECK constraint so in-memory adapters reject the
+        # same shapes Postgres would.
+        if self.is_system and self.org_id is not None:
+            raise ValueError("system roles must not carry an org_id")
+        if not self.is_system and self.org_id is None:
+            raise ValueError("non-system roles must carry an org_id")
+        return self
+
+
+class RoleAssignmentRecord(BackendContract):
+    assignment_id: str = Field(default_factory=lambda: f"asn_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    role_id: str
+    granted_by_user_id: str | None = None
+    granted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    revoked_at: datetime | None = None
+    reason: str | None = None
+
+    @field_validator(
+        _IdentityFields.ORG_ID, _IdentityFields.USER_ID, _IdentityFields.ROLE_ID
+    )
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class AuthProviderRecord(BackendContract):
+    provider_id: str = Field(default_factory=lambda: f"prv_{uuid4().hex}")
+    org_id: str
+    kind: AuthProviderKind
+    display_name: str
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+    encrypted_client_secret: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator(_IdentityFields.PROVIDER_ID, _IdentityFields.ORG_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator(_IdentityFields.DISPLAY_NAME)
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str:
+        return Validators.normalize_text(value)
+
+
+class IdentityAuditEventRecord(BackendContract):
+    audit_id: str = Field(default_factory=lambda: f"evt_{uuid4().hex}")
+    org_id: str
+    actor_user_id: str | None = None
+    subject_user_id: str | None = None
+    action: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    request_ip: str | None = None
+    user_agent: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator(_IdentityFields.ORG_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class LoginAttemptRecord(BackendContract):
+    attempt_id: str = Field(default_factory=lambda: f"att_{uuid4().hex}")
+    org_id: str | None = None
+    email_attempted: str | None = None
+    user_id: str | None = None
+    auth_kind: LoginAttemptKind
+    outcome: LoginAttemptOutcome
+    ip: str | None = None
+    user_agent: str | None = None
+    failure_reason: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator(_IdentityFields.EMAIL_ATTEMPTED)
+    @classmethod
+    def _normalize_email(cls, value: object) -> str | None:
+        return _IdentityValidators.normalize_optional_email(value)
+
+
+# -----------------------------------------------------------------------------
+# Sessions (A2)
+# -----------------------------------------------------------------------------
+
+
+class SessionRecord(BackendContract):
+    """Server-issued session bound to an HMAC-signed bearer token.
+
+    ``token_hash`` is sha256(token signature) — never the plaintext bearer.
+    The same shape works for dev-mint (auth_provider_id IS NULL) and the
+    real login flows landing in A3..A5.
+    """
+
+    session_id: str = Field(default_factory=lambda: f"sid_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    token_hash: str
+    roles: tuple[str, ...] = ("employee",)
+    permission_scopes: tuple[str, ...] = ()
+    connector_scopes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    auth_provider_id: str | None = None
+    mfa_satisfied_at: datetime | None = None
+    client_ip: str | None = None
+    user_agent: str | None = None
+    device_label: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+
+    @field_validator("session_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class SessionMintResult(BackendContract):
+    """Returned by ``SessionService.create`` / ``dev_mint``.
+
+    The plaintext bearer is in this object only — once returned it is never
+    available again (we only store the hash).
+    """
+
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+
+
+class SessionTouchResult(BackendContract):
+    """Result of a successful ``SessionService.touch``."""
+
+    session_id: str
+    org_id: str
+    user_id: str
+    roles: tuple[str, ...]
+    permission_scopes: tuple[str, ...]
+    connector_scopes: dict[str, tuple[str, ...]]
+    mfa_satisfied: bool
+    expires_at: datetime
+
+
+# Internal-API request / response shapes for the session endpoints. Kept in
+# contracts.py so the service-layer Pydantic record + the route's request/
+# response models share validators where helpful.
+
+
+class CreateSessionRequest(BackendContract):
+    org_id: str
+    user_id: str
+    roles: tuple[str, ...] = ("employee",)
+    permission_scopes: tuple[str, ...] = ()
+    connector_scopes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    auth_provider_id: str | None = None
+    ttl_seconds: int | None = None
+    client_ip: str | None = None
+    user_agent: str | None = None
+    device_label: str | None = None
+
+
+class TouchSessionRequest(BackendContract):
+    session_id: str
+    token_hash: str
+
+
+class RevokeSessionRequest(BackendContract):
+    org_id: str
+    reason: str | None = None
+
+
+class DevMintRequest(BackendContract):
+    org_id: str = "org_dev"
+    user_id: str = "usr_dev"
+    roles: tuple[str, ...] = ("employee",)
+    permission_scopes: tuple[str, ...] = ("runtime:use",)
+    connector_scopes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    ttl_seconds: int = 24 * 60 * 60
+
+
+class SessionListItem(BackendContract):
+    session_id: str
+    org_id: str
+    user_id: str
+    auth_provider_id: str | None
+    device_label: str | None
+    client_ip: str | None
+    user_agent: str | None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    mfa_satisfied: bool
+
+
+class SessionListResponse(BackendContract):
+    sessions: tuple[SessionListItem, ...] = ()

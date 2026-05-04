@@ -35,6 +35,12 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
+from backend_app.identity import (
+    InMemorySessionStore,
+    SessionAuthSecretMissing,
+    SessionService,
+)
+from backend_app.identity.session_sweeper import SessionSweeper
 from backend_app.observability import (
     RequestContextMiddleware,
     TelemetryBootstrap,
@@ -43,6 +49,7 @@ from backend_app.observability import (
 )
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
+from backend_app.routes.sessions import register_session_routes
 from backend_app.service import (
     DeployAuditService,
     McpRegistryService,
@@ -69,8 +76,41 @@ class _AppServices:
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
-    yield
-    PostgresConnectionPool.close_shared()
+    sweeper = getattr(application.state, "session_sweeper", None)
+    if sweeper is not None:
+        await sweeper.start()
+    try:
+        yield
+    finally:
+        if sweeper is not None:
+            await sweeper.stop()
+        PostgresConnectionPool.close_shared()
+
+
+def _default_session_service(
+    deployment: DeploymentProfile,
+) -> SessionService | None:
+    """Build the default in-memory ``SessionService`` if a secret is available.
+
+    The session service mints / verifies HMAC bearers so it requires
+    ``ENTERPRISE_AUTH_SECRET``. In a fresh dev environment where the secret
+    is not set we omit the routes rather than crashing app boot — the
+    operator sees the routes return 404 and the new functionality is opt-in.
+
+    Production profiles (``single_tenant_managed`` / ``single_tenant_self_hosted``)
+    never silently skip: the secret IS required there. The deployment
+    profile loader (C1) already fails closed for `production` / managed
+    profiles when env is misconfigured, so by the time we get here the
+    secret is expected to exist.
+    """
+
+    try:
+        return SessionService(
+            store=InMemorySessionStore(),
+            dev_mint_allowed=deployment.toggles.dev_auth_bypass_allowed,
+        )
+    except SessionAuthSecretMissing:
+        return None
 
 
 def create_app(
@@ -81,6 +121,7 @@ def create_app(
     configure_logging_on_create: bool = True,
     configure_telemetry_on_create: bool = True,
     deployment: DeploymentProfile | None = None,
+    session_service: SessionService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -96,6 +137,13 @@ def create_app(
     app.state.skill_service = skill_service or SkillRegistryService()
     app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()
     app.state.deployment = resolved_deployment
+    resolved_session_service = session_service or _default_session_service(
+        resolved_deployment
+    )
+    if resolved_session_service is not None:
+        app.state.session_service = resolved_session_service
+        register_session_routes(app, resolved_session_service)
+        app.state.session_sweeper = SessionSweeper(sessions=resolved_session_service)
 
     @app.get("/v1/health")
     def health() -> dict[str, object]:

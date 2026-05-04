@@ -10,6 +10,10 @@ import json
 import os
 from typing import Any
 
+from enterprise_service_contracts.auth_claims import (
+    CLAIM_SID,
+    ENV_REQUIRE_SESSION_BINDING,
+)
 from enterprise_service_contracts.headers import (
     AUTH_HEADER,
     CONNECTOR_SCOPES_HEADER,
@@ -113,7 +117,54 @@ class FacadeAuthenticator:
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED, "Invalid bearer token payload"
             ) from exc
-        return cls._identity_from_payload(payload)
+        identity = cls._identity_from_payload(payload)
+        # When REQUIRE_SESSION_BINDING is on, a bearer issued by an A2-aware
+        # path (dev-mint or future A3..A5 logins) carries a `sid` claim. We
+        # reject any bearer that lacks one so the externally-minted-token
+        # back-door is closed. The backend touch (per-request session DB
+        # check + revocation gate) lands in a follow-up; here we enforce the
+        # static shape so the UI stops accepting unbound tokens.
+        if cls._require_session_binding() and not _has_sid_claim(payload):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "Bearer token must carry a session id (sid) claim",
+            )
+        return identity
+
+    @classmethod
+    def session_id_from_token(cls, token: str) -> str | None:
+        """Return the `sid` claim from an HMAC-verified token, or None.
+
+        Caller must already have verified the HMAC (e.g. via
+        ``verify_identity_token``) so this routine does not re-validate the
+        signature. Returns ``None`` when the claim is absent or malformed.
+        """
+
+        try:
+            payload_part, _ = token.split(".", maxsplit=1)
+            payload_obj = json.loads(cls._b64decode(payload_part).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload_obj, dict):
+            return None
+        sid = payload_obj.get(CLAIM_SID)
+        return sid if isinstance(sid, str) and sid else None
+
+    @classmethod
+    def token_hash_from_signature(cls, token: str) -> str:
+        """sha256 of the token's signature half.
+
+        Used by ``/v1/auth/logout`` and the eventual per-request touch path
+        to identify the session row without exposing the bearer payload.
+        """
+
+        try:
+            _, signature_part = token.split(".", maxsplit=1)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Malformed bearer token"
+            ) from exc
+        return hashlib.sha256(signature_part.encode("ascii")).hexdigest()
 
     @classmethod
     def _identity_from_payload(cls, payload: object) -> AuthenticatedIdentity:
@@ -199,6 +250,10 @@ class FacadeAuthenticator:
             return False
 
     @classmethod
+    def _require_session_binding(cls) -> bool:
+        return os.environ.get(ENV_REQUIRE_SESSION_BINDING, "").strip().lower() == "true"
+
+    @classmethod
     def _required_secret(cls, name: str) -> str:
         value = os.environ.get(name, "").strip()
         if not value:
@@ -248,3 +303,8 @@ class FacadeAuthenticator:
             str(connector): cls._string_tuple(scopes)
             for connector, scopes in value.items()
         }
+
+
+def _has_sid_claim(payload: dict[str, Any]) -> bool:
+    sid = payload.get(CLAIM_SID)
+    return isinstance(sid, str) and bool(sid)
