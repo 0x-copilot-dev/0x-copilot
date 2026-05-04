@@ -1037,6 +1037,40 @@ class InternalRuntimeApiRoutes:
         RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         return SystemSkillsProjector().list_skills()
 
+    @classmethod
+    async def audit_cursor(
+        cls,
+        request: Request,
+        after_id: str | None = Query(None, min_length=1),
+        limit: int = Query(100, ge=1, le=1000),
+    ) -> dict[str, object]:
+        """C9 SIEM cursor — paginated runtime_audit_log read.
+
+        Service-token only. Returns rows ordered by ``(created_at, id)``
+        ascending so the SIEM pump's cursor is monotonic.
+        """
+
+        RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        persistence = RuntimeApiRoutes.service(request).persistence
+        rows = await persistence.list_audit_log_for_export(
+            after_id=after_id, limit=limit
+        )
+        next_cursor = rows[-1]["id"] if rows else after_id
+        # Coerce datetimes to ISO strings so the JSON response is stable
+        # for the SIEM pump and downstream tooling.
+        events: list[dict[str, object]] = []
+        for row in rows:
+            events.append(
+                {
+                    key: (value.isoformat() if hasattr(value, "isoformat") else value)
+                    for key, value in row.items()
+                }
+            )
+        return {
+            "events": events,
+            "next_cursor": next_cursor,
+        }
+
 
 class InternalRuntimeApiRouter:
     """Build the `/internal/v1/*` runtime router.
@@ -1055,5 +1089,11 @@ class InternalRuntimeApiRouter:
             methods=["GET"],
             response_model=SystemSkillListResponse,
             name="internal_list_system_skills",
+        )
+        router.add_api_route(
+            "/audit/cursor",
+            InternalRuntimeApiRoutes.audit_cursor,
+            methods=["GET"],
+            name="internal_audit_cursor",
         )
         return router

@@ -1017,6 +1017,46 @@ class PostgresRuntimeApiStore:
                     ),
                 )
 
+    async def list_audit_log_for_export(
+        self,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> tuple[dict, ...]:
+        # Cross-tenant scan via the worker role (same trust contract as
+        # ``query_run_usage_for_range(org_id=None)``); the SIEM pump is the
+        # only legitimate caller and runs under the operator's service token.
+        bounded = max(1, min(limit, 1000))
+        async with self._role_connection("worker") as conn:
+            async with conn.cursor() as cur:
+                if after_id is None:
+                    await cur.execute(
+                        """
+                        SELECT id, org_id, user_id, actor_type, event_type,
+                               resource_type, resource_id, outcome,
+                               metadata_json_redacted, created_at
+                          FROM runtime_audit_log
+                         ORDER BY created_at ASC, id ASC
+                         LIMIT %s
+                        """,
+                        (bounded,),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        SELECT id, org_id, user_id, actor_type, event_type,
+                               resource_type, resource_id, outcome,
+                               metadata_json_redacted, created_at
+                          FROM runtime_audit_log
+                         WHERE id > %s
+                         ORDER BY created_at ASC, id ASC
+                         LIMIT %s
+                        """,
+                        (after_id, bounded),
+                    )
+                rows = await cur.fetchall()
+        return tuple(dict(row) for row in rows)
+
     async def delete_user_history(
         self,
         *,

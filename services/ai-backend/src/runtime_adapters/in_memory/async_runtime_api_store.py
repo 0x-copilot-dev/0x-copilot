@@ -158,6 +158,18 @@ class AsyncInMemoryRuntimeApiStore:
     ) -> None:
         self._store.write_audit_log(event_type=event_type, record=record)
 
+    async def list_audit_log_for_export(
+        self,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> tuple[dict, ...]:
+        # In-memory is dev-only; the SIEM pump usually runs against
+        # Postgres. Returning the empty tuple keeps the contract honest
+        # without shipping a half-baked dev export.
+        del after_id, limit
+        return ()
+
     async def delete_user_history(
         self,
         *,

@@ -141,6 +141,19 @@ class AsyncPersistencePort(Protocol):
     async def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
 
+    async def list_audit_log_for_export(
+        self,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> Sequence[dict]:
+        """Cross-tenant audit log read for the C9 SIEM cursor.
+
+        Worker-role only — same trust contract as ``query_run_usage_for_range
+        (org_id=None)``. Returns rows ordered by ``(created_at, id)`` ascending
+        so the SIEM pump's cursor is monotonic.
+        """
+
     async def delete_user_history(
         self,
         *,
