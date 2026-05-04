@@ -188,6 +188,81 @@ class SyncToAsyncPersistence:
             reason=reason,
         )
 
+    # Usage + pricing (B1, B2, B3, B4) — defer to the underlying sync port.
+
+    async def record_run_usage(self, record):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(self._port.record_run_usage, record)
+
+    async def record_model_call_usage(self, record):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(self._port.record_model_call_usage, record)
+
+    async def update_run_usage_cost(
+        self,
+        *,
+        run_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._port.update_run_usage_cost,
+            run_id=run_id,
+            cost_micro_usd=cost_micro_usd,
+            pricing_id=pricing_id,
+            pricing_version=pricing_version,
+        )
+
+    async def update_model_call_usage_cost(
+        self,
+        *,
+        usage_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._port.update_model_call_usage_cost,
+            usage_id=usage_id,
+            cost_micro_usd=cost_micro_usd,
+            pricing_id=pricing_id,
+            pricing_version=pricing_version,
+        )
+
+    async def upsert_pricing(self, record):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.upsert_pricing, record)
+
+    async def lookup_pricing(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.lookup_pricing, **kwargs)
+
+    async def list_runs_missing_cost(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.list_runs_missing_cost, **kwargs)
+
+    async def upsert_user_daily_usage(self, row):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(self._port.upsert_user_daily_usage, row)
+
+    async def upsert_org_daily_usage(self, row):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(self._port.upsert_org_daily_usage, row)
+
+    async def query_user_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_user_daily_usage, **kwargs)
+
+    async def query_org_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_org_daily_usage, **kwargs)
+
+    async def query_run_usage(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_run_usage, **kwargs)
+
+    async def query_run_usage_for_range(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_run_usage_for_range, **kwargs)
+
+    async def query_top_conversations(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_top_conversations, **kwargs)
+
+    async def query_model_call_usage_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.query_model_call_usage_for_run, **kwargs
+        )
+
 
 class SyncToAsyncEventStore:
     """Wrap a sync :class:`EventStorePort` in async signatures."""

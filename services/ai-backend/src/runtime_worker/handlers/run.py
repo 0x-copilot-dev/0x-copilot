@@ -27,6 +27,7 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
+from agent_runtime.pricing import CostCalculator, ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -125,6 +126,7 @@ class RuntimeRunHandler:
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
+        self.pricing_catalog = ModelPricingCatalog(self.persistence)
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -270,6 +272,12 @@ class RuntimeRunHandler:
                 error_code=ToolErrorCode.TOOL_RUN_TIMEOUT.value,
                 duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
             )
+            await self._record_run_usage(
+                failed,
+                metrics=metrics,
+                completed_at=failed.completed_at or datetime.now(timezone.utc),
+                status=AgentRunStatus.TIMED_OUT.value,
+            )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             return
         except Exception as exc:
@@ -293,6 +301,12 @@ class RuntimeRunHandler:
                 error_code=ToolErrorCode.TOOL_EXCEPTION.value,
                 duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
             )
+            await self._record_run_usage(
+                failed,
+                metrics=metrics,
+                completed_at=failed.completed_at or datetime.now(timezone.utc),
+                status=AgentRunStatus.FAILED.value,
+            )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             raise
 
@@ -302,9 +316,8 @@ class RuntimeRunHandler:
             )
         )
         self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
-        metrics_payload = metrics.to_payload(
-            completed_at=completed.completed_at or datetime.now(timezone.utc)
-        )
+        completed_at = completed.completed_at or datetime.now(timezone.utc)
+        metrics_payload = metrics.to_payload(completed_at=completed_at)
         await self._append_lifecycle(
             completed,
             RuntimeApiEventType.RUN_COMPLETED,
@@ -319,6 +332,73 @@ class RuntimeRunHandler:
             completed,
             duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
         )
+        await self._record_run_usage(
+            completed,
+            metrics=metrics,
+            completed_at=completed_at,
+            status=AgentRunStatus.COMPLETED.value,
+        )
+
+    async def _record_run_usage(
+        self,
+        run: RunRecord,
+        *,
+        metrics: AssistantRunMetrics,
+        completed_at: datetime,
+        status: str,
+    ) -> None:
+        """Best-effort write of the per-run usage row + cost stamp (B1, B3).
+
+        The run-completion event is the source of truth; this denormalized
+        row is a derived aggregate that powers fast aggregations (B4) and
+        budget enforcement (B7). A failure here must never break the run
+        lifecycle, so we swallow exceptions and let observability surface
+        them as a metric.
+
+        After the row is written we look up pricing-as-of ``completed_at``
+        and stamp the cost. Pricing miss → row stays at ``cost_micro_usd
+        IS NULL`` (B3 spec: unknown models are null-safe).
+        """
+
+        try:
+            usage_record = metrics.to_usage_record(
+                run, completed_at=completed_at, status=status
+            )
+            await self.persistence.record_run_usage(usage_record)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "runtime_run_usage_write_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
+            return
+        try:
+            pricing = await self.pricing_catalog.lookup(
+                provider=run.model_provider,
+                model_name=run.model_name,
+                region="global",
+                at=completed_at,
+            )
+            if pricing is None:
+                return
+            cost_micro_usd = CostCalculator.compute(
+                input_tokens=usage_record.input_tokens,
+                output_tokens=usage_record.output_tokens,
+                cached_input_tokens=usage_record.cached_input_tokens,
+                pricing=pricing,
+            )
+            await self.persistence.update_run_usage_cost(
+                run_id=run.run_id,
+                cost_micro_usd=cost_micro_usd,
+                pricing_id=pricing.id,
+                pricing_version=pricing.pricing_version,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "runtime_run_usage_cost_write_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
 
     async def _messages_for_run(
         self,

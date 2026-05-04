@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import JsonObject
+from agent_runtime.persistence.records import RuntimeRunUsageRecord
 from runtime_api.schemas import (
     AssistantPerformanceMetrics,
     AssistantUsageMetrics,
@@ -217,6 +218,50 @@ class AssistantRunMetrics:
         """Attach metrics to an existing event payload."""
 
         return {**payload, cls.PERFORMANCE_KEY: metrics}
+
+    def to_usage_record(
+        self,
+        run: RunRecord,
+        *,
+        completed_at: datetime,
+        status: str,
+    ) -> RuntimeRunUsageRecord:
+        """Build the per-run usage row at ``RUN_COMPLETED`` time (B1).
+
+        Reads from the same accumulator that backs ``to_payload`` so the
+        denormalized row and the event payload always agree. Token fields
+        fall back to 0 when the provider didn't report usage (the row is
+        still useful for ``runs_count`` / latency aggregates).
+        """
+
+        duration_ms = self._duration_ms(self.started_at, completed_at)
+        first_token_ms = (
+            self._duration_ms(self.started_at, self.first_token_at)
+            if self.first_token_at is not None
+            else None
+        )
+        return RuntimeRunUsageRecord(
+            id=run.run_id,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            assistant_id=getattr(run.runtime_context, "assistant_id", None),
+            model_provider=run.model_provider,
+            model_name=run.model_name,
+            input_tokens=self.input_tokens or 0,
+            output_tokens=self.output_tokens or 0,
+            cached_input_tokens=self.cached_input_tokens or 0,
+            total_tokens=self.total_tokens
+            or (self.input_tokens or 0) + (self.output_tokens or 0),
+            chunk_count=self.chunk_count,
+            first_token_ms=first_token_ms,
+            duration_ms=duration_ms,
+            started_at=self.started_at,
+            completed_at=completed_at,
+            status=status,
+            created_at=completed_at,
+        )
 
     def _usage_payload(
         self,

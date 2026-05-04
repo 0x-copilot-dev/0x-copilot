@@ -1,0 +1,19 @@
+# B3 pricing seed — Google, 2026 Q1. micro-USD per 1M tokens.
+
+pricing_version: "google-2026-q1.v1"
+provider: google
+prices:
+  - model_name: gemini-2.5-pro
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 1_250_000
+    output_per_1m_micro_usd: 5_000_000
+    cached_input_per_1m_micro_usd: 312_500
+    context_window_tokens: 2_000_000
+  - model_name: gemini-2.5-flash
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 75_000
+    output_per_1m_micro_usd: 300_000
+    cached_input_per_1m_micro_usd: 18_750
+    context_window_tokens: 1_000_000

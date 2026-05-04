@@ -14,7 +14,15 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import (
+    ModelPricingRecord,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+    UsageDailyOrgRow,
+    UsageDailyUserRow,
+)
 from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRecord,
@@ -133,6 +141,137 @@ class AsyncPersistencePort(Protocol):
         reason: str | None = None,
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
+
+    # ------------------------------------------------------------------
+    # Usage + pricing (B1, B2, B3, B4).
+    #
+    # Writes are best-effort: the run-completion event is the source of
+    # truth, the rows below are derived aggregates. ``record_run_usage``
+    # is idempotent on ``run_id``; ``record_model_call_usage`` is
+    # idempotent on the row's own UUID id (caller dedupes at the source
+    # by AIMessage id). Pricing methods underwrite B3's catalog and
+    # B4's rollup loop.
+    # ------------------------------------------------------------------
+
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+        """Idempotent write of a per-run usage row (B1)."""
+
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
+        """Append a per-LLM-call usage row (B2)."""
+
+    async def update_run_usage_cost(
+        self,
+        *,
+        run_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        """Stamp computed cost onto an existing run-usage row (B3)."""
+
+    async def update_model_call_usage_cost(
+        self,
+        *,
+        usage_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        """Stamp computed cost onto an existing per-call usage row (B3)."""
+
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+        """Insert or update a pricing row keyed by (provider, model, region) (B3).
+
+        Implementations close the previous active row by setting
+        ``effective_until`` when a row with a later ``effective_from``
+        replaces it, so the partial unique index on ``effective_until IS
+        NULL`` stays satisfied.
+        """
+
+    async def lookup_pricing(
+        self,
+        *,
+        provider: str,
+        model_name: str,
+        region: str,
+        at: datetime,
+    ) -> ModelPricingRecord | None:
+        """Return the pricing row in effect for ``at`` or ``None`` (B3)."""
+
+    async def list_runs_missing_cost(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run-usage rows where ``cost_micro_usd IS NULL`` for backfill (B3)."""
+
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        """Idempotent UPSERT of one daily per-user rollup row (B4)."""
+
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        """Idempotent UPSERT of one daily per-org rollup row (B4)."""
+
+    async def query_user_daily_usage(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyUserRow]:
+        """Read per-user rollup rows in ``[start_day, end_day]`` (B4)."""
+
+    async def query_org_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyOrgRow]:
+        """Read per-org rollup rows in ``[start_day, end_day]`` (B4)."""
+
+    async def query_run_usage(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        """Look up a single run-usage row scoped to org (B4)."""
+
+    async def query_run_usage_for_range(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        """Read raw run-usage rows for cold-start fallback when rollups are empty (B4)."""
+
+    async def query_top_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> Sequence[tuple[str, int]]:
+        """Return top conversations by total tokens for the range (B4).
+
+        Each tuple is ``(conversation_id, total_tokens)``.
+        """
+
+    async def query_model_call_usage_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return per-LLM-call rows for a run, scoped by org (B4 / B5)."""
 
 
 @runtime_checkable

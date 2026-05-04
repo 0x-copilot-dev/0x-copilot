@@ -33,6 +33,11 @@ from agent_runtime.persistence.records.subagents import (
 from agent_runtime.persistence.records.telemetry import (
     CapabilitySnapshotRecord,
     CompressionEventRecord,
+    ModelPricingRecord,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
+    UsageDailyOrgRow,
+    UsageDailyUserRow,
 )
 from agent_runtime.persistence.records.tools import ToolInvocationRecord
 
@@ -79,6 +84,11 @@ __all__ = [
     "ContextPayloadRecord",
     "CompressionEventRecord",
     "CapabilitySnapshotRecord",
+    "ModelPricingRecord",
+    "RuntimeModelCallUsageRecord",
+    "RuntimeRunUsageRecord",
+    "UsageDailyOrgRow",
+    "UsageDailyUserRow",
     "AuditLogRecord",
     "CheckpointRecord",
     "PERSISTENCE_TABLE_RECORDS",

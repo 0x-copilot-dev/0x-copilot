@@ -37,9 +37,14 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.pool_metrics import PoolMetrics
 from agent_runtime.persistence.records import (
+    ModelPricingRecord,
     OutboxStatus,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    UsageDailyOrgRow,
+    UsageDailyUserRow,
 )
 from agent_runtime.persistence.schema.migrate import MigrationRunner
 from runtime_adapters.base import (
@@ -1108,6 +1113,672 @@ class PostgresRuntimeApiStore:
             events_retained=events_retained,
             audit_event_id=audit_event_id,
         )
+
+    # ------------------------------------------------------------------
+    # Usage + pricing (B1, B2, B3, B4)
+    # ------------------------------------------------------------------
+
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+        """Idempotent INSERT of one ``runtime_run_usage`` row (B1).
+
+        ``ON CONFLICT (run_id) DO NOTHING`` makes worker retries safe; if
+        the row already exists, the second write is a no-op. The row is a
+        derived aggregate — failure to write it must not break the run
+        completion path, so the caller swallows write errors and metrics
+        them rather than propagating.
+        """
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_run_usage (
+                    id, org_id, user_id, conversation_id, run_id, assistant_id,
+                    model_provider, model_name, input_tokens, output_tokens,
+                    cached_input_tokens, total_tokens, chunk_count,
+                    first_token_ms, duration_ms, started_at, completed_at,
+                    status, schema_version, retention_until, pii_purged_at,
+                    cost_micro_usd, pricing_id, pricing_version, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (run_id) DO NOTHING
+                """,
+                (
+                    record.id,
+                    record.org_id,
+                    record.user_id,
+                    record.conversation_id,
+                    record.run_id,
+                    record.assistant_id,
+                    record.model_provider,
+                    record.model_name,
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cached_input_tokens,
+                    record.total_tokens,
+                    record.chunk_count,
+                    record.first_token_ms,
+                    record.duration_ms,
+                    record.started_at,
+                    record.completed_at,
+                    record.status,
+                    record.schema_version,
+                    record.retention_until,
+                    record.pii_purged_at,
+                    record.cost_micro_usd,
+                    record.pricing_id,
+                    record.pricing_version,
+                    record.created_at,
+                ),
+            )
+
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
+        """Append a per-LLM-call usage row (B2).
+
+        Rows are unique by their own UUID id so no ON CONFLICT is needed;
+        upstream dedupe (one row per AIMessage id) is the worker's job.
+        """
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_model_call_usage (
+                    id, org_id, run_id, conversation_id, parent_event_id,
+                    trace_id, task_id, subagent_id, model_provider, model_name,
+                    input_tokens, output_tokens, cached_input_tokens,
+                    total_tokens, duration_ms, schema_version, cost_micro_usd,
+                    pricing_id, pricing_version, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+                """,
+                (
+                    record.id,
+                    record.org_id,
+                    record.run_id,
+                    record.conversation_id,
+                    record.parent_event_id,
+                    record.trace_id,
+                    record.task_id,
+                    record.subagent_id,
+                    record.model_provider,
+                    record.model_name,
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cached_input_tokens,
+                    record.total_tokens,
+                    record.duration_ms,
+                    record.schema_version,
+                    record.cost_micro_usd,
+                    record.pricing_id,
+                    record.pricing_version,
+                    record.created_at,
+                ),
+            )
+
+    async def update_run_usage_cost(
+        self,
+        *,
+        run_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE runtime_run_usage
+                   SET cost_micro_usd = %s,
+                       pricing_id = %s,
+                       pricing_version = %s
+                 WHERE run_id = %s
+                """,
+                (cost_micro_usd, pricing_id, pricing_version, run_id),
+            )
+
+    async def update_model_call_usage_cost(
+        self,
+        *,
+        usage_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE runtime_model_call_usage
+                   SET cost_micro_usd = %s,
+                       pricing_id = %s,
+                       pricing_version = %s
+                 WHERE id = %s
+                """,
+                (cost_micro_usd, pricing_id, pricing_version, usage_id),
+            )
+
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+        """Replace the active pricing row for (provider, model, region) (B3).
+
+        The partial unique index on ``effective_until IS NULL`` requires
+        that we close any prior active row before inserting the new one.
+        Both writes happen in a single transaction so a reader never sees
+        zero rows or two active rows.
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    UPDATE model_pricing
+                       SET effective_until = %s
+                     WHERE provider = %s
+                       AND model_name = %s
+                       AND region = %s
+                       AND effective_until IS NULL
+                       AND effective_from < %s
+                    """,
+                    (
+                        record.effective_from,
+                        record.provider,
+                        record.model_name,
+                        record.region,
+                        record.effective_from,
+                    ),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO model_pricing (
+                        id, provider, model_name, region, effective_from,
+                        effective_until, input_per_1m_micro_usd,
+                        output_per_1m_micro_usd, cached_input_per_1m_micro_usd,
+                        context_window_tokens, pricing_source, pricing_version,
+                        created_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s,
+                        %s, %s,
+                        %s, %s, %s,
+                        %s
+                    )
+                    """,
+                    (
+                        record.id,
+                        record.provider,
+                        record.model_name,
+                        record.region,
+                        record.effective_from,
+                        record.effective_until,
+                        record.input_per_1m_micro_usd,
+                        record.output_per_1m_micro_usd,
+                        record.cached_input_per_1m_micro_usd,
+                        record.context_window_tokens,
+                        record.pricing_source,
+                        record.pricing_version,
+                        record.created_at,
+                    ),
+                )
+        return record
+
+    async def lookup_pricing(
+        self,
+        *,
+        provider: str,
+        model_name: str,
+        region: str,
+        at: datetime,
+    ) -> ModelPricingRecord | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM model_pricing
+                 WHERE provider = %s
+                   AND model_name = %s
+                   AND region = %s
+                   AND effective_from <= %s
+                   AND (effective_until IS NULL OR effective_until > %s)
+                 ORDER BY effective_from DESC
+                 LIMIT 1
+                """,
+                (provider, model_name, region, at, at),
+            )
+            row = await cur.fetchone()
+        return self._pricing_record(row) if row is not None else None
+
+    async def list_runs_missing_cost(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        cursor_clause = "AND id > %s" if cursor is not None else ""
+        params: tuple[object, ...] = (limit, cursor) if cursor is not None else (limit,)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""
+                SELECT * FROM runtime_run_usage
+                 WHERE cost_micro_usd IS NULL
+                   {cursor_clause}
+                 ORDER BY id
+                 LIMIT %s
+                """,
+                # Param order: cursor (if any), limit
+                tuple(reversed(params)) if cursor is not None else (limit,),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._run_usage_record(row) for row in rows)
+
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_usage_daily_user (
+                    org_id, user_id, day, model_provider, model_name,
+                    runs_count, input_tokens, output_tokens,
+                    cached_input_tokens, total_tokens, cost_micro_usd,
+                    refreshed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s
+                )
+                ON CONFLICT (org_id, user_id, day, model_provider, model_name)
+                DO UPDATE SET
+                    runs_count = EXCLUDED.runs_count,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cost_micro_usd = EXCLUDED.cost_micro_usd,
+                    refreshed_at = EXCLUDED.refreshed_at
+                """,
+                (
+                    row.org_id,
+                    row.user_id,
+                    row.day.date(),
+                    row.model_provider,
+                    row.model_name,
+                    row.runs_count,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.cached_input_tokens,
+                    row.total_tokens,
+                    row.cost_micro_usd,
+                    row.refreshed_at,
+                ),
+            )
+
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_usage_daily_org (
+                    org_id, day, model_provider, model_name, runs_count,
+                    distinct_users, input_tokens, output_tokens,
+                    cached_input_tokens, total_tokens, cost_micro_usd,
+                    refreshed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s
+                )
+                ON CONFLICT (org_id, day, model_provider, model_name)
+                DO UPDATE SET
+                    runs_count = EXCLUDED.runs_count,
+                    distinct_users = EXCLUDED.distinct_users,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cost_micro_usd = EXCLUDED.cost_micro_usd,
+                    refreshed_at = EXCLUDED.refreshed_at
+                """,
+                (
+                    row.org_id,
+                    row.day.date(),
+                    row.model_provider,
+                    row.model_name,
+                    row.runs_count,
+                    row.distinct_users,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.cached_input_tokens,
+                    row.total_tokens,
+                    row.cost_micro_usd,
+                    row.refreshed_at,
+                ),
+            )
+
+    async def query_user_daily_usage(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyUserRow]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_usage_daily_user
+                 WHERE org_id = %s
+                   AND user_id = %s
+                   AND day BETWEEN %s AND %s
+                 ORDER BY day DESC
+                """,
+                (org_id, user_id, start_day.date(), end_day.date()),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._user_daily_row(r) for r in rows)
+
+    async def query_org_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyOrgRow]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_usage_daily_org
+                 WHERE org_id = %s
+                   AND day BETWEEN %s AND %s
+                 ORDER BY day DESC
+                """,
+                (org_id, start_day.date(), end_day.date()),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._org_daily_row(r) for r in rows)
+
+    async def query_run_usage(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_run_usage
+                 WHERE org_id = %s AND run_id = %s
+                """,
+                (org_id, run_id),
+            )
+            row = await cur.fetchone()
+        return self._run_usage_record(row) if row is not None else None
+
+    async def query_run_usage_for_range(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        # Cold-start fallback only — capped by the caller (B4 enforces 30d).
+        if user_id is not None:
+            sql = """
+                SELECT * FROM runtime_run_usage
+                 WHERE org_id = %s AND user_id = %s
+                   AND completed_at BETWEEN %s AND %s
+                   AND pii_purged_at IS NULL
+                 ORDER BY completed_at DESC
+            """
+            params: tuple[object, ...] = (org_id, user_id, start, end)
+        else:
+            sql = """
+                SELECT * FROM runtime_run_usage
+                 WHERE org_id = %s
+                   AND completed_at BETWEEN %s AND %s
+                 ORDER BY completed_at DESC
+            """
+            params = (org_id, start, end)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(sql, params)
+            rows = await cur.fetchall()
+        return tuple(self._run_usage_record(r) for r in rows)
+
+    async def query_top_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> Sequence[tuple[str, int]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT conversation_id, SUM(total_tokens) AS total
+                  FROM runtime_run_usage
+                 WHERE org_id = %s AND user_id = %s
+                   AND completed_at BETWEEN %s AND %s
+                   AND pii_purged_at IS NULL
+                 GROUP BY conversation_id
+                 ORDER BY total DESC
+                 LIMIT %s
+                """,
+                (org_id, user_id, start, end, limit),
+            )
+            rows = await cur.fetchall()
+        return tuple((str(r["conversation_id"]), int(r["total"] or 0)) for r in rows)
+
+    async def query_model_call_usage_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_model_call_usage
+                 WHERE org_id = %s AND run_id = %s
+                 ORDER BY created_at ASC
+                """,
+                (org_id, run_id),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._model_call_record(r) for r in rows)
+
+    @classmethod
+    def _run_usage_record(cls, row: dict[str, object]) -> RuntimeRunUsageRecord:
+        return RuntimeRunUsageRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            user_id=str(row["user_id"]),
+            conversation_id=str(row["conversation_id"]),
+            run_id=str(row["run_id"]),
+            assistant_id=(
+                str(row["assistant_id"])
+                if row.get("assistant_id") is not None
+                else None
+            ),
+            model_provider=str(row["model_provider"]),
+            model_name=str(row["model_name"]),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            chunk_count=int(row.get("chunk_count") or 0),
+            first_token_ms=(
+                int(row["first_token_ms"])
+                if row.get("first_token_ms") is not None
+                else None
+            ),
+            duration_ms=int(row.get("duration_ms") or 0),
+            started_at=cls._coerce_datetime(row["started_at"]),
+            completed_at=cls._coerce_datetime(row["completed_at"]),
+            status=str(row["status"]),
+            schema_version=int(row.get("schema_version") or 1),
+            retention_until=(
+                cls._coerce_datetime(row["retention_until"])
+                if row.get("retention_until") is not None
+                else None
+            ),
+            pii_purged_at=(
+                cls._coerce_datetime(row["pii_purged_at"])
+                if row.get("pii_purged_at") is not None
+                else None
+            ),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            pricing_id=(
+                str(row["pricing_id"]) if row.get("pricing_id") is not None else None
+            ),
+            pricing_version=(
+                str(row["pricing_version"])
+                if row.get("pricing_version") is not None
+                else None
+            ),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _model_call_record(cls, row: dict[str, object]) -> RuntimeModelCallUsageRecord:
+        return RuntimeModelCallUsageRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            run_id=str(row["run_id"]),
+            conversation_id=str(row["conversation_id"]),
+            parent_event_id=(
+                str(row["parent_event_id"])
+                if row.get("parent_event_id") is not None
+                else None
+            ),
+            trace_id=str(row["trace_id"]),
+            task_id=(str(row["task_id"]) if row.get("task_id") is not None else None),
+            subagent_id=(
+                str(row["subagent_id"]) if row.get("subagent_id") is not None else None
+            ),
+            model_provider=str(row["model_provider"]),
+            model_name=str(row["model_name"]),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            duration_ms=int(row.get("duration_ms") or 0),
+            schema_version=int(row.get("schema_version") or 1),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            pricing_id=(
+                str(row["pricing_id"]) if row.get("pricing_id") is not None else None
+            ),
+            pricing_version=(
+                str(row["pricing_version"])
+                if row.get("pricing_version") is not None
+                else None
+            ),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _pricing_record(cls, row: dict[str, object]) -> ModelPricingRecord:
+        return ModelPricingRecord(
+            id=str(row["id"]),
+            provider=str(row["provider"]),
+            model_name=str(row["model_name"]),
+            region=str(row.get("region") or "global"),
+            effective_from=cls._coerce_datetime(row["effective_from"]),
+            effective_until=(
+                cls._coerce_datetime(row["effective_until"])
+                if row.get("effective_until") is not None
+                else None
+            ),
+            input_per_1m_micro_usd=int(row["input_per_1m_micro_usd"]),
+            output_per_1m_micro_usd=int(row["output_per_1m_micro_usd"]),
+            cached_input_per_1m_micro_usd=(
+                int(row["cached_input_per_1m_micro_usd"])
+                if row.get("cached_input_per_1m_micro_usd") is not None
+                else None
+            ),
+            context_window_tokens=(
+                int(row["context_window_tokens"])
+                if row.get("context_window_tokens") is not None
+                else None
+            ),
+            pricing_source=str(row.get("pricing_source") or "yaml-seed"),
+            pricing_version=str(row["pricing_version"]),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _user_daily_row(cls, row: dict[str, object]) -> UsageDailyUserRow:
+        return UsageDailyUserRow(
+            org_id=str(row["org_id"]),
+            user_id=str(row["user_id"]),
+            day=cls._coerce_date_to_datetime(row["day"]),
+            model_provider=str(row["model_provider"]),
+            model_name=str(row["model_name"]),
+            runs_count=int(row.get("runs_count") or 0),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            refreshed_at=cls._coerce_datetime(row["refreshed_at"]),
+        )
+
+    @classmethod
+    def _org_daily_row(cls, row: dict[str, object]) -> UsageDailyOrgRow:
+        return UsageDailyOrgRow(
+            org_id=str(row["org_id"]),
+            day=cls._coerce_date_to_datetime(row["day"]),
+            model_provider=str(row["model_provider"]),
+            model_name=str(row["model_name"]),
+            runs_count=int(row.get("runs_count") or 0),
+            distinct_users=int(row.get("distinct_users") or 0),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            refreshed_at=cls._coerce_datetime(row["refreshed_at"]),
+        )
+
+    @staticmethod
+    def _coerce_datetime(value: object) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value))
+
+    @staticmethod
+    def _coerce_date_to_datetime(value: object) -> datetime:
+        from datetime import date as _date
+
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, _date):
+            return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(value))
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number (H1).
