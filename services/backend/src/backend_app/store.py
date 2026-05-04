@@ -300,6 +300,33 @@ def _take_audit_chain_lock(cur, *, table: str, org_id: str) -> None:  # type: ig
     cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
 
 
+def _apply_rls_session_vars(  # type: ignore[no-untyped-def]
+    conn, *, org_id: str | None, role: str | None
+) -> None:
+    """Stamp ``app.current_org_id`` / ``app.role`` on a checked-out conn (C5).
+
+    Used by both ``PostgresMcpStore`` and ``PostgresSkillStore`` so the
+    set_config behaviour stays in one place. ``set_config(_, _, true)`` is a
+    transaction-local setting — once Stage 3 enables RLS, the policy
+    references these names and the row visibility flips on with no
+    application change.
+    """
+
+    if org_id is None and role is None:
+        return
+    with conn.cursor() as cur:
+        if org_id is not None:
+            cur.execute(
+                "SELECT set_config('app.current_org_id', %s, true)",
+                (org_id,),
+            )
+        if role is not None:
+            cur.execute(
+                "SELECT set_config('app.role', %s, true)",
+                (role,),
+            )
+
+
 def _sign_mcp_audit(record: AuditEventRecord, chain: _AuditChain) -> AuditEventRecord:
     payload = {
         "audit_id": record.audit_id,
@@ -330,7 +357,7 @@ class PostgresMcpStore:
         self._pool = pool
 
     @contextmanager
-    def transaction(self) -> Iterator[Any]:
+    def transaction(self, *, org_id: str | None = None) -> Iterator[Any]:
         """Yield a connection inside a transaction the caller can compose with.
 
         Used by the service layer to wrap (write + audit) pairs so a partial
@@ -338,16 +365,23 @@ class PostgresMcpStore:
         a composite must accept the optional ``conn`` and reuse it; otherwise
         the audit and primary writes land on separate connections and the
         atomicity guarantee is lost (C3).
+
+        ``org_id``: when provided, stamps ``app.current_org_id`` so the C5
+        ``tenant_isolation`` policies match. Defaults to None (no stamp) for
+        callers that have not yet been refactored — once Stage 3 enables RLS,
+        un-stamped composites will fail closed and the missing site is
+        surfaced in tests/logs.
         """
 
         with self._pool.connection() as conn:
+            _apply_rls_session_vars(conn, org_id=org_id, role="api")
             with conn.transaction():
                 yield conn
 
     def create_server(
         self, record: McpServerRecord, *, conn: Any | None = None
     ) -> McpServerRecord:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -371,7 +405,7 @@ class PostgresMcpStore:
     def update_server(
         self, record: McpServerRecord, *, conn: Any | None = None
     ) -> McpServerRecord:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -413,7 +447,7 @@ class PostgresMcpStore:
     def delete_server(
         self, *, org_id: str, server_id: str, conn: Any | None = None
     ) -> bool:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     "DELETE FROM mcp_servers WHERE org_id = %(org_id)s AND server_id = %(server_id)s",
@@ -422,7 +456,7 @@ class PostgresMcpStore:
                 return cur.rowcount > 0
 
     def create_auth_session(self, record: McpAuthSessionRecord) -> McpAuthSessionRecord:
-        with self._connect() as conn:
+        with self._connect(org_id=record.org_id) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -498,7 +532,7 @@ class PostgresMcpStore:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -559,7 +593,7 @@ class PostgresMcpStore:
         self, record: AuditEventRecord, *, conn: Any | None = None
     ) -> AuditEventRecord:
         signer = AuditChainSigner.from_env()
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 _take_audit_chain_lock(
                     cur, table="mcp_audit_events", org_id=record.org_id
@@ -638,27 +672,46 @@ class PostgresMcpStore:
     def _fetch_many_servers(
         self, query: str, params: dict[str, object]
     ) -> tuple[McpServerRecord, ...]:
-        with self._connect() as conn:
+        # ``params`` is built by the caller and always carries ``org_id`` for
+        # tenant-scoped reads (see ``get_server`` / ``list_servers``). Passing
+        # it through to ``_connect`` stamps the RLS session var.
+        org_id = params.get("org_id")
+        org_id_str = str(org_id) if isinstance(org_id, str) else None
+        with self._connect(org_id=org_id_str) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 return tuple(self._row_to_server(row) for row in cur.fetchall())
 
-    def _connect(self) -> Any:
-        return self._pool.connection()
+    @contextmanager
+    def _connect(self, *, org_id: str | None = None) -> Iterator[Any]:
+        """Acquire a pool connection and stamp RLS session vars (C5).
+
+        ``org_id``: when set, stamps ``app.current_org_id`` so tenant-isolation
+        policies match. Always stamps ``app.role='api'`` so the outbox-style
+        ``tenant_or_worker`` policies on other databases keyed off the role
+        var distinguish API vs worker traffic.
+        """
+
+        with self._pool.connection() as conn:
+            _apply_rls_session_vars(conn, org_id=org_id, role="api")
+            yield conn
 
     @contextmanager
-    def _connect_or_inherit(self, conn: Any | None) -> Iterator[Any]:
+    def _connect_or_inherit(
+        self, conn: Any | None, *, org_id: str | None = None
+    ) -> Iterator[Any]:
         """Yield ``conn`` directly if non-None, else acquire a fresh pool conn.
 
         Lets store methods participate in a caller-provided transaction (when
         composed by the service layer) while keeping single-call behavior
-        unchanged.
+        unchanged. When ``conn`` is inherited the session vars were stamped
+        by the outer ``transaction(org_id=...)`` call; we don't restamp.
         """
 
         if conn is not None:
             yield conn
             return
-        with self._connect() as own:
+        with self._connect(org_id=org_id) as own:
             yield own
 
     @classmethod
@@ -857,17 +910,18 @@ class PostgresSkillStore:
         self._pool = pool
 
     @contextmanager
-    def transaction(self) -> Iterator[Any]:
+    def transaction(self, *, org_id: str | None = None) -> Iterator[Any]:
         """Yield a connection inside a transaction; see PostgresMcpStore."""
 
         with self._pool.connection() as conn:
+            _apply_rls_session_vars(conn, org_id=org_id, role="api")
             with conn.transaction():
                 yield conn
 
     def create_skill(
         self, record: SkillRecord, *, conn: Any | None = None
     ) -> SkillRecord:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -889,7 +943,7 @@ class PostgresSkillStore:
     def update_skill(
         self, record: SkillRecord, *, conn: Any | None = None
     ) -> SkillRecord:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -964,7 +1018,7 @@ class PostgresSkillStore:
         skill_id: str,
         conn: Any | None = None,
     ) -> bool:
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=org_id) as connection:
             with connection.cursor() as cur:
                 cur.execute(
                     """
@@ -982,7 +1036,7 @@ class PostgresSkillStore:
         conn: Any | None = None,
     ) -> SkillAuditEventRecord:
         signer = AuditChainSigner.from_env()
-        with self._connect_or_inherit(conn) as connection:
+        with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 _take_audit_chain_lock(
                     cur, table="skill_audit_events", org_id=record.org_id
@@ -1058,20 +1112,27 @@ class PostgresSkillStore:
     def _fetch_many(
         self, query: str, params: dict[str, object]
     ) -> tuple[SkillRecord, ...]:
-        with self._connect() as conn:
+        org_id = params.get("org_id")
+        org_id_str = str(org_id) if isinstance(org_id, str) else None
+        with self._connect(org_id=org_id_str) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 return tuple(self._row_to_record(row) for row in cur.fetchall())
 
-    def _connect(self) -> Any:
-        return self._pool.connection()
+    @contextmanager
+    def _connect(self, *, org_id: str | None = None) -> Iterator[Any]:
+        with self._pool.connection() as conn:
+            _apply_rls_session_vars(conn, org_id=org_id, role="api")
+            yield conn
 
     @contextmanager
-    def _connect_or_inherit(self, conn: Any | None) -> Iterator[Any]:
+    def _connect_or_inherit(
+        self, conn: Any | None, *, org_id: str | None = None
+    ) -> Iterator[Any]:
         if conn is not None:
             yield conn
             return
-        with self._connect() as own:
+        with self._connect(org_id=org_id) as own:
             yield own
 
     @classmethod

@@ -18,7 +18,8 @@ Hazard-fix highlights:
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import psycopg
@@ -344,6 +345,59 @@ class PostgresRuntimeApiStore:
     async def __aexit__(self, *args: object) -> None:
         await self.close()
 
+    @asynccontextmanager
+    async def _tenant_connection(
+        self, *, org_id: str | None = None, role: str | None = None
+    ) -> AsyncIterator[psycopg.AsyncConnection]:  # type: ignore[type-arg]
+        """Acquire a pool connection and stamp the RLS session vars (C5).
+
+        - ``org_id``: when set, runs ``set_config('app.current_org_id', ...)``
+          so the ``tenant_isolation`` policies on tenant-scoped tables match
+          once Stage 3 enables RLS.
+        - ``role``: when set, runs ``set_config('app.role', ...)`` so policies
+          that key off ``app.role='worker'`` (e.g. the outbox's
+          ``tenant_or_worker`` policy) grant cross-tenant access to the worker
+          process. Defaults to ``self._role`` ('api' or 'worker') so every
+          API connection still tags itself in the unlikely event we extend
+          policies later.
+
+        During Stage 1+2 the policies are dormant — ENABLE ROW LEVEL SECURITY
+        has not been applied — so setting the vars is harmless and lets us
+        instrument logs to confirm every checkout flows through here.
+        """
+
+        async with self._pool.connection() as conn:
+            if org_id is not None:
+                await conn.execute(
+                    "SELECT set_config('app.current_org_id', %s, true)",
+                    (org_id,),
+                )
+            effective_role = role if role is not None else self._role
+            if effective_role:
+                await conn.execute(
+                    "SELECT set_config('app.role', %s, true)",
+                    (effective_role,),
+                )
+            yield conn
+
+    @asynccontextmanager
+    async def _role_connection(
+        self, role: str
+    ) -> AsyncIterator[psycopg.AsyncConnection]:  # type: ignore[type-arg]
+        """Acquire a pool connection without binding it to a tenant.
+
+        Used by cross-tenant operator paths (worker outbox claim,
+        backfill jobs). Sets ``app.role`` so the
+        ``runtime_outbox_events.tenant_or_worker`` policy grants access.
+        """
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "SELECT set_config('app.role', %s, true)",
+                (role,),
+            )
+            yield conn
+
     async def migrate(self) -> None:
         """Apply pending schema migrations.
 
@@ -373,7 +427,7 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord:
         """Create or idempotently return a scoped conversation."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=request.org_id) as conn:
             async with conn.transaction():
                 if request.idempotency_key is not None:
                     cur = await conn.execute(
@@ -429,7 +483,7 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Return a conversation only when org and user scope match."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM agent_conversations
@@ -451,7 +505,7 @@ class PostgresRuntimeApiStore:
         """Return scoped conversations ordered by latest update."""
 
         archived_filter = "" if include_archived else "AND status <> 'archived'"
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_conversations
@@ -475,7 +529,7 @@ class PostgresRuntimeApiStore:
         """Return messages ordered by creation time."""
 
         deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_messages
@@ -491,7 +545,7 @@ class PostgresRuntimeApiStore:
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=message.org_id) as conn:
             async with conn.transaction():
                 await self._insert_message(conn, message)
                 await conn.execute(
@@ -517,7 +571,7 @@ class PostgresRuntimeApiStore:
                 retryable=False,
             )
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=conversation.org_id) as conn:
             # Single transaction for the whole multi-statement op (H4): if we
             # release the connection mid-way we lose atomicity.
             async with conn.transaction():
@@ -637,7 +691,7 @@ class PostgresRuntimeApiStore:
     async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 "SELECT * FROM agent_runs WHERE id = %s AND org_id = %s",
                 (run_id, org_id),
@@ -659,7 +713,7 @@ class PostgresRuntimeApiStore:
 
         from agent_runtime.persistence.errors import ConcurrentRunUpdateError
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     "SELECT * FROM agent_runs WHERE id = %s", (run_id,)
@@ -699,7 +753,7 @@ class PostgresRuntimeApiStore:
         backwards.
         """
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     """
@@ -730,7 +784,7 @@ class PostgresRuntimeApiStore:
         """Persist an approval decision against the approval request row."""
 
         decision_reason = record.reason if record.reason is not None else record.answer
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.transaction():
                 await conn.execute(
                     """
@@ -763,7 +817,7 @@ class PostgresRuntimeApiStore:
 
         risk_class = RuntimeAdapterHelpers.normalize_risk_class(record.metadata)
         action_summary = RuntimeAdapterHelpers.derive_action_summary(record.metadata)
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     """
@@ -832,7 +886,7 @@ class PostgresRuntimeApiStore:
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT a.*, r.conversation_id, r.user_id
@@ -876,7 +930,7 @@ class PostgresRuntimeApiStore:
         audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
         org_id = str(data.get(_Fields.ORG_ID, "unknown"))
         signer = AuditChainSigner.from_env()
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.transaction():
                 await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
                 seq, prev_hash = await _read_runtime_audit_chain_head_async(
@@ -949,7 +1003,7 @@ class PostgresRuntimeApiStore:
         now = datetime.now(timezone.utc)
         ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
         audit_event_id = f"history_delete_{ts_ns}"
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     """
@@ -1128,7 +1182,7 @@ class PostgresRuntimeApiStore:
         them rather than propagating.
         """
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
             await conn.execute(
                 """
                 INSERT INTO runtime_run_usage (
@@ -1186,7 +1240,7 @@ class PostgresRuntimeApiStore:
         upstream dedupe (one row per AIMessage id) is the worker's job.
         """
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
             await conn.execute(
                 """
                 INSERT INTO runtime_model_call_usage (
@@ -1235,7 +1289,7 @@ class PostgresRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             await conn.execute(
                 """
                 UPDATE runtime_run_usage
@@ -1255,7 +1309,7 @@ class PostgresRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             await conn.execute(
                 """
                 UPDATE runtime_model_call_usage
@@ -1276,7 +1330,7 @@ class PostgresRuntimeApiStore:
         zero rows or two active rows.
         """
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             async with conn.transaction():
                 await conn.execute(
                     """
@@ -1338,7 +1392,7 @@ class PostgresRuntimeApiStore:
         region: str,
         at: datetime,
     ) -> ModelPricingRecord | None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM model_pricing
@@ -1363,7 +1417,7 @@ class PostgresRuntimeApiStore:
     ) -> Sequence[RuntimeRunUsageRecord]:
         cursor_clause = "AND id > %s" if cursor is not None else ""
         params: tuple[object, ...] = (limit, cursor) if cursor is not None else (limit,)
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM runtime_run_usage
@@ -1379,7 +1433,7 @@ class PostgresRuntimeApiStore:
         return tuple(self._run_usage_record(row) for row in rows)
 
     async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
                 INSERT INTO runtime_usage_daily_user (
@@ -1420,7 +1474,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
                 INSERT INTO runtime_usage_daily_org (
@@ -1469,7 +1523,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyUserRow]:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_usage_daily_user
@@ -1490,7 +1544,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_usage_daily_org
@@ -1509,7 +1563,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> RuntimeRunUsageRecord | None:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_run_usage
@@ -1546,7 +1600,7 @@ class PostgresRuntimeApiStore:
                  ORDER BY completed_at DESC
             """
             params = (org_id, start, end)
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(sql, params)
             rows = await cur.fetchall()
         return tuple(self._run_usage_record(r) for r in rows)
@@ -1560,7 +1614,7 @@ class PostgresRuntimeApiStore:
         end: datetime,
         limit: int,
     ) -> Sequence[tuple[str, int]]:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT conversation_id, SUM(total_tokens) AS total
@@ -1583,7 +1637,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_model_call_usage
@@ -1792,7 +1846,7 @@ class PostgresRuntimeApiStore:
         — if it ever fires, the lock pattern is broken.
         """
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=event.org_id) as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE",
@@ -1891,7 +1945,7 @@ class PostgresRuntimeApiStore:
     ) -> Sequence[RuntimeEventEnvelope]:
         """Return persisted events after a sequence number."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_events
@@ -1906,7 +1960,7 @@ class PostgresRuntimeApiStore:
     async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(role=self._role) as conn:
             cur = await conn.execute(
                 "SELECT COALESCE(MAX(sequence_no), 0) AS latest FROM runtime_events WHERE run_id = %s",
                 (run_id,),
@@ -1957,7 +2011,7 @@ class PostgresRuntimeApiStore:
     ) -> RuntimeWorkerClaim | None:
         """Claim the next available runtime command using SKIP LOCKED."""
 
-        async with self._pool.connection() as conn:
+        async with self._role_connection("worker") as conn:
             async with conn.transaction():
                 cur = await conn.execute(
                     """
@@ -2030,7 +2084,7 @@ class PostgresRuntimeApiStore:
         payload: dict[str, object],
     ) -> None:
         now = datetime.now(timezone.utc)
-        async with self._pool.connection() as conn:
+        async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
                 await conn.execute(
                     """
@@ -2056,7 +2110,7 @@ class PostgresRuntimeApiStore:
     async def _mark_outbox(
         self, *, result: RuntimeWorkerResult, status_value: OutboxStatus
     ) -> None:
-        async with self._pool.connection() as conn:
+        async with self._role_connection("worker") as conn:
             async with conn.transaction():
                 await conn.execute(
                     """
