@@ -544,15 +544,15 @@ export function ChatScreen({
   }, [activeRunId, identity]);
 
   const onStartNewChat = useCallback(() => {
-    if (activeRunId !== null) {
-      return;
-    }
+    streamRef.current?.close();
+    streamRef.current = null;
+    setActiveRunId(null);
     setConversationId(null);
     setItems([]);
     setLatestRunEvent(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
-  }, [activeRunId]);
+  }, []);
 
   const onShare = useCallback(async (): Promise<void> => {
     if (typeof window === "undefined" || !navigator.clipboard) {
@@ -579,7 +579,7 @@ export function ChatScreen({
     try {
       await decideApproval(approvalId, decision, identity, undefined, answer);
       setItems((current) =>
-        resolveApprovalDecision(current, approvalId, decision),
+        resolveApprovalDecision(current, approvalId, decision, answer),
       );
     } catch (err) {
       setItems((current) => [

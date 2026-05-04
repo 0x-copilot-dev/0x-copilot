@@ -440,6 +440,9 @@ class RuntimeEventPresentationProjector:
 
     @classmethod
     def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        approval_kind = cls._text(payload.get(Keys.Field.APPROVAL_KIND))
+        if approval_kind == Values.ApprovalKind.ASK_A_QUESTION:
+            return cls._ask_a_question_requested_payload(payload)
         safe_payload: JsonObject = {}
         for key in (
             Keys.Field.APPROVAL_ID,
@@ -469,6 +472,64 @@ class RuntimeEventPresentationProjector:
                 option for option in grant_options if isinstance(option, str)
             ]
         return safe_payload
+
+    @classmethod
+    def _ask_a_question_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ask_a_question approval payloads, preserving question text and
+        structured options. The narrow approval allow-list strips these, so
+        ask_a_question gets its own projection."""
+
+        safe_payload: JsonObject = {}
+        for key in (
+            Keys.Field.APPROVAL_ID,
+            Keys.Field.APPROVAL_KIND,
+            Keys.Payload.MESSAGE,
+            Keys.Field.STATUS,
+            Keys.Field.SOURCE_TOOL_CALL_ID,
+            "header",
+            "question",
+            "hint",
+        ):
+            value = cls._text(payload.get(key))
+            if value is not None:
+                safe_payload[key] = value
+        options = payload.get("options")
+        if isinstance(options, list | tuple):
+            safe_payload["options"] = cls._safe_question_options(options)
+        for flag_key in ("multi_select", "allow_free_text"):
+            flag = payload.get(flag_key)
+            if isinstance(flag, bool):
+                safe_payload[flag_key] = flag
+        return safe_payload
+
+    @classmethod
+    def _safe_question_options(cls, options: list | tuple) -> list[JsonObject]:
+        """Coerce structured option dicts (and bare strings) into a sanitized list.
+
+        Bare strings are upgraded to ``{label: ...}`` for backwards compatibility
+        with callers that haven't moved to the structured shape yet."""
+
+        sanitized: list[JsonObject] = []
+        for option in options:
+            if isinstance(option, str):
+                label = cls._text(option)
+                if label is not None:
+                    sanitized.append({"label": label})
+                continue
+            if not isinstance(option, dict):
+                continue
+            label = cls._text(option.get("label"))
+            if label is None:
+                continue
+            entry: JsonObject = {"label": label}
+            description = cls._text(option.get("description"))
+            if description is not None:
+                entry["description"] = description
+            recommended = option.get("recommended")
+            if isinstance(recommended, bool):
+                entry["recommended"] = recommended
+            sanitized.append(entry)
+        return sanitized
 
     @classmethod
     def _visibility_for(

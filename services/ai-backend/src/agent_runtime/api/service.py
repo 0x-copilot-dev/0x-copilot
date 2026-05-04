@@ -495,17 +495,24 @@ class RuntimeApiService:
             user_id=record.user_id,
             run_id=record.run_id,
         )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
         await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
             payload={
                 Keys.Field.APPROVAL_ID: record.approval_id,
-                Keys.Field.APPROVAL_KIND: approval.metadata.get(
-                    Keys.Field.APPROVAL_KIND
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                # ask_a_question is a question-to-user, not a permission gate.
+                # Emit a vocabulary that matches the user-facing semantics so
+                # the frontend can render "Answered"/"Skipped" rather than
+                # leaning on approve/reject copy.
+                Keys.Field.STATUS: self._wire_status_for(
+                    approval_kind=approval_kind,
+                    record_status=record.status.value,
                 ),
-                Keys.Field.STATUS: record.status.value,
                 Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+                Keys.Field.DECISION: record.status.value,
             },
         )
         await self.queue.enqueue_approval_resolved(
@@ -535,6 +542,26 @@ class RuntimeApiService:
             status=record.status,
             decided_at=record.decided_at,
         )
+
+    @classmethod
+    def _wire_status_for(
+        cls,
+        *,
+        approval_kind: object,
+        record_status: str,
+    ) -> str:
+        """Translate the persisted ApprovalStatus into a wire-level status string.
+
+        For ``ask_a_question`` approvals the persisted "approved"/"rejected"
+        record is a question-answer event in disguise. Surface the user-facing
+        vocabulary so the chat UI does not have to render a question card with
+        an "Approved"/"Rejected" status badge."""
+
+        if approval_kind == Values.ApprovalKind.ASK_A_QUESTION:
+            if record_status == ApprovalStatus.APPROVED.value:
+                return Values.Status.ANSWERED
+            return Values.Status.SKIPPED
+        return record_status
 
     @classmethod
     def _create_run_response(

@@ -106,11 +106,13 @@ class Values:
     SSE_EVENT_NAME = "runtime_event"
 
     class Status:
+        ANSWERED = "answered"
         CANCELLED = "cancelled"
         COMPLETED = "completed"
         FAILED = "failed"
         QUEUED = "queued"
         RUNNING = "running"
+        SKIPPED = "skipped"
         STARTED = "started"
         WAITING = "waiting"
 

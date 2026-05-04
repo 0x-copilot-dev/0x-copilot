@@ -518,6 +518,12 @@ export interface ApprovalDecisionResponse {
   decided_at: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string | null;
+  recommended?: boolean;
+}
+
 export interface ApprovalRequestedPayload {
   approval_id: string;
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
@@ -533,9 +539,15 @@ export interface ApprovalRequestedPayload {
   reason?: string;
   status?: string;
   source_tool_call_id?: string;
+  // ask_a_question-specific fields. Present only when approval_kind is
+  // "ask_a_question". `options` is widened to a structured shape; bare-string
+  // entries from older callers are coerced server-side to `{label}`.
+  header?: string | null;
   question?: string;
   hint?: string | null;
-  options?: string[];
+  options?: QuestionOption[];
+  multi_select?: boolean;
+  allow_free_text?: boolean;
   [key: string]: unknown;
 }
 
@@ -580,13 +592,22 @@ export interface ToolCallDeltaPayload {
   [key: string]: unknown;
 }
 
+export type ToolResultStatus =
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "abandoned"
+  | "cancelled";
+
 export interface ToolResultPayload {
   tool_name: string;
   call_id: string;
-  status?: string;
+  status?: ToolResultStatus | (string & {});
   output?: Record<string, unknown>;
   summary?: string;
   safe_message?: string;
+  error_code?: string;
+  error_message?: string;
   [key: string]: unknown;
 }
 
@@ -617,6 +638,18 @@ export interface PresentationUpdatedPayload {
   [key: string]: unknown;
 }
 
+export interface ApprovalResolvedPayload {
+  approval_id: string;
+  approval_kind?: "mcp_tool" | "ask_a_question" | string;
+  // Wire-level status. For approval_kind=ask_a_question this is "answered" or
+  // "skipped" (not "approved"/"rejected") so the UI does not have to render a
+  // permission-flavored badge for a question card.
+  status?: "approved" | "rejected" | "answered" | "skipped" | string;
+  decision?: ApprovalDecision;
+  message?: string;
+  [key: string]: unknown;
+}
+
 export interface RuntimeEventPayloadByType {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
@@ -638,7 +671,7 @@ export interface RuntimeEventPayloadByType {
   subagent_progress: SubagentActivityPayload;
   subagent_completed: SubagentActivityPayload;
   approval_requested: ApprovalRequestedPayload;
-  approval_resolved: RuntimeLifecyclePayload;
+  approval_resolved: ApprovalResolvedPayload;
   observation: RuntimeTextPayload;
   error: RuntimeTextPayload;
   model_call_started: RuntimeLifecyclePayload;

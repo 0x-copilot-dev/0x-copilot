@@ -215,6 +215,35 @@ def test_native_ask_a_question_interrupt_projects_to_approval_requested() -> Non
     assert payload["approval_id"] == "ask_a_question:run_123:trace_123"
 
 
+def test_ask_a_question_tool_calls_are_marked_internal_visibility() -> None:
+    """The ask_a_question approval surface is owned by the native interrupt
+    projector, so the chunked tool_call_started/result events for the same call
+    must be marked internal — otherwise the UI renders a duplicate
+    'ask_a_question running' tile next to the actual question card."""
+
+    started = StreamMessageProcessor.tool_call_payload(
+        {
+            "name": "ask_a_question",
+            "id": "call_aq_1",
+            "args": {
+                "question": "Petrol or Diesel?",
+                "options": ["Petrol", "Diesel"],
+            },
+        }
+    )
+    result = StreamMessageProcessor.tool_result_payload(
+        {
+            "type": "tool",
+            "name": "ask_a_question",
+            "tool_call_id": "call_aq_1",
+            "content": '{"ok": true, "decision": "approved", "answer": "Petrol"}',
+        }
+    )
+
+    assert started["visibility"] == "internal"
+    assert result["visibility"] == "internal"
+
+
 def test_tool_call_state_merges_incremental_chunks_with_stable_identity() -> None:
     producer = object()
     update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]

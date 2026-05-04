@@ -45,11 +45,10 @@ export function AssistantThreadList({
       <ThreadListPrimitive.Root className="aui-thread-list">
         <ThreadListPrimitive.New
           className="aui-new-thread"
-          disabled={activeRunId !== null}
           title={
             activeRunId === null
               ? "Start a new thread"
-              : "Stop the current response before starting a new thread"
+              : "Start a new thread (this run will be left in its current state)"
           }
         >
           New Thread

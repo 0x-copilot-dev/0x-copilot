@@ -133,7 +133,12 @@ class TestAskAQuestionApprovalResume:
 
         assert resume == {"decisions": [{"type": "reject"}]}
 
-    def test_handle_appends_user_message_with_answer(self) -> None:
+    def test_handle_resumes_run_without_appending_user_message_on_answer(self) -> None:
+        """The user's answer must reach the agent via the LangGraph resume value
+        (and the tool's return value), NOT as a stray top-level USER message in
+        the chat thread. Persisting it as a USER message used to surface a
+        duplicate user-bubble in the UI disconnected from the question card."""
+
         store = InMemoryRuntimeApiStore()
         _seed_run_and_approval(store)
         captured: list[object] = []
@@ -153,18 +158,12 @@ class TestAskAQuestionApprovalResume:
 
         asyncio.run(handler.handle(command))
 
-        user_messages = [
+        run_user_messages = [
             message
             for message in store.messages.values()
-            if message.role == MessageRole.USER
+            if message.role == MessageRole.USER and message.run_id == _Values.RUN_ID
         ]
-        assert any(message.content_text == "Tokyo" for message in user_messages)
-        answer_message = next(
-            message for message in user_messages if message.content_text == "Tokyo"
-        )
-        assert answer_message.parent_message_id == _Values.USER_MESSAGE_ID
-        assert answer_message.run_id == _Values.RUN_ID
-        assert answer_message.metadata["approval_kind"] == "ask_a_question"
+        assert run_user_messages == []
         assert captured == [
             {
                 "approval_id": _Values.APPROVAL_ID,

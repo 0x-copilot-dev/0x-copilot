@@ -19,6 +19,7 @@ from runtime_api.schemas import (
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
 from runtime_worker.stream_subagents import StreamUpdateProcessor
+from runtime_worker.tool_call_ledger import ToolCallLedger
 
 
 @dataclass
@@ -47,7 +48,15 @@ class StreamMessageProcessor:
     and delegates subagent lifecycle events to a supplied update_processor.
     """
 
-    internal_tool_names = frozenset({Values.Tool.WRITE_TODOS})
+    internal_tool_names = frozenset(
+        {
+            Values.Tool.WRITE_TODOS,
+            # ask_a_question surfaces its own approval_requested card via the
+            # native interrupt path; the tool_call_started/result events are
+            # noise and would render a duplicate "ask_a_question running" tile.
+            Values.Tool.ASK_A_QUESTION,
+        }
+    )
     large_result_artifact_tool_names = frozenset(
         {
             Values.Tool.READ_FILE,
@@ -71,6 +80,24 @@ class StreamMessageProcessor:
             tuple[str, tuple[str, ...], str], ToolCallStreamState
         ] = {}
         self._tool_call_ids: dict[tuple[str, str], ToolCallStreamState] = {}
+        # Per-run lifecycle ledger of in-flight tool calls. Lazily created on
+        # first tool_call_started, used by `RuntimeRunHandler` to settle
+        # orphaned calls when a run hits a terminal failure path.
+        self._ledgers: dict[str, ToolCallLedger] = {}
+
+    def ledger_for_run(self, run_id: str) -> ToolCallLedger:
+        """Return (and lazily create) the per-run tool call ledger."""
+
+        ledger = self._ledgers.get(run_id)
+        if ledger is None:
+            ledger = ToolCallLedger(run_id=run_id)
+            self._ledgers[run_id] = ledger
+        return ledger
+
+    def discard_ledger(self, run_id: str) -> None:
+        """Free per-run ledger state once the run has reached a terminal state."""
+
+        self._ledgers.pop(run_id, None)
 
     async def process(
         self,
@@ -136,10 +163,19 @@ class StreamMessageProcessor:
                 parent_task_id=parent_task_id,
                 subagent_id=subagent_id,
             )
-            completed_payload = {
+            settled_call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
+            if settled_call_id is not None:
+                self.ledger_for_run(run.run_id).observed_settled(settled_call_id)
+            completed_payload: JsonObject = {
                 Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
                 Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
-                Keys.Field.STATUS: Values.Status.COMPLETED,
+                # Mirror the tool_result status so a failed/timed_out result
+                # produces a failed/timed_out completed event. Settlement is
+                # owned by the tool_result; this mirror keeps presentation
+                # downstream consistent.
+                Keys.Field.STATUS: payload.get(
+                    Keys.Field.STATUS, Values.Status.COMPLETED
+                ),
             }
             if duration_ms is not None:
                 completed_payload["duration_ms"] = duration_ms
@@ -204,6 +240,13 @@ class StreamMessageProcessor:
         )
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             state.started_at = datetime.now(timezone.utc)
+            if state.call_id is not None and state.tool_name is not None:
+                self.ledger_for_run(run.run_id).started(
+                    call_id=state.call_id,
+                    tool_name=state.tool_name,
+                    parent_task_id=parent_task_id,
+                    subagent_id=subagent_id,
+                )
         state.started_emitted = True
 
     async def _append_task_tool_call_event(
@@ -375,6 +418,15 @@ class StreamMessageProcessor:
             return {}
         return StreamMessageParser.payload_mapping(parsed)
 
+    # LangChain `ToolMessage.status` values mapped onto our public
+    # `tool_result.status` strings. ``error`` is what the LangGraph tool
+    # executor sets when a tool raised — we want to surface that as a typed
+    # ``failed`` outcome, not the silent ``completed`` default.
+    _TOOL_MESSAGE_STATUS_MAP: dict[str, str] = {
+        "error": Values.Status.FAILED,
+        "success": Values.Status.COMPLETED,
+    }
+
     @classmethod
     def tool_result_payload(cls, message: object) -> JsonObject:
         payload = StreamMessageParser.payload_mapping(message)
@@ -399,10 +451,16 @@ class StreamMessageProcessor:
             Keys.Field.STATUS,
         }
         output = {key: value for key, value in payload.items() if key not in excluded}
+        raw_status = payload.get(Keys.Field.STATUS)
+        status: object
+        if isinstance(raw_status, str):
+            status = cls._TOOL_MESSAGE_STATUS_MAP.get(raw_status.lower(), raw_status)
+        else:
+            status = Values.Status.COMPLETED
         result: JsonObject = {
             Keys.Field.TOOL_NAME: tool_name,
             Keys.Field.CALL_ID: call_id,
-            Keys.Field.STATUS: payload.get(Keys.Field.STATUS, Values.Status.COMPLETED),
+            Keys.Field.STATUS: status,
             Keys.Field.OUTPUT: output or payload,
         }
         cls.apply_tool_visibility(result)

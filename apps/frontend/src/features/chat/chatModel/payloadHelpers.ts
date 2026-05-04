@@ -80,6 +80,11 @@ export const hiddenToolArgKeys = new Set([
   "server_id",
   "server_name",
   "source_tool_call_id",
+  // `presentation` is the transport-level UI envelope (title, status_label,
+  // kind, debug_label, …) — it is NOT part of the tool's logical input and
+  // should never be rendered inside the "Tool details → Input" JSON block.
+  // It stays on `args` so `presentationFromArgs` can still read it.
+  "presentation",
 ]);
 
 export const hiddenApprovalArgKeys = new Set([

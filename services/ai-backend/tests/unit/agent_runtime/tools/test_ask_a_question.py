@@ -18,7 +18,11 @@ class TestAskAQuestionTool:
 
         def fake_interrupt(payload: dict[str, object]) -> dict[str, object]:
             captured.update(payload)
-            return {"decision": "approved", "answer": "Tokyo"}
+            return {
+                "decision": "approved",
+                "selected": ["Tokyo"],
+                "free_text": None,
+            }
 
         tool = AskAQuestionTool(
             runtime_context=runtime_context_admin,
@@ -30,7 +34,7 @@ class TestAskAQuestionTool:
                 {
                     "question": "Where would you like to travel?",
                     "hint": "Pick a city",
-                    "options": ("Tokyo", "Paris"),
+                    "options": ["Tokyo", "Paris"],
                 }
             )
         )
@@ -38,10 +42,68 @@ class TestAskAQuestionTool:
         assert captured["api_event_type"] == "approval_requested"
         assert captured["approval_kind"] == "ask_a_question"
         assert captured["question"] == "Where would you like to travel?"
-        assert captured["options"] == ["Tokyo", "Paris"]
+        assert captured["options"] == [
+            {"label": "Tokyo", "description": None, "recommended": False},
+            {"label": "Paris", "description": None, "recommended": False},
+        ]
+        assert captured["multi_select"] is False
+        assert captured["allow_free_text"] is True
         assert captured["status"] == "pending"
         assert isinstance(captured["approval_id"], str)
-        assert result == {"ok": True, "decision": "approved", "answer": "Tokyo"}
+        assert result["ok"] is True
+        assert result["decision"] == "approved"
+        assert result["answer"] == "Tokyo"
+        assert result["selected"] == ["Tokyo"]
+
+    def test_structured_options_preserve_label_description_and_recommended(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_interrupt(payload: dict[str, object]) -> dict[str, object]:
+            captured.update(payload)
+            return {"decision": "approved", "selected": ["Petrol + Automatic"]}
+
+        tool = AskAQuestionTool(
+            runtime_context=runtime_context_admin,
+            interrupt_handler=fake_interrupt,
+        )
+
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    "question": "Powertrain?",
+                    "header": "Pick a powertrain",
+                    "options": [
+                        {
+                            "label": "Petrol + Automatic",
+                            "description": "Smoother in city traffic.",
+                            "recommended": True,
+                        },
+                        {"label": "Diesel + Manual"},
+                    ],
+                    "multi_select": False,
+                    "allow_free_text": False,
+                }
+            )
+        )
+
+        assert captured["header"] == "Pick a powertrain"
+        assert captured["multi_select"] is False
+        assert captured["allow_free_text"] is False
+        assert captured["options"] == [
+            {
+                "label": "Petrol + Automatic",
+                "description": "Smoother in city traffic.",
+                "recommended": True,
+            },
+            {
+                "label": "Diesel + Manual",
+                "description": None,
+                "recommended": False,
+            },
+        ]
 
     def test_returns_rejection_when_user_declines(
         self,
@@ -85,7 +147,7 @@ class TestAskAQuestionTool:
 
         def fake_interrupt(payload: dict[str, object]) -> dict[str, object]:
             captured.update(payload)
-            return {"decision": "approved", "answer": "ok"}
+            return "Yes"
 
         tool = AskAQuestionTool(
             runtime_context=runtime_context_admin,
@@ -95,10 +157,38 @@ class TestAskAQuestionTool:
         result = asyncio.run(tool.ainvoke("Are you sure?"))
 
         assert captured["question"] == "Are you sure?"
-        assert result["answer"] == "ok"
+        assert result["ok"] is True
+        assert result["answer"] == "Yes"
 
-    def test_input_contract_normalizes_options(self) -> None:
+    def test_resume_with_legacy_answer_string_is_still_supported(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        def fake_interrupt(_payload: dict[str, object]) -> dict[str, object]:
+            return {"decision": "approved", "answer": "Tokyo"}
+
+        tool = AskAQuestionTool(
+            runtime_context=runtime_context_admin,
+            interrupt_handler=fake_interrupt,
+        )
+
+        result = asyncio.run(tool.ainvoke({"question": "Pick one"}))
+
+        assert result["ok"] is True
+        assert result["answer"] == "Tokyo"
+
+    def test_input_contract_normalizes_string_options_to_structured(self) -> None:
         parsed = AskAQuestionInput.model_validate(
             {"question": "Pick one", "options": ["a", "b"]}
         )
-        assert parsed.options == ("a", "b")
+        assert [option.label for option in parsed.options] == ["a", "b"]
+        assert all(option.recommended is False for option in parsed.options)
+
+    def test_input_contract_caps_option_count(self) -> None:
+        parsed = AskAQuestionInput.model_validate(
+            {
+                "question": "Pick one",
+                "options": [{"label": str(index)} for index in range(20)],
+            }
+        )
+        assert len(parsed.options) == 8

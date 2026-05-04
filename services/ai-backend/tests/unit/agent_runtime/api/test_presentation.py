@@ -107,6 +107,74 @@ def test_runtime_event_presentation_sanitizes_text() -> None:
     assert presentation.summary == "Found useful sources."
 
 
+def test_approval_requested_payload_strips_unknown_fields_for_generic_approvals() -> (
+    None
+):
+    """Genuine approval payloads keep their narrow allow-list — question-shaped
+    fields would only be noise for an MCP-tool approval."""
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload={
+            "approval_id": "approval_1",
+            "approval_kind": "mcp_tool",
+            "tool_name": "list_tasks",
+            "message": "Allow ClickUp search?",
+            "status": "pending",
+            "question": "leaked",
+            "options": ["leaked"],
+        },
+    )
+
+    assert "question" not in projected
+    assert "options" not in projected
+    assert projected["approval_kind"] == "mcp_tool"
+    assert projected["message"] == "Allow ClickUp search?"
+
+
+def test_ask_a_question_approval_payload_preserves_question_fields() -> None:
+    """ask_a_question payloads carry user-visible content (question, hint,
+    options, multi_select, allow_free_text). The projector must keep these
+    intact so the chat UI can render the dedicated question card."""
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload={
+            "approval_id": "ask_a_question:run_1:trace_1",
+            "approval_kind": "ask_a_question",
+            "header": "Pick a powertrain",
+            "question": "Petrol or Diesel?",
+            "hint": "Diesel for >15k km/yr",
+            "options": [
+                {
+                    "label": "Petrol + Automatic",
+                    "description": "Smoother in city traffic.",
+                    "recommended": True,
+                },
+                "Diesel + Manual",
+            ],
+            "multi_select": False,
+            "allow_free_text": True,
+            "status": "pending",
+        },
+    )
+
+    assert projected["approval_kind"] == "ask_a_question"
+    assert projected["header"] == "Pick a powertrain"
+    assert projected["question"] == "Petrol or Diesel?"
+    assert projected["hint"] == "Diesel for >15k km/yr"
+    assert projected["multi_select"] is False
+    assert projected["allow_free_text"] is True
+    assert projected["options"] == [
+        {
+            "label": "Petrol + Automatic",
+            "description": "Smoother in city traffic.",
+            "recommended": True,
+        },
+        {"label": "Diesel + Manual"},
+    ]
+
+
 async def test_presentation_generator_uses_valid_llm_json() -> None:
     generator = PresentationGenerator(
         presenter=lambda _: {

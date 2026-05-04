@@ -120,12 +120,11 @@ class RuntimeApprovalHandler:
         ):
             return
 
-        if (
-            approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION
-            and command.answer is not None
-        ):
-            await self._append_user_answer_message(run=run, command=command)
-
+        # The user's answer flows back to the agent via the LangGraph resume
+        # value (and is persisted as part of the tool result event). We do NOT
+        # append it as a top-level USER message — doing that surfaced the
+        # answer as a stray user-message bubble disconnected from the
+        # question card in the chat thread.
         resume = self._resume_payload(command, metadata)
         running = await self.persistence.update_run_status(
             run_id=run.run_id,
@@ -235,31 +234,6 @@ class RuntimeApprovalHandler:
             ),
             metadata=AssistantRunMetrics.metadata(metrics_payload),
             summary="Run completed",
-        )
-
-    async def _append_user_answer_message(
-        self,
-        *,
-        run: RunRecord,
-        command: RuntimeApprovalResolvedCommand,
-    ) -> None:
-        answer = command.answer
-        if answer is None or not answer.strip():
-            return
-        await self.persistence.append_message(
-            MessageRecord(
-                conversation_id=run.conversation_id,
-                org_id=run.org_id,
-                run_id=run.run_id,
-                role=MessageRole.USER,
-                content_text=answer,
-                parent_message_id=run.user_message_id,
-                trace_id=run.trace_id,
-                metadata={
-                    self._Fields.APPROVAL_ID: command.approval_id,
-                    self._Fields.APPROVAL_KIND: ApiValues.ApprovalKind.ASK_A_QUESTION,
-                },
-            )
         )
 
     @classmethod
