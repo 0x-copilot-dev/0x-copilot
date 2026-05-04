@@ -27,12 +27,19 @@ export function resolveApprovalDecision(
       // ask_a_question parts use the question vocabulary (answered/skipped),
       // not the permission-gate vocabulary. Branch here so the optimistic
       // local update matches the wire-level status the server will emit.
+      //
+      // `presentation` is cleared on resolution: the snapshot taken when the
+      // approval was *requested* pinned status_label="Waiting for permission",
+      // and the card UI prefers presentation.status_label over the computed
+      // resolved status. Clearing it lets ApprovalTool's fallback render
+      // "Permission approved"/"Done" once result is set.
       if (stringValue(args.approval_kind) === "ask_a_question") {
         const status = decision === "approved" ? "answered" : "skipped";
         return {
           ...part,
           args: jsonArgs({
             ...args,
+            presentation: null,
             approval_id: approvalId,
             status,
           }),
@@ -48,6 +55,7 @@ export function resolveApprovalDecision(
         ...part,
         args: jsonArgs({
           ...args,
+          presentation: null,
           approval_id: approvalId,
           status: decision,
         }),
@@ -85,6 +93,7 @@ export function resolveQuestionFromPayload(
         ...part,
         args: jsonArgs({
           ...asRecord(part.args),
+          presentation: null,
           approval_id: approvalId,
           status,
         }),

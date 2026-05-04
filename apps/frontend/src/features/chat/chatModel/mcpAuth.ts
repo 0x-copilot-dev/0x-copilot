@@ -98,6 +98,7 @@ export function resolveAuthenticatedMcpPart(
       ...part,
       args: jsonArgs({
         ...args,
+        presentation: null,
         approval_id: approvalId,
         server_id: server.server_id,
         status: "approved",
@@ -172,6 +173,7 @@ export function resolveMcpAuthDecision(
         ...part,
         args: jsonArgs({
           ...args,
+          presentation: null,
           approval_id: actionId,
           server_id: serverId,
           status: resultDecision,
