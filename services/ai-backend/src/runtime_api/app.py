@@ -15,6 +15,7 @@ from agent_runtime.observability.http_logging import (
     LoggingConfigurator,
     RequestContextMiddleware,
 )
+from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
@@ -35,9 +36,13 @@ class RuntimeApiAppFactory:
         service: RuntimeApiService | None = None,
         *,
         configure_logging_on_create: bool = True,
+        configure_telemetry_on_create: bool = True,
     ) -> FastAPI:
         if configure_logging_on_create:
             LoggingConfigurator.configure()
+        if configure_telemetry_on_create:
+            TelemetryBootstrap.configure()
+            TelemetryBootstrap.instrument_httpx_clients()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -51,6 +56,8 @@ class RuntimeApiAppFactory:
 
         app = FastAPI(title="Agent Runtime API", version="1", lifespan=lifespan)
         app.add_middleware(RequestContextMiddleware)
+        if configure_telemetry_on_create:
+            TelemetryBootstrap.instrument_fastapi(app)
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
         app.include_router(RuntimeApiRouter.create_router())

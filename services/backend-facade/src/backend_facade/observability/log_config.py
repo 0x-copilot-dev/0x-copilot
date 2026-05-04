@@ -8,6 +8,8 @@ import os
 import traceback
 from typing import Any
 
+from opentelemetry import trace as otel_trace
+
 from backend_facade.observability.log_event import (
     LogEvent,
     LogLevel,
@@ -119,14 +121,15 @@ class StructuredLogger:
         ctx: RequestContext | None,
         fields: dict[str, Any],
     ) -> LogEvent:
+        trace_id, span_id = _active_otel_ids()
         return LogEvent(
             service=fields.pop("service", _SERVICE_NAME),
             env=fields.pop("env", _current_env()),
             level=level,
             event=event,
             request_id=fields.pop("request_id", ctx.request_id if ctx else None),
-            trace_id=fields.pop("trace_id", None),
-            span_id=fields.pop("span_id", None),
+            trace_id=fields.pop("trace_id", trace_id),
+            span_id=fields.pop("span_id", span_id),
             org_id=fields.pop("org_id", ctx.org_id if ctx else None),
             user_id=fields.pop("user_id", ctx.user_id if ctx else None),
             method=fields.pop("method", ctx.method if ctx else None),
@@ -138,6 +141,16 @@ class StructuredLogger:
             safe_message=fields.pop("safe_message", None),
             metadata=MetadataRedactor.redact(fields.pop("metadata", None) or {}),
         )
+
+
+def _active_otel_ids() -> tuple[str | None, str | None]:
+    span = otel_trace.get_current_span()
+    if span is None:
+        return None, None
+    sc = span.get_span_context()
+    if not sc or not sc.is_valid:
+        return None, None
+    return format(sc.trace_id, "032x"), format(sc.span_id, "016x")
 
 
 def configure_logging(*, env: str | None = None, level: str | None = None) -> None:

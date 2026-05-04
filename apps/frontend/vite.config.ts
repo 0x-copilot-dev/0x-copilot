@@ -3,6 +3,12 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __BUILD_SHA__: JSON.stringify(process.env.GIT_SHA ?? "dev"),
+    __DEPLOY_ENV__: JSON.stringify(
+      process.env.DEPLOY_ENVIRONMENT ?? "development",
+    ),
+  },
   server: {
     port: 5173,
     proxy: {

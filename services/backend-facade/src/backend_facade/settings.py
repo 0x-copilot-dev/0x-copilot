@@ -12,6 +12,7 @@ class FacadeSettings(BaseModel):
 
     backend_url: str = "http://127.0.0.1:8100"
     ai_backend_url: str = "http://127.0.0.1:8000"
+    otel_collector_url: str = ""
 
     @classmethod
     def load(cls) -> "FacadeSettings":
@@ -22,4 +23,7 @@ class FacadeSettings(BaseModel):
             ai_backend_url=os.environ.get(
                 "AI_BACKEND_URL", "http://127.0.0.1:8000"
             ).rstrip("/"),
+            otel_collector_url=os.environ.get("OTEL_COLLECTOR_HTTP_URL", "").rstrip(
+                "/"
+            ),
         )

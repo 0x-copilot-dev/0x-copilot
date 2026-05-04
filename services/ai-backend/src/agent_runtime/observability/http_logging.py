@@ -30,6 +30,7 @@ from enterprise_service_contracts.headers import (
     REQUEST_ID_HEADER,
     USER_HEADER,
 )
+from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_runtime.observability.constants import Patterns
@@ -45,6 +46,22 @@ _LEVEL_BY_NAME = {
     "warning": logging.WARNING,
     "error": logging.ERROR,
 }
+
+
+def _active_otel_ids() -> tuple[str | None, str | None]:
+    """Return (trace_id, span_id) of the active OTEL span if any.
+
+    Returns ``(None, None)`` when no tracer is configured or no span is
+    active. Module-level for symmetry with the sibling backend services.
+    """
+
+    span = otel_trace.get_current_span()
+    if span is None:
+        return None, None
+    sc = span.get_span_context()
+    if not sc or not sc.is_valid:
+        return None, None
+    return format(sc.trace_id, "032x"), format(sc.span_id, "016x")
 
 
 class HttpLogLevel(StrEnum):
@@ -213,14 +230,15 @@ class HttpStructuredLogger:
         exc_info: bool = False,
     ) -> None:
         ctx = HttpRequestContextHolder.get()
+        trace_id, span_id = _active_otel_ids()
         log_event = HttpLogEvent(
             service=_SERVICE_NAME,
             env=LoggingConfigurator.current_env(),
             level=level,
             event=event,
             request_id=fields.pop("request_id", ctx.request_id if ctx else None),
-            trace_id=fields.pop("trace_id", None),
-            span_id=fields.pop("span_id", None),
+            trace_id=fields.pop("trace_id", trace_id),
+            span_id=fields.pop("span_id", span_id),
             org_id=fields.pop("org_id", ctx.org_id if ctx else None),
             user_id=fields.pop("user_id", ctx.user_id if ctx else None),
             method=fields.pop("method", ctx.method if ctx else None),

@@ -15,6 +15,10 @@ from backend_app.observability.log_config import (
     get_logger,
 )
 from backend_app.observability.log_event import LogEvent, LogLevel
+from backend_app.observability.otel import (
+    SafeAttributeSpanProcessor,
+    TelemetryBootstrap,
+)
 from backend_app.observability.request_context import (
     RequestContext,
     RequestContextMiddleware,
@@ -27,7 +31,9 @@ __all__ = [
     "LogLevel",
     "RequestContext",
     "RequestContextMiddleware",
+    "SafeAttributeSpanProcessor",
     "StructuredLogger",
+    "TelemetryBootstrap",
     "configure_logging",
     "current_context",
     "emit_access_log",

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
 from backend_facade.observability import (
     RequestContextMiddleware,
+    TelemetryBootstrap,
     configure_logging,
     current_context,
     emit_access_log,
@@ -52,12 +53,56 @@ def create_app(
     settings: FacadeSettings | None = None,
     *,
     configure_logging_on_create: bool = True,
+    configure_telemetry_on_create: bool = True,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
+    if configure_telemetry_on_create:
+        TelemetryBootstrap.configure()
+        TelemetryBootstrap.instrument_httpx_clients()
     app = FastAPI(title="Enterprise Search Backend Facade")
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
+    if configure_telemetry_on_create:
+        TelemetryBootstrap.instrument_fastapi(app)
     app.state.settings = settings or FacadeSettings.load()
+
+    @app.post("/v1/telemetry/otlp/v1/traces")
+    async def telemetry_otlp_traces(request: Request) -> Response:
+        """Pass browser-originated OTLP/HTTP traces to the in-perimeter collector.
+
+        The browser never reaches the OTEL collector directly so the collector
+        stays inside the customer perimeter; the facade is the only egress
+        path. The body is forwarded as-is (OTLP/HTTP protobuf or JSON);
+        identity is enforced via the standard bearer-token auth so the endpoint
+        cannot be abused as an open relay.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        endpoint = settings_for(app).otel_collector_url
+        if not endpoint:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        body = await request.body()
+        outbound_headers = _outbound_headers(identity)
+        ct = request.headers.get("content-type")
+        if ct:
+            outbound_headers["content-type"] = ct
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                upstream = await client.post(
+                    f"{endpoint.rstrip('/')}/v1/traces",
+                    content=body,
+                    headers=outbound_headers,
+                )
+        except httpx.HTTPError:
+            # Telemetry must never break the user; swallow upstream errors and
+            # let the browser keep trying. The facade access log records the
+            # 502 so we have a signal.
+            return Response(status_code=status.HTTP_502_BAD_GATEWAY)
+        return Response(
+            status_code=upstream.status_code,
+            content=upstream.content,
+            media_type=upstream.headers.get("content-type"),
+        )
 
     @app.get("/v1/session")
     async def get_session(request: Request) -> dict[str, object]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from agent_runtime.observability.http_logging import LoggingConfigurator
+from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
@@ -22,6 +23,8 @@ class RuntimeWorkerEntrypoint:
 
         settings = RuntimeSettings.load()
         LoggingConfigurator.configure(env=settings.environment.value)
+        TelemetryBootstrap.configure(env=settings.environment.value)
+        TelemetryBootstrap.instrument_httpx_clients()
         RuntimeSettings.configure_sdk_environment(settings)
         logger = LoggingConfigurator.get_logger("runtime_worker")
 
