@@ -329,6 +329,27 @@ class SessionService:
     def list_active(self, *, org_id: str, user_id: str) -> tuple[SessionRecord, ...]:
         return self._store.list_active_sessions(org_id=org_id, user_id=user_id)
 
+    def mark_mfa_satisfied(
+        self,
+        *,
+        session_id: str,
+        promoted_scopes: tuple[str, ...] | None = None,
+    ) -> bool:
+        """Stamp ``mfa_satisfied_at`` (and optionally swap the
+        ``mfa:pending`` placeholder for the real scopes). Returns ``True``
+        when a row was updated.
+
+        Called by ``MfaService`` after a successful TOTP / WebAuthn /
+        recovery-code verify so the next ``touch`` returns the satisfied
+        state and protected routes 200 instead of 401.
+        """
+
+        return self._store.mark_mfa_satisfied(
+            session_id=session_id,
+            when=_now(),
+            promoted_scopes=promoted_scopes,
+        )
+
     # Sweeper -----------------------------------------------------------
     def sweep_expired(self) -> int:
         cutoff = _now() - timedelta(seconds=self._policy.retention_after_expiry_seconds)

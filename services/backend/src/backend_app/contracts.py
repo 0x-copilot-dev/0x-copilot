@@ -1324,6 +1324,10 @@ class OidcCallbackResult(BackendContract):
     bearer_token: str
     expires_at: datetime
     return_to: str | None = None
+    # Mirrors LocalLoginResult.requires_mfa — when True the session was
+    # minted with the ``mfa:pending`` scope and the frontend must route
+    # to the MFA prompt.
+    requires_mfa: bool = False
 
 
 class OidcProviderSummary(BackendContract):
@@ -1397,13 +1401,15 @@ class IdentityPolicyRecord(BackendContract):
     ``local_password_enabled=False`` the local-password route returns 404
     regardless of how strong the candidate password is.
 
-    Reusable: A6 will add ``mfa_required``, A7 will add ``scim_required``
-    here so a bank/gov deployment can lock down to SAML+SCIM only via a
-    single UPDATE.
+    A6 added ``mfa_required`` + ``step_up_window_seconds``; A7 will add
+    ``scim_required`` so a bank/gov deployment can lock down to SAML+SCIM
+    only via a single UPDATE.
     """
 
     org_id: str
     local_password_enabled: bool = True
+    mfa_required: bool = False
+    step_up_window_seconds: int = 300
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("org_id")
@@ -1464,6 +1470,11 @@ class LocalLoginResult(BackendContract):
     bearer_token: str
     expires_at: datetime
     requires_password_change: bool = False
+    # When True the session was minted with ``permission_scopes=("mfa:pending",)``
+    # and protected routes will 401 until ``MfaService.verify*`` succeeds.
+    # The frontend uses this to route to the MFA prompt instead of the
+    # post-login destination.
+    requires_mfa: bool = False
 
 
 class PasswordChangeRequest(BackendContract):
@@ -1572,3 +1583,222 @@ class LoginAttemptListResponse(BackendContract):
 class AccountUnlockRequest(BackendContract):
     org_id: str
     reason: str | None = None
+
+
+# -----------------------------------------------------------------------------
+# MFA (A6) — TOTP + WebAuthn + recovery codes
+# -----------------------------------------------------------------------------
+
+
+class MfaFactorKind(StrEnum):
+    TOTP = "totp"
+    WEBAUTHN = "webauthn"
+
+
+class MfaChallengeKind(StrEnum):
+    TOTP = "totp"
+    WEBAUTHN = "webauthn"
+    RECOVERY = "recovery"
+
+
+class MfaFactorRecord(BackendContract):
+    """Generic per-user factor row. The ``kind`` column says which detail
+    table (``totp_secrets`` / ``webauthn_credentials``) carries the
+    cryptographic material."""
+
+    factor_id: str = Field(default_factory=lambda: f"mff_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    kind: MfaFactorKind
+    display_name: str
+    enabled: bool = False
+    enrolled_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used_at: datetime | None = None
+    disabled_at: datetime | None = None
+
+    @field_validator("factor_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class TotpSecretRecord(BackendContract):
+    """Encrypted TOTP seed + replay guard. ``encrypted_secret`` is the
+    TokenVault wrapping of the raw base32 seed; the plaintext only exists
+    in memory during enroll/verify."""
+
+    secret_id: str = Field(default_factory=lambda: f"tot_{uuid4().hex}")
+    factor_id: str
+    encrypted_secret: str
+    last_step: int | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("secret_id", "factor_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class WebAuthnCredentialRecord(BackendContract):
+    """COSE public key + sign_count for one FIDO2 authenticator.
+
+    ``credential_id_b64`` is the IdP-assigned credential id (urlsafe-b64,
+    no padding); we keep it as the unique business key so the WebAuthn
+    library's lookups land on the right row.
+    """
+
+    credential_id: str = Field(default_factory=lambda: f"wac_{uuid4().hex}")
+    factor_id: str
+    credential_id_b64: str
+    public_key_cose: bytes
+    sign_count: int = 0
+    transports: tuple[str, ...] = ()
+    aaguid: str | None = None
+    attestation_format: str
+    rp_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used_at: datetime | None = None
+
+    @field_validator("credential_id", "factor_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class MfaChallengeRecord(BackendContract):
+    """Single-use nonce binding a verify request to a (user, kind, factor)."""
+
+    challenge_id: str = Field(default_factory=lambda: f"mfc_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    kind: MfaChallengeKind
+    nonce: str
+    expected_factor_id: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("challenge_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class MfaRecoveryCodeRecord(BackendContract):
+    """One-shot recovery code; only the sha256 hash is stored."""
+
+    code_id: str = Field(default_factory=lambda: f"mfr_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    code_hash: str
+    consumed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("code_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+# Wire shapes for the MFA facade routes -----------------------------------
+
+
+class MfaFactorSummary(BackendContract):
+    """Public-safe view of a factor (no secrets, no public-key bytes)."""
+
+    factor_id: str
+    kind: MfaFactorKind
+    display_name: str
+    enabled: bool
+    enrolled_at: datetime
+    last_used_at: datetime | None = None
+
+
+class MfaFactorListResponse(BackendContract):
+    factors: tuple[MfaFactorSummary, ...] = ()
+
+
+class TotpEnrollResult(BackendContract):
+    """Returned ONCE at enrollment. Recovery codes never re-surface."""
+
+    factor_id: str
+    otpauth_url: str
+    secret_b32: str
+    recovery_codes: tuple[str, ...] = ()
+
+
+class TotpEnrollRequest(BackendContract):
+    org_id: str
+    user_id: str
+    display_name: str = "Authenticator app"
+
+
+class TotpConfirmRequest(BackendContract):
+    org_id: str
+    user_id: str
+    factor_id: str
+    code: str
+
+
+class MfaChallengeRequest(BackendContract):
+    org_id: str
+    user_id: str
+    kind: MfaChallengeKind = MfaChallengeKind.TOTP
+    factor_id: str | None = None
+
+
+class MfaChallengeResult(BackendContract):
+    challenge_id: str
+    nonce: str
+    kind: MfaChallengeKind
+    expected_factor_id: str | None = None
+    expires_at: datetime
+    # WebAuthn ``PublicKeyCredentialRequestOptions`` (already JSON-safe).
+    webauthn_options: dict[str, object] | None = None
+
+
+class MfaVerifyRequest(BackendContract):
+    org_id: str
+    user_id: str
+    challenge_id: str
+    code: str | None = None
+    assertion: dict[str, object] | None = None
+
+
+class MfaVerifyResult(BackendContract):
+    factor_id: str
+    kind: MfaChallengeKind
+    mfa_satisfied_at: datetime
+
+
+class MfaRecoveryConsumeRequest(BackendContract):
+    org_id: str
+    user_id: str
+    code: str
+
+
+class WebAuthnRegisterStartRequest(BackendContract):
+    org_id: str
+    user_id: str
+    display_name: str = "Security key"
+    rp_id: str
+    rp_name: str
+    user_name: str
+    user_display_name: str | None = None
+
+
+class WebAuthnRegisterStartResult(BackendContract):
+    factor_id: str
+    challenge_id: str
+    options: dict[str, object]
+
+
+class WebAuthnRegisterFinishRequest(BackendContract):
+    org_id: str
+    user_id: str
+    factor_id: str
+    challenge_id: str
+    rp_id: str
+    expected_origin: str
+    attestation: dict[str, object]

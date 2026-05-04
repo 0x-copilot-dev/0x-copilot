@@ -47,6 +47,19 @@ class SessionStore(Protocol):
         conn: Any | None = None,
     ) -> bool: ...
 
+    def mark_mfa_satisfied(
+        self,
+        *,
+        session_id: str,
+        when: datetime,
+        promoted_scopes: tuple[str, ...] | None = None,
+        conn: Any | None = None,
+    ) -> bool:
+        """Stamp ``mfa_satisfied_at`` on the session and (optionally) replace
+        the ``permission_scopes`` JSONB so the ``mfa:pending`` placeholder
+        gets swapped for the session's real scopes. Returns ``True`` when a
+        row was updated."""
+
     def list_active_sessions(
         self, *, org_id: str, user_id: str
     ) -> tuple[SessionRecord, ...]: ...
@@ -128,6 +141,24 @@ class InMemorySessionStore:
         self.sessions[session_id] = record.model_copy(
             update={"revoked_at": _now(), "revocation_reason": reason}
         )
+        return True
+
+    def mark_mfa_satisfied(
+        self,
+        *,
+        session_id: str,
+        when: datetime,
+        promoted_scopes: tuple[str, ...] | None = None,
+        conn: Any | None = None,
+    ) -> bool:
+        del conn
+        record = self.sessions.get(session_id)
+        if record is None or record.revoked_at is not None:
+            return False
+        update: dict[str, object] = {"mfa_satisfied_at": when}
+        if promoted_scopes is not None:
+            update["permission_scopes"] = promoted_scopes
+        self.sessions[session_id] = record.model_copy(update=update)
         return True
 
     def list_active_sessions(
@@ -278,6 +309,32 @@ class PostgresSessionStore:
                 WHERE session_id = %s AND org_id = %s
                 """,
                 (_now(), reason, session_id, org_id),
+            )
+            return bool(cur.rowcount)
+
+    def mark_mfa_satisfied(
+        self,
+        *,
+        session_id: str,
+        when: datetime,
+        promoted_scopes: tuple[str, ...] | None = None,
+        conn: Any | None = None,
+    ) -> bool:
+        # The COALESCE on the JSONB column lets the caller skip the swap
+        # by passing ``promoted_scopes=None`` (e.g. step-up reverify on a
+        # session that already had its real scopes).
+        scopes_arg = (
+            json.dumps(list(promoted_scopes)) if promoted_scopes is not None else None
+        )
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                UPDATE sessions SET
+                    mfa_satisfied_at = %s,
+                    permission_scopes = COALESCE(%s::jsonb, permission_scopes)
+                WHERE session_id = %s AND revoked_at IS NULL
+                """,
+                (when, scopes_arg, session_id),
             )
             return bool(cur.rowcount)
 

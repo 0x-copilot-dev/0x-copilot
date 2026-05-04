@@ -33,6 +33,7 @@ from backend_app.contracts import (
     PasswordResetTokenRecord,
 )
 from backend_app.identity.lockout import LockoutService
+from backend_app.identity.mfa import MfaService
 from backend_app.identity.password_store import PasswordStore
 from backend_app.identity.sessions import SessionService
 from backend_app.identity.store import IdentityStore
@@ -146,6 +147,7 @@ class PasswordService:
         hasher_config: PasswordHasherConfig | None = None,
         pepper: str | None = None,
         lockout: LockoutService | None = None,
+        mfa: MfaService | None = None,
     ) -> None:
         self._identity_store = identity_store
         self._password_store = password_store
@@ -153,6 +155,11 @@ class PasswordService:
         # Optional so existing tests / dev wiring without lockout still
         # work; production composes this from app.state during create_app.
         self._lockout = lockout
+        # Same opt-in shape: when wired, ``login`` mints sessions with
+        # ``permission_scopes=("mfa:pending",)`` whenever the org policy
+        # requires MFA AND the user has at least one enrolled factor.
+        # ``MfaService.verify*`` later swaps in the real scopes.
+        self._mfa = mfa
         self._config = hasher_config or PasswordHasherConfig.from_env()
         self._pepper = (
             pepper if pepper is not None else os.environ.get("PASSWORD_PEPPER", "")
@@ -418,11 +425,22 @@ class PasswordService:
             if employee is not None:
                 permission_scopes = tuple(sorted(employee.permission_scopes))
 
+        # If the org requires MFA AND the user has at least one enabled
+        # factor, mint the session with the placeholder scope so every
+        # protected route 401s until ``MfaService.verify*`` succeeds. We
+        # stash the real scopes in metadata so the verify path can
+        # promote them in a single UPDATE.
+        mfa_required = (
+            self._mfa is not None
+            and self._mfa.policy_requires_mfa(org_id=org_id)
+            and self._mfa.has_enabled_factor(org_id=org_id, user_id=user.user_id)
+        )
+        session_scopes = ("mfa:pending",) if mfa_required else permission_scopes
         session = self._sessions.create(
             org_id=org_id,
             user_id=user.user_id,
             roles=roles,
-            permission_scopes=permission_scopes,
+            permission_scopes=session_scopes,
             device_label="local-password",
             client_ip=ip,
             user_agent=user_agent,
@@ -443,12 +461,15 @@ class PasswordService:
             # later failure starts the count fresh; permanent lockouts
             # require admin unlock and are NOT cleared here.
             self._lockout.record_success(org_id=org_id, user_id=user.user_id)
+        # `requires_mfa` lives in the response so the frontend can route to
+        # the MFA prompt without relying on the bearer's scope shape.
         return LocalLoginResult(
             user_id=user.user_id,
             session_id=session.session_id,
             bearer_token=session.bearer_token,
             expires_at=session.expires_at,
             requires_password_change=requires_rotate,
+            requires_mfa=mfa_required,
         )
 
     # Reset -------------------------------------------------------------

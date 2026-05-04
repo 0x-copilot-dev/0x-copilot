@@ -1245,7 +1245,8 @@ class PostgresIdentityStore:
     def get_identity_policy(self, *, org_id: str) -> IdentityPolicyRecord | None:
         with self._cursor(None) as cur:
             cur.execute(
-                "SELECT org_id, local_password_enabled, updated_at "
+                "SELECT org_id, local_password_enabled, mfa_required, "
+                "step_up_window_seconds, updated_at "
                 "FROM identity_policies WHERE org_id = %s",
                 (org_id,),
             )
@@ -1264,15 +1265,20 @@ class PostgresIdentityStore:
             cur.execute(
                 """
                 INSERT INTO identity_policies (
-                    org_id, local_password_enabled, updated_at
-                ) VALUES (%s, %s, %s)
+                    org_id, local_password_enabled, mfa_required,
+                    step_up_window_seconds, updated_at
+                ) VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (org_id) DO UPDATE SET
                     local_password_enabled = EXCLUDED.local_password_enabled,
+                    mfa_required = EXCLUDED.mfa_required,
+                    step_up_window_seconds = EXCLUDED.step_up_window_seconds,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
                     updated.org_id,
                     updated.local_password_enabled,
+                    updated.mfa_required,
+                    updated.step_up_window_seconds,
                     updated.updated_at,
                 ),
             )

@@ -16,6 +16,21 @@ from backend_app.identity.lockout_store import (
     LockoutStore,
     PostgresLockoutStore,
 )
+from backend_app.identity.mfa import (
+    MfaChallengeInvalid,
+    MfaCodeRejected,
+    MfaConfig,
+    MfaError,
+    MfaFactorDisabled,
+    MfaFactorNotFound,
+    MfaService,
+    MfaWebAuthnRejected,
+)
+from backend_app.identity.mfa_store import (
+    InMemoryMfaStore,
+    MfaStore,
+    PostgresMfaStore,
+)
 from backend_app.identity.oidc import (
     HttpxTokenEndpointClient,
     OidcConfigError,
@@ -84,6 +99,7 @@ __all__ = [
     "IdentityStore",
     "InMemoryIdentityStore",
     "InMemoryLockoutStore",
+    "InMemoryMfaStore",
     "InMemoryOidcStore",
     "InMemoryPasswordStore",
     "InMemorySessionStore",
@@ -93,6 +109,15 @@ __all__ = [
     "LockoutService",
     "LockoutStore",
     "LoginRejectedError",
+    "MfaChallengeInvalid",
+    "MfaCodeRejected",
+    "MfaConfig",
+    "MfaError",
+    "MfaFactorDisabled",
+    "MfaFactorNotFound",
+    "MfaService",
+    "MfaStore",
+    "MfaWebAuthnRejected",
     "OidcConfigError",
     "OidcProviderConfig",
     "OidcProviderDisabled",
@@ -107,6 +132,7 @@ __all__ = [
     "PasswordStore",
     "PostgresIdentityStore",
     "PostgresLockoutStore",
+    "PostgresMfaStore",
     "PostgresOidcStore",
     "PostgresPasswordStore",
     "PostgresSessionStore",

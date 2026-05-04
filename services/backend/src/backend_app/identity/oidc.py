@@ -45,6 +45,7 @@ from backend_app.contracts import (
     UserRecord,
 )
 from backend_app.identity.lockout import LockoutService
+from backend_app.identity.mfa import MfaService
 from backend_app.identity._pkce import (
     compute_challenge,
     generate_nonce,
@@ -235,12 +236,18 @@ class OidcService:
         id_token_verifier: IdTokenVerifier | None = None,
         jwks_provider: JwksProvider | None = None,
         lockout: LockoutService | None = None,
+        mfa: MfaService | None = None,
     ) -> None:
         self._identity_store = identity_store
         self._oidc_store = oidc_store
         self._sessions = sessions
         self._token_vault = token_vault
         self._lockout = lockout
+        # Same opt-in as PasswordService — when wired AND the org's
+        # ``identity_policies.mfa_required`` is true AND the user has at
+        # least one enrolled factor, the OIDC mint puts the session in
+        # the ``mfa:pending`` state until ``MfaService.verify*`` runs.
+        self._mfa = mfa
         self._token_endpoint_client = (
             token_endpoint_client or HttpxTokenEndpointClient()
         )
@@ -400,7 +407,7 @@ class OidcService:
             provider=provider, user=user, token_payload=token_payload
         )
 
-        session = self._mint_session(user=user, provider=provider)
+        session, mfa_required = self._mint_session(user=user, provider=provider)
         self._record_login_attempt(
             org_id=user.org_id,
             user_id=user.user_id,
@@ -416,6 +423,7 @@ class OidcService:
             bearer_token=session.bearer_token,
             expires_at=session.expires_at,
             return_to=consumed.return_to,
+            requires_mfa=mfa_required,
         )
 
     # Helpers -----------------------------------------------------------
@@ -657,7 +665,10 @@ class OidcService:
         *,
         user: UserRecord,
         provider: AuthProviderRecord,
-    ) -> SessionMintResult:
+    ) -> tuple[SessionMintResult, bool]:
+        """Returns ``(session, requires_mfa)`` so the caller can wire the
+        ``OidcCallbackResult.requires_mfa`` flag without re-running the
+        policy check."""
         role_records = self._identity_store.list_role_assignments(
             org_id=user.org_id, user_id=user.user_id
         )
@@ -676,14 +687,23 @@ class OidcService:
             )
             if employee is not None:
                 permission_scopes.update(employee.permission_scopes)
-        return self._sessions.create(
+        mfa_required = (
+            self._mfa is not None
+            and self._mfa.policy_requires_mfa(org_id=user.org_id)
+            and self._mfa.has_enabled_factor(org_id=user.org_id, user_id=user.user_id)
+        )
+        session_scopes: tuple[str, ...] = (
+            ("mfa:pending",) if mfa_required else tuple(sorted(permission_scopes))
+        )
+        result = self._sessions.create(
             org_id=user.org_id,
             user_id=user.user_id,
             roles=tuple(role_names),
-            permission_scopes=tuple(sorted(permission_scopes)),
+            permission_scopes=session_scopes,
             auth_provider_id=provider.provider_id,
             device_label="oidc",
         )
+        return result, mfa_required
 
     def _record_login_attempt(
         self,

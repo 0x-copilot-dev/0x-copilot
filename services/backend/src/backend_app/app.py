@@ -40,11 +40,14 @@ from backend_app.identity import (
     IdentityStore,
     InMemoryIdentityStore,
     InMemoryLockoutStore,
+    InMemoryMfaStore,
     InMemoryOidcStore,
     InMemoryPasswordStore,
     InMemorySessionStore,
     LockoutService,
     LockoutStore,
+    MfaService,
+    MfaStore,
     OidcService,
     OidcStore,
     PasswordService,
@@ -62,6 +65,7 @@ from backend_app.observability import (
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
 from backend_app.routes.lockouts import register_lockout_routes
+from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.sessions import register_session_routes
@@ -162,6 +166,8 @@ def create_app(
     password_service: PasswordService | None = None,
     lockout_store: LockoutStore | None = None,
     lockout_service: LockoutService | None = None,
+    mfa_store: MfaStore | None = None,
+    mfa_service: MfaService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -206,18 +212,37 @@ def create_app(
         )
 
         # OIDC depends on a session service (it mints sessions on callback).
-        # If the session secret is unavailable, OIDC routes are also omitted.
+        # If the session secret is unavailable, OIDC + MFA routes are also
+        # omitted (MFA needs TokenVault for TOTP secret encryption).
         resolved_oidc_store: OidcStore = oidc_store or InMemoryOidcStore()
         app.state.oidc_store = resolved_oidc_store
         resolved_token_vault = token_vault or _default_token_vault()
+        resolved_mfa_service: MfaService | None = None
         if resolved_token_vault is not None:
             app.state.token_vault = resolved_token_vault
+            # MFA (A6) — TOTP secrets ride the TokenVault adapter for
+            # encryption-at-rest. Wired BEFORE OIDC + Password so both
+            # login flows can pass it through.
+            resolved_mfa_store: MfaStore = mfa_store or InMemoryMfaStore()
+            app.state.mfa_store = resolved_mfa_store
+            resolved_mfa_service = mfa_service or MfaService(
+                identity_store=resolved_identity_store,
+                mfa_store=resolved_mfa_store,
+                token_vault=resolved_token_vault,
+            )
+            app.state.mfa_service = resolved_mfa_service
+            register_mfa_routes(
+                app,
+                service=resolved_mfa_service,
+                sessions=resolved_session_service,
+            )
             resolved_oidc_service = oidc_service or OidcService(
                 identity_store=resolved_identity_store,
                 oidc_store=resolved_oidc_store,
                 sessions=resolved_session_service,
                 token_vault=resolved_token_vault,
                 lockout=resolved_lockout_service,
+                mfa=resolved_mfa_service,
             )
             app.state.oidc_service = resolved_oidc_service
             register_oidc_routes(
@@ -238,6 +263,7 @@ def create_app(
             password_store=resolved_password_store,
             sessions=resolved_session_service,
             lockout=resolved_lockout_service,
+            mfa=resolved_mfa_service,
         )
         app.state.password_service = resolved_password_service
         bootstrap_service = BootstrapAdminService(

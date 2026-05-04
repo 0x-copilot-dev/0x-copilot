@@ -282,6 +282,199 @@ def register_auth_routes(app: FastAPI) -> None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ------------------------------------------------------------------
+    # MFA (A6) — enroll, confirm, challenge, verify, recovery.
+    #
+    # Every route is bearer-authenticated; the caller's identity comes
+    # from the verified token, never from the request body. The session_id
+    # for ``verify`` / ``recovery/consume`` is derived from the bearer's
+    # ``sid`` claim so the user can't satisfy somebody else's session.
+    # ------------------------------------------------------------------
+
+    @app.get("/v1/auth/mfa/factors")
+    async def list_mfa_factors(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await _backend_get(
+            app,
+            identity,
+            "/internal/v1/auth/mfa/factors",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+        )
+
+    @app.post("/v1/auth/mfa/factors/totp/enroll")
+    async def mfa_totp_enroll(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        body = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "display_name": str(payload.get("display_name") or "Authenticator"),
+        }
+        return await _backend_post(
+            app, identity, "/internal/v1/auth/mfa/factors/totp/enroll", json=body
+        )
+
+    @app.post("/v1/auth/mfa/factors/totp/confirm")
+    async def mfa_totp_confirm(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        body = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "factor_id": _required_str(payload, "factor_id"),
+            "code": _required_str(payload, "code"),
+        }
+        return await _backend_post(
+            app, identity, "/internal/v1/auth/mfa/factors/totp/confirm", json=body
+        )
+
+    @app.delete(
+        "/v1/auth/mfa/factors/{factor_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def mfa_disable_factor(request: Request, factor_id: str) -> Response:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.delete(
+                f"{backend_url}/internal/v1/auth/mfa/factors/{factor_id}",
+                params={"org_id": identity.org_id, "user_id": identity.user_id},
+                headers=FacadeAuthenticator.service_headers(identity),
+            )
+        if response.status_code != status.HTTP_404_NOT_FOUND:
+            _raise_for_upstream(response)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/v1/auth/mfa/challenge")
+    async def mfa_challenge(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        body: dict[str, object] = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "kind": str(payload.get("kind") or "totp"),
+        }
+        if payload.get("factor_id"):
+            body["factor_id"] = str(payload["factor_id"])
+        return await _backend_post(
+            app, identity, "/internal/v1/auth/mfa/challenge", json=body
+        )
+
+    @app.post("/v1/auth/mfa/verify")
+    async def mfa_verify(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        bearer = _bearer_from_request(request)
+        session_id = (
+            FacadeAuthenticator.session_id_from_token(bearer) if bearer else None
+        )
+        if session_id is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "MFA verify requires a session-bound bearer token",
+            )
+        body: dict[str, object] = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "challenge_id": _required_str(payload, "challenge_id"),
+        }
+        if "code" in payload:
+            body["code"] = str(payload["code"])
+        if "assertion" in payload and isinstance(payload["assertion"], dict):
+            body["assertion"] = payload["assertion"]
+        params: dict[str, str] = {"session_id": session_id}
+        if "expected_origin" in payload:
+            params["expected_origin"] = str(payload["expected_origin"])
+        return await _backend_post(
+            app,
+            identity,
+            "/internal/v1/auth/mfa/verify",
+            json=body,
+            params=params,
+        )
+
+    @app.post("/v1/auth/mfa/recovery/consume")
+    async def mfa_recovery_consume(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        bearer = _bearer_from_request(request)
+        session_id = (
+            FacadeAuthenticator.session_id_from_token(bearer) if bearer else None
+        )
+        if session_id is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "MFA recovery requires a session-bound bearer token",
+            )
+        body = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "code": _required_str(payload, "code"),
+        }
+        return await _backend_post(
+            app,
+            identity,
+            "/internal/v1/auth/mfa/recovery/consume",
+            json=body,
+            params={"session_id": session_id},
+        )
+
+    @app.post("/v1/auth/mfa/factors/webauthn/register/start")
+    async def mfa_webauthn_start(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        body = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "display_name": str(payload.get("display_name") or "Security key"),
+            "rp_id": _required_str(payload, "rp_id"),
+            "rp_name": _required_str(payload, "rp_name"),
+            "user_name": _required_str(payload, "user_name"),
+            "user_display_name": (
+                str(payload.get("user_display_name"))
+                if payload.get("user_display_name")
+                else None
+            ),
+        }
+        return await _backend_post(
+            app,
+            identity,
+            "/internal/v1/auth/mfa/factors/webauthn/register/start",
+            json=body,
+        )
+
+    @app.post("/v1/auth/mfa/factors/webauthn/register/finish")
+    async def mfa_webauthn_finish(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        attestation = payload.get("attestation")
+        if not isinstance(attestation, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "attestation must be a JSON object"
+            )
+        body = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+            "factor_id": _required_str(payload, "factor_id"),
+            "challenge_id": _required_str(payload, "challenge_id"),
+            "rp_id": _required_str(payload, "rp_id"),
+            "expected_origin": _required_str(payload, "expected_origin"),
+            "attestation": attestation,
+        }
+        return await _backend_post(
+            app,
+            identity,
+            "/internal/v1/auth/mfa/factors/webauthn/register/finish",
+            json=body,
+        )
+
+    # ------------------------------------------------------------------
     # Login attempts (A8) — caller's own history.
     #
     # Spec §2.3 ``GET /v1/auth/me/login-attempts``. Backend validates the
@@ -341,6 +534,46 @@ async def _revoke(
         # leaking "this session id exists in some other org".
         return
     _raise_for_upstream(response)
+
+
+async def _backend_get(
+    app: FastAPI,
+    identity: AuthenticatedIdentity,
+    path: str,
+    *,
+    params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    backend_url = settings_for(app).backend_url
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            f"{backend_url}{path}",
+            params=params or {},
+            headers=FacadeAuthenticator.service_headers(identity),
+        )
+    _raise_for_upstream(response)
+    return response.json()
+
+
+async def _backend_post(
+    app: FastAPI,
+    identity: AuthenticatedIdentity,
+    path: str,
+    *,
+    json: dict[str, object] | None = None,
+    params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    backend_url = settings_for(app).backend_url
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"{backend_url}{path}",
+            json=json,
+            params=params or {},
+            headers=FacadeAuthenticator.service_headers(identity),
+        )
+    _raise_for_upstream(response)
+    if response.status_code == status.HTTP_204_NO_CONTENT or not response.content:
+        return {}
+    return response.json()
 
 
 def _anonymous_service_headers(*, org_id: str) -> dict[str, str]:
