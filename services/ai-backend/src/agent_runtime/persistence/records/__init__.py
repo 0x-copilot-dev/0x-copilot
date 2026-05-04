@@ -37,6 +37,12 @@ from agent_runtime.persistence.records.outbox import (
     RuntimeWorkerResult,
 )
 from agent_runtime.persistence.records.payloads import ContextPayloadRecord
+from agent_runtime.persistence.records.retention import (
+    RetentionKind,
+    RetentionPolicyRecord,
+    RetentionScope,
+    RetentionSweepOutcome,
+)
 from agent_runtime.persistence.records.subagents import (
     AsyncTaskRecord,
     SubagentResultRecord,
@@ -117,5 +123,9 @@ __all__ = [
     "ChargeOutcome",
     "ToolBudgetEnforcement",
     "ToolBudgetRecord",
+    "RetentionKind",
+    "RetentionPolicyRecord",
+    "RetentionScope",
+    "RetentionSweepOutcome",
     "PERSISTENCE_TABLE_RECORDS",
 ]

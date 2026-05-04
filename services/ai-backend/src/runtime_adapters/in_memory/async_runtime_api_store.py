@@ -360,6 +360,51 @@ class AsyncInMemoryRuntimeApiStore:
     async def delete_budget(self, **kwargs):  # type: ignore[no-untyped-def]
         return self._store.delete_budget(**kwargs)
 
+    # Retention (C8). In-memory has no persistence so the sweeper is a
+    # complete no-op; the async surface is here only so the loop can be
+    # wired the same way in dev as in production.
+
+    async def list_retention_orgs(self):  # type: ignore[no-untyped-def]
+        from agent_runtime.persistence.records import (
+            RetentionPolicyRecord,
+        )
+
+        del RetentionPolicyRecord
+        return tuple(getattr(self._store, "retention_policies", {}).keys())
+
+    async def list_retention_policies(self, *, org_id: str):  # type: ignore[no-untyped-def]
+        policies = getattr(self._store, "retention_policies", {})
+        return tuple(policies.get(org_id, ()))
+
+    async def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+        policies = getattr(self._store, "retention_policies", None)
+        if policies is None:
+            policies = {}
+            self._store.retention_policies = policies
+        bucket = list(policies.get(record.org_id, ()))
+        bucket = [
+            row
+            for row in bucket
+            if (row.scope, row.resource_id, row.kind)
+            != (record.scope, record.resource_id, record.kind)
+        ]
+        bucket.append(record)
+        policies[record.org_id] = tuple(bucket)
+        return record
+
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        policies = getattr(self._store, "retention_policies", {})
+        bucket = list(policies.get(org_id, ()))
+        policies[org_id] = tuple(row for row in bucket if row.id != policy_id)
+
+    async def sweep_retention_kind(self, **kwargs):  # type: ignore[no-untyped-def]
+        from agent_runtime.persistence.records import RetentionSweepOutcome
+
+        return RetentionSweepOutcome(
+            org_id=kwargs["org_id"],
+            kind=kwargs["kind"],
+        )
+
     # EventStorePort ------------------------------------------------------
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:

@@ -54,6 +54,10 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
+    RetentionKind,
+    RetentionPolicyRecord,
+    RetentionScope,
+    RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -2024,6 +2028,301 @@ class PostgresRuntimeApiStore:
                 "DELETE FROM usage_budgets WHERE org_id = %s AND id = %s",
                 (org_id, budget_id),
             )
+
+    # ------------------------------------------------------------------
+    # Retention (C8). The sweeper walks orgs cross-tenant under
+    # ``app.role='worker'`` so RLS allows the per-org policy lookup +
+    # tombstone/delete; same trust contract as the usage rollup loop.
+    # ------------------------------------------------------------------
+
+    async def list_retention_orgs(self) -> tuple[str, ...]:
+        async with self._role_connection("worker") as conn:
+            async with conn.cursor() as cur:
+                # Distinct org_ids across the affected tables. The UNION
+                # is small (one row per org) and the query runs at the
+                # sweeper's tick cadence so it's not hot-path.
+                await cur.execute(
+                    """
+                    SELECT DISTINCT org_id FROM agent_messages
+                    UNION SELECT DISTINCT org_id FROM runtime_events
+                    UNION SELECT DISTINCT org_id FROM runtime_context_payloads
+                    UNION SELECT DISTINCT org_id FROM runtime_checkpoints
+                    UNION SELECT DISTINCT org_id FROM runtime_memory_items
+                    """
+                )
+                rows = await cur.fetchall()
+        return tuple(str(row["org_id"]) for row in rows)
+
+    async def list_retention_policies(
+        self, *, org_id: str
+    ) -> tuple[RetentionPolicyRecord, ...]:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT id, org_id, scope, resource_id, kind, ttl_seconds,
+                           created_by_user_id, created_at, updated_at
+                      FROM retention_policies
+                     WHERE org_id = %s
+                     ORDER BY created_at ASC
+                    """,
+                    (org_id,),
+                )
+                rows = await cur.fetchall()
+        return tuple(self._retention_policy(row) for row in rows)
+
+    async def upsert_retention_policy(
+        self, record: RetentionPolicyRecord
+    ) -> RetentionPolicyRecord:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO retention_policies (
+                        id, org_id, scope, resource_id, kind, ttl_seconds,
+                        created_by_user_id, created_at, updated_at
+                    ) VALUES (
+                        %(id)s, %(org_id)s, %(scope)s, %(resource_id)s,
+                        %(kind)s, %(ttl_seconds)s, %(created_by_user_id)s,
+                        %(created_at)s, %(updated_at)s
+                    )
+                    ON CONFLICT (org_id, scope, COALESCE(resource_id, ''), kind)
+                    DO UPDATE SET
+                        ttl_seconds = EXCLUDED.ttl_seconds,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    {
+                        "id": record.id,
+                        "org_id": record.org_id,
+                        "scope": record.scope.value,
+                        "resource_id": record.resource_id,
+                        "kind": record.kind.value,
+                        "ttl_seconds": record.ttl_seconds,
+                        "created_by_user_id": record.created_by_user_id,
+                        "created_at": record.created_at,
+                        "updated_at": record.updated_at,
+                    },
+                )
+        return record
+
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            await conn.execute(
+                "DELETE FROM retention_policies WHERE org_id = %s AND id = %s",
+                (org_id, policy_id),
+            )
+
+    async def sweep_retention_kind(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        dry_run: bool = False,
+    ) -> RetentionSweepOutcome:
+        # Per-kind SQL — one method instead of five separate handler
+        # files to keep the audit-readable surface narrow. Tombstone vs.
+        # hard-delete strategy is per the C8 spec; legal-hold filter
+        # uses the active-only index from migration 0001.
+        if kind is RetentionKind.MESSAGES:
+            return await self._sweep_messages(
+                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+            )
+        if kind is RetentionKind.EVENTS:
+            return await self._sweep_events(
+                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+            )
+        if kind is RetentionKind.CONTEXT_PAYLOADS:
+            return await self._sweep_context_payloads(org_id=org_id, dry_run=dry_run)
+        if kind is RetentionKind.CHECKPOINTS:
+            return await self._sweep_checkpoints(
+                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+            )
+        if kind is RetentionKind.MEMORY_ITEMS:
+            return await self._sweep_memory_items(
+                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+            )
+        raise ValueError(f"unknown retention kind: {kind!r}")
+
+    async def _sweep_messages(
+        self, *, org_id: str, ttl_seconds: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # Tombstone messages older than ttl whose conversation isn't on
+        # legal hold. Audit rows referencing the message id stay intact.
+        sql = """
+            UPDATE agent_messages
+               SET status = 'deleted',
+                   content_text = '[deleted by retention policy]',
+                   content_json = '[]'::jsonb,
+                   metadata_json = '{}'::jsonb,
+                   deleted_at = NOW()
+             WHERE org_id = %(org_id)s
+               AND status <> 'deleted'
+               AND created_at < NOW() - make_interval(secs => %(ttl)s)
+               AND conversation_id NOT IN (
+                   SELECT resource_id
+                     FROM runtime_legal_holds
+                    WHERE org_id = %(org_id)s
+                      AND scope IN ('conversation','user','org')
+                      AND released_at IS NULL
+               )
+        """
+        return await self._execute_sweep(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MESSAGES,
+            ttl_seconds=ttl_seconds,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def _sweep_events(
+        self, *, org_id: str, ttl_seconds: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            UPDATE runtime_events
+               SET payload_json_redacted = '{}'::jsonb,
+                   metadata_json_redacted = jsonb_build_object('retention_purged', true)
+             WHERE org_id = %(org_id)s
+               AND created_at < NOW() - make_interval(secs => %(ttl)s)
+               AND run_id NOT IN (
+                   SELECT resource_id
+                     FROM runtime_legal_holds
+                    WHERE org_id = %(org_id)s
+                      AND released_at IS NULL
+               )
+        """
+        return await self._execute_sweep(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.EVENTS,
+            ttl_seconds=ttl_seconds,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def _sweep_context_payloads(
+        self, *, org_id: str, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # The schema's retention_until column is authoritative for context
+        # payloads; the resolver's TTL is unused on this path.
+        sql = """
+            DELETE FROM runtime_context_payloads
+             WHERE org_id = %(org_id)s
+               AND retention_until IS NOT NULL
+               AND retention_until < NOW()
+        """
+        return await self._execute_sweep(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.CONTEXT_PAYLOADS,
+            ttl_seconds=0,
+            dry_run=dry_run,
+            tally_field="deleted",
+        )
+
+    async def _sweep_checkpoints(
+        self, *, org_id: str, ttl_seconds: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # Keep the latest 10 per (thread_id, namespace) plus anything in
+        # the policy window. Older versions outside the window are
+        # hard-deleted (no audit need; checkpoint blobs are reproducible
+        # state, not user-visible PII).
+        sql = """
+            DELETE FROM runtime_checkpoints
+             WHERE org_id = %(org_id)s
+               AND id IN (
+                   SELECT id FROM (
+                       SELECT id,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY thread_id, checkpoint_namespace
+                                  ORDER BY checkpoint_version DESC
+                              ) AS rn,
+                              created_at
+                         FROM runtime_checkpoints
+                        WHERE org_id = %(org_id)s
+                   ) ranked
+                   WHERE rn > 10
+                     AND created_at < NOW() - make_interval(secs => %(ttl)s)
+               )
+        """
+        return await self._execute_sweep(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.CHECKPOINTS,
+            ttl_seconds=ttl_seconds,
+            dry_run=dry_run,
+            tally_field="deleted",
+        )
+
+    async def _sweep_memory_items(
+        self, *, org_id: str, ttl_seconds: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            UPDATE runtime_memory_items
+               SET deleted_at = NOW(),
+                   content_summary = '[deleted by retention policy]'
+             WHERE org_id = %(org_id)s
+               AND deleted_at IS NULL
+               AND created_at < NOW() - make_interval(secs => %(ttl)s)
+        """
+        return await self._execute_sweep(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MEMORY_ITEMS,
+            ttl_seconds=ttl_seconds,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def _execute_sweep(
+        self,
+        *,
+        sql: str,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        dry_run: bool,
+        tally_field: str,
+    ) -> RetentionSweepOutcome:
+        # Dry-run runs the sweep inside a transaction we explicitly roll
+        # back — the rowcount reflects exactly what would change without
+        # leaving state behind. Live mode runs in autocommit per the
+        # connection helper's default.
+        async with self._tenant_connection(org_id=org_id) as conn:
+            if dry_run:
+                async with conn.transaction(force_rollback=True):
+                    async with conn.cursor() as cur:
+                        await cur.execute(sql, {"org_id": org_id, "ttl": ttl_seconds})
+                        affected = cur.rowcount
+            else:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql, {"org_id": org_id, "ttl": ttl_seconds})
+                    affected = cur.rowcount
+        outcome = RetentionSweepOutcome(org_id=org_id, kind=kind)
+        if tally_field == "tombstoned":
+            return outcome.model_copy(update={"tombstoned": affected})
+        return outcome.model_copy(update={"deleted": affected})
+
+    @classmethod
+    def _retention_policy(cls, row: dict[str, object]) -> RetentionPolicyRecord:
+        return RetentionPolicyRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            scope=RetentionScope(str(row["scope"])),
+            resource_id=(
+                str(row["resource_id"]) if row.get("resource_id") is not None else None
+            ),
+            kind=RetentionKind(str(row["kind"])),
+            ttl_seconds=int(row["ttl_seconds"]),
+            created_by_user_id=(
+                str(row["created_by_user_id"])
+                if row.get("created_by_user_id") is not None
+                else None
+            ),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
     @classmethod
     def _budget_record(cls, row: dict[str, object]) -> BudgetRecord:

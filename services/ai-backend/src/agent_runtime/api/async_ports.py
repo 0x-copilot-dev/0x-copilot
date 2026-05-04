@@ -21,6 +21,9 @@ from agent_runtime.persistence.records import (
     ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
+    RetentionKind,
+    RetentionPolicyRecord,
+    RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -386,6 +389,60 @@ class AsyncPersistencePort(Protocol):
 
     async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
         """Hard-delete a budget (cascades to state + reservations)."""
+
+    # ------------------------------------------------------------------
+    # Retention (C8).
+    #
+    # The sweeper runs in the worker process; the API service uses these
+    # methods only for the admin CRUD endpoints (out of scope for this
+    # PR; operators seed via SQL until A10 RBAC ships).
+    # ------------------------------------------------------------------
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        """Return distinct org_ids that have any rows in retention-affected tables.
+
+        The sweeper iterates one org at a time so cross-tenant scope is
+        impossible. Worker-role only — same trust contract as
+        ``query_run_usage_for_range(org_id=None)``.
+        """
+
+    async def list_retention_policies(
+        self, *, org_id: str
+    ) -> Sequence[RetentionPolicyRecord]:
+        """Return every retention policy for an org (small list, no paging)."""
+
+    async def upsert_retention_policy(
+        self, record: RetentionPolicyRecord
+    ) -> RetentionPolicyRecord:
+        """Idempotent insert or update keyed by ``(org_id, scope, resource_id, kind)``."""
+
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        """Remove one retention policy."""
+
+    async def sweep_retention_kind(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        dry_run: bool = False,
+    ) -> RetentionSweepOutcome:
+        """Apply the per-kind retention strategy for one tenant.
+
+        Per kind:
+
+          - ``messages`` / ``events`` / ``memory_items``: tombstone (status
+            flip / blank content) for rows older than ttl. Hard delete after
+            a 30d grace; today the implementation only tombstones.
+          - ``context_payloads``: hard delete where ``retention_until <
+            now()`` (the column already exists in the schema and is
+            authoritative) — the resolver's ttl is treated as a fallback.
+          - ``checkpoints``: keep the latest N per ``(thread_id, namespace)``
+            (default 10) plus anything inside the ttl window.
+
+        Resources covered by an active ``runtime_legal_holds`` row are
+        skipped and counted in ``skipped_legal_hold``.
+        """
 
 
 @runtime_checkable

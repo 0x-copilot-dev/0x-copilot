@@ -9,6 +9,10 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.jobs.retention_sweeper import (
+    RetentionSweeperLoop,
+    RetentionSweeperLoopEnv,
+)
 from runtime_worker.usage_rollup_loop import (
     UsageRollupLoop,
     UsageRollupLoopEnv,
@@ -39,6 +43,7 @@ class RuntimeWorkerEntrypoint:
             await async_ports.store.open()
             await async_ports.store.migrate()
             rollup_loop: UsageRollupLoop | None = None
+            retention_loop: RetentionSweeperLoop | None = None
             try:
                 worker = RuntimeWorker(
                     persistence=async_ports.persistence,
@@ -67,10 +72,28 @@ class RuntimeWorkerEntrypoint:
                             "late_arrival_minutes": rollup_loop._late_arrival_minutes,
                         },
                     )
+                # C8: opt-in (default off) so existing deploys don't
+                # start tombstoning rows on upgrade.
+                if RetentionSweeperLoopEnv.env_bool(
+                    RetentionSweeperLoopEnv.ENABLED, default=False
+                ):
+                    retention_loop = RetentionSweeperLoop(
+                        persistence=async_ports.persistence
+                    )
+                    await retention_loop.start()
+                    logger.info(
+                        "retention_sweeper_loop_started",
+                        metadata={
+                            "interval_seconds": retention_loop._interval,
+                            "dry_run": retention_loop._dry_run,
+                        },
+                    )
                 await worker.run_forever(
                     poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
                 )
             finally:
+                if retention_loop is not None:
+                    await retention_loop.stop()
                 if rollup_loop is not None:
                     await rollup_loop.stop()
                 await async_ports.store.close()
