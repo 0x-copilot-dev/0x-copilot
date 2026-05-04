@@ -86,6 +86,30 @@ class _ErrorMessage:
         "Service unavailable",
         "The connected app didn't respond.",
     )
+    TOOL_EXCEPTION = (
+        "Step failed",
+        "The tool reported an error and didn't return a result.",
+    )
+    TOOL_TIMEOUT = (
+        "Step timed out",
+        "The tool took too long to respond and was stopped.",
+    )
+    TOOL_RUN_TIMEOUT = (
+        "Step timed out",
+        "Enterprise Search ran out of time before this tool finished.",
+    )
+    TOOL_RUN_ABANDONED = (
+        "Step interrupted",
+        "Enterprise Search lost track of this step and stopped it.",
+    )
+    TOOL_CANCELLED = (
+        "Step cancelled",
+        "This step was cancelled before it could finish.",
+    )
+    RUN_WORKER_LOST = (
+        "Run interrupted",
+        "Enterprise Search stopped this run because the worker became unresponsive.",
+    )
     DEFAULT = ("Step failed", "Enterprise Search couldn't complete this step.")
 
     @classmethod

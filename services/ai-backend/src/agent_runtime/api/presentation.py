@@ -41,7 +41,9 @@ from agent_runtime.api.presentation_templates import (
     PayloadProjector,
     PresentationOutput,
     ToolTemplateRenderer,
+    _ErrorMessage,
 )
+from agent_runtime.execution.tool_outcomes import TOOL_FAILURE_STATUSES
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.execution.contracts import ModelConfig, StreamEventSource
 from agent_runtime.execution.deep_agent_builder import build_chat_model
@@ -269,12 +271,18 @@ class PresentationGenerator:
         event_type: RuntimeApiEventType,
         payload: JsonObject,
     ) -> dict[str, str]:
-        """Map event_type + payload status to a fixed status_label / kind pair."""
+        """Map event_type + payload status to a fixed status_label / kind pair.
+
+        Failure status wins over event_type — a TOOL_RESULT with status="failed"
+        is a terminal error, not a successful "Done".
+        """
 
         status = ""
         raw_status = payload.get("status")
         if isinstance(raw_status, str):
             status = raw_status.lower()
+        if status in TOOL_FAILURE_STATUSES or status == "error":
+            return {"status_label": "Failed", "kind": "error"}
         if event_type is RuntimeApiEventType.TOOL_RESULT or status in {
             "completed",
             "complete",
@@ -283,8 +291,6 @@ class PresentationGenerator:
             "succeeded",
         }:
             return {"status_label": "Done", "kind": "result"}
-        if status in {"failed", "error"}:
-            return {"status_label": "Failed", "kind": "error"}
         return {"status_label": "Running", "kind": "progress"}
 
     async def _generate(self, context: JsonObject) -> object:
@@ -707,14 +713,25 @@ class PresentationGenerator:
             if isinstance(tool_name, str) and tool_name.strip()
             else None
         )
-        is_result = event_type in self._RESULT_EVENT_TYPES or self._payload_status(
-            payload
-        ) in {"completed", "complete", "done", "success", "succeeded"}
-        is_failed = self._payload_status(payload) in {"failed", "error"}
+        status = self._payload_status(payload)
+        is_failed = status in TOOL_FAILURE_STATUSES or status == "error"
+        is_result = not is_failed and (
+            event_type in self._RESULT_EVENT_TYPES
+            or status in {"completed", "complete", "done", "success", "succeeded"}
+        )
+        error_summary: str | None = None
         if is_failed:
             status_label = "Failed"
             kind = "error"
-            default_title = humanized_tool or "Step failed"
+            error_code = self._first_text(payload, ("error_code",))
+            error_title, error_summary_template = _ErrorMessage.for_code(error_code)
+            # Prefer a tool-call-specific message when one is on the payload;
+            # fall back to the typed error code's static copy.
+            error_summary = (
+                self._first_text(payload, ("error_message", "safe_message"))
+                or error_summary_template
+            )
+            default_title = error_title
         elif is_result:
             status_label = "Done"
             kind = "result"
@@ -730,11 +747,16 @@ class PresentationGenerator:
             "kind": kind,
             "debug_label": "Tool details",
         }
+        if error_summary is not None:
+            envelope["summary"] = error_summary[:240]
         if group_key is not None:
             envelope["group_key"] = group_key
         if humanized_tool:
             envelope["primary_entity"] = humanized_tool[:80]
-        if event_type in self._RESULT_EVENT_TYPES:
+        # Skip the projector on failed results — error payloads typically
+        # don't carry preview-able rows, and the heuristics could surface
+        # noise (e.g. an `error.context` dict) that misleads the user.
+        if event_type in self._RESULT_EVENT_TYPES and not is_failed:
             preview = PayloadProjector.project(payload=payload, template=template)
             if preview:
                 envelope["result_preview"] = preview

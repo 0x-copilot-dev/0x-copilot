@@ -564,6 +564,143 @@ async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_c
     )
 
 
+def test_failed_tool_result_renders_error_kind_card() -> None:
+    """A `tool_result` with `status='failed'` must render kind='error' /
+    status_label='Failed', not the default 'Done' / kind='result'. The summary
+    falls back to the typed error code's static copy when no error_message is
+    on the payload."""
+
+    generator = PresentationGenerator()
+    presentation = generator.preliminary_presentation_for_event(
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_err",
+            "status": "failed",
+            "error_code": "tool_exception",
+        },
+        metadata={},
+        timeline_fields={"status": "failed", "span_id": "call_err"},
+    )
+
+    assert presentation is not None
+    assert presentation["kind"] == "error"
+    assert presentation["status_label"] == "Failed"
+    # Title comes from _ErrorMessage.for_code('tool_exception').
+    assert presentation["title"] == "Step failed"
+    # Summary comes from the typed code's copy when no error_message is present.
+    assert "tool reported an error" in presentation["summary"].lower()
+
+
+def test_timed_out_tool_result_uses_typed_error_code_summary() -> None:
+    """`status='timed_out'` + `error_code='tool_timeout'` should render with
+    the timeout-specific copy from `_ErrorMessage`, not the generic default."""
+
+    generator = PresentationGenerator()
+    presentation = generator.preliminary_presentation_for_event(
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "slow_tool",
+            "call_id": "call_slow",
+            "status": "timed_out",
+            "error_code": "tool_timeout",
+        },
+        metadata={},
+        timeline_fields={"status": "timed_out", "span_id": "call_slow"},
+    )
+
+    assert presentation is not None
+    assert presentation["kind"] == "error"
+    assert presentation["status_label"] == "Failed"
+    assert presentation["title"] == "Step timed out"
+    assert "took too long" in presentation["summary"].lower()
+
+
+def test_failed_tool_result_with_explicit_error_message_wins_over_typed_copy() -> None:
+    """When a tool surfaces a typed `error_message` on the payload, that wins
+    over `_ErrorMessage.for_code(...)`'s static fallback summary."""
+
+    generator = PresentationGenerator()
+    presentation = generator.preliminary_presentation_for_event(
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_err",
+            "status": "failed",
+            "error_code": "tool_exception",
+            "error_message": "Upstream API rejected the request: 503 Service Unavailable",
+        },
+        metadata={},
+        timeline_fields={"status": "failed", "span_id": "call_err"},
+    )
+
+    assert presentation is not None
+    assert presentation["summary"].startswith("Upstream API rejected the request")
+
+
+def test_failed_tool_result_skips_payload_projector() -> None:
+    """The projector heuristics could surface noise from an error payload's
+    `error.context` etc. Result_preview must not appear on a failed card."""
+
+    generator = PresentationGenerator()
+    presentation = generator.preliminary_presentation_for_event(
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_err",
+            "status": "failed",
+            "error_code": "tool_exception",
+            # A list-shaped output that the projector would happily render
+            # if we let it run; we should suppress it on failures.
+            "output": {
+                "results": [
+                    {"title": "row 1", "url": "https://example.com/1"},
+                    {"title": "row 2", "url": "https://example.com/2"},
+                ]
+            },
+        },
+        metadata={},
+        timeline_fields={"status": "failed", "span_id": "call_err"},
+    )
+
+    assert presentation is not None
+    assert presentation["kind"] == "error"
+    # The projector populates result_preview only on success paths; on a
+    # failed card the field is absent or empty, never the noisy heuristic rows.
+    assert not presentation.get("result_preview")
+
+
+def test_successful_tool_result_still_renders_done_with_projector_rows() -> None:
+    """Regression guard: my error-kind branch must not regress the happy path —
+    a successful tool_result still goes through the projector and renders kind='result'."""
+
+    generator = PresentationGenerator()
+    presentation = generator.preliminary_presentation_for_event(
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_ok",
+            "status": "completed",
+            "output": {
+                "results": [
+                    {
+                        "title": "Slack docs",
+                        "snippet": "Setup",
+                        "link": "https://slack.dev",
+                    }
+                ]
+            },
+        },
+        metadata={},
+        timeline_fields={"status": "completed", "span_id": "call_ok"},
+    )
+
+    assert presentation is not None
+    assert presentation["kind"] == "result"
+    assert presentation["status_label"] == "Done"
+    assert presentation["result_preview"][0]["title"] == "Slack docs"
+
+
 async def test_event_producer_forwards_agent_intent_hint_into_presentation_prompt() -> (
     None
 ):

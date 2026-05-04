@@ -1267,6 +1267,110 @@ def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
     assert set(store._queue_statuses.values()) == {OutboxStatus.COMPLETED}
 
 
+def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
+    """Run-level asyncio.timeout fires while a tool_call is in-flight without
+    a matching tool_result. The handler must emit synthetic terminal
+    `tool_result` + `tool_call_completed` events for the orphan call BEFORE
+    `run_failed` so SSE consumers see lifecycle terminate top-down. The
+    synthetic tool_result carries `status='timed_out'` and
+    `error_code='tool_run_timeout'` so the frontend renders an error card."""
+
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create()
+    run_id = _TestHelpers.create_queued_run(
+        store,
+        settings,
+        model={
+            "provider": "openai",
+            "model_name": "gpt-5.4-mini",
+            "timeout_seconds": 0.05,
+        },
+    )
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def streamer_with_orphan_tool(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        # First yield a tool_call_started chunk for `web_search`. The
+        # streamer never yields the matching tool_result before the
+        # outer asyncio.timeout fires.
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                SimpleNamespace(
+                    tool_call_chunks=[
+                        {
+                            "name": "web_search",
+                            "id": "call_orphan",
+                            "index": 0,
+                            "args": '{"query":"will hang"}',
+                        }
+                    ],
+                    content="",
+                ),
+                {},
+            ),
+        }
+        # Sleep past the run-level timeout so the call orphans.
+        await asyncio.sleep(1.0)
+        yield {"type": "values", "ns": (), "data": {"messages": []}}
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        retry_delay_seconds=0,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=streamer_with_orphan_tool,
+        ),
+    )
+
+    asyncio.run(worker.run_until_idle())
+
+    events = store.events_by_run[run_id]
+    event_types = [event.event_type for event in events]
+    # Event order is critical: tool lifecycle terminates BEFORE run lifecycle.
+    assert event_types == [
+        "run_queued",
+        "run_started",
+        "model_call_started",
+        "tool_call_started",
+        "tool_result",
+        "tool_call_completed",
+        "run_failed",
+    ]
+    # Synthetic tool_result from reconciliation carries timed_out status and
+    # the typed error_code so the frontend renders a Failed card.
+    synthetic_result = next(
+        event for event in events if event.event_type == "tool_result"
+    )
+    assert synthetic_result.payload["status"] == "timed_out"
+    assert synthetic_result.payload["error_code"] == "tool_run_timeout"
+    assert synthetic_result.payload["call_id"] == "call_orphan"
+    assert store.runs[run_id].status == AgentRunStatus.TIMED_OUT
+
+
 def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()

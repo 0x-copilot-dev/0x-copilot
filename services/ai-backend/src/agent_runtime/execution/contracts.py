@@ -66,6 +66,7 @@ class RuntimeErrorCode(StrEnum):
     CONFIGURATION_ERROR = "configuration_error"
     DEPENDENCY_ERROR = "dependency_error"
     RUNTIME_FACTORY_ERROR = "runtime_factory_error"
+    RUN_WORKER_LOST = "run_worker_lost"
 
 
 class RuntimeRunStatus(StrEnum):

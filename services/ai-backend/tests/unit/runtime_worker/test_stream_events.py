@@ -792,6 +792,175 @@ async def test_subagent_completed_carries_duration_ms_back_to_started_event() ->
     assert completed["payload"]["duration_ms"] >= 0
 
 
+async def test_tool_message_with_error_status_emits_failed_tool_result() -> None:
+    """LangGraph's tool executor sets ToolMessage.status='error' when a tool
+    raises. The runtime stream parser must surface that as `tool_result.status='failed'`
+    (and propagate the failure into the follow-up `tool_call_completed` event)
+    rather than silently defaulting to 'completed'."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = TestFixtures.run_record()
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "web_search",
+            "id": "call_err",
+            "index": 0,
+            "args": {"query": "broken tool"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_err",
+            "content": "ConnectionError: connection refused",
+            "status": "error",
+        },
+        delta=None,
+    )
+
+    result = next(
+        e for e in producer.events if e["event_type"] is RuntimeApiEventType.TOOL_RESULT
+    )
+    completed = next(
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.TOOL_CALL_COMPLETED
+    )
+    assert result["payload"]["status"] == "failed"
+    assert completed["payload"]["status"] == "failed"
+
+
+async def test_tool_message_with_success_status_emits_completed_tool_result() -> None:
+    """LangChain ToolMessage.status='success' maps to our 'completed' status."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = TestFixtures.run_record()
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "web_search",
+            "id": "call_ok",
+            "index": 0,
+            "args": {"query": "ok"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_ok",
+            "content": "results...",
+            "status": "success",
+        },
+        delta=None,
+    )
+
+    result = next(
+        e for e in producer.events if e["event_type"] is RuntimeApiEventType.TOOL_RESULT
+    )
+    assert result["payload"]["status"] == "completed"
+
+
+async def test_tool_call_started_records_ledger_entry() -> None:
+    """The ledger must observe every tool_call_started event so the handler
+    can reconcile in-flight calls if the run hits a terminal failure path."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = TestFixtures.run_record()
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "web_search",
+            "id": "call_x",
+            "index": 0,
+            "args": {"query": "hello"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    ledger = orchestrator.message_processor.ledger_for_run(run.run_id)
+    unsettled = ledger.unsettled()
+    assert len(unsettled) == 1
+    assert unsettled[0].call_id == "call_x"
+    assert unsettled[0].tool_name == "web_search"
+
+
+async def test_tool_result_marks_ledger_entry_observed_settled() -> None:
+    """Natural settlement (LangGraph emits a tool_result) must clear the
+    in-flight entry so the handler doesn't synthesize a duplicate
+    terminal event during reconciliation."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    namespace = StreamNamespace.from_value(())
+    run = TestFixtures.run_record()
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "web_search",
+            "id": "call_settled",
+            "index": 0,
+            "args": {"query": "x"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_settled",
+            "content": "results",
+        },
+        delta=None,
+    )
+    ledger = orchestrator.message_processor.ledger_for_run(run.run_id)
+    assert ledger.unsettled() == []
+
+
+def test_discard_ledger_frees_per_run_state() -> None:
+    """The handler calls discard_ledger after RUN_COMPLETED / RUN_FAILED so
+    we don't leak per-run state on a long-running worker."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+
+    ledger = orchestrator.message_processor.ledger_for_run("run_to_discard")
+    ledger.started("call_a", tool_name="web_search")
+    assert ledger.has_entries()
+    orchestrator.message_processor.discard_ledger("run_to_discard")
+    # A fresh ledger_for_run after discard returns an empty new instance.
+    fresh = orchestrator.message_processor.ledger_for_run("run_to_discard")
+    assert fresh is not ledger
+    assert fresh.has_entries() is False
+
+
 async def test_subagent_completed_without_started_omits_duration_ms() -> None:
     """If a SUBAGENT_COMPLETED arrives without a matching SUBAGENT_STARTED on
     this processor (e.g. event-store replay scenarios), we omit the field
