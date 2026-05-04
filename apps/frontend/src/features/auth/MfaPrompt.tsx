@@ -6,6 +6,12 @@
  * ``AuthContext.completeMfa()`` which refreshes the canonical session.
  */
 
+import {
+  Button,
+  Card,
+  Field,
+  TextInput,
+} from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -45,8 +51,8 @@ export function MfaPrompt({ rpId, onComplete }: MfaPromptProps): ReactElement {
     // The parent should not render this when MFA is not pending; if it
     // does we render an idle placeholder rather than crash.
     return (
-      <main className="auth-mfa" data-testid="mfa-prompt-idle">
-        Waiting for login…
+      <main className="auth-screen" data-testid="mfa-prompt-idle">
+        <Card tone="muted">Waiting for login…</Card>
       </main>
     );
   }
@@ -118,103 +124,161 @@ export function MfaPrompt({ rpId, onComplete }: MfaPromptProps): ReactElement {
   };
 
   return (
-    <main className="auth-mfa" data-testid="mfa-prompt">
-      <h1>Two-factor required</h1>
-      {step === "choose" && (
-        <section className="auth-mfa__choose">
-          <button
-            type="button"
-            onClick={() => setStep("totp")}
-            data-testid="mfa-choose-totp"
+    <main className="auth-screen" data-testid="mfa-prompt">
+      <Card className="auth-screen__card" tone="default">
+        <header className="auth-screen__header">
+          <h1>Two-factor required</h1>
+          <p>Verify your second factor to finish signing in.</p>
+        </header>
+
+        {step === "choose" && (
+          <section
+            className="auth-screen__mfa-choices"
+            aria-label="Choose a second factor"
           >
-            Use authenticator app code
-          </button>
-          <button
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              onClick={() => setStep("totp")}
+              data-testid="mfa-choose-totp"
+            >
+              Use authenticator app code
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="lg"
+              onClick={() => {
+                setStep("webauthn");
+                void startWebAuthn();
+              }}
+              data-testid="mfa-choose-webauthn"
+            >
+              Use security key
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              onClick={() => setStep("recovery")}
+              data-testid="mfa-choose-recovery"
+            >
+              Use recovery code
+            </Button>
+          </section>
+        )}
+
+        {step === "totp" && (
+          <form
+            onSubmit={submitTotp}
+            data-testid="mfa-totp-form"
+            className="auth-screen__form"
+          >
+            <Field
+              label="6-digit code"
+              hint="From your authenticator app"
+              className="auth-screen__field"
+            >
+              <TextInput
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value)}
+                required
+                data-testid="mfa-totp-input"
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={submitting || totpCode.length === 0}
+              data-testid="mfa-totp-submit"
+              className="auth-screen__submit"
+            >
+              {submitting ? "Verifying…" : "Verify"}
+            </Button>
+          </form>
+        )}
+
+        {step === "webauthn" && (
+          <p
+            className="auth-screen__webauthn-status"
+            data-testid="mfa-webauthn-status"
+            role="status"
+          >
+            {submitting
+              ? "Tap your security key…"
+              : (error ?? "WebAuthn complete")}
+          </p>
+        )}
+
+        {step === "recovery" && (
+          <form
+            onSubmit={submitRecovery}
+            data-testid="mfa-recovery-form"
+            className="auth-screen__form"
+          >
+            <Field
+              label="Recovery code"
+              hint="One of the codes saved during enrollment"
+              className="auth-screen__field"
+            >
+              <TextInput
+                type="text"
+                autoComplete="off"
+                value={recoveryCode}
+                onChange={(e) => setRecoveryCode(e.target.value)}
+                required
+                data-testid="mfa-recovery-input"
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={submitting || recoveryCode.length === 0}
+              data-testid="mfa-recovery-submit"
+              className="auth-screen__submit"
+            >
+              {submitting ? "Verifying…" : "Verify"}
+            </Button>
+          </form>
+        )}
+
+        {rpId && (
+          <p className="auth-screen__rp-id-hint" hidden>
+            rp_id={rpId}
+          </p>
+        )}
+
+        {error && step !== "choose" && (
+          <p
+            className="auth-screen__error"
+            role="alert"
+            data-testid="mfa-error"
+          >
+            {error}
+          </p>
+        )}
+
+        {step !== "choose" && (
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={() => {
-              setStep("webauthn");
-              void startWebAuthn();
+              setStep("choose");
+              setError(null);
             }}
-            data-testid="mfa-choose-webauthn"
+            className="auth-screen__back"
           >
-            Use security key
-          </button>
-          <button
-            type="button"
-            onClick={() => setStep("recovery")}
-            data-testid="mfa-choose-recovery"
-          >
-            Use recovery code
-          </button>
-        </section>
-      )}
-
-      {step === "totp" && (
-        <form onSubmit={submitTotp} data-testid="mfa-totp-form">
-          <label>
-            <span>6-digit code</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value)}
-              required
-              data-testid="mfa-totp-input"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={submitting || totpCode.length === 0}
-            data-testid="mfa-totp-submit"
-          >
-            Verify
-          </button>
-        </form>
-      )}
-
-      {step === "webauthn" && (
-        <p data-testid="mfa-webauthn-status">
-          {submitting
-            ? "Tap your security key…"
-            : (error ?? "WebAuthn complete")}
-        </p>
-      )}
-
-      {step === "recovery" && (
-        <form onSubmit={submitRecovery} data-testid="mfa-recovery-form">
-          <label>
-            <span>Recovery code</span>
-            <input
-              type="text"
-              autoComplete="off"
-              value={recoveryCode}
-              onChange={(e) => setRecoveryCode(e.target.value)}
-              required
-              data-testid="mfa-recovery-input"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={submitting || recoveryCode.length === 0}
-            data-testid="mfa-recovery-submit"
-          >
-            Verify
-          </button>
-        </form>
-      )}
-
-      {rpId && (
-        <p className="auth-mfa__rp-id-hint" hidden>
-          rp_id={rpId}
-        </p>
-      )}
-
-      {error && step !== "choose" && (
-        <p className="auth-mfa__error" role="alert" data-testid="mfa-error">
-          {error}
-        </p>
-      )}
+            ← Choose another method
+          </Button>
+        )}
+      </Card>
     </main>
   );
 }

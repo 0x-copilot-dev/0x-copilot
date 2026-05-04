@@ -17,9 +17,11 @@ import {
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { authTone } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import type { SkillState } from "../skills/useSkills";
+import { AccountSessionsPanel } from "./AccountSessionsPanel";
 
 const DEFAULT_SKILL_MARKDOWN = `---
 name: custom-workflow
@@ -113,9 +115,7 @@ export function SettingsScreen({
       </aside>
       <section className="settings-content">
         {activeSection === "general" ? <GeneralSettings /> : null}
-        {activeSection === "account" ? (
-          <PlaceholderSettings title="Account" />
-        ) : null}
+        {activeSection === "account" ? <AccountSettings /> : null}
         {activeSection === "capabilities" ? (
           <PlaceholderSettings
             title="Capabilities"
@@ -158,6 +158,39 @@ function GeneralSettings(): ReactElement {
           </Select>
         </Field>
       </Card>
+    </div>
+  );
+}
+
+function AccountSettings(): ReactElement {
+  const auth = useAuth();
+  const identity = auth.identity;
+  return (
+    <div className="settings-section">
+      <h2>Account</h2>
+      {identity && (
+        <Card className="settings-account-summary">
+          <Field label="Organization">
+            <code>{identity.org_id}</code>
+          </Field>
+          <Field label="User">
+            <code>{identity.user_id}</code>
+          </Field>
+          <Field label="Roles">
+            <span>{identity.roles.join(", ") || "none"}</span>
+          </Field>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            onClick={() => void auth.logout()}
+            data-testid="account-sign-out"
+          >
+            Sign out everywhere on this device
+          </Button>
+        </Card>
+      )}
+      <AccountSessionsPanel />
     </div>
   );
 }

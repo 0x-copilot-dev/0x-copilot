@@ -390,6 +390,7 @@ class SessionService:
             permission_scopes=record.permission_scopes,
             connector_scopes=record.connector_scopes,
             mfa_satisfied=record.mfa_satisfied_at is not None,
+            mfa_satisfied_at=record.mfa_satisfied_at,
             expires_at=record.expires_at,
         )
 

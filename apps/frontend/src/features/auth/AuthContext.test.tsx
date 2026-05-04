@@ -171,7 +171,7 @@ describe("LoginScreen", () => {
         <LoginScreen defaultOrgId="org_a" />
       </AuthProvider>,
     );
-    expect(await screen.findByText("Sign in with Google")).toBeInTheDocument();
+    expect(await screen.findByText("Continue with Google")).toBeInTheDocument();
     expect(screen.getByTestId("login-form")).toBeInTheDocument();
   });
 
@@ -192,7 +192,7 @@ describe("LoginScreen", () => {
         <LoginScreen defaultOrgId="org_a" />
       </AuthProvider>,
     );
-    expect(await screen.findByText("Sign in with Okta")).toBeInTheDocument();
+    expect(await screen.findByText("Continue with Okta")).toBeInTheDocument();
     expect(screen.queryByTestId("login-form")).not.toBeInTheDocument();
   });
 

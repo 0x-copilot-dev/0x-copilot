@@ -22,8 +22,17 @@ from enterprise_service_contracts.headers import (
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
-from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
+from backend_facade.auth import (
+    AuthenticatedIdentity,
+    FacadeAuthenticator,
+    requires_recent_mfa,
+)
 from backend_facade.settings import FacadeSettings
+
+
+# Default step-up window for sensitive routes when the org policy
+# doesn't override it. Mirrors the spec default in A6 §2.4 (5 minutes).
+_DEFAULT_STEP_UP_SECONDS = 300
 
 
 _ANONYMOUS_USER = "anonymous"
@@ -263,11 +272,20 @@ def register_auth_routes(app: FastAPI) -> None:
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def password_change(request: Request, payload: dict[str, object]) -> Response:
-        identity = FacadeAuthenticator.authenticate_request(request)
+        # Sensitive operation: require a fresh MFA verify within the last
+        # 5 minutes (spec A6 §2.4). cache_bypass=True so the elapsed
+        # check runs against the canonical DB state, not a stale cache.
         current = _required_str(payload, "current_password")
         new = _required_str(payload, "new_password")
         backend_url = settings_for(app).backend_url
         async with httpx.AsyncClient(timeout=10) as client:
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request,
+                backend_url=backend_url,
+                http_client=client,
+                cache_bypass=True,
+            )
+            requires_recent_mfa(identity, max_age_seconds=_DEFAULT_STEP_UP_SECONDS)
             response = await client.post(
                 f"{backend_url}/internal/v1/auth/password/change",
                 json={

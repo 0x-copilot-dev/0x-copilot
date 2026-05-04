@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import base64
 import hashlib
 import hmac
@@ -49,6 +50,15 @@ class AuthenticatedIdentity:
     roles: tuple[str, ...] = ("employee",)
     permission_scopes: tuple[str, ...] = ()
     connector_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Populated by ``verify_with_touch`` when the backend touch returns a
+    # ``mfa_satisfied_at`` timestamp. The HMAC-only path leaves this None
+    # since back-compat tokens carry no session row.
+    mfa_satisfied_at: datetime | None = None
+    # ``sid`` claim from the bearer (None for back-compat / dev-bypass
+    # tokens). ``requires_recent_mfa`` uses this to decide whether the
+    # caller is session-bound — step-up gates only fire on real
+    # sessions, not on the dev bypass path.
+    session_id: str | None = None
 
     def scoped_params(
         self, extra: dict[str, object] | None = None
@@ -252,6 +262,8 @@ class FacadeAuthenticator:
                 str(connector): tuple(scopes or ())
                 for connector, scopes in (body.get("connector_scopes") or {}).items()
             },
+            mfa_satisfied_at=_parse_iso_timestamp(body.get("mfa_satisfied_at")),
+            session_id=sid,
         )
         _TOUCH_CACHE.put(token_hash=token_hash, identity=canonical)
         return canonical
@@ -500,3 +512,84 @@ def _bearer_from_authorization_header(request: Request) -> str | None:
     if not header.lower().startswith("bearer "):
         return None
     return header.split(" ", maxsplit=1)[1].strip() or None
+
+
+def _parse_iso_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        # ``datetime.fromisoformat`` accepts ``+00:00`` and ``Z``; backend
+        # currently emits the former via Pydantic, but we tolerate both.
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Step-up MFA gate (A6 §2.4)
+# ---------------------------------------------------------------------------
+
+
+class StepUpRequired(HTTPException):
+    """Raised when a route demands a recent MFA verify and the session
+    either never satisfied MFA or did so outside the allowed window. The
+    ``WWW-Authenticate: x-step-up`` header tells the frontend to prompt
+    for a fresh second factor without invalidating the session itself."""
+
+    def __init__(
+        self,
+        *,
+        max_age_seconds: int,
+        elapsed_seconds: int | None,
+    ) -> None:
+        detail = (
+            "step-up MFA required: re-verify your second factor "
+            f"(window={max_age_seconds}s, "
+            f"elapsed={'never' if elapsed_seconds is None else f'{elapsed_seconds}s'})"
+        )
+        super().__init__(
+            status_code=403,
+            detail=detail,
+            headers={
+                "WWW-Authenticate": (
+                    f'x-step-up max_age="{max_age_seconds}", realm="enterprise-search"'
+                ),
+            },
+        )
+
+
+def requires_recent_mfa(
+    identity: AuthenticatedIdentity,
+    *,
+    max_age_seconds: int,
+    now: datetime | None = None,
+) -> None:
+    """Raise ``StepUpRequired`` if the caller's session hasn't satisfied
+    MFA within ``max_age_seconds``. Routes that need step-up wrap their
+    ``verify_with_touch`` call and immediately call this helper.
+
+    Why a free function instead of a FastAPI ``Depends``: the route
+    already drives ``verify_with_touch`` with its own ``http_client`` +
+    ``cache_bypass`` knobs; a Depends would have to duplicate that
+    machinery. Easier to compose explicitly.
+    """
+
+    if max_age_seconds <= 0:
+        return
+    if identity.session_id is None:
+        # Back-compat / dev-bypass tokens have no server-side session row
+        # to consult. Step-up is meaningless until ``REQUIRE_SESSION_BINDING``
+        # is on, at which point ``verify_identity_token`` will reject these
+        # tokens before they reach this guard.
+        return
+    satisfied = identity.mfa_satisfied_at
+    current = now if now is not None else datetime.now(timezone.utc)
+    if satisfied is None:
+        raise StepUpRequired(max_age_seconds=max_age_seconds, elapsed_seconds=None)
+    elapsed = int((current - satisfied).total_seconds())
+    if elapsed > max_age_seconds:
+        raise StepUpRequired(
+            max_age_seconds=max_age_seconds,
+            elapsed_seconds=elapsed,
+        )

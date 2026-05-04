@@ -14,11 +14,15 @@ from fastapi.testclient import TestClient
 
 import backend_facade.auth_routes as auth_routes_module
 from backend_facade.app import create_app
+from datetime import datetime, timedelta, timezone
+
 from backend_facade.auth import (
     AuthenticatedIdentity,
     FacadeAuthenticator,
     SessionRevoked,
+    StepUpRequired,
     _TouchCache,
+    requires_recent_mfa,
 )
 from backend_facade.settings import FacadeSettings
 
@@ -389,3 +393,158 @@ class TestSessionRevokedException:
     def test_session_revoked_is_401(self) -> None:
         exc = SessionRevoked()
         assert exc.status_code == 401
+
+
+class TestRequiresRecentMfa:
+    def _now(self) -> datetime:
+        return datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _identity(
+        self,
+        *,
+        sid: str | None = "sid_a",
+        mfa_satisfied_at: datetime | None = None,
+    ) -> AuthenticatedIdentity:
+        return AuthenticatedIdentity(
+            org_id="org_a",
+            user_id="usr_a",
+            session_id=sid,
+            mfa_satisfied_at=mfa_satisfied_at,
+        )
+
+    def test_no_op_when_max_age_zero(self) -> None:
+        # Defensive — ``max_age_seconds=0`` means "no step-up requirement".
+        requires_recent_mfa(self._identity(mfa_satisfied_at=None), max_age_seconds=0)
+
+    def test_skips_back_compat_tokens_without_sid(self) -> None:
+        # Back-compat / dev-bypass tokens have no session row; the gate
+        # must not 403 them or every dev login breaks.
+        requires_recent_mfa(
+            self._identity(sid=None, mfa_satisfied_at=None),
+            max_age_seconds=300,
+        )
+
+    def test_raises_when_mfa_never_satisfied(self) -> None:
+        with pytest.raises(StepUpRequired) as exc:
+            requires_recent_mfa(
+                self._identity(mfa_satisfied_at=None),
+                max_age_seconds=300,
+                now=self._now(),
+            )
+        assert exc.value.status_code == 403
+        assert "x-step-up" in exc.value.headers["WWW-Authenticate"]
+        assert 'max_age="300"' in exc.value.headers["WWW-Authenticate"]
+
+    def test_passes_when_mfa_within_window(self) -> None:
+        recent = self._now() - timedelta(seconds=120)
+        requires_recent_mfa(
+            self._identity(mfa_satisfied_at=recent),
+            max_age_seconds=300,
+            now=self._now(),
+        )
+
+    def test_raises_when_mfa_outside_window(self) -> None:
+        stale = self._now() - timedelta(seconds=900)
+        with pytest.raises(StepUpRequired) as exc:
+            requires_recent_mfa(
+                self._identity(mfa_satisfied_at=stale),
+                max_age_seconds=300,
+                now=self._now(),
+            )
+        assert exc.value.status_code == 403
+        assert "elapsed=900s" in exc.value.detail
+
+
+class TestPasswordChangeStepUp:
+    """The password-change route is the canonical step-up consumer."""
+
+    def _make_token(self, *, sid: str | None) -> str:
+        payload: dict[str, object] = {
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "roles": ["employee"],
+            "permission_scopes": ["runtime:use"],
+        }
+        if sid is not None:
+            payload["sid"] = sid
+        return _hmac_token(payload, _TEST_SECRET)
+
+    def _fake_async_client(self, *, mfa_satisfied_at: str | None):
+        captured: list[str] = []
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self) -> "_FakeAsyncClient":
+                return self
+
+            async def __aexit__(self, *args, **kwargs) -> None:
+                return None
+
+            async def post(self, url, *, json, headers, timeout=None):
+                captured.append(url)
+                if url.endswith("/touch"):
+                    return httpx.Response(
+                        200,
+                        json={
+                            "session_id": "sid_target",
+                            "org_id": "org_123",
+                            "user_id": "user_123",
+                            "roles": ["employee"],
+                            "permission_scopes": ["runtime:use"],
+                            "connector_scopes": {},
+                            "mfa_satisfied": mfa_satisfied_at is not None,
+                            "mfa_satisfied_at": mfa_satisfied_at,
+                            "expires_at": "2099-01-01T00:00:00+00:00",
+                        },
+                    )
+                return httpx.Response(204)
+
+        return _FakeAsyncClient, captured
+
+    def test_returns_403_with_step_up_header_when_mfa_stale(self, monkeypatch) -> None:
+        monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", _TEST_SECRET)
+        monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
+        # mfa_satisfied_at = far in the past → outside the 300s window.
+        client_class, _ = self._fake_async_client(
+            mfa_satisfied_at="2000-01-01T00:00:00+00:00"
+        )
+        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", client_class)
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        response = client.post(
+            "/v1/auth/password/change",
+            headers={"authorization": f"Bearer {self._make_token(sid='sid_target')}"},
+            json={
+                "current_password": "old-password",
+                "new_password": "new-password",
+            },
+        )
+        assert response.status_code == 403
+        assert "x-step-up" in response.headers.get("www-authenticate", "")
+
+    def test_passes_when_mfa_recent(self, monkeypatch) -> None:
+        monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", _TEST_SECRET)
+        monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        client_class, captured = self._fake_async_client(mfa_satisfied_at=recent)
+        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", client_class)
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        response = client.post(
+            "/v1/auth/password/change",
+            headers={"authorization": f"Bearer {self._make_token(sid='sid_target')}"},
+            json={
+                "current_password": "old-password",
+                "new_password": "new-password",
+            },
+        )
+        assert response.status_code == 204
+        # Both upstream calls fired: /touch + /password/change.
+        assert any(url.endswith("/touch") for url in captured)
+        assert any(
+            url.endswith("/internal/v1/auth/password/change") for url in captured
+        )

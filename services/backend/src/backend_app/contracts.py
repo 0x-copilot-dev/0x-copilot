@@ -1159,6 +1159,12 @@ class SessionTouchResult(BackendContract):
     permission_scopes: tuple[str, ...]
     connector_scopes: dict[str, tuple[str, ...]]
     mfa_satisfied: bool
+    # Raw timestamp of the most recent MFA verify on this session. Returned
+    # so the facade's step-up gate can compare against per-route windows
+    # (the org's default window is on ``identity_policies`` but routes can
+    # demand a stricter one). ``None`` when the session has never satisfied
+    # MFA — same condition that flips ``mfa_satisfied`` to false.
+    mfa_satisfied_at: datetime | None = None
     expires_at: datetime
 
 

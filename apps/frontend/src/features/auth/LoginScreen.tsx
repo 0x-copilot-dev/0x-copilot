@@ -6,9 +6,18 @@
  * the dance; the local-password form drives ``AuthContext.login``.
  *
  * Bank deploys hide signup + reset links via ``hideSelfService`` (a
- * later PR threads the C1 toggle through).
+ * later PR threads the C1 toggle through). Built on the design-system
+ * primitives (``Card``, ``Field``, ``TextInput``, ``Button``) so the
+ * tokens / focus rings / disabled states match the rest of the app.
  */
 
+import {
+  Button,
+  Card,
+  Field,
+  TextInput,
+  classNames,
+} from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -130,89 +139,110 @@ export function LoginScreen({
   };
 
   return (
-    <main className="auth-login" data-testid="login-screen">
-      <h1 className="auth-login__title">Sign in</h1>
+    <main className="auth-screen" data-testid="login-screen">
+      <Card className="auth-screen__card" tone="default">
+        <header className="auth-screen__header">
+          <h1>Sign in to Enterprise Search</h1>
+          <p>Use your organization credentials to continue.</p>
+        </header>
 
-      <label className="auth-login__field">
-        <span>Organization</span>
-        <input
-          type="text"
-          value={orgId}
-          onChange={(e) => setOrgId(e.target.value)}
-          autoComplete="organization"
-          data-testid="login-org"
-        />
-      </label>
+        <Field label="Organization" className="auth-screen__field">
+          <TextInput
+            value={orgId}
+            onChange={(e) => setOrgId(e.target.value)}
+            autoComplete="organization"
+            data-testid="login-org"
+          />
+        </Field>
 
-      {providersError && (
-        <p className="auth-login__error" role="alert">
-          {providersError}
-        </p>
-      )}
+        {providersError && (
+          <p className="auth-screen__error" role="alert">
+            {providersError}
+          </p>
+        )}
 
-      {oidcProviders.length > 0 && (
-        <section className="auth-login__idp-list" data-testid="login-idp-list">
-          {oidcProviders.map((provider) => (
-            <a
-              key={provider.provider_id}
-              href={oidcStartUrl(provider.provider_id)}
-              className="auth-login__idp-button"
-              data-provider-id={provider.provider_id}
-            >
-              Sign in with {provider.display_name}
-            </a>
-          ))}
-        </section>
-      )}
-
-      {showLocalForm && (
-        <form
-          className="auth-login__form"
-          onSubmit={onSubmit}
-          data-testid="login-form"
-        >
-          <label>
-            <span>Email</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              data-testid="login-email"
-            />
-          </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              data-testid="login-password"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={submitting || !email || !password}
-            data-testid="login-submit"
+        {oidcProviders.length > 0 && (
+          <section
+            className="auth-screen__idp-list"
+            data-testid="login-idp-list"
+            aria-label="Identity providers"
           >
-            {submitting ? "Signing in…" : "Sign in"}
-          </button>
-          {formError && (
-            <p className="auth-login__error" role="alert">
-              {formError}
-            </p>
-          )}
-        </form>
-      )}
+            {oidcProviders.map((provider) => (
+              <Button
+                key={provider.provider_id}
+                variant="secondary"
+                size="lg"
+                onClick={() => {
+                  window.location.href = oidcStartUrl(provider.provider_id);
+                }}
+                data-provider-id={provider.provider_id}
+                className="auth-screen__idp-button"
+              >
+                Continue with {provider.display_name}
+              </Button>
+            ))}
+            {showLocalForm && (
+              <p
+                className="auth-screen__divider"
+                role="separator"
+                aria-label="or"
+              >
+                <span>or</span>
+              </p>
+            )}
+          </section>
+        )}
 
-      {!hideSelfService && showLocalForm && (
-        <footer className="auth-login__self-service">
-          <a href="/forgot-password">Forgot password?</a>
-        </footer>
-      )}
+        {showLocalForm && (
+          <form
+            className="auth-screen__form"
+            onSubmit={onSubmit}
+            data-testid="login-form"
+          >
+            <Field label="Email" className="auth-screen__field">
+              <TextInput
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                data-testid="login-email"
+              />
+            </Field>
+            <Field label="Password" className="auth-screen__field">
+              <TextInput
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+                data-testid="login-password"
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={submitting || !email || !password}
+              data-testid="login-submit"
+              className={classNames("auth-screen__submit")}
+            >
+              {submitting ? "Signing in…" : "Sign in"}
+            </Button>
+            {formError && (
+              <p className="auth-screen__error" role="alert">
+                {formError}
+              </p>
+            )}
+          </form>
+        )}
+
+        {!hideSelfService && showLocalForm && (
+          <footer className="auth-screen__self-service">
+            <a href="/forgot-password">Forgot password?</a>
+          </footer>
+        )}
+      </Card>
     </main>
   );
 }

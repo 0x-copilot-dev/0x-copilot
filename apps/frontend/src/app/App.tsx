@@ -8,7 +8,9 @@ import "../styles.css";
 import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";
-import { getSessionIdentity } from "../api/sessionApi";
+import { AuthProvider, useAuth } from "../features/auth/AuthContext";
+import { LoginScreen } from "../features/auth/LoginScreen";
+import { MfaPrompt } from "../features/auth/MfaPrompt";
 import { ChatScreen } from "../features/chat/ChatScreen";
 import {
   clearPendingMcpAuthAction,
@@ -21,6 +23,16 @@ import {
   type SettingsSection,
 } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
+
+/**
+ * The org slug LoginScreen falls back to when the URL doesn't carry one.
+ * SaaS deploys eventually parse from the subdomain; single-tenant deploys
+ * hardcode it via build-time env.
+ */
+const DEFAULT_ORG_ID =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env?.VITE_DEFAULT_ORG_ID) ||
+  "org_123";
 
 type AppRoute =
   | { screen: "chat" }
@@ -39,8 +51,76 @@ const settingsSections = [
 export default function App(): ReactElement {
   return (
     <ThemeProvider defaultScheme="dark">
-      <EnterpriseSearchApp />
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
     </ThemeProvider>
+  );
+}
+
+/**
+ * Gates the app behind the AuthContext state machine. ``initial`` /
+ * ``loading`` show the boot spinner; ``anonymous`` / ``error`` route to
+ * the login screen; ``mfa_pending`` to the MFA prompt; only
+ * ``authenticated`` renders the actual app shell.
+ *
+ * Lives here (rather than inside ``EnterpriseSearchApp``) so the rest of
+ * the app continues to assume identity is non-null — same invariant the
+ * pre-A9 code relied on.
+ */
+function AuthGate(): ReactElement {
+  const auth = useAuth();
+
+  if (auth.status === "initial" || auth.status === "loading") {
+    return (
+      <main className="app-loading">
+        <p>Loading session…</p>
+      </main>
+    );
+  }
+
+  if (auth.status === "mfa_pending") {
+    return <MfaPrompt rpId={window.location.hostname} />;
+  }
+
+  if (auth.status === "anonymous" || auth.status === "error") {
+    return (
+      <>
+        {auth.status === "error" && auth.error && (
+          <p className="app-loading" role="alert" data-testid="app-auth-error">
+            {auth.error}
+          </p>
+        )}
+        <LoginScreen
+          defaultOrgId={DEFAULT_ORG_ID}
+          returnTo={
+            window.location.pathname === "/login"
+              ? undefined
+              : window.location.pathname + window.location.search
+          }
+        />
+      </>
+    );
+  }
+
+  if (auth.identity === null) {
+    // ``authenticated`` always carries a non-null identity (set in the
+    // AuthContext reducer). Render the boot spinner as a defensive
+    // fallback rather than crashing.
+    return (
+      <main className="app-loading">
+        <p>Loading session…</p>
+      </main>
+    );
+  }
+
+  return (
+    <EnterpriseSearchApp
+      identity={{
+        orgId: auth.identity.org_id,
+        userId: auth.identity.user_id,
+      }}
+    />
   );
 }
 
@@ -109,41 +189,17 @@ function isSettingsSection(value: string): value is SettingsSection {
   return settingsSections.includes(value as SettingsSection);
 }
 
-function EnterpriseSearchApp(): ReactElement {
-  const [identity, setIdentity] = useState<RequestIdentity | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+function EnterpriseSearchApp({
+  identity,
+}: {
+  identity: RequestIdentity;
+}): ReactElement {
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
   const [completedMcpAuthAction, setCompletedMcpAuthAction] =
     useState<CompletedMcpAuthAction | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadSession(): Promise<void> {
-      try {
-        const nextIdentity = await getSessionIdentity();
-        if (!cancelled) {
-          setIdentity(nextIdentity);
-          setSessionError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSessionError(
-            err instanceof Error
-              ? err.message
-              : "Could not load session identity.",
-          );
-        }
-      }
-    }
-
-    void loadSession();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     function onPopState(): void {
@@ -157,10 +213,7 @@ function EnterpriseSearchApp(): ReactElement {
   }, []);
 
   useEffect(() => {
-    if (
-      window.location.pathname !== "/mcp/oauth/callback" ||
-      identity === null
-    ) {
+    if (window.location.pathname !== "/mcp/oauth/callback") {
       return;
     }
     const currentIdentity = identity;
@@ -242,22 +295,6 @@ function EnterpriseSearchApp(): ReactElement {
       cancelled = true;
     };
   }, [connectors.refresh, identity]);
-
-  if (sessionError !== null) {
-    return (
-      <main className="app-loading">
-        <p>{sessionError}</p>
-      </main>
-    );
-  }
-
-  if (identity === null) {
-    return (
-      <main className="app-loading">
-        <p>Loading session...</p>
-      </main>
-    );
-  }
 
   if (route.screen === "settings") {
     return (

@@ -3,11 +3,44 @@ import { identityParams } from "./config";
 
 const REQUEST_ID_HEADER = "x-request-id";
 
+// AuthContext registers a callback so a 401 anywhere in the API surface
+// flows back to "anonymous" + login redirect — without prop-threading
+// the auth context through every API helper. Defaults to a no-op so
+// tests and pre-AuthContext callers don't blow up.
+type UnauthorizedHandler = (response: Response) => void;
+let _onUnauthorized: UnauthorizedHandler = () => {};
+
+export function configureUnauthorizedHandler(
+  handler: UnauthorizedHandler | null,
+): void {
+  _onUnauthorized = handler ?? (() => {});
+}
+
+export class UnauthorizedError extends Error {
+  readonly status = 401;
+
+  constructor(detail?: string) {
+    super(detail || "Request failed with 401");
+    this.name = "UnauthorizedError";
+  }
+}
+
 export async function assertOk(response: Response): Promise<void> {
   if (response.ok) {
     return;
   }
   const detail = await response.text();
+  if (response.status === 401) {
+    // Notify AuthContext (or any registered handler) before throwing so
+    // the caller's catch can still surface a useful message — the
+    // notification is fire-and-forget.
+    try {
+      _onUnauthorized(response);
+    } catch {
+      /* handler errors must not mask the original 401 */
+    }
+    throw new UnauthorizedError(detail);
+  }
   throw new Error(detail || `Request failed with ${response.status}`);
 }
 

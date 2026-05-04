@@ -36,6 +36,7 @@ import {
   logout as logoutApi,
   type SessionIdentity,
 } from "../../api/authApi";
+import { configureUnauthorizedHandler } from "../../api/http";
 
 const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
 
@@ -96,6 +97,25 @@ export function AuthProvider({
   // it. Re-runs on bearer change.
   useEffect(() => {
     configureAuthBearerProvider(() => bearerRef.current);
+  }, []);
+
+  // Register the 401 interceptor so any other API helper (agentApi,
+  // mcpApi, skillsApi, etc.) that sees a 401 drops the bearer and
+  // flips back to anonymous.  Wrapped in a ref-stable closure so the
+  // interceptor doesn't capture stale state.
+  useEffect(() => {
+    configureUnauthorizedHandler(() => {
+      bearerRef.current = null;
+      setState({
+        status: "anonymous",
+        identity: null,
+        mfaPending: null,
+        error: null,
+      });
+    });
+    return () => {
+      configureUnauthorizedHandler(null);
+    };
   }, []);
 
   const setBearer = useCallback(
