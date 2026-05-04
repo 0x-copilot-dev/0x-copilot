@@ -9,7 +9,10 @@ import {
   PlanningIndicator,
   type RunIndicator,
 } from "../activity/PlanningIndicator";
-import { AssistantComposer } from "../composer/AssistantComposer";
+import {
+  AssistantComposer,
+  type DetailsPanelKind,
+} from "../composer/AssistantComposer";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
@@ -26,6 +29,7 @@ export function ThreadBody({
   onOpenMcpSettings,
   onOpenSkillsSettings,
   onShowConnectors,
+  onOpenDetailsPanel,
 }: {
   connectors: {
     servers: McpServer[];
@@ -48,6 +52,7 @@ export function ThreadBody({
   onOpenMcpSettings: () => void;
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
+  onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
 }): ReactElement {
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -109,6 +114,7 @@ export function ThreadBody({
           onOpenMcpSettings={onOpenMcpSettings}
           onOpenSkillsSettings={onOpenSkillsSettings}
           onShowConnectors={onShowConnectors}
+          onOpenDetailsPanel={onOpenDetailsPanel}
         />
       </div>
     </ThreadPrimitive.Root>

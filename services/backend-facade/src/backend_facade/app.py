@@ -306,6 +306,20 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/conversations/{conversation_id}/context")
+    async def get_conversation_context(
+        request: Request,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/context",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/models")
     async def list_models(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)

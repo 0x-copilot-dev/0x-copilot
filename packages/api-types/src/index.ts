@@ -420,6 +420,65 @@ export interface ConversationUsageResponse {
   by_run: UsageRunRow[];
 }
 
+// ---------------------------------------------------------------------------
+// Conversation context view (B5 — `/context` slash command).
+//
+// Server-computed view of "where did the tokens go in this conversation".
+// `headroom_pct` is an integer percent computed by the server; the UI
+// must render the value verbatim and never re-derive percentages from
+// `available_tokens / context_window_tokens`.
+// ---------------------------------------------------------------------------
+
+export interface ContextWindowSummary {
+  provider: string;
+  name: string;
+  context_window_tokens: number | null;
+}
+
+export interface ContextCurrentSlice {
+  last_run_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  available_tokens: number | null;
+  headroom_pct: number | null;
+}
+
+export interface ContextCallRow {
+  event_id: string;
+  model_name: string;
+  input: number;
+  output: number;
+  cached_input: number;
+  task_id: string | null;
+}
+
+export interface ContextSubagentRow {
+  subagent_id: string;
+  name: string;
+  total: number;
+  call_count: number;
+}
+
+export interface ContextCompressionRow {
+  before: number;
+  after: number;
+  strategy: string;
+  at: string;
+}
+
+export interface ContextBreakdown {
+  by_call: ContextCallRow[];
+  by_subagent: ContextSubagentRow[];
+  compression_events: ContextCompressionRow[];
+}
+
+export interface ConversationContextResponse {
+  model: ContextWindowSummary;
+  current: ContextCurrentSlice;
+  breakdown: ContextBreakdown;
+}
+
 export interface MessageListResponse {
   conversation_id: string;
   messages: Message[];

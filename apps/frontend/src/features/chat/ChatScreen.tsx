@@ -41,6 +41,10 @@ import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import type { SkillState } from "../skills/useSkills";
+import {
+  DetailsPanelHost,
+  type DetailsPanelKind,
+} from "./components/details/DetailsPanelHost";
 
 type ChatSettingsTarget = "general" | "connectors" | "skills";
 import {
@@ -99,6 +103,9 @@ export function ChatScreen({
   const [showConnectorSuggestions, setShowConnectorSuggestions] =
     useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [detailsPanel, setDetailsPanel] = useState<DetailsPanelKind | null>(
+    null,
+  );
   const [status, setStatus] = useState("Ready");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
@@ -863,6 +870,7 @@ export function ChatScreen({
             onOpenMcpSettings={() => onOpenSettings("connectors")}
             onOpenSkillsSettings={() => onOpenSettings("skills")}
             onShowConnectors={() => setShowConnectorSuggestions(true)}
+            onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
             runIndicator={runIndicator}
             connectorSuggestions={
               showConnectorSuggestions && suggestedServers.length > 0 ? (
@@ -878,6 +886,14 @@ export function ChatScreen({
             }
           />
         </AssistantThread>
+        {detailsPanel !== null ? (
+          <DetailsPanelHost
+            kind={detailsPanel}
+            conversationId={conversationId}
+            identity={identity}
+            onClose={() => setDetailsPanel(null)}
+          />
+        ) : null}
       </main>
     </AssistantRuntimeProvider>
   );

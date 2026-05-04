@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
+    CompressionEventRecord,
     ModelPricingRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
@@ -278,6 +279,30 @@ class AsyncPersistencePort(Protocol):
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
         """Return per-LLM-call rows for a run, scoped by org (B4 / B5)."""
+
+    async def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        """Return the most recently-completed run usage row for a conversation (B5).
+
+        Used by the ``/v1/agent/conversations/{id}/context`` endpoint to
+        answer "where did the tokens go in this conversation". Excludes
+        rows where ``pii_purged_at IS NOT NULL`` since the user-visible
+        view should not surface purged history. Returns ``None`` when the
+        conversation has no completed runs yet.
+        """
+
+    async def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[CompressionEventRecord]:
+        """Return compression events for a run, ordered by ``created_at`` (B5)."""
 
 
 @runtime_checkable

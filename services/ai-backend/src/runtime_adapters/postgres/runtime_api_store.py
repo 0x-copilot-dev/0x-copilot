@@ -38,6 +38,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.pool_metrics import PoolMetrics
 from agent_runtime.persistence.records import (
+    CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
     RuntimeModelCallUsageRecord,
@@ -1666,6 +1667,45 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._model_call_record(r) for r in rows)
 
+    async def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_run_usage
+                 WHERE org_id = %s AND user_id = %s AND conversation_id = %s
+                   AND pii_purged_at IS NULL
+                 ORDER BY completed_at DESC
+                 LIMIT 1
+                """,
+                (org_id, user_id, conversation_id),
+            )
+            row = await cur.fetchone()
+        return self._run_usage_record(row) if row is not None else None
+
+    async def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[CompressionEventRecord]:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_compression_events
+                 WHERE org_id = %s AND run_id = %s
+                 ORDER BY created_at ASC
+                """,
+                (org_id, run_id),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._compression_event_record(r) for r in rows)
+
     @classmethod
     def _run_usage_record(cls, row: dict[str, object]) -> RuntimeRunUsageRecord:
         return RuntimeRunUsageRecord(
@@ -1759,6 +1799,24 @@ class PostgresRuntimeApiStore:
                 str(row["pricing_version"])
                 if row.get("pricing_version") is not None
                 else None
+            ),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _compression_event_record(
+        cls, row: dict[str, object]
+    ) -> CompressionEventRecord:
+        return CompressionEventRecord(
+            compression_event_id=str(row["id"]),
+            run_id=str(row["run_id"]),
+            org_id=str(row["org_id"]),
+            before_tokens=int(row.get("before_tokens") or 0),
+            after_tokens=int(row.get("after_tokens") or 0),
+            strategy=str(row["strategy"]),
+            payload_refs=dict(row.get("payload_refs_json") or {}),
+            trace_id=(
+                str(row["trace_id"]) if row.get("trace_id") is not None else None
             ),
             created_at=cls._coerce_datetime(row["created_at"]),
         )

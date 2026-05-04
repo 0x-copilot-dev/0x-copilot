@@ -263,6 +263,16 @@ class SyncToAsyncPersistence:
             self._port.query_model_call_usage_for_run, **kwargs
         )
 
+    async def query_latest_run_usage_for_conversation(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.query_latest_run_usage_for_conversation, **kwargs
+        )
+
+    async def query_compression_events_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.query_compression_events_for_run, **kwargs
+        )
+
 
 class SyncToAsyncEventStore:
     """Wrap a sync :class:`EventStorePort` in async signatures."""

@@ -307,6 +307,27 @@ class AsyncInMemoryRuntimeApiStore:
     ):  # type: ignore[no-untyped-def]
         return self._store.query_model_call_usage_for_run(org_id=org_id, run_id=run_id)
 
+    async def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ):  # type: ignore[no-untyped-def]
+        return self._store.query_latest_run_usage_for_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+
+    async def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ):  # type: ignore[no-untyped-def]
+        return self._store.query_compression_events_for_run(
+            org_id=org_id, run_id=run_id
+        )
+
     # EventStorePort ------------------------------------------------------
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:

@@ -18,12 +18,15 @@ import { ComposerPlusMenu, type ComposerMenuView } from "./ComposerPlusMenu";
 import { TriggerPopoverList } from "./TriggerPopoverList";
 import { fileAttachmentAccept } from "./fileAttachmentAccept";
 
+export type DetailsPanelKind = "context" | "usage";
+
 export function AssistantComposer({
   connectors,
   skills,
   onOpenMcpSettings,
   onOpenSkillsSettings,
   onShowConnectors,
+  onOpenDetailsPanel,
 }: {
   connectors: {
     servers: McpServer[];
@@ -36,6 +39,7 @@ export function AssistantComposer({
   onOpenMcpSettings: () => void;
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
+  onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
 }): ReactElement {
   const aui = useAui();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -44,6 +48,18 @@ export function AssistantComposer({
   const slash = unstable_useSlashCommandAdapter({
     commands: useMemo<readonly Unstable_SlashCommand[]>(
       () => [
+        {
+          id: "context",
+          label: "Context",
+          description: "Show this conversation's token usage.",
+          execute: () => onOpenDetailsPanel?.("context"),
+        },
+        {
+          id: "usage",
+          label: "Usage",
+          description: "Show your token usage and cost.",
+          execute: () => onOpenDetailsPanel?.("usage"),
+        },
         {
           id: "summarize",
           label: "Summarize",
@@ -69,9 +85,9 @@ export function AssistantComposer({
           execute: () => undefined,
         },
       ],
-      [],
+      [onOpenDetailsPanel],
     ),
-    removeOnExecute: false,
+    removeOnExecute: true,
   });
   const mention = unstable_useMentionAdapter({
     categories: useMemo<readonly Unstable_MentionCategory[]>(

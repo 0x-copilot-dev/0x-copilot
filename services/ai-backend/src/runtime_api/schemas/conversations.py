@@ -257,3 +257,76 @@ class HistoryDeletionResponse(RuntimeContract):
     runs_cancelled: NonNegativeInt = 0
     events_retained: NonNegativeInt = 0
     audit_event_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Conversation context (B5 — `/context` slash command).
+#
+# Joins the latest run-level usage row (B1) with the per-call rows (B2),
+# the compression event log, and the model's pricing context window (B3).
+# Server returns integer ``headroom_pct`` so the UI never re-derives it.
+# ---------------------------------------------------------------------------
+
+
+class ContextWindowSummary(RuntimeContract):
+    """Model + context-window descriptor for the latest run."""
+
+    provider: str
+    name: str
+    context_window_tokens: NonNegativeInt | None = None  # None = model not in pricing
+
+
+class ContextCurrentSlice(RuntimeContract):
+    """Token state for the latest completed run in the conversation."""
+
+    last_run_id: str | None = None
+    input_tokens: NonNegativeInt = 0
+    output_tokens: NonNegativeInt = 0
+    cached_input_tokens: NonNegativeInt = 0
+    available_tokens: NonNegativeInt | None = None
+    headroom_pct: int | None = Field(default=None, ge=0, le=100)
+
+
+class ContextCallRow(RuntimeContract):
+    """One LLM call inside ``ContextBreakdown.by_call``."""
+
+    event_id: str
+    model_name: str
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cached_input: NonNegativeInt = 0
+    task_id: str | None = None
+
+
+class ContextSubagentRow(RuntimeContract):
+    """One subagent inside ``ContextBreakdown.by_subagent``."""
+
+    subagent_id: str
+    name: str
+    total: NonNegativeInt = 0
+    call_count: NonNegativeInt = 0
+
+
+class ContextCompressionRow(RuntimeContract):
+    """One context compression event for the run."""
+
+    before: NonNegativeInt
+    after: NonNegativeInt
+    strategy: str
+    at: datetime
+
+
+class ContextBreakdown(RuntimeContract):
+    """Per-call, per-subagent, and compression-event breakdown."""
+
+    by_call: tuple[ContextCallRow, ...] = ()
+    by_subagent: tuple[ContextSubagentRow, ...] = ()
+    compression_events: tuple[ContextCompressionRow, ...] = ()
+
+
+class ConversationContextResponse(RuntimeContract):
+    """Response shape for ``GET /v1/agent/conversations/{id}/context``."""
+
+    model: ContextWindowSummary
+    current: ContextCurrentSlice
+    breakdown: ContextBreakdown

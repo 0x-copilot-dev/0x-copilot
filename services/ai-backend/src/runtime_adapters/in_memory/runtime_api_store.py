@@ -13,6 +13,7 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import (
+    CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
     RuntimeModelCallUsageRecord,
@@ -87,6 +88,8 @@ class InMemoryRuntimeApiStore:
             tuple[str, str, str, str, str], UsageDailyUserRow
         ] = {}
         self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
+        # Compression events (B5 read-only path; no writer wired yet).
+        self.compression_events: list[CompressionEventRecord] = []
 
     def create_conversation(
         self, request: CreateConversationRequest
@@ -724,6 +727,42 @@ class InMemoryRuntimeApiStore:
             row
             for row in self.model_call_usage
             if row.org_id == org_id and row.run_id == run_id
+        )
+
+    def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        candidates = [
+            row
+            for row in self.run_usage.values()
+            if row.org_id == org_id
+            and row.user_id == user_id
+            and row.conversation_id == conversation_id
+            and row.pii_purged_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: r.completed_at)
+
+    def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[CompressionEventRecord]:
+        return tuple(
+            sorted(
+                (
+                    event
+                    for event in self.compression_events
+                    if event.org_id == org_id and event.run_id == run_id
+                ),
+                key=lambda e: e.created_at,
+            )
         )
 
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:

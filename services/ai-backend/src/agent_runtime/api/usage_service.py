@@ -14,9 +14,21 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 
 from agent_runtime.persistence.records import (
+    CompressionEventRecord,
+    ModelPricingRecord,
+    RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     UsageDailyOrgRow,
     UsageDailyUserRow,
+)
+from runtime_api.schemas.conversations import (
+    ContextBreakdown,
+    ContextCallRow,
+    ContextCompressionRow,
+    ContextCurrentSlice,
+    ContextSubagentRow,
+    ContextWindowSummary,
+    ConversationContextResponse,
 )
 
 
@@ -171,6 +183,133 @@ class UsageQueryService:
                 if isinstance(value, int):
                     totals[key] += value
         return totals
+
+
+class ConversationContextBuilder:
+    """Pure builder for the ``/context`` slash-command response (B5).
+
+    Stateless: given the latest run-usage row, the per-call rows, the
+    compression events, and the model's pricing snapshot, returns the
+    fully-populated :class:`ConversationContextResponse`. Every input is
+    an already-fetched record, so the builder is trivially testable
+    without any I/O.
+
+    Headroom is computed server-side as an integer percent so the UI
+    never re-derives floats. ``available_tokens`` and ``headroom_pct``
+    are ``None`` whenever the model has no pricing entry (signaling
+    "context window unknown" — the UI renders an "unknown" gauge).
+    """
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        provider: str,
+        model_name: str,
+        latest_run: RuntimeRunUsageRecord | None,
+        per_call_rows: Sequence[RuntimeModelCallUsageRecord],
+        compression_events: Sequence[CompressionEventRecord],
+        pricing: ModelPricingRecord | None,
+    ) -> ConversationContextResponse:
+        context_window = (
+            pricing.context_window_tokens
+            if pricing is not None and pricing.context_window_tokens is not None
+            else None
+        )
+        model_summary = ContextWindowSummary(
+            provider=provider,
+            name=model_name,
+            context_window_tokens=context_window,
+        )
+        if latest_run is None:
+            return ConversationContextResponse(
+                model=model_summary,
+                current=ContextCurrentSlice(),
+                breakdown=ContextBreakdown(),
+            )
+
+        used = latest_run.input_tokens + latest_run.cached_input_tokens
+        if context_window is None:
+            available = None
+            headroom = None
+        else:
+            available = max(0, context_window - used)
+            headroom = (
+                int(available * 100 // context_window) if context_window > 0 else None
+            )
+            # Clamp to the public schema's [0, 100] range — over-window
+            # cases (estimator drift) report 0.
+            if headroom is not None:
+                headroom = max(0, min(100, headroom))
+
+        current = ContextCurrentSlice(
+            last_run_id=latest_run.run_id,
+            input_tokens=latest_run.input_tokens,
+            output_tokens=latest_run.output_tokens,
+            cached_input_tokens=latest_run.cached_input_tokens,
+            available_tokens=available,
+            headroom_pct=headroom,
+        )
+
+        by_call = tuple(
+            ContextCallRow(
+                event_id=row.id,
+                model_name=row.model_name,
+                input=row.input_tokens,
+                output=row.output_tokens,
+                cached_input=row.cached_input_tokens,
+                task_id=row.task_id,
+            )
+            for row in per_call_rows
+        )
+        by_subagent = cls._collapse_by_subagent(per_call_rows)
+        compression = tuple(
+            ContextCompressionRow(
+                before=event.before_tokens,
+                after=event.after_tokens,
+                strategy=event.strategy,
+                at=event.created_at,
+            )
+            for event in compression_events
+        )
+        return ConversationContextResponse(
+            model=model_summary,
+            current=current,
+            breakdown=ContextBreakdown(
+                by_call=by_call,
+                by_subagent=by_subagent,
+                compression_events=compression,
+            ),
+        )
+
+    @classmethod
+    def _collapse_by_subagent(
+        cls, rows: Sequence[RuntimeModelCallUsageRecord]
+    ) -> tuple[ContextSubagentRow, ...]:
+        buckets: dict[str, dict[str, int]] = {}
+        for row in rows:
+            subagent_id = row.subagent_id
+            if not subagent_id:
+                continue
+            bucket = buckets.setdefault(subagent_id, {"total": 0, "call_count": 0})
+            bucket["total"] += row.total_tokens
+            bucket["call_count"] += 1
+        return tuple(
+            ContextSubagentRow(
+                subagent_id=subagent_id,
+                # No subagent registry yet — use the id as the display
+                # name. When the registry lands the builder takes a
+                # ``names: dict[str, str]`` dependency and looks up.
+                name=subagent_id,
+                total=bucket["total"],
+                call_count=bucket["call_count"],
+            )
+            for subagent_id, bucket in sorted(
+                buckets.items(),
+                key=lambda item: item[1]["total"],
+                reverse=True,
+            )
+        )
 
 
 class _RollupBucket:

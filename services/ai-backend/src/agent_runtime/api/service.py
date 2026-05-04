@@ -13,6 +13,8 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.api.usage_service import ConversationContextBuilder
+from agent_runtime.pricing import ModelPricingCatalog
 from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecisionRequest,
@@ -21,6 +23,7 @@ from runtime_api.schemas import (
     ApprovalStatus,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationContextResponse,
     ConversationListResponse,
     ConversationResponse,
     CreateConversationRequest,
@@ -93,6 +96,10 @@ class RuntimeApiService:
             event_store=self.event_store,
             on_event_appended=on_event_appended,
         )
+        # Pricing lookups for the /context endpoint (B5). Cache lives on the
+        # service so repeated panel opens hit the in-process LRU rather than
+        # re-querying ``model_pricing`` per render.
+        self._pricing_catalog = ModelPricingCatalog(self.persistence)
 
     def list_models(self) -> ModelCatalogResponse:
         """Return selectable chat models and credential availability."""
@@ -239,6 +246,62 @@ class RuntimeApiService:
             conversation_id=conversation_id,
             messages=tuple(record.to_response() for record in records),
             has_more=len(records) == bounded_limit,
+        )
+
+    async def get_conversation_context(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> ConversationContextResponse:
+        """Return the per-conversation context-window view (B5).
+
+        404s for foreign-tenant conversations (does not leak existence).
+        Returns zero/None totals when the conversation has no completed
+        runs yet — the panel renders the "no data" state.
+        """
+
+        await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        latest_run = await self.persistence.query_latest_run_usage_for_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        if latest_run is None:
+            default_model = self.settings.default_model
+            return ConversationContextBuilder.build(
+                provider=default_model.provider,
+                model_name=default_model.model_name,
+                latest_run=None,
+                per_call_rows=(),
+                compression_events=(),
+                pricing=None,
+            )
+
+        per_call_rows = await self.persistence.query_model_call_usage_for_run(
+            org_id=org_id, run_id=latest_run.run_id
+        )
+        compression_events = await self.persistence.query_compression_events_for_run(
+            org_id=org_id, run_id=latest_run.run_id
+        )
+        pricing = await self._pricing_catalog.lookup(
+            provider=latest_run.model_provider,
+            model_name=latest_run.model_name,
+            region="global",
+            at=latest_run.completed_at,
+        )
+        return ConversationContextBuilder.build(
+            provider=latest_run.model_provider,
+            model_name=latest_run.model_name,
+            latest_run=latest_run,
+            per_call_rows=per_call_rows,
+            compression_events=compression_events,
+            pricing=pricing,
         )
 
     async def create_run(self, request: CreateRunRequest) -> CreateRunResponse:

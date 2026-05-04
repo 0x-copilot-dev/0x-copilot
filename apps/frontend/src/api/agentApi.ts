@@ -4,6 +4,7 @@ import type {
   CancelRunRequest,
   CancelRunResponse,
   Conversation,
+  ConversationContextResponse,
   ConversationListResponse,
   CreateConversationRequest,
   CreateRunRequest,
@@ -13,6 +14,9 @@ import type {
   ModelSelectionRequest,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
+  UsageConversationRow,
+  UsageMeResponse,
+  UsagePeriod,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
@@ -98,6 +102,38 @@ export function listMessages(
     `/v1/agent/conversations/${conversationId}/messages`,
     identity,
     { limit: "100" },
+  );
+}
+
+/** B5: per-conversation `/context` slash-command panel data. */
+export function getConversationContext(
+  conversationId: string,
+  identity: RequestIdentity,
+): Promise<ConversationContextResponse> {
+  return httpGet<ConversationContextResponse>(
+    `/v1/agent/conversations/${conversationId}/context`,
+    identity,
+  );
+}
+
+/** B6: caller's own usage rollup for the period (`today` / `7d` / `30d` / `month`). */
+export function getMyUsage(
+  period: UsagePeriod,
+  identity: RequestIdentity,
+): Promise<UsageMeResponse> {
+  return httpGet<UsageMeResponse>("/v1/usage/me", identity, { period });
+}
+
+/** B6: caller's top conversations by total tokens for the period. */
+export function getMyTopConversations(
+  period: UsagePeriod,
+  identity: RequestIdentity,
+  limit = 10,
+): Promise<UsageConversationRow[]> {
+  return httpGet<UsageConversationRow[]>(
+    "/v1/usage/me/conversations",
+    identity,
+    { period, limit: String(limit) },
   );
 }
 

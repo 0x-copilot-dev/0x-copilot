@@ -18,6 +18,7 @@ from runtime_api.schemas import (
     ApprovalDecisionResponse,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationContextResponse,
     ConversationListResponse,
     ConversationResponse,
     CreateConversationRequest,
@@ -116,6 +117,21 @@ class RuntimeApiRoutes:
             conversation_id=conversation_id,
             limit=limit,
             include_deleted=include_deleted,
+        )
+
+    @classmethod
+    async def get_conversation_context(
+        cls,
+        request: Request,
+        conversation_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ConversationContextResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.service(request).get_conversation_context(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
         )
 
     @classmethod
@@ -319,6 +335,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=MessageListResponse,
             name=Keys.RouteName.GET_MESSAGES,
+        )
+        router.add_api_route(
+            "/conversations/{conversation_id}/context",
+            RuntimeApiRoutes.get_conversation_context,
+            methods=["GET"],
+            response_model=ConversationContextResponse,
+            name=Keys.RouteName.GET_CONVERSATION_CONTEXT,
         )
         router.add_api_route(
             "/models",

@@ -85,6 +85,7 @@ class Keys:
         CREATE_RUN = "create_run"
         DELETE_USER_HISTORY = "delete_user_history"
         GET_CONVERSATION = "get_conversation"
+        GET_CONVERSATION_CONTEXT = "get_conversation_context"
         GET_EVENTS = "get_events"
         GET_MESSAGES = "get_messages"
         GET_RUN = "get_run"
