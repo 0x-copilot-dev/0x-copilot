@@ -29,7 +29,9 @@ class RuntimeWorkerEntrypoint:
         logger = LoggingConfigurator.get_logger("runtime_worker")
 
         if settings.store.backend in _ASYNC_BACKENDS:
-            async_ports = RuntimeAdapterFactory.async_from_settings(settings)
+            async_ports = RuntimeAdapterFactory.async_from_settings(
+                settings, role="worker"
+            )
             await async_ports.store.open()
             await async_ports.store.migrate()
             try:

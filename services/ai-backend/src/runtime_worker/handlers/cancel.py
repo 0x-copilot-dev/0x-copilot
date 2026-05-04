@@ -6,6 +6,7 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.persistence import with_optimistic_retry
 from runtime_adapters.async_wrappers import (
     adapt_event_store_to_async,
     adapt_persistence_to_async,
@@ -42,9 +43,11 @@ class RuntimeCancelHandler:
             return
         if run.user_id != command.requested_by_user_id:
             return
-        run = await self.persistence.update_run_status(
-            run_id=command.run_id,
-            status=AgentRunStatus.CANCELLED,
+        run = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=command.run_id,
+                status=AgentRunStatus.CANCELLED,
+            )
         )
         await self.event_producer.append_api_event(
             run=run,

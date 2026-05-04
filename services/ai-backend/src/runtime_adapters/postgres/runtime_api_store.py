@@ -17,6 +17,7 @@ Hazard-fix highlights:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
@@ -34,6 +35,7 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.pool_metrics import PoolMetrics
 from agent_runtime.persistence.records import (
     OutboxStatus,
     RuntimeWorkerClaim,
@@ -138,14 +140,71 @@ class _Columns:
     VISIBILITY = "visibility"
 
 
-_DEFAULT_POOL_KWARGS: dict[str, object] = {
-    "row_factory": dict_row,
-    # Server-side guards. statement_timeout aborts a runaway query so it can't
-    # pin a pool slot; lock_timeout fails fast on row-lock contention so an
-    # async caller doesn't deadlock the event loop waiting on a stuck FOR
-    # UPDATE. Tune per deploy if needed.
-    "options": "-c statement_timeout=10000 -c lock_timeout=3000",
-}
+class _PoolEnv:
+    """Env-var keys + defaults for runtime DB pool tuning (C4)."""
+
+    POOL_MIN_SIZE = "RUNTIME_DB_POOL_MIN_SIZE"
+    POOL_MAX_SIZE = "RUNTIME_DB_POOL_MAX_SIZE"
+    POOL_ACQUIRE_TIMEOUT_SECONDS = "RUNTIME_DB_POOL_ACQUIRE_TIMEOUT_SECONDS"
+    STATEMENT_TIMEOUT_MS = "RUNTIME_DB_STATEMENT_TIMEOUT_MS"
+    LOCK_TIMEOUT_MS = "RUNTIME_DB_LOCK_TIMEOUT_MS"
+    IDLE_IN_TXN_TIMEOUT_MS = "RUNTIME_DB_IDLE_IN_TXN_TIMEOUT_MS"
+
+    DEFAULT_POOL_MIN_SIZE = 5
+    DEFAULT_POOL_MAX_SIZE = 50
+    DEFAULT_POOL_ACQUIRE_TIMEOUT_SECONDS = 5.0
+    DEFAULT_STATEMENT_TIMEOUT_MS = 10000
+    DEFAULT_LOCK_TIMEOUT_MS = 3000
+    DEFAULT_IDLE_IN_TXN_TIMEOUT_MS = 30000
+
+    SERVICE_NAME = "ai-backend"
+
+    @classmethod
+    def env_int(cls, name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    @classmethod
+    def env_float(cls, name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    @classmethod
+    def build_pool_kwargs(cls, *, role: str) -> dict[str, object]:
+        """Return psycopg pool ``kwargs={...}`` with env-driven server guards.
+
+        Includes statement_timeout (per-statement cap), lock_timeout (per-row
+        wait cap), idle_in_transaction_session_timeout (server-side abort on
+        long-idle txns), and application_name (greppable per service+role in
+        ``pg_stat_activity``).
+        """
+
+        statement_timeout_ms = cls.env_int(
+            cls.STATEMENT_TIMEOUT_MS, cls.DEFAULT_STATEMENT_TIMEOUT_MS
+        )
+        lock_timeout_ms = cls.env_int(cls.LOCK_TIMEOUT_MS, cls.DEFAULT_LOCK_TIMEOUT_MS)
+        idle_in_txn_ms = cls.env_int(
+            cls.IDLE_IN_TXN_TIMEOUT_MS, cls.DEFAULT_IDLE_IN_TXN_TIMEOUT_MS
+        )
+        return {
+            "row_factory": dict_row,
+            "options": (
+                f"-c statement_timeout={statement_timeout_ms} "
+                f"-c lock_timeout={lock_timeout_ms} "
+                f"-c idle_in_transaction_session_timeout={idle_in_txn_ms} "
+                f"-c application_name={cls.SERVICE_NAME}:{role}"
+            ),
+        }
 
 
 async def _take_runtime_audit_chain_lock_async(
@@ -211,27 +270,54 @@ class PostgresRuntimeApiStore:
         database_url: str | None = None,
         *,
         pool: AsyncConnectionPool | None = None,
-        pool_min_size: int = 5,
-        pool_max_size: int = 50,
-        pool_acquire_timeout_seconds: float = 5.0,
+        role: str = "api",
+        pool_min_size: int | None = None,
+        pool_max_size: int | None = None,
+        pool_acquire_timeout_seconds: float | None = None,
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
         self.database_url = database_url
+        self._role = role
+        self._metrics = PoolMetrics(service=_PoolEnv.SERVICE_NAME, role=role)
         if pool is not None:
             self._pool = pool
             self._owns_pool = False
+            self._metrics.bind_pool(pool)
         else:
             assert database_url is not None
+            min_size = (
+                pool_min_size
+                if pool_min_size is not None
+                else _PoolEnv.env_int(
+                    _PoolEnv.POOL_MIN_SIZE, _PoolEnv.DEFAULT_POOL_MIN_SIZE
+                )
+            )
+            max_size = (
+                pool_max_size
+                if pool_max_size is not None
+                else _PoolEnv.env_int(
+                    _PoolEnv.POOL_MAX_SIZE, _PoolEnv.DEFAULT_POOL_MAX_SIZE
+                )
+            )
+            acquire_timeout = (
+                pool_acquire_timeout_seconds
+                if pool_acquire_timeout_seconds is not None
+                else _PoolEnv.env_float(
+                    _PoolEnv.POOL_ACQUIRE_TIMEOUT_SECONDS,
+                    _PoolEnv.DEFAULT_POOL_ACQUIRE_TIMEOUT_SECONDS,
+                )
+            )
             self._pool = AsyncConnectionPool(
                 conninfo=database_url,
-                min_size=pool_min_size,
-                max_size=pool_max_size,
-                timeout=pool_acquire_timeout_seconds,
-                kwargs=_DEFAULT_POOL_KWARGS,
+                min_size=min_size,
+                max_size=max_size,
+                timeout=acquire_timeout,
+                kwargs=_PoolEnv.build_pool_kwargs(role=role),
                 open=False,
             )
             self._owns_pool = True
+            self._metrics.bind_pool(self._pool)
 
     async def open(self) -> None:
         """Open the underlying pool. Required when this store owns the pool."""
@@ -557,7 +643,16 @@ class PostgresRuntimeApiStore:
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
     ) -> RunRecord:
-        """Update mutable run status and return the new record."""
+        """Update mutable run status with optimistic-lock CAS (C3).
+
+        Reads ``row_version`` alongside the run row, then issues an UPDATE
+        whose WHERE clause asserts the same version and bumps it. If a
+        concurrent writer beat us to the row our UPDATE returns no rows; we
+        raise :class:`ConcurrentRunUpdateError` so the worker's
+        ``with_optimistic_retry`` helper can refetch and retry.
+        """
+
+        from agent_runtime.persistence.errors import ConcurrentRunUpdateError
 
         async with self._pool.connection() as conn:
             async with conn.transaction():
@@ -569,16 +664,23 @@ class PostgresRuntimeApiStore:
                     status,
                     already_started=existing[_Columns.STARTED_AT] is not None,
                 )
+                expected_version = int(existing["row_version"])
                 updates: dict[str, object] = {
                     _Columns.STATUS: status.value,
                     **timestamps,
                 }
                 assignments = ", ".join(f"{key} = %s" for key in updates)
                 cur = await conn.execute(
-                    f"UPDATE agent_runs SET {assignments} WHERE id = %s RETURNING *",
-                    (*updates.values(), run_id),
+                    f"UPDATE agent_runs SET {assignments}, "
+                    f"row_version = row_version + 1 "
+                    f"WHERE id = %s AND row_version = %s RETURNING *",
+                    (*updates.values(), run_id, expected_version),
                 )
                 row = await cur.fetchone()
+                if row is None:
+                    raise ConcurrentRunUpdateError(
+                        run_id=run_id, expected_version=expected_version
+                    )
         return self._run_record(row)
 
     async def set_run_latest_sequence(

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
@@ -18,6 +21,76 @@ from backend_app.contracts import (
     SkillRecord,
     TokenEnvelope,
 )
+
+
+class CrossTenantWriteError(Exception):
+    """Raised when an upsert is rejected by a cross-tenant ``WHERE`` guard.
+
+    The composite-key row exists for a different ``org_id`` than the one
+    attempting the write. The caller's row is left untouched. The public
+    error message is intentionally generic to avoid leaking the existing
+    org's identity to the writer.
+    """
+
+    def __init__(self, *, table: str) -> None:
+        super().__init__(f"cross-tenant write rejected on {table}")
+        self.table = table
+
+
+class _BackendPoolEnv:
+    """Env-var keys + defaults for backend DB pool tuning (C4)."""
+
+    POOL_MIN_SIZE = "BACKEND_DB_POOL_MIN_SIZE"
+    POOL_MAX_SIZE = "BACKEND_DB_POOL_MAX_SIZE"
+    POOL_ACQUIRE_TIMEOUT_SECONDS = "BACKEND_DB_POOL_ACQUIRE_TIMEOUT_SECONDS"
+    STATEMENT_TIMEOUT_MS = "BACKEND_DB_STATEMENT_TIMEOUT_MS"
+    LOCK_TIMEOUT_MS = "BACKEND_DB_LOCK_TIMEOUT_MS"
+    IDLE_IN_TXN_TIMEOUT_MS = "BACKEND_DB_IDLE_IN_TXN_TIMEOUT_MS"
+
+    DEFAULT_POOL_MIN_SIZE = 5
+    DEFAULT_POOL_MAX_SIZE = 50
+    DEFAULT_POOL_ACQUIRE_TIMEOUT_SECONDS = 5.0
+    DEFAULT_STATEMENT_TIMEOUT_MS = 10000
+    DEFAULT_LOCK_TIMEOUT_MS = 3000
+    DEFAULT_IDLE_IN_TXN_TIMEOUT_MS = 30000
+
+    SERVICE_NAME = "backend"
+
+    @classmethod
+    def env_int(cls, name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    @classmethod
+    def env_float(cls, name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    @classmethod
+    def build_options(cls, *, role: str) -> str:
+        statement_timeout_ms = cls.env_int(
+            cls.STATEMENT_TIMEOUT_MS, cls.DEFAULT_STATEMENT_TIMEOUT_MS
+        )
+        lock_timeout_ms = cls.env_int(cls.LOCK_TIMEOUT_MS, cls.DEFAULT_LOCK_TIMEOUT_MS)
+        idle_in_txn_ms = cls.env_int(
+            cls.IDLE_IN_TXN_TIMEOUT_MS, cls.DEFAULT_IDLE_IN_TXN_TIMEOUT_MS
+        )
+        return (
+            f"-c statement_timeout={statement_timeout_ms} "
+            f"-c lock_timeout={lock_timeout_ms} "
+            f"-c idle_in_transaction_session_timeout={idle_in_txn_ms} "
+            f"-c application_name={cls.SERVICE_NAME}:{role}"
+        )
 
 
 class _AuditChain:
@@ -59,16 +132,49 @@ class PostgresConnectionPool:
     _instance: PostgresConnectionPool | None = None
 
     def __init__(
-        self, database_url: str, *, min_size: int = 2, max_size: int = 10
+        self,
+        database_url: str,
+        *,
+        role: str = "api",
+        min_size: int | None = None,
+        max_size: int | None = None,
+        acquire_timeout_seconds: float | None = None,
     ) -> None:
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
 
+        resolved_min = (
+            min_size
+            if min_size is not None
+            else _BackendPoolEnv.env_int(
+                _BackendPoolEnv.POOL_MIN_SIZE, _BackendPoolEnv.DEFAULT_POOL_MIN_SIZE
+            )
+        )
+        resolved_max = (
+            max_size
+            if max_size is not None
+            else _BackendPoolEnv.env_int(
+                _BackendPoolEnv.POOL_MAX_SIZE, _BackendPoolEnv.DEFAULT_POOL_MAX_SIZE
+            )
+        )
+        resolved_timeout = (
+            acquire_timeout_seconds
+            if acquire_timeout_seconds is not None
+            else _BackendPoolEnv.env_float(
+                _BackendPoolEnv.POOL_ACQUIRE_TIMEOUT_SECONDS,
+                _BackendPoolEnv.DEFAULT_POOL_ACQUIRE_TIMEOUT_SECONDS,
+            )
+        )
+        self._role = role
         self._pool = ConnectionPool(
             conninfo=database_url,
-            min_size=min_size,
-            max_size=max_size,
-            kwargs={"row_factory": dict_row},
+            min_size=resolved_min,
+            max_size=resolved_max,
+            timeout=resolved_timeout,
+            kwargs={
+                "row_factory": dict_row,
+                "options": _BackendPoolEnv.build_options(role=role),
+            },
         )
 
     def connection(self) -> Any:
@@ -98,11 +204,23 @@ class InMemoryMcpStore:
     audit_events: list[AuditEventRecord] = field(default_factory=list)
     _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
-    def create_server(self, record: McpServerRecord) -> McpServerRecord:
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """No-op transaction so the service layer can compose uniformly."""
+
+        yield None
+
+    def create_server(
+        self, record: McpServerRecord, *, conn: Any | None = None
+    ) -> McpServerRecord:
+        del conn
         self.servers[record.server_id] = record
         return record
 
-    def update_server(self, record: McpServerRecord) -> McpServerRecord:
+    def update_server(
+        self, record: McpServerRecord, *, conn: Any | None = None
+    ) -> McpServerRecord:
+        del conn
         self.servers[record.server_id] = record
         return record
 
@@ -124,7 +242,10 @@ class InMemoryMcpStore:
             )
         )
 
-    def delete_server(self, *, org_id: str, server_id: str) -> bool:
+    def delete_server(
+        self, *, org_id: str, server_id: str, conn: Any | None = None
+    ) -> bool:
+        del conn
         record = self.get_server(org_id=org_id, server_id=server_id)
         if record is None:
             return False
@@ -139,14 +260,23 @@ class InMemoryMcpStore:
     def pop_auth_session(self, *, state: str) -> McpAuthSessionRecord | None:
         return self.auth_sessions.pop(state, None)
 
-    def put_token(self, record: TokenEnvelope) -> TokenEnvelope:
+    def put_token(
+        self, record: TokenEnvelope, *, conn: Any | None = None
+    ) -> TokenEnvelope:
+        del conn
+        existing = self.tokens_by_server.get(record.server_id)
+        if existing is not None and existing.org_id != record.org_id:
+            raise CrossTenantWriteError(table="mcp_auth_connections")
         self.tokens_by_server[record.server_id] = record
         return record
 
     def get_token(self, *, server_id: str) -> TokenEnvelope | None:
         return self.tokens_by_server.get(server_id)
 
-    def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
+    def append_audit(
+        self, record: AuditEventRecord, *, conn: Any | None = None
+    ) -> AuditEventRecord:
+        del conn
         signed = _sign_mcp_audit(record, self._chain)
         self.audit_events.append(signed)
         return signed
@@ -199,9 +329,26 @@ class PostgresMcpStore:
     def __init__(self, *, pool: PostgresConnectionPool) -> None:
         self._pool = pool
 
-    def create_server(self, record: McpServerRecord) -> McpServerRecord:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        """Yield a connection inside a transaction the caller can compose with.
+
+        Used by the service layer to wrap (write + audit) pairs so a partial
+        failure rolls back both rows. Each store write method participating in
+        a composite must accept the optional ``conn`` and reuse it; otherwise
+        the audit and primary writes land on separate connections and the
+        atomicity guarantee is lost (C3).
+        """
+
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    def create_server(
+        self, record: McpServerRecord, *, conn: Any | None = None
+    ) -> McpServerRecord:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO mcp_servers (
@@ -221,9 +368,11 @@ class PostgresMcpStore:
                 )
         return record
 
-    def update_server(self, record: McpServerRecord) -> McpServerRecord:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    def update_server(
+        self, record: McpServerRecord, *, conn: Any | None = None
+    ) -> McpServerRecord:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE mcp_servers
@@ -261,9 +410,11 @@ class PostgresMcpStore:
             {"org_id": org_id, "user_id": user_id},
         )
 
-    def delete_server(self, *, org_id: str, server_id: str) -> bool:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    def delete_server(
+        self, *, org_id: str, server_id: str, conn: Any | None = None
+    ) -> bool:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     "DELETE FROM mcp_servers WHERE org_id = %(org_id)s AND server_id = %(server_id)s",
                     {"org_id": org_id, "server_id": server_id},
@@ -323,13 +474,32 @@ class PostgresMcpStore:
                     created_at=self._datetime(row["created_at"]),
                 )
 
-    def put_token(self, record: TokenEnvelope) -> TokenEnvelope:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM mcp_auth_connections WHERE server_id = %(server_id)s",
-                    {"server_id": record.server_id},
-                )
+    def put_token(
+        self, record: TokenEnvelope, *, conn: Any | None = None
+    ) -> TokenEnvelope:
+        """Atomic upsert keyed by ``server_id`` with a cross-tenant guard.
+
+        Prior implementation did DELETE-then-INSERT in an implicit transaction
+        — a process kill between the two statements left the user with no
+        usable token. This is now a single ``INSERT ... ON CONFLICT (server_id)
+        DO UPDATE`` whose ``WHERE`` clause asserts ``org_id`` match. If a row
+        already exists for a different org we reject the write and the
+        existing row stays untouched (C3, ticket put_token).
+        """
+
+        params = {
+            "connection_id": record.connection_id,
+            "server_id": record.server_id,
+            "org_id": record.org_id,
+            "user_id": record.user_id,
+            "encrypted_access_token": record.encrypted_access_token,
+            "encrypted_refresh_token": record.encrypted_refresh_token,
+            "expires_at": record.expires_at,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO mcp_auth_connections (
@@ -341,19 +511,18 @@ class PostgresMcpStore:
                       %(encrypted_access_token)s, %(encrypted_refresh_token)s,
                       %(expires_at)s, %(created_at)s, %(updated_at)s
                     )
+                    ON CONFLICT (server_id) DO UPDATE SET
+                      encrypted_access_token = EXCLUDED.encrypted_access_token,
+                      encrypted_refresh_token = EXCLUDED.encrypted_refresh_token,
+                      expires_at = EXCLUDED.expires_at,
+                      updated_at = EXCLUDED.updated_at,
+                      user_id = EXCLUDED.user_id
+                    WHERE mcp_auth_connections.org_id = EXCLUDED.org_id
                     """,
-                    {
-                        "connection_id": record.connection_id,
-                        "server_id": record.server_id,
-                        "org_id": record.org_id,
-                        "user_id": record.user_id,
-                        "encrypted_access_token": record.encrypted_access_token,
-                        "encrypted_refresh_token": record.encrypted_refresh_token,
-                        "expires_at": record.expires_at,
-                        "created_at": record.created_at,
-                        "updated_at": record.updated_at,
-                    },
+                    params,
                 )
+                if cur.rowcount == 0:
+                    raise CrossTenantWriteError(table="mcp_auth_connections")
         return record
 
     def get_token(self, *, server_id: str) -> TokenEnvelope | None:
@@ -386,10 +555,12 @@ class PostgresMcpStore:
                     updated_at=self._datetime(row["updated_at"]),
                 )
 
-    def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
+    def append_audit(
+        self, record: AuditEventRecord, *, conn: Any | None = None
+    ) -> AuditEventRecord:
         signer = AuditChainSigner.from_env()
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 _take_audit_chain_lock(
                     cur, table="mcp_audit_events", org_id=record.org_id
                 )
@@ -475,6 +646,21 @@ class PostgresMcpStore:
     def _connect(self) -> Any:
         return self._pool.connection()
 
+    @contextmanager
+    def _connect_or_inherit(self, conn: Any | None) -> Iterator[Any]:
+        """Yield ``conn`` directly if non-None, else acquire a fresh pool conn.
+
+        Lets store methods participate in a caller-provided transaction (when
+        composed by the service layer) while keeping single-call behavior
+        unchanged.
+        """
+
+        if conn is not None:
+            yield conn
+            return
+        with self._connect() as own:
+            yield own
+
     @classmethod
     def _server_params(cls, record: McpServerRecord) -> dict[str, object]:
         return {
@@ -554,11 +740,23 @@ class InMemorySkillStore:
     audit_events: list[SkillAuditEventRecord] = field(default_factory=list)
     _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
-    def create_skill(self, record: SkillRecord) -> SkillRecord:
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """No-op transaction so the service layer can compose uniformly."""
+
+        yield None
+
+    def create_skill(
+        self, record: SkillRecord, *, conn: Any | None = None
+    ) -> SkillRecord:
+        del conn
         self.skills[record.skill_id] = record
         return record
 
-    def update_skill(self, record: SkillRecord) -> SkillRecord:
+    def update_skill(
+        self, record: SkillRecord, *, conn: Any | None = None
+    ) -> SkillRecord:
+        del conn
         self.skills[record.skill_id] = record
         return record
 
@@ -600,7 +798,15 @@ class InMemorySkillStore:
             sorted(records, key=lambda record: (record.created_at, record.name))
         )
 
-    def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
+    def delete_skill(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        skill_id: str,
+        conn: Any | None = None,
+    ) -> bool:
+        del conn
         record = self.get_skill(org_id=org_id, skill_id=skill_id)
         if record is None or record.user_id != user_id:
             return False
@@ -608,8 +814,12 @@ class InMemorySkillStore:
         return True
 
     def append_skill_audit(
-        self, record: SkillAuditEventRecord
+        self,
+        record: SkillAuditEventRecord,
+        *,
+        conn: Any | None = None,
     ) -> SkillAuditEventRecord:
+        del conn
         signed = _sign_skill_audit(record, self._chain)
         self.audit_events.append(signed)
         return signed
@@ -646,9 +856,19 @@ class PostgresSkillStore:
     def __init__(self, *, pool: PostgresConnectionPool) -> None:
         self._pool = pool
 
-    def create_skill(self, record: SkillRecord) -> SkillRecord:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        """Yield a connection inside a transaction; see PostgresMcpStore."""
+
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    def create_skill(
+        self, record: SkillRecord, *, conn: Any | None = None
+    ) -> SkillRecord:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO skills (
@@ -666,9 +886,11 @@ class PostgresSkillStore:
                 )
         return record
 
-    def update_skill(self, record: SkillRecord) -> SkillRecord:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    def update_skill(
+        self, record: SkillRecord, *, conn: Any | None = None
+    ) -> SkillRecord:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE skills
@@ -734,9 +956,16 @@ class PostgresSkillStore:
             {"org_id": org_id, "user_id": user_id},
         )
 
-    def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+    def delete_skill(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        skill_id: str,
+        conn: Any | None = None,
+    ) -> bool:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 cur.execute(
                     """
                     DELETE FROM skills
@@ -747,11 +976,14 @@ class PostgresSkillStore:
                 return cur.rowcount > 0
 
     def append_skill_audit(
-        self, record: SkillAuditEventRecord
+        self,
+        record: SkillAuditEventRecord,
+        *,
+        conn: Any | None = None,
     ) -> SkillAuditEventRecord:
         signer = AuditChainSigner.from_env()
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+        with self._connect_or_inherit(conn) as connection:
+            with connection.cursor() as cur:
                 _take_audit_chain_lock(
                     cur, table="skill_audit_events", org_id=record.org_id
                 )
@@ -833,6 +1065,14 @@ class PostgresSkillStore:
 
     def _connect(self) -> Any:
         return self._pool.connection()
+
+    @contextmanager
+    def _connect_or_inherit(self, conn: Any | None) -> Iterator[Any]:
+        if conn is not None:
+            yield conn
+            return
+        with self._connect() as own:
+            yield own
 
     @classmethod
     def _record_params(cls, record: SkillRecord) -> dict[str, object]:

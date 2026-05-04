@@ -80,8 +80,13 @@ class RuntimeAdapterFactory:
         )
 
     @classmethod
-    def async_from_settings(cls, settings: RuntimeSettings) -> AsyncRuntimePorts:
+    def async_from_settings(
+        cls, settings: RuntimeSettings, *, role: str = "api"
+    ) -> AsyncRuntimePorts:
         """Build async runtime ports.
+
+        ``role`` distinguishes the API process from the worker process so the
+        pool's ``application_name`` shows up greppable in ``pg_stat_activity``.
 
         The store's pool is *not* opened here. The caller (FastAPI lifespan
         or worker entrypoint) must:
@@ -114,7 +119,7 @@ class RuntimeAdapterFactory:
                     "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres.",
                     retryable=False,
                 )
-            store = PostgresRuntimeApiStore(settings.store.database_url)
+            store = PostgresRuntimeApiStore(settings.store.database_url, role=role)
             return AsyncRuntimePorts(
                 persistence=store,
                 event_store=store,

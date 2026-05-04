@@ -75,3 +75,18 @@ repos:
         language: pygrep
         files: \.py$
         exclude: ^services/.+/tests/
+
+      - id: audit-in-transaction
+        name: audit append must be inside store.transaction() block
+        description: |
+          C3 atomicity: every (write + audit append) site in the backend
+          service must run inside one transaction so a partial failure rolls
+          back both rows. This static check walks service.py's AST and
+          flags any ``self.store.append_*audit*(...)`` call whose enclosing
+          function does not also enter a ``with store.transaction()`` block
+          (calls passing through ``conn=...`` are exempt -- they delegate
+          the txn to their caller).
+        entry: python tools/check_audit_in_transaction.py
+        language: system
+        pass_filenames: false
+        files: ^services/backend/src/backend_app/service\.py$

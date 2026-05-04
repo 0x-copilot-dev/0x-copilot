@@ -10,7 +10,7 @@ import os
 from secrets import token_urlsafe
 
 import yaml
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -193,8 +193,9 @@ class McpRegistryService:
             health=McpServerHealth.HEALTHY,
             oauth_client=self._oauth_client_config(request.oauth_client),
         )
-        self.store.create_server(record)
-        self._audit(record, "mcp_server_created")
+        with self.store.transaction() as conn:
+            self.store.create_server(record, conn=conn)
+            self._audit(record, "mcp_server_created", conn=conn)
         return McpServerResponse.from_record(record)
 
     def list_servers(self, *, org_id: str, user_id: str) -> McpServerListResponse:
@@ -211,9 +212,12 @@ class McpRegistryService:
         )
         if record is None:
             return False
-        deleted = self.store.delete_server(org_id=org_id, server_id=server_id)
-        if deleted:
-            self._audit(record, "mcp_server_deleted")
+        with self.store.transaction() as conn:
+            deleted = self.store.delete_server(
+                org_id=org_id, server_id=server_id, conn=conn
+            )
+            if deleted:
+                self._audit(record, "mcp_server_deleted", conn=conn)
         return deleted
 
     def update_server(
@@ -243,8 +247,9 @@ class McpRegistryService:
         if not changes:
             return McpServerResponse.from_record(record)
 
-        updated = self._update_record(record, **changes)
-        self._audit(updated, "mcp_server_updated")
+        with self.store.transaction() as conn:
+            updated = self._update_record(record, conn=conn, **changes)
+            self._audit(updated, "mcp_server_updated", conn=conn)
         return McpServerResponse.from_record(updated)
 
     def skip_auth(
@@ -253,8 +258,11 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        updated = self._update_record(record, auth_state=McpAuthState.AUTH_SKIPPED)
-        self._audit(updated, "mcp_auth_skipped")
+        with self.store.transaction() as conn:
+            updated = self._update_record(
+                record, conn=conn, auth_state=McpAuthState.AUTH_SKIPPED
+            )
+            self._audit(updated, "mcp_auth_skipped", conn=conn)
         return McpServerResponse.from_record(updated)
 
     def start_auth(
@@ -269,10 +277,13 @@ class McpRegistryService:
             server_id=server_id,
         )
         if record.auth_mode != McpAuthMode.OAUTH2:
-            updated = self._update_record(
-                record, auth_state=McpAuthState.AUTH_UNSUPPORTED
-            )
-            self._audit(updated, "mcp_auth_unsupported")
+            with self.store.transaction() as conn:
+                updated = self._update_record(
+                    record,
+                    conn=conn,
+                    auth_state=McpAuthState.AUTH_UNSUPPORTED,
+                )
+                self._audit(updated, "mcp_auth_unsupported", conn=conn)
             raise ValueError("MCP server does not support OAuth authentication")
 
         verifier = token_urlsafe(64)
@@ -300,13 +311,15 @@ class McpRegistryService:
             if self._has_usable_token(record)
             else McpAuthState.AUTH_PENDING
         )
-        updated = self._update_record(
-            record,
-            auth_state=next_auth_state,
-            last_discovery=authorization.discovery,
-            required_scopes=authorization.required_scopes,
-        )
-        self._audit(updated, "mcp_auth_started")
+        with self.store.transaction() as conn:
+            updated = self._update_record(
+                record,
+                conn=conn,
+                auth_state=next_auth_state,
+                last_discovery=authorization.discovery,
+                required_scopes=authorization.required_scopes,
+            )
+            self._audit(updated, "mcp_auth_started", conn=conn)
         return McpAuthStartResponse(
             server_id=record.server_id,
             auth_url=authorization.auth_url,
@@ -323,8 +336,11 @@ class McpRegistryService:
             server_id=session.server_id,
         )
         if request.error is not None:
-            updated = self._update_record(record, auth_state=McpAuthState.AUTH_FAILED)
-            self._audit(updated, "mcp_auth_failed")
+            with self.store.transaction() as conn:
+                updated = self._update_record(
+                    record, conn=conn, auth_state=McpAuthState.AUTH_FAILED
+                )
+                self._audit(updated, "mcp_auth_failed", conn=conn)
             detail = request.error_description or request.error
             raise ValueError(f"MCP auth failed: {detail}")
         if request.code is None:
@@ -335,23 +351,25 @@ class McpRegistryService:
             code=request.code,
             token_vault=self.token_vault,
         )
-        self.store.put_token(
-            TokenEnvelope(
-                server_id=record.server_id,
-                org_id=record.org_id,
-                user_id=record.user_id,
-                encrypted_access_token=self.token_vault.encrypt(tokens.access_token),
-                encrypted_refresh_token=(
-                    self.token_vault.encrypt(tokens.refresh_token)
-                    if tokens.refresh_token is not None
-                    else None
-                ),
-                token_type=tokens.token_type,
-                expires_at=tokens.expires_at,
-            )
+        token_envelope = TokenEnvelope(
+            server_id=record.server_id,
+            org_id=record.org_id,
+            user_id=record.user_id,
+            encrypted_access_token=self.token_vault.encrypt(tokens.access_token),
+            encrypted_refresh_token=(
+                self.token_vault.encrypt(tokens.refresh_token)
+                if tokens.refresh_token is not None
+                else None
+            ),
+            token_type=tokens.token_type,
+            expires_at=tokens.expires_at,
         )
-        updated = self._update_record(record, auth_state=McpAuthState.AUTHENTICATED)
-        self._audit(updated, "mcp_auth_completed")
+        with self.store.transaction() as conn:
+            self.store.put_token(token_envelope, conn=conn)
+            updated = self._update_record(
+                record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
+            )
+            self._audit(updated, "mcp_auth_completed", conn=conn)
         return McpServerResponse.from_record(updated)
 
     def list_internal_cards(
@@ -428,32 +446,38 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        self.store.put_token(
-            TokenEnvelope(
-                server_id=record.server_id,
-                org_id=record.org_id,
-                user_id=record.user_id,
-                encrypted_access_token=self.token_vault.encrypt(request.access_token),
-                encrypted_refresh_token=(
-                    self.token_vault.encrypt(request.refresh_token)
-                    if request.refresh_token is not None
-                    else None
-                ),
-                token_type=request.token_type,
-                expires_at=request.expires_at,
-            )
+        token_envelope = TokenEnvelope(
+            server_id=record.server_id,
+            org_id=record.org_id,
+            user_id=record.user_id,
+            encrypted_access_token=self.token_vault.encrypt(request.access_token),
+            encrypted_refresh_token=(
+                self.token_vault.encrypt(request.refresh_token)
+                if request.refresh_token is not None
+                else None
+            ),
+            token_type=request.token_type,
+            expires_at=request.expires_at,
         )
-        updated = self._update_record(record, auth_state=McpAuthState.AUTHENTICATED)
-        self._audit(updated, "mcp_token_upserted")
+        with self.store.transaction() as conn:
+            self.store.put_token(token_envelope, conn=conn)
+            updated = self._update_record(
+                record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
+            )
+            self._audit(updated, "mcp_token_upserted", conn=conn)
         return McpServerResponse.from_record(updated)
 
     def _update_record(
-        self, record: McpServerRecord, **changes: object
+        self,
+        record: McpServerRecord,
+        *,
+        conn: Any | None = None,
+        **changes: object,
     ) -> McpServerRecord:
         updated = record.model_copy(
             update={**changes, _Fields.UPDATED_AT: datetime.now(timezone.utc)}
         )
-        return self.store.update_server(updated)
+        return self.store.update_server(updated, conn=conn)
 
     def _response_from_record(self, record: McpServerRecord) -> McpServerResponse:
         effective_record = record.model_copy(
@@ -614,7 +638,13 @@ class McpRegistryService:
             return None
         return record
 
-    def _audit(self, record: McpServerRecord, action: str) -> None:
+    def _audit(
+        self,
+        record: McpServerRecord,
+        action: str,
+        *,
+        conn: Any | None = None,
+    ) -> None:
         self.store.append_audit(
             AuditEventRecord(
                 org_id=record.org_id,
@@ -625,7 +655,8 @@ class McpRegistryService:
                     _Fields.AUTH_STATE: record.auth_state.value,
                     _Fields.HEALTH: record.health.value,
                 },
-            )
+            ),
+            conn=conn,
         )
 
     @classmethod
@@ -698,8 +729,9 @@ class SkillRegistryService:
             compatibility=manifest.compatibility,
             metadata=manifest.metadata,
         )
-        self.store.create_skill(record)
-        self._audit(record, "skill_created")
+        with self.store.transaction() as conn:
+            self.store.create_skill(record, conn=conn)
+            self._audit(record, "skill_created", conn=conn)
         return SkillResponse.from_record(record)
 
     def list_skills(self, *, org_id: str, user_id: str) -> SkillListResponse:
@@ -758,8 +790,9 @@ class SkillRegistryService:
         if request.scope is not None:
             changes[_Fields.SCOPE] = request.scope
         updated = record.model_copy(update=changes)
-        self.store.update_skill(updated)
-        self._audit(updated, "skill_updated")
+        with self.store.transaction() as conn:
+            self.store.update_skill(updated, conn=conn)
+            self._audit(updated, "skill_updated", conn=conn)
         return SkillResponse.from_record(updated)
 
     def delete_skill(self, *, org_id: str, user_id: str, skill_id: str) -> bool:
@@ -769,11 +802,12 @@ class SkillRegistryService:
         )
         if record.source_type is SkillSourceType.PRELOADED:
             raise ValueError("Preloaded skills cannot be deleted")
-        deleted = self.store.delete_skill(
-            org_id=org_id, user_id=user_id, skill_id=skill_id
-        )
-        if deleted:
-            self._audit(record, "skill_deleted")
+        with self.store.transaction() as conn:
+            deleted = self.store.delete_skill(
+                org_id=org_id, user_id=user_id, skill_id=skill_id, conn=conn
+            )
+            if deleted:
+                self._audit(record, "skill_deleted", conn=conn)
         return deleted
 
     def list_internal_cards(
@@ -880,8 +914,9 @@ class SkillRegistryService:
                     compatibility=manifest.compatibility,
                     metadata=manifest.metadata,
                 )
-                self.store.create_skill(record)
-                self._audit(record, "skill_preloaded")
+                with self.store.transaction() as conn:
+                    self.store.create_skill(record, conn=conn)
+                    self._audit(record, "skill_preloaded", conn=conn)
                 continue
             if existing.source_type is not SkillSourceType.PRELOADED:
                 continue
@@ -899,7 +934,10 @@ class SkillRegistryService:
                 changes[_Fields.METADATA] = manifest.metadata
             if changes:
                 changes[_Fields.UPDATED_AT] = datetime.now(timezone.utc)
-                self.store.update_skill(existing.model_copy(update=changes))
+                with self.store.transaction() as conn:
+                    self.store.update_skill(
+                        existing.model_copy(update=changes), conn=conn
+                    )
         self._seeded_scopes.add(scope_key)
 
     def _require_visible_skill(
@@ -918,7 +956,13 @@ class SkillRegistryService:
             raise ValueError("Skill was not found for this user")
         return record
 
-    def _audit(self, record: SkillRecord, action: str) -> None:
+    def _audit(
+        self,
+        record: SkillRecord,
+        action: str,
+        *,
+        conn: Any | None = None,
+    ) -> None:
         self.store.append_skill_audit(
             SkillAuditEventRecord(
                 org_id=record.org_id,
@@ -929,7 +973,8 @@ class SkillRegistryService:
                     _Fields.NAME: record.name,
                     _Fields.VERSION: record.version,
                 },
-            )
+            ),
+            conn=conn,
         )
 
     @classmethod

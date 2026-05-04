@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
+import logging
 from datetime import datetime, timezone
 
+from agent_runtime.api.presentation_templates import _ErrorMessage
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
     RuntimeErrorCode,
     StreamEventSource,
 )
+from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
@@ -22,6 +25,7 @@ from runtime_adapters.async_wrappers import (
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
+from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -147,8 +151,10 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             )
 
-        run = await self.persistence.update_run_status(
-            run_id=command.run_id, status=AgentRunStatus.RUNNING
+        run = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=command.run_id, status=AgentRunStatus.RUNNING
+            )
         )
         await self._append_lifecycle(
             run, RuntimeApiEventType.RUN_STARTED, "Run started"
@@ -196,9 +202,11 @@ class RuntimeRunHandler:
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
             if self._is_action_interrupt(result):
-                await self.persistence.update_run_status(
-                    run_id=command.run_id,
-                    status=AgentRunStatus.WAITING_FOR_APPROVAL,
+                await with_optimistic_retry(
+                    lambda: self.persistence.update_run_status(
+                        run_id=command.run_id,
+                        status=AgentRunStatus.WAITING_FOR_APPROVAL,
+                    )
                 )
                 return
             final_text = self._extract_final_text(result)
@@ -237,25 +245,44 @@ class RuntimeRunHandler:
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
-            failed = await self.persistence.update_run_status(
-                run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
+            await self._reconcile_inflight_tool_calls(
+                run,
+                outcome=ToolOutcome.TIMED_OUT,
+                error_code=ToolErrorCode.TOOL_RUN_TIMEOUT,
+            )
+            failed = await with_optimistic_retry(
+                lambda: self.persistence.update_run_status(
+                    run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
+                )
             )
             await self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
             )
+            self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             return
         except Exception:
-            failed = await self.persistence.update_run_status(
-                run_id=command.run_id, status=AgentRunStatus.FAILED
+            await self._reconcile_inflight_tool_calls(
+                run,
+                outcome=ToolOutcome.FAILED,
+                error_code=ToolErrorCode.TOOL_EXCEPTION,
+            )
+            failed = await with_optimistic_retry(
+                lambda: self.persistence.update_run_status(
+                    run_id=command.run_id, status=AgentRunStatus.FAILED
+                )
             )
             await self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run failed"
             )
+            self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             raise
 
-        completed = await self.persistence.update_run_status(
-            run_id=command.run_id, status=AgentRunStatus.COMPLETED
+        completed = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=command.run_id, status=AgentRunStatus.COMPLETED
+            )
         )
+        self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
         metrics_payload = metrics.to_payload(
             completed_at=completed.completed_at or datetime.now(timezone.utc)
         )
@@ -621,6 +648,72 @@ class RuntimeRunHandler:
             or result.get(cls._Fields.APPROVAL_REQUESTED) is True
             or bool(result.get(cls._Fields.INTERRUPTS))
         )
+
+    async def _reconcile_inflight_tool_calls(
+        self,
+        run: RunRecord,
+        *,
+        outcome: ToolOutcome,
+        error_code: ToolErrorCode,
+    ) -> None:
+        """Settle every in-flight tool call before the run terminates.
+
+        On run-level failure paths (asyncio.timeout, unhandled exception),
+        any tool call still in `tool_call_started` without a matching
+        `tool_result` would leave a "Running" card stuck on the client.
+        We synthesize a terminal `tool_result` + `tool_call_completed`
+        event for each, in started-order, BEFORE emitting `run_failed`
+        so SSE consumers see lifecycle terminate top-down.
+
+        Failures inside this loop are logged but never raised — the caller
+        is already on a failure path and reconciliation is best-effort. A
+        partial reconciliation is still strictly better than none.
+        """
+
+        ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
+        unsettled = ledger.unsettled()
+        if not unsettled:
+            return
+        _, error_summary = _ErrorMessage.for_code(error_code.value)
+        for entry in unsettled:
+            try:
+                payload: dict[str, object] = {
+                    "tool_name": entry.tool_name,
+                    "call_id": entry.call_id,
+                    "status": outcome.value,
+                    "error_code": error_code.value,
+                    "error_message": error_summary,
+                }
+                await self.event_producer.append_api_event(
+                    run=run,
+                    source=StreamEventSource.SYSTEM,
+                    event_type=RuntimeApiEventType.TOOL_RESULT,
+                    payload=payload,
+                    parent_task_id=entry.parent_task_id,
+                    subagent_id=entry.subagent_id,
+                )
+                await self.event_producer.append_api_event(
+                    run=run,
+                    source=StreamEventSource.SYSTEM,
+                    event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
+                    payload={
+                        "tool_name": entry.tool_name,
+                        "call_id": entry.call_id,
+                        "status": outcome.value,
+                        "error_code": error_code.value,
+                    },
+                    parent_task_id=entry.parent_task_id,
+                    subagent_id=entry.subagent_id,
+                )
+                ledger.observed_settled(entry.call_id)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "tool_call_reconcile.failed run=%s call_id=%s outcome=%s",
+                    run.run_id,
+                    entry.call_id,
+                    outcome.value,
+                    exc_info=True,
+                )
 
     async def _append_lifecycle(
         self,

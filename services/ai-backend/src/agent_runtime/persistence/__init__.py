@@ -1,5 +1,11 @@
 """Durable persistence contracts and provider ports for the agent runtime."""
 
+from agent_runtime.persistence.errors import (
+    ConcurrentMemoryItemUpdateError,
+    ConcurrentRunUpdateError,
+    PersistenceError,
+)
+from agent_runtime.persistence.optimistic import with_optimistic_retry
 from agent_runtime.persistence.records import (
     AsyncTaskRecord,
     AsyncTaskStatus,
@@ -44,6 +50,8 @@ __all__ = [
     "CheckpointRecord",
     "CheckpointStorePort",
     "CompressionEventRecord",
+    "ConcurrentMemoryItemUpdateError",
+    "ConcurrentRunUpdateError",
     "ConsumerCursorRecord",
     "ContextPayloadRecord",
     "MemoryItemRecord",
@@ -57,6 +65,7 @@ __all__ = [
     "PersistenceApprovalStatus",
     "PayloadStoragePort",
     "PersistenceApprovalRequestRecord",
+    "PersistenceError",
     "RuntimeMemoryScopeType",
     "RuntimeWorkerClaim",
     "RuntimeWorkerResult",
@@ -64,4 +73,5 @@ __all__ = [
     "ToolInvocationRecord",
     "ToolInvocationStatus",
     "ToolSideEffectClass",
+    "with_optimistic_retry",
 ]

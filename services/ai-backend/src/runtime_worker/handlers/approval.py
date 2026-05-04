@@ -22,6 +22,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import astream_runtime_resume
+from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -126,9 +127,11 @@ class RuntimeApprovalHandler:
         # answer as a stray user-message bubble disconnected from the
         # question card in the chat thread.
         resume = self._resume_payload(command, metadata)
-        running = await self.persistence.update_run_status(
-            run_id=run.run_id,
-            status=AgentRunStatus.RUNNING,
+        running = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=run.run_id,
+                status=AgentRunStatus.RUNNING,
+            )
         )
         try:
             harness = self.agent_factory(
@@ -143,17 +146,21 @@ class RuntimeApprovalHandler:
                 metrics=metrics,
             )
             if RuntimeRunHandler._is_action_interrupt(result):
-                await self.persistence.update_run_status(
-                    run_id=run.run_id,
-                    status=AgentRunStatus.WAITING_FOR_APPROVAL,
+                await with_optimistic_retry(
+                    lambda: self.persistence.update_run_status(
+                        run_id=run.run_id,
+                        status=AgentRunStatus.WAITING_FOR_APPROVAL,
+                    )
                 )
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
             await self._complete_run_with_result(running, final_text, metrics)
         except Exception:
-            failed = await self.persistence.update_run_status(
-                run_id=run.run_id,
-                status=AgentRunStatus.FAILED,
+            failed = await with_optimistic_retry(
+                lambda: self.persistence.update_run_status(
+                    run_id=run.run_id,
+                    status=AgentRunStatus.FAILED,
+                )
             )
             await self.event_producer.append_api_event(
                 run=failed,
@@ -220,9 +227,11 @@ class RuntimeApprovalHandler:
                 summary=final_text,
                 status="completed",
             )
-        completed = await self.persistence.update_run_status(
-            run_id=run.run_id,
-            status=AgentRunStatus.COMPLETED,
+        completed = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=run.run_id,
+                status=AgentRunStatus.COMPLETED,
+            )
         )
         await self.event_producer.append_api_event(
             run=completed,
