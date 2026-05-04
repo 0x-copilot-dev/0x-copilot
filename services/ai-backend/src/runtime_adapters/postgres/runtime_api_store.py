@@ -27,6 +27,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette import status
 
 from agent_runtime.api.constants import Messages
+from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
@@ -38,9 +39,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
 )
-from agent_runtime.persistence.schema.postgres import (
-    POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
-)
+from agent_runtime.persistence.schema.migrate import MigrationRunner
 from runtime_adapters.base import (
     RuntimeAdapterHelpers,
     StatusTransition,
@@ -149,6 +148,61 @@ _DEFAULT_POOL_KWARGS: dict[str, object] = {
 }
 
 
+async def _take_runtime_audit_chain_lock_async(
+    conn: psycopg.AsyncConnection,  # type: ignore[type-arg]
+    *,
+    org_id: str,
+) -> None:
+    """Serialize concurrent runtime_audit_log appends within one org chain.
+
+    Two concurrent appends would otherwise both read the same prev_hash and
+    fork the chain. ``pg_advisory_xact_lock`` releases at transaction commit
+    so the lock scope matches the insert's atomic unit. The key is the high
+    8 bytes of sha256("audit_chain:runtime_audit_log:<org_id>") interpreted
+    as a signed int64 -- collisions between unrelated org chains are
+    theoretically possible but harmless (extra serialization, never lost
+    integrity).
+    """
+
+    import hashlib
+
+    digest = hashlib.sha256(
+        f"audit_chain:runtime_audit_log:{org_id}".encode("utf-8")
+    ).digest()
+    lock_key = int.from_bytes(digest[:8], "big", signed=True)
+    await conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
+
+async def _read_runtime_audit_chain_head_async(
+    conn: psycopg.AsyncConnection,  # type: ignore[type-arg]
+    *,
+    org_id: str,
+) -> tuple[int, bytes | None]:
+    """Return ``(last_seq, last_signature)`` for the org's chain head.
+
+    Returns ``(0, None)`` when no rows exist yet, signaling the chain is
+    being started for this org. The advisory lock must already be held.
+    """
+
+    cur = await conn.execute(
+        """
+        SELECT seq, signature
+          FROM runtime_audit_log
+         WHERE org_id = %s
+         ORDER BY seq DESC NULLS LAST
+         LIMIT 1
+        """,
+        (org_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return 0, None
+    last_seq = int(row["seq"]) if row.get("seq") is not None else 0
+    sig = row.get("signature")
+    last_sig = bytes(sig) if sig is not None else None
+    return last_seq, last_sig
+
+
 class PostgresRuntimeApiStore:
     """Async Postgres implementation of persistence, event store, and queue ports."""
 
@@ -200,18 +254,28 @@ class PostgresRuntimeApiStore:
         await self.close()
 
     async def migrate(self) -> None:
-        """Apply the runtime schema migration."""
+        """Apply pending schema migrations.
 
-        async with self._pool.connection() as conn:
-            async with conn.transaction():
-                await conn.execute(POSTGRES_AGENT_RUNTIME_MIGRATION_SQL)
-                await conn.execute(
-                    """
-                    ALTER TABLE runtime_events
-                        ADD COLUMN IF NOT EXISTS activity_kind TEXT,
-                        ADD COLUMN IF NOT EXISTS presentation_json JSONB;
-                    """
-                )
+        Delegates to the versioned ``yoyo``-backed runner. When
+        ``RUNTIME_MIGRATIONS_AUTO_APPLY=false`` (production), this method
+        becomes a no-op so a separate deploy step owns the apply. The legacy
+        embedded SQL is no longer executed inline; the same DDL is now
+        recorded as ``0001_initial_runtime_persistence.sql`` and
+        ``0002_runtime_events_presentation.sql``.
+        """
+
+        if not MigrationRunner.auto_apply_enabled():
+            return
+        if self.database_url is None:
+            # Pool provided externally without a connection string — caller is
+            # expected to run migrations out-of-band. Common in tests where the
+            # test harness sets up the schema independently.
+            return
+        # yoyo uses a sync DB driver; run it on a worker thread so the async
+        # event loop stays free.
+        import asyncio
+
+        await asyncio.to_thread(MigrationRunner.apply, self.database_url)
 
     async def create_conversation(
         self, request: CreateConversationRequest
@@ -689,7 +753,13 @@ class PostgresRuntimeApiStore:
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]
     ) -> None:
-        """Append an audit record for security-relevant actions."""
+        """Append an HMAC-chained audit record for security-relevant actions.
+
+        The chain is per-(table, org_id) and serialized via
+        ``pg_advisory_xact_lock`` so concurrent appends in the same org
+        cannot fork. The signed payload is the canonical record minus the
+        chain fields plus ``__event_type__`` to bind action identity.
+        """
 
         data = record if isinstance(record, dict) else {_Fields.RECORD: str(record)}
         now = datetime.now(timezone.utc)
@@ -697,19 +767,42 @@ class PostgresRuntimeApiStore:
         metadata = raw_meta if isinstance(raw_meta, dict) else {}
         ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
         audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
+        org_id = str(data.get(_Fields.ORG_ID, "unknown"))
+        signer = AuditChainSigner.from_env()
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
+                seq, prev_hash = await _read_runtime_audit_chain_head_async(
+                    conn, org_id=org_id
+                )
+                payload = {
+                    "audit_id": audit_id,
+                    "org_id": org_id,
+                    "user_id": data.get(_Fields.USER_ID),
+                    "actor_type": str(data.get(_Fields.ACTOR_TYPE, "system")),
+                    "action": event_type,
+                    "resource_type": str(data.get(_Fields.RESOURCE_TYPE, "runtime")),
+                    "resource_id": str(data.get(_Fields.RESOURCE_ID, "unknown")),
+                    "run_id": data.get(_Fields.RUN_ID),
+                    "trace_id": data.get(_Fields.TRACE_ID),
+                    "outcome": str(data.get(_Fields.OUTCOME, "success")),
+                    "metadata": metadata,
+                    "created_at": now,
+                    "__event_type__": event_type,
+                }
+                sig = signer.sign(prev_hash=prev_hash, payload=payload)
                 await conn.execute(
                     """
                     INSERT INTO runtime_audit_log (
                         id, org_id, user_id, actor_type, action, resource_type, resource_id,
-                        run_id, trace_id, outcome, metadata_json_redacted, created_at
+                        run_id, trace_id, outcome, metadata_json_redacted, created_at,
+                        seq, prev_hash, signature, key_version
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         audit_id,
-                        str(data.get(_Fields.ORG_ID, "unknown")),
+                        org_id,
                         data.get(_Fields.USER_ID)
                         if isinstance(data.get(_Fields.USER_ID), str)
                         else None,
@@ -726,6 +819,10 @@ class PostgresRuntimeApiStore:
                         str(data.get(_Fields.OUTCOME, "success")),
                         Jsonb(metadata),
                         now,
+                        seq + 1,
+                        sig.prev_hash,
+                        sig.signature,
+                        sig.key_version,
                     ),
                 )
 
@@ -820,30 +917,61 @@ class PostgresRuntimeApiStore:
                 events_retained = (
                     int(events_row[_Columns.COUNT]) if events_row is not None else 0
                 )
+                # Hold the chain lock and read the head BEFORE inserting,
+                # then sign and insert with full chain fields. The outer
+                # transaction is already open so the lock auto-releases on
+                # commit alongside the rest of the deletion.
+                signer = AuditChainSigner.from_env()
+                await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
+                last_seq, prev_hash = await _read_runtime_audit_chain_head_async(
+                    conn, org_id=org_id
+                )
+                deletion_metadata = {
+                    _Fields.REASON: reason,
+                    _Fields.CONVERSATIONS_ARCHIVED: conversations_archived,
+                    _Fields.MESSAGES_TOMBSTONED: messages_tombstoned,
+                    _Fields.RUNS_CANCELLED: runs_cancelled,
+                    _Fields.EVENTS_RETAINED: events_retained,
+                }
+                deletion_payload = {
+                    "audit_id": audit_event_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "actor_type": "user",
+                    "action": "user_history_deleted",
+                    "resource_type": "user_history",
+                    "resource_id": user_id,
+                    "run_id": None,
+                    "trace_id": None,
+                    "outcome": "success",
+                    "metadata": deletion_metadata,
+                    "created_at": now,
+                    "__event_type__": "user_history_deleted",
+                }
+                deletion_sig = signer.sign(
+                    prev_hash=prev_hash, payload=deletion_payload
+                )
                 await conn.execute(
                     """
                     INSERT INTO runtime_audit_log (
                         id, org_id, user_id, actor_type, action, resource_type, resource_id,
-                        run_id, trace_id, outcome, metadata_json_redacted, created_at
+                        run_id, trace_id, outcome, metadata_json_redacted, created_at,
+                        seq, prev_hash, signature, key_version
                     )
                     VALUES (%s, %s, %s, 'user', 'user_history_deleted', 'user_history', %s,
-                            NULL, NULL, 'success', %s, %s)
+                            NULL, NULL, 'success', %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         audit_event_id,
                         org_id,
                         user_id,
                         user_id,
-                        Jsonb(
-                            {
-                                _Fields.REASON: reason,
-                                _Fields.CONVERSATIONS_ARCHIVED: conversations_archived,
-                                _Fields.MESSAGES_TOMBSTONED: messages_tombstoned,
-                                _Fields.RUNS_CANCELLED: runs_cancelled,
-                                _Fields.EVENTS_RETAINED: events_retained,
-                            }
-                        ),
+                        Jsonb(deletion_metadata),
                         now,
+                        last_seq + 1,
+                        deletion_sig.prev_hash,
+                        deletion_sig.signature,
+                        deletion_sig.key_version,
                     ),
                 )
                 evidence_id = f"deletion_evidence_{ts_ns}"

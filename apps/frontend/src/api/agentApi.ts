@@ -27,7 +27,7 @@ export type RuntimeStreamProtocolErrorReason =
 
 export class RuntimeStreamProtocolError extends Error {
   readonly reason: RuntimeStreamProtocolErrorReason;
-  readonly data: string;
+  readonly dataLength: number;
 
   constructor(reason: RuntimeStreamProtocolErrorReason, data: string) {
     super(
@@ -37,7 +37,12 @@ export class RuntimeStreamProtocolError extends Error {
     );
     this.name = "RuntimeStreamProtocolError";
     this.reason = reason;
-    this.data = data;
+    // Length only — never the raw payload. The original data may contain
+    // user-typed prompts or model output, and this error object can flow
+    // through React error boundaries / OTEL spans where any string field
+    // could be serialized. Length preserves the one useful debugging signal
+    // (was the payload truncated?) without the leak.
+    this.dataLength = data.length;
   }
 }
 

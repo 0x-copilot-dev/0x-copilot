@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 from starlette import status
 
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import (
     OutboxStatus,
@@ -63,6 +65,9 @@ class InMemoryRuntimeApiStore:
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
         self.audit_log: list[tuple[str, dict[str, object]]] = []
+        self._audit_chain_signer = AuditChainSigner.from_env()
+        self._audit_chain_heads_by_org: dict[str, bytes] = {}
+        self._audit_chain_counts_by_org: dict[str, int] = {}
         self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency: dict[tuple[str, str, str], str] = {}
         self._run_idempotency_fingerprint: dict[
@@ -341,9 +346,56 @@ class InMemoryRuntimeApiStore:
         return approval
 
     def write_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
-        """Append a deterministic audit record for assertions."""
+        """Append an audit record with HMAC hash-chain fields attached.
 
-        self.audit_log.append((event_type, record))
+        Chain is per-(audit_log, org_id). The record dict gains ``seq``,
+        ``prev_hash`` (hex or ``None``), ``signature`` (hex), and
+        ``key_version`` so callers reading ``audit_log`` see exactly what a
+        Postgres-backed export would emit, without coupling tests to the
+        chain internals.
+        """
+
+        signed = self._sign_audit_record(event_type=event_type, record=record)
+        self.audit_log.append((event_type, signed))
+
+    def _sign_audit_record(
+        self, *, event_type: str, record: dict[str, object]
+    ) -> dict[str, object]:
+        org_id = str(record.get(_Fields.ORG_ID, "unknown"))
+        prev_hash = self._audit_chain_heads_by_org.get(org_id)
+        payload = self._audit_signing_payload(event_type=event_type, record=record)
+        sig = self._audit_chain_signer.sign(prev_hash=prev_hash, payload=payload)
+        seq = self._audit_chain_counts_by_org.get(org_id, 0) + 1
+        self._audit_chain_counts_by_org[org_id] = seq
+        self._audit_chain_heads_by_org[org_id] = sig.signature
+        return {
+            **record,
+            "seq": seq,
+            "prev_hash": prev_hash.hex() if prev_hash else None,
+            "signature": sig.signature.hex(),
+            "key_version": sig.key_version,
+        }
+
+    @staticmethod
+    def _audit_signing_payload(
+        *, event_type: str, record: dict[str, object]
+    ) -> dict[str, Any]:
+        # Only the canonical record fields are signed; chain fields are
+        # excluded so the signature is independent of itself. Datetimes go
+        # through the canonicalizer as ISO 8601.
+        signable = {
+            k: v
+            for k, v in record.items()
+            if k
+            not in {
+                "seq",
+                "prev_hash",
+                "signature",
+                "key_version",
+            }
+        }
+        signable["__event_type__"] = event_type
+        return signable
 
     def delete_user_history(
         self,
@@ -408,17 +460,15 @@ class InMemoryRuntimeApiStore:
             and self.runs[run_id].user_id == user_id
         )
         audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
-        self.audit_log.append(
-            (
-                "user_history_deleted",
-                {
-                    _Fields.AUDIT_EVENT_ID: audit_event_id,
-                    _Fields.ORG_ID: org_id,
-                    _Fields.USER_ID: user_id,
-                    _Fields.REASON: reason,
-                    _Fields.DELETED_AT: now.isoformat(),
-                },
-            )
+        self.write_audit_log(
+            event_type="user_history_deleted",
+            record={
+                _Fields.AUDIT_EVENT_ID: audit_event_id,
+                _Fields.ORG_ID: org_id,
+                _Fields.USER_ID: user_id,
+                _Fields.REASON: reason,
+                _Fields.DELETED_AT: now.isoformat(),
+            },
         )
         return HistoryDeletionResponse(
             org_id=org_id,
