@@ -24,6 +24,9 @@ class ToolOutcome(StrEnum):
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
     ABANDONED = "abandoned"
+    # B8 — the call was rejected by the per-tool budget middleware
+    # before invocation; no side effects, model receives a safe error.
+    REJECTED = "rejected"
 
     @property
     def is_terminal(self) -> bool:
@@ -46,6 +49,9 @@ class ToolErrorCode(StrEnum):
     TOOL_RUN_TIMEOUT = "tool_run_timeout"
     TOOL_RUN_ABANDONED = "tool_run_abandoned"
     TOOL_CANCELLED = "tool_cancelled"
+    # B8 — code-enforced per-tool budget rejection. The model sees the
+    # safe error string and can decide to continue without this tool.
+    TOOL_BUDGET_EXCEEDED = "tool_budget_exceeded"
 
 
 # Statuses that indicate a tool call did not complete successfully.

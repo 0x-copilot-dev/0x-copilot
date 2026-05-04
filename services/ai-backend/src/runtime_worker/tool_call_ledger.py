@@ -29,6 +29,15 @@ class ToolCallEntry:
     subagent_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     settled: bool = False
+    # B8 — observed input-token cost for the call. Populated post-execute
+    # by the tool-budget middleware so subsequent calls can enforce a
+    # per-run input-token cap.
+    input_tokens: int | None = None
+    # B8 — set when the middleware admitted the call against a budget.
+    # ``charged_calls(tool_name)`` only counts entries with
+    # ``budget_charged=True`` so REJECTED calls don't burn through the
+    # cap.
+    budget_charged: bool = True
 
 
 class ToolCallLedger:
@@ -87,3 +96,44 @@ class ToolCallLedger:
 
     def has_entries(self) -> bool:
         return bool(self._entries)
+
+    # B8 — accessors for the per-tool budget middleware -------------------
+
+    def charged_calls(self, tool_name: str) -> int:
+        """Return the number of admitted calls to ``tool_name`` in this run.
+
+        REJECTED calls (``budget_charged=False``) do not count: a
+        rejection must not consume the budget it just blocked, otherwise
+        the model could be permanently locked out by a single bad call.
+        """
+
+        return sum(
+            1
+            for entry in self._entries.values()
+            if entry.tool_name == tool_name and entry.budget_charged
+        )
+
+    def total_input_tokens(self, tool_name: str) -> int:
+        """Sum observed input tokens across admitted calls to ``tool_name``."""
+
+        return sum(
+            entry.input_tokens or 0
+            for entry in self._entries.values()
+            if entry.tool_name == tool_name and entry.budget_charged
+        )
+
+    def record_input_tokens(self, call_id: str, tokens: int) -> None:
+        """Stamp observed input tokens on an entry. No-op for unknown call_ids."""
+
+        entry = self._entries.get(call_id)
+        if entry is None:
+            return
+        entry.input_tokens = tokens
+
+    def mark_rejected(self, call_id: str) -> None:
+        """Flag an entry as rejected so it does not count toward the cap."""
+
+        entry = self._entries.get(call_id)
+        if entry is None:
+            return
+        entry.budget_charged = False

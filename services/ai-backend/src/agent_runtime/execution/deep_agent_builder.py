@@ -38,38 +38,61 @@ _WEB_HARNESS_PROFILE_KEYS = (
 # wording requires the checkpoint to ride in the same AIMessage as the next
 # tool call so the loop continues, and reserves a tool-call-free message for
 # the explicit final answer.
-WEB_SUBAGENT_CHECKPOINT_SUFFIX = (
-    "When you call multiple tools, every 2 to 3 tool calls include a short "
-    "progress checkpoint as the assistant message's `content` while ALSO "
-    "calling your next tool in the SAME message. The checkpoint should "
-    "briefly state what you have learned so far, what is still missing, and "
-    "which tool you are about to call next. Do NOT emit a checkpoint without "
-    "an accompanying tool call — a message with no tool call is treated as "
-    "your final answer. When you genuinely have no more tools to call, write "
-    "your final answer instead of a checkpoint.\n\n"
-    "Plan web_search queries before issuing them. Decide which 1–3 distinct "
-    "queries you actually need — each targeting a different facet (different "
-    "entity, attribute, time period, or source via `site:`). Do NOT "
-    "paraphrase a query whose prior result was already usable; the per-tool "
-    "cap is for new angles, not retries or double-checks. If two consecutive "
-    "searches return the same sources or add nothing beyond what you "
-    "already have, stop searching and answer with what you have plus an "
-    "honest note on what is still uncertain. The `web-search-discipline` "
-    "skill has deeper guidance — load it when planning a search batch or "
-    "when consecutive searches stop helping.\n\n"
-    "Bound any single tool to at most 5 invocations within one task: after 5 "
-    "calls of the same tool, stop calling that tool and return your final "
-    "answer summarizing what you found, even if your answer is incomplete or "
-    "uncertain. A partial answer with citations beats an exhausted budget. "
-    'Open-ended phrasing in the request ("many", "comprehensive", '
-    '"thorough") does not lift this cap — pick the most informative queries '
-    "and stop.\n\n"
-    "Subagent execution traces from this and prior turns are available "
-    "read-only at `/subagents/<task_id>/`. When the user asks about a "
-    "delegate's tools, queries, or conversation, run `ls /subagents/` and "
-    "`read_file` on the relevant `tool_calls.json` or `conversation.md` "
-    "rather than guessing or saying you cannot recall."
-)
+_DEFAULT_TOOL_CALL_BUDGET = 5  # Aligns with the historical literal "5" used here.
+
+
+def format_web_subagent_suffix(
+    tool_call_budget: int = _DEFAULT_TOOL_CALL_BUDGET,
+) -> str:
+    """Build the supervisor / subagent prompt suffix with a dynamic per-tool cap.
+
+    B8 — the cap interpolated here mirrors the value the future
+    :class:`ToolBudgetMiddleware` will hard-enforce. The model behaves
+    consistently with the enforced contract instead of being told a
+    different number than the runtime will tolerate.
+    """
+
+    return (
+        "When you call multiple tools, every 2 to 3 tool calls include a short "
+        "progress checkpoint as the assistant message's `content` while ALSO "
+        "calling your next tool in the SAME message. The checkpoint should "
+        "briefly state what you have learned so far, what is still missing, and "
+        "which tool you are about to call next. Do NOT emit a checkpoint without "
+        "an accompanying tool call — a message with no tool call is treated as "
+        "your final answer. When you genuinely have no more tools to call, write "
+        "your final answer instead of a checkpoint.\n\n"
+        "Plan web_search queries before issuing them. Decide which 1–3 distinct "
+        "queries you actually need — each targeting a different facet (different "
+        "entity, attribute, time period, or source via `site:`). Do NOT "
+        "paraphrase a query whose prior result was already usable; the per-tool "
+        "cap is for new angles, not retries or double-checks. If two consecutive "
+        "searches return the same sources or add nothing beyond what you "
+        "already have, stop searching and answer with what you have plus an "
+        "honest note on what is still uncertain. The `web-search-discipline` "
+        "skill has deeper guidance — load it when planning a search batch or "
+        "when consecutive searches stop helping.\n\n"
+        f"Bound any single tool to at most {tool_call_budget} invocations within "
+        f"one task: after {tool_call_budget} calls of the same tool, stop "
+        "calling that tool and return your final answer summarizing what you "
+        "found, even if your answer is incomplete or uncertain. A partial "
+        "answer with citations beats an exhausted budget. "
+        'Open-ended phrasing in the request ("many", "comprehensive", '
+        '"thorough") does not lift this cap — pick the most informative queries '
+        "and stop.\n\n"
+        "Subagent execution traces from this and prior turns are available "
+        "read-only at `/subagents/<task_id>/`. When the user asks about a "
+        "delegate's tools, queries, or conversation, run `ls /subagents/` and "
+        "`read_file` on the relevant `tool_calls.json` or `conversation.md` "
+        "rather than guessing or saying you cannot recall."
+    )
+
+
+# Back-compat: the legacy module-level constant used by the harness profile
+# registration. Kept as a string so existing imports continue to work without
+# being made dynamic at import time. Callers that want a per-org cap should
+# instead invoke ``format_web_subagent_suffix(cap)`` directly when building
+# the harness.
+WEB_SUBAGENT_CHECKPOINT_SUFFIX = format_web_subagent_suffix()
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 

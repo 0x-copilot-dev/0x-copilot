@@ -50,6 +50,10 @@ from agent_runtime.persistence.records.telemetry import (
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
+from agent_runtime.persistence.records.tool_budgets import (
+    ToolBudgetEnforcement,
+    ToolBudgetRecord,
+)
 from agent_runtime.persistence.records.tools import ToolInvocationRecord
 
 PERSISTENCE_TABLE_RECORDS = (
@@ -111,5 +115,7 @@ __all__ = [
     "BudgetStatus",
     "BudgetWithState",
     "ChargeOutcome",
+    "ToolBudgetEnforcement",
+    "ToolBudgetRecord",
     "PERSISTENCE_TABLE_RECORDS",
 ]
