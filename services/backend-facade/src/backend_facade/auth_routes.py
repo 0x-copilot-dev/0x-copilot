@@ -201,6 +201,102 @@ def register_auth_routes(app: FastAPI) -> None:
         return response.json()
 
     # ------------------------------------------------------------------
+    # SAML 2.0 SSO (A5) — unauthenticated public surface.
+    #
+    # Three surfaces:
+    #
+    #   /start     — facade-builds the IdP redirect via the backend; either
+    #                returns 302 to the IdP SSO URL (browser flow) or a JSON
+    #                payload with `sso_url` + `request_xml` (test flow).
+    #   /acs       — IdP POSTs the SAMLResponse here; we forward to the
+    #                backend, which validates + mints a session.
+    #   /metadata  — public SP metadata XML for the IdP admin to consume.
+    #
+    # Same anonymous service-header pattern as OIDC: the facade still sends
+    # the service token, the backend pulls org_id off the resolved
+    # auth_providers row.
+    # ------------------------------------------------------------------
+
+    @app.get("/v1/auth/saml/{provider_id}/start")
+    async def saml_start(
+        request: Request,
+        provider_id: str,
+        org_id: str = Query(..., min_length=1),
+        relay_state: str | None = Query(None),
+        format: str = Query("redirect", pattern="^(redirect|json)$"),
+    ) -> Response:
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/saml/{provider_id}/authorize",
+                json={
+                    "org_id": org_id,
+                    "provider_id": provider_id,
+                    "relay_state": relay_state,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id=org_id),
+            )
+        _raise_for_upstream(response)
+        body = response.json()
+        if format == "redirect":
+            return RedirectResponse(
+                url=body["sso_url"], status_code=status.HTTP_302_FOUND
+            )
+        return Response(content=response.content, media_type="application/json")
+
+    @app.post("/v1/auth/saml/{provider_id}/acs")
+    async def saml_acs(
+        request: Request,
+        provider_id: str,
+    ) -> Response:
+        # Form-encoded SAMLResponse. Both the IdP-redirect and the IdP-POST
+        # bindings deliver the assertion as a form field.
+        form = await request.form()
+        saml_response = form.get("SAMLResponse")
+        relay_state_raw = form.get("RelayState")
+        if not isinstance(saml_response, str) or not saml_response:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "SAML ACS requires SAMLResponse form field",
+            )
+        relay_state = relay_state_raw if isinstance(relay_state_raw, str) else None
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/saml/consume",
+                json={
+                    "provider_id": provider_id,
+                    "saml_response": saml_response,
+                    "relay_state": relay_state,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        _raise_for_upstream(response)
+        # The SPA consumes ``relay_state`` from the JSON body to navigate
+        # post-login; the facade does not 302 here because the SPA needs
+        # the bearer first. RelayState round-trip is the SPA's job.
+        return Response(content=response.content, media_type="application/json")
+
+    @app.get("/v1/auth/saml/{provider_id}/metadata")
+    async def saml_metadata(
+        request: Request,
+        provider_id: str,
+    ) -> Response:
+        del request
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"{backend_url}/internal/v1/auth/saml/{provider_id}/metadata",
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        _raise_for_upstream(response)
+        return Response(content=response.content, media_type="application/xml")
+
+    # ------------------------------------------------------------------
     # Local password (A4) — login + reset surfaces.
     # ------------------------------------------------------------------
 

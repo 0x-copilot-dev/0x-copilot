@@ -127,6 +127,17 @@ class IdentityStore(Protocol):
     def get_auth_provider(
         self, *, org_id: str, provider_id: str
     ) -> AuthProviderRecord | None: ...
+    def get_auth_provider_by_id(self, provider_id: str) -> AuthProviderRecord | None:
+        """Lookup without requiring org_id.
+
+        Used by anonymous SSO callback endpoints (SAML ACS, SCIM token
+        validation) where the org is recovered from the provider row
+        itself. Cross-tenant attacks remain impossible because every
+        downstream lookup is scoped by ``(provider_id, identity_key)`` —
+        an assertion signed by org_a's IdP cert cannot link to org_b
+        because the linking row is per-provider, not per-org.
+        """
+
     def list_auth_providers(
         self, *, org_id: str, enabled_only: bool = False
     ) -> tuple[AuthProviderRecord, ...]: ...
@@ -490,6 +501,12 @@ class InMemoryIdentityStore:
     ) -> AuthProviderRecord | None:
         record = self.auth_providers.get(provider_id)
         if record is None or record.org_id != org_id or record.deleted_at is not None:
+            return None
+        return record
+
+    def get_auth_provider_by_id(self, provider_id: str) -> AuthProviderRecord | None:
+        record = self.auth_providers.get(provider_id)
+        if record is None or record.deleted_at is not None:
             return None
         return record
 
@@ -1084,6 +1101,18 @@ class PostgresIdentityStore:
                 WHERE provider_id = %s AND org_id = %s AND deleted_at IS NULL
                 """,
                 (provider_id, org_id),
+            )
+            row = cur.fetchone()
+        return _row_to_auth_provider(row) if row else None
+
+    def get_auth_provider_by_id(self, provider_id: str) -> AuthProviderRecord | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT * FROM auth_providers
+                WHERE provider_id = %s AND deleted_at IS NULL
+                """,
+                (provider_id,),
             )
             row = cur.fetchone()
         return _row_to_auth_provider(row) if row else None

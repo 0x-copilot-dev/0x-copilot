@@ -1812,3 +1812,120 @@ class WebAuthnRegisterFinishRequest(BackendContract):
     rp_id: str
     expected_origin: str
     attestation: dict[str, object]
+
+
+# -----------------------------------------------------------------------------
+# SAML 2.0 SSO (A5)
+# -----------------------------------------------------------------------------
+
+
+class SamlAuthenticationStatus(StrEnum):
+    PENDING = "pending"
+    CONSUMED = "consumed"
+    REJECTED = "rejected"
+
+
+class SamlAuthenticationRecord(BackendContract):
+    """One in-flight SAML authn request (SP-initiated) or accepted assertion.
+
+    The lifecycle is:
+
+      1. SP-initiated start  → row created with ``status=pending``,
+         ``request_id`` populated, ``assertion_id`` provisional.
+      2. ACS POST            → row updated to ``status=consumed`` with the
+         real ``assertion_id`` and ``consumed_at``.
+      3. ACS validation fail → ``status=rejected`` (the row stays for audit).
+
+    For IdP-initiated flows ``request_id`` is NULL — we still write a
+    pending row with a synthetic id so the consume step has a single
+    insertion point.
+    """
+
+    auth_id: str = Field(default_factory=lambda: f"sac_{uuid4().hex}")
+    org_id: str
+    provider_id: str
+    request_id: str | None = None
+    assertion_id: str
+    relay_state: str | None = None
+    status: SamlAuthenticationStatus = SamlAuthenticationStatus.PENDING
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("auth_id", "org_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class SamlIdentityRecord(BackendContract):
+    """Mapping from IdP ``NameID`` to a local user.
+
+    ``(provider_id, name_id)`` is unique among non-unlinked rows — a re-link
+    after explicit unlink is allowed.
+    """
+
+    identity_id: str = Field(default_factory=lambda: f"sid_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    provider_id: str
+    name_id: str
+    name_id_format: str
+    linked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    unlinked_at: datetime | None = None
+    attributes_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("identity_id", "org_id", "user_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class SamlAuthorizeResult(BackendContract):
+    """Returned by the backend authorize endpoint.
+
+    ``sso_url`` is where the browser should be sent. For HTTP-Redirect
+    binding it includes the SAMLRequest in the query string; for HTTP-POST
+    binding the caller should auto-submit ``request_xml`` to the IdP via
+    a self-posting form. ``binding`` says which one.
+    """
+
+    auth_id: str
+    request_id: str
+    sso_url: str
+    request_xml: str
+    binding: str = "HTTP-Redirect"
+    expires_at: datetime
+
+
+class SamlConsumeResult(BackendContract):
+    """Returned after the ACS endpoint validates an assertion.
+
+    Mirrors :class:`OidcCallbackResult` so the facade and frontend
+    deal with the two SSO paths uniformly.
+    """
+
+    user_id: str
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+    relay_state: str | None = None
+    requires_mfa: bool = False
+
+
+class SamlAuthorizeRequest(BackendContract):
+    org_id: str
+    provider_id: str
+    relay_state: str | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class SamlConsumeRequest(BackendContract):
+    provider_id: str
+    saml_response: str
+    relay_state: str | None = None
+    ip: str | None = None
+    user_agent: str | None = None

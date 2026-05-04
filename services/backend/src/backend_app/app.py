@@ -43,6 +43,7 @@ from backend_app.identity import (
     InMemoryMfaStore,
     InMemoryOidcStore,
     InMemoryPasswordStore,
+    InMemorySamlStore,
     InMemorySessionStore,
     LockoutService,
     LockoutStore,
@@ -50,8 +51,12 @@ from backend_app.identity import (
     MfaStore,
     OidcService,
     OidcStore,
+    OneLoginSamlVerifier,
     PasswordService,
     PasswordStore,
+    SamlService,
+    SamlStore,
+    SamlVerifier,
     SessionAuthSecretMissing,
     SessionService,
 )
@@ -68,6 +73,7 @@ from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
+from backend_app.routes.saml import register_saml_routes
 from backend_app.routes.sessions import register_session_routes
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
@@ -125,6 +131,22 @@ def _default_token_vault(
         return None
 
 
+def _default_saml_verifier() -> SamlVerifier | None:
+    """Construct the production SAML verifier if ``python3-saml`` is installed.
+
+    Returns ``None`` on dev boxes that don't have ``xmlsec1`` (the OneLogin
+    library import will fail). When ``None`` we omit the SAML routes
+    rather than crash boot, matching how OIDC / MFA behave when their
+    optional secrets are missing. Tests inject :class:`FakeSamlVerifier`
+    directly through ``saml_verifier=``.
+    """
+
+    try:
+        return OneLoginSamlVerifier()
+    except Exception:
+        return None
+
+
 def _default_session_service(
     deployment: DeploymentProfile,
 ) -> SessionService | None:
@@ -170,6 +192,9 @@ def create_app(
     lockout_service: LockoutService | None = None,
     mfa_store: MfaStore | None = None,
     mfa_service: MfaService | None = None,
+    saml_store: SamlStore | None = None,
+    saml_service: SamlService | None = None,
+    saml_verifier: SamlVerifier | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -250,6 +275,31 @@ def create_app(
             register_oidc_routes(
                 app,
                 service=resolved_oidc_service,
+                identity_store=resolved_identity_store,
+            )
+
+        # SAML (A5): mints sessions on a successful ACS POST. Same gating
+        # as OIDC + local password — wired only when the session secret is
+        # available. The verifier is constructed lazily so a host without
+        # ``xmlsec1`` doesn't crash boot — production resolves the
+        # ``OneLoginSamlVerifier`` here, tests inject ``FakeSamlVerifier``.
+        resolved_saml_store: SamlStore = saml_store or InMemorySamlStore()
+        app.state.saml_store = resolved_saml_store
+        resolved_saml_verifier = saml_verifier or _default_saml_verifier()
+        if resolved_saml_verifier is not None:
+            app.state.saml_verifier = resolved_saml_verifier
+            resolved_saml_service = saml_service or SamlService(
+                identity_store=resolved_identity_store,
+                saml_store=resolved_saml_store,
+                sessions=resolved_session_service,
+                verifier=resolved_saml_verifier,
+                lockout=resolved_lockout_service,
+                mfa=resolved_mfa_service,
+            )
+            app.state.saml_service = resolved_saml_service
+            register_saml_routes(
+                app,
+                service=resolved_saml_service,
                 identity_store=resolved_identity_store,
             )
 
