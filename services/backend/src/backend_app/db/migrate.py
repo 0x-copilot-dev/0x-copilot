@@ -1,0 +1,159 @@
+"""Versioned schema migration runner for the backend service.
+
+Wraps yoyo-migrations and pins the migration source to
+``services/backend/migrations``. Each migration file is named
+``NNNN_<topic>.sql`` with a sibling ``NNNN_<topic>.rollback.sql`` and is
+checksummed in ``MANIFEST.lock``.
+
+Production runs migrations as a separate deploy step
+(``BACKEND_MIGRATIONS_AUTO_APPLY=false``); dev/test runs them automatically
+via the adapter's ``migrate()`` method.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+from collections.abc import Sequence
+from pathlib import Path
+
+import yoyo
+
+
+_LOGGER = logging.getLogger(__name__)
+
+# services/backend/src/backend_app/db/migrate.py -> services/backend/migrations
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
+MANIFEST_FILE = MIGRATIONS_DIR / "MANIFEST.lock"
+
+
+class MigrationManifestError(RuntimeError):
+    """Raised when MANIFEST.lock contradicts the migrations directory."""
+
+
+class MigrationRunner:
+    """Apply, rollback, and report status for backend migrations."""
+
+    @classmethod
+    def migrations_dir(cls) -> Path:
+        return MIGRATIONS_DIR
+
+    @classmethod
+    def apply(cls, database_url: str) -> list[str]:
+        """Apply all pending migrations. Returns the list of applied ids."""
+
+        backend = cls._backend(database_url)
+        migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
+        with backend.lock():
+            to_apply = backend.to_apply(migrations)
+            applied_ids = [migration.id for migration in to_apply]
+            backend.apply_migrations(to_apply)
+        for migration_id in applied_ids:
+            _LOGGER.info("migration_applied id=%s service=backend", migration_id)
+        return applied_ids
+
+    @classmethod
+    def rollback(cls, database_url: str, *, to: str | None = None) -> list[str]:
+        """Roll back applied migrations. ``to`` is the highest id to keep."""
+
+        backend = cls._backend(database_url)
+        migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
+        applied = backend.to_rollback(migrations)
+        if to is not None:
+            applied = applied.__class__(
+                [migration for migration in applied if migration.id > to]
+            )
+        with backend.lock():
+            rolled_back_ids = [migration.id for migration in applied]
+            backend.rollback_migrations(applied)
+        for migration_id in rolled_back_ids:
+            _LOGGER.info("migration_rolled_back id=%s service=backend", migration_id)
+        return rolled_back_ids
+
+    @classmethod
+    def status(cls, database_url: str) -> tuple[list[str], list[str]]:
+        """Return (applied, pending) migration ids in order."""
+
+        backend = cls._backend(database_url)
+        migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
+        applied = [migration.id for migration in backend.to_rollback(migrations)]
+        pending = [migration.id for migration in backend.to_apply(migrations)]
+        return applied, pending
+
+    @classmethod
+    def auto_apply_enabled(cls, env: dict[str, str] | None = None) -> bool:
+        """Whether the adapter's migrate() should auto-apply on startup.
+
+        Defaults to ``true`` so dev / tests / Docker compose keep their
+        existing zero-config behavior; production deploys override to
+        ``false`` and run migrations as a separate Job.
+        """
+
+        env = env if env is not None else dict(os.environ)
+        return (
+            env.get("BACKEND_MIGRATIONS_AUTO_APPLY", "true").strip().lower() == "true"
+        )
+
+    @classmethod
+    def expected_manifest(cls) -> dict[str, str]:
+        """Return ``{migration_id: sha256}`` from MANIFEST.lock."""
+
+        if not MANIFEST_FILE.exists():
+            raise MigrationManifestError(
+                f"Missing manifest: {MANIFEST_FILE}. Run "
+                "tools/check_migration_manifest.py to regenerate."
+            )
+        return cls._parse_manifest(MANIFEST_FILE.read_text())
+
+    @classmethod
+    def actual_manifest(cls) -> dict[str, str]:
+        """Compute current ``{migration_id: sha256}`` from disk."""
+
+        result: dict[str, str] = {}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.name.endswith(".rollback.sql"):
+                continue
+            migration_id = path.stem
+            rollback_path = MIGRATIONS_DIR / f"{migration_id}.rollback.sql"
+            digest = hashlib.sha256()
+            digest.update(path.read_bytes())
+            if rollback_path.exists():
+                digest.update(b"\x00")
+                digest.update(rollback_path.read_bytes())
+            result[migration_id] = digest.hexdigest()
+        return result
+
+    @classmethod
+    def _backend(cls, database_url: str) -> yoyo.backends.DatabaseBackend:
+        return yoyo.get_backend(database_url)
+
+    @staticmethod
+    def _parse_manifest(text: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                migration_id, marker = line.split(" sha256=", maxsplit=1)
+            except ValueError as exc:
+                raise MigrationManifestError(
+                    f"Malformed manifest line: {raw!r}"
+                ) from exc
+            result[migration_id.strip()] = marker.strip()
+        return result
+
+
+def render_manifest(entries: Sequence[tuple[str, str]]) -> str:
+    """Render manifest text from ``(migration_id, sha256)`` pairs."""
+
+    header = (
+        "# Auto-generated by tools/check_migration_manifest.py.\n"
+        "# Do not hand-edit; CI will refuse if checksums drift from the\n"
+        "# migrations/ directory.\n"
+    )
+    body = "\n".join(
+        f"{migration_id} sha256={digest}" for migration_id, digest in entries
+    )
+    return header + body + "\n"

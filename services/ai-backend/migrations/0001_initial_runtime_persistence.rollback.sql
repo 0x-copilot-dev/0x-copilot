@@ -1,0 +1,20 @@
+-- Rollback for 0001_initial_runtime_persistence. CASCADE bypasses FK ordering.
+DROP TABLE IF EXISTS runtime_checkpoints CASCADE;
+DROP TABLE IF EXISTS runtime_deletion_evidence CASCADE;
+DROP TABLE IF EXISTS runtime_legal_holds CASCADE;
+DROP TABLE IF EXISTS runtime_audit_log CASCADE;
+DROP TABLE IF EXISTS runtime_capability_snapshots CASCADE;
+DROP TABLE IF EXISTS runtime_compression_events CASCADE;
+DROP TABLE IF EXISTS runtime_context_payloads CASCADE;
+DROP TABLE IF EXISTS runtime_memory_items CASCADE;
+DROP TABLE IF EXISTS runtime_memory_scopes CASCADE;
+DROP TABLE IF EXISTS runtime_approval_requests CASCADE;
+DROP TABLE IF EXISTS runtime_tool_invocations CASCADE;
+DROP TABLE IF EXISTS runtime_subagent_results CASCADE;
+DROP TABLE IF EXISTS runtime_async_tasks CASCADE;
+DROP TABLE IF EXISTS runtime_consumer_cursors CASCADE;
+DROP TABLE IF EXISTS runtime_outbox_events CASCADE;
+DROP TABLE IF EXISTS runtime_events CASCADE;
+DROP TABLE IF EXISTS agent_runs CASCADE;
+DROP TABLE IF EXISTS agent_messages CASCADE;
+DROP TABLE IF EXISTS agent_conversations CASCADE;
