@@ -350,18 +350,21 @@ class McpRegistryService:
             code=request.code,
             token_vault=self.token_vault,
         )
+        encrypted_access = self.token_vault.encrypt(tokens.access_token)
+        encrypted_refresh = (
+            self.token_vault.encrypt(tokens.refresh_token)
+            if tokens.refresh_token is not None
+            else None
+        )
         token_envelope = TokenEnvelope(
             server_id=record.server_id,
             org_id=record.org_id,
             user_id=record.user_id,
-            encrypted_access_token=self.token_vault.encrypt(tokens.access_token),
-            encrypted_refresh_token=(
-                self.token_vault.encrypt(tokens.refresh_token)
-                if tokens.refresh_token is not None
-                else None
-            ),
+            encrypted_access_token=encrypted_access,
+            encrypted_refresh_token=encrypted_refresh,
             token_type=tokens.token_type,
             expires_at=tokens.expires_at,
+            kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
         with self.store.transaction() as conn:
             self.store.put_token(token_envelope, conn=conn)
@@ -445,18 +448,21 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
+        encrypted_access = self.token_vault.encrypt(request.access_token)
+        encrypted_refresh = (
+            self.token_vault.encrypt(request.refresh_token)
+            if request.refresh_token is not None
+            else None
+        )
         token_envelope = TokenEnvelope(
             server_id=record.server_id,
             org_id=record.org_id,
             user_id=record.user_id,
-            encrypted_access_token=self.token_vault.encrypt(request.access_token),
-            encrypted_refresh_token=(
-                self.token_vault.encrypt(request.refresh_token)
-                if request.refresh_token is not None
-                else None
-            ),
+            encrypted_access_token=encrypted_access,
+            encrypted_refresh_token=encrypted_refresh,
             token_type=request.token_type,
             expires_at=request.expires_at,
+            kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
         with self.store.transaction() as conn:
             self.store.put_token(token_envelope, conn=conn)
@@ -546,22 +552,25 @@ class McpRegistryService:
             refresh_token=refresh_token,
             token_vault=self.token_vault,
         )
+        encrypted_access = self.token_vault.encrypt(refreshed.access_token)
+        encrypted_refresh = (
+            self.token_vault.encrypt(refreshed.refresh_token)
+            if refreshed.refresh_token is not None
+            else token.encrypted_refresh_token
+        )
         updated = self.store.put_token(
             TokenEnvelope(
                 connection_id=token.connection_id,
                 server_id=record.server_id,
                 org_id=record.org_id,
                 user_id=record.user_id,
-                encrypted_access_token=self.token_vault.encrypt(refreshed.access_token),
-                encrypted_refresh_token=(
-                    self.token_vault.encrypt(refreshed.refresh_token)
-                    if refreshed.refresh_token is not None
-                    else token.encrypted_refresh_token
-                ),
+                encrypted_access_token=encrypted_access,
+                encrypted_refresh_token=encrypted_refresh,
                 token_type=refreshed.token_type,
                 expires_at=refreshed.expires_at,
                 created_at=token.created_at,
                 updated_at=datetime.now(timezone.utc),
+                kms_key_id=self.token_vault.key_id_for(encrypted_access),
             )
         )
         return updated

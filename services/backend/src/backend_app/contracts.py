@@ -679,6 +679,10 @@ class TokenEnvelope(BackendContract):
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # C6: KMS key id under which the access/refresh ciphertexts were encrypted.
+    # NULL for legacy Fernet rows; populated for ``kms_v1:`` envelopes so the
+    # rotation script can scan WHERE kms_key_id IS DISTINCT FROM $new_key.
+    kms_key_id: str | None = None
 
 
 class AuditEventRecord(BackendContract):

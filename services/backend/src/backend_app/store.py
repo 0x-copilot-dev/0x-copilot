@@ -531,6 +531,7 @@ class PostgresMcpStore:
             "expires_at": record.expires_at,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
+            "kms_key_id": record.kms_key_id,
         }
         with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
@@ -539,18 +540,19 @@ class PostgresMcpStore:
                     INSERT INTO mcp_auth_connections (
                       connection_id, server_id, org_id, user_id,
                       encrypted_access_token, encrypted_refresh_token,
-                      expires_at, created_at, updated_at
+                      expires_at, created_at, updated_at, kms_key_id
                     ) VALUES (
                       %(connection_id)s, %(server_id)s, %(org_id)s, %(user_id)s,
                       %(encrypted_access_token)s, %(encrypted_refresh_token)s,
-                      %(expires_at)s, %(created_at)s, %(updated_at)s
+                      %(expires_at)s, %(created_at)s, %(updated_at)s, %(kms_key_id)s
                     )
                     ON CONFLICT (server_id) DO UPDATE SET
                       encrypted_access_token = EXCLUDED.encrypted_access_token,
                       encrypted_refresh_token = EXCLUDED.encrypted_refresh_token,
                       expires_at = EXCLUDED.expires_at,
                       updated_at = EXCLUDED.updated_at,
-                      user_id = EXCLUDED.user_id
+                      user_id = EXCLUDED.user_id,
+                      kms_key_id = EXCLUDED.kms_key_id
                     WHERE mcp_auth_connections.org_id = EXCLUDED.org_id
                     """,
                     params,
@@ -587,6 +589,9 @@ class PostgresMcpStore:
                     else None,
                     created_at=self._datetime(row["created_at"]),
                     updated_at=self._datetime(row["updated_at"]),
+                    kms_key_id=str(row["kms_key_id"])
+                    if row.get("kms_key_id") is not None
+                    else None,
                 )
 
     def append_audit(

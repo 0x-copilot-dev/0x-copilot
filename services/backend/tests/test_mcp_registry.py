@@ -433,12 +433,18 @@ def test_production_refuses_in_memory_mcp_registry(monkeypatch) -> None:
 
 
 def test_managed_token_vault_fails_closed_when_adapter_missing(monkeypatch) -> None:
+    """Legacy ``MCP_TOKEN_VAULT_PROVIDER=managed`` is rejected now that
+    C6 ships a real adapter framework; operators must move to
+    ``MCP_TOKEN_VAULT_BACKEND=aws_kms`` (or an explicit local for dev).
+    """
+
     monkeypatch.setenv("BACKEND_ENVIRONMENT", "production")
+    monkeypatch.delenv("MCP_TOKEN_VAULT_BACKEND", raising=False)
     monkeypatch.setenv("MCP_TOKEN_VAULT_PROVIDER", "managed")
 
     try:
         TokenVaultFactory.create()
     except RuntimeError as exc:
-        assert "Managed MCP token vault adapter" in str(exc)
+        assert "MCP_TOKEN_VAULT_PROVIDER=managed is no longer accepted" in str(exc)
     else:
-        raise AssertionError("managed token vault must fail closed without adapter")
+        raise AssertionError("legacy managed provider must fail closed")

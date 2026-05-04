@@ -107,7 +107,9 @@ async def _lifespan(application: FastAPI):
         PostgresConnectionPool.close_shared()
 
 
-def _default_token_vault() -> TokenVault | None:
+def _default_token_vault(
+    deployment: DeploymentProfile | None,
+) -> TokenVault | None:
     """Build the default TokenVault if a secret is available.
 
     OIDC needs the vault to encrypt refresh tokens at rest. Where the secret
@@ -118,7 +120,7 @@ def _default_token_vault() -> TokenVault | None:
     """
 
     try:
-        return TokenVaultFactory.create()
+        return TokenVaultFactory.create(profile=deployment)
     except Exception:
         return None
 
@@ -216,7 +218,7 @@ def create_app(
         # omitted (MFA needs TokenVault for TOTP secret encryption).
         resolved_oidc_store: OidcStore = oidc_store or InMemoryOidcStore()
         app.state.oidc_store = resolved_oidc_store
-        resolved_token_vault = token_vault or _default_token_vault()
+        resolved_token_vault = token_vault or _default_token_vault(resolved_deployment)
         resolved_mfa_service: MfaService | None = None
         if resolved_token_vault is not None:
             app.state.token_vault = resolved_token_vault
