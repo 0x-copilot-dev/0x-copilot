@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Protocol
+from typing import Any, Protocol
 
 
 _ENVELOPE_PREFIX = "v1:"
@@ -305,6 +306,155 @@ class EnvelopeFieldEncryption(FieldEncryption):
             _decode(parts[1], "iv"),
             _decode(parts[2], "ct+tag"),
         )
+
+
+class EncryptionVersionRequired(FieldEncryptionError):
+    """Raised when ``RUNTIME_FIELD_ENCRYPTION_STRICT_READS=true`` and a v0 row
+    is encountered.
+
+    Operators flip strict reads on after backfill confirms
+    ``min(encryption_version)=1`` everywhere — at that point any v0 row is a
+    bug or a missed retention sweep, and we want the read path to surface it
+    rather than silently return plaintext.
+    """
+
+
+_JSON_ENVELOPE_KEY = "$enc"
+_TEXT_ENVELOPE_PREFIX_BYTES = len(_ENVELOPE_PREFIX)
+
+
+class FieldCodec:
+    """Per-column encrypt/decrypt facade over a :class:`FieldEncryption` adapter.
+
+    Hides the (text vs JSONB) marshaling and the (v0 vs v1) version
+    branching so the per-call-site code in ``PostgresRuntimeApiStore``
+    stays one-line per column.
+
+    JSONB columns wrap the v1 envelope inside a single-key object —
+    ``{"$enc": "v1:<wrapped>:<iv>:<ct+tag>"}`` — so the column stays
+    valid JSONB at the Postgres level. Text columns store the envelope
+    string directly.
+
+    When ``strict_reads=True``, decrypt-on-read against an
+    ``encryption_version=0`` row raises :class:`EncryptionVersionRequired`.
+    Operators turn this on after backfill confirms every row is v1 to
+    surface any bug or missed sweep.
+    """
+
+    def __init__(
+        self,
+        encryption: FieldEncryption,
+        *,
+        strict_reads: bool = False,
+    ) -> None:
+        self._enc = encryption
+        self._strict_reads = strict_reads
+
+    @property
+    def write_version(self) -> int:
+        """Encryption version that new INSERTs / UPDATEs should set."""
+
+        return 1 if self._enc.is_envelope_v1() else 0
+
+    @property
+    def is_envelope_v1(self) -> bool:
+        return self._enc.is_envelope_v1()
+
+    def encrypt_text(
+        self,
+        value: str | None,
+        *,
+        table: str,
+        column: str,
+        org_id: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        if not self._enc.is_envelope_v1():
+            return value
+        return self._enc.encrypt(
+            value.encode("utf-8"), table=table, column=column, org_id=org_id
+        )
+
+    def decrypt_text(
+        self,
+        stored: str | None,
+        *,
+        encryption_version: int,
+        table: str,
+        column: str,
+        org_id: str,
+    ) -> str | None:
+        if stored is None:
+            return None
+        if encryption_version == 0:
+            self._check_strict(table=table, column=column, org_id=org_id)
+            return stored
+        if not stored.startswith(_ENVELOPE_PREFIX):
+            # v1 row but value isn't an envelope (e.g. retention sweeper
+            # rewrote the column to a placeholder). Pass through.
+            return stored
+        decrypted = self._enc.decrypt(stored, table=table, column=column, org_id=org_id)
+        return decrypted.decode("utf-8")
+
+    def encrypt_jsonb(
+        self,
+        value: Any,
+        *,
+        table: str,
+        column: str,
+        org_id: str,
+    ) -> Any:
+        if value is None:
+            return None
+        if not self._enc.is_envelope_v1():
+            return value
+        serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        envelope = self._enc.encrypt(
+            serialized, table=table, column=column, org_id=org_id
+        )
+        return {_JSON_ENVELOPE_KEY: envelope}
+
+    def decrypt_jsonb(
+        self,
+        stored: Any,
+        *,
+        encryption_version: int,
+        table: str,
+        column: str,
+        org_id: str,
+    ) -> Any:
+        if stored is None:
+            return None
+        if encryption_version == 0:
+            self._check_strict(table=table, column=column, org_id=org_id)
+            return stored
+        if (
+            isinstance(stored, dict)
+            and len(stored) == 1
+            and _JSON_ENVELOPE_KEY in stored
+            and isinstance(stored[_JSON_ENVELOPE_KEY], str)
+        ):
+            decrypted = self._enc.decrypt(
+                stored[_JSON_ENVELOPE_KEY],
+                table=table,
+                column=column,
+                org_id=org_id,
+            )
+            return json.loads(decrypted.decode("utf-8"))
+        # v1 row but value isn't an envelope dict — same logic as text.
+        return stored
+
+    def _check_strict(self, *, table: str, column: str, org_id: str) -> None:
+        # Strict reads only make sense once envelope_v1 is on; under a Null
+        # adapter every row is legitimately v0.
+        if self._strict_reads and self._enc.is_envelope_v1():
+            raise EncryptionVersionRequired(
+                f"strict reads enabled but {table}.{column} (org_id={org_id}) "
+                "is encryption_version=0 — backfill incomplete or row missed."
+            )
 
 
 class FieldEncryptionFactory:

@@ -95,22 +95,40 @@ This is **not** a single-step deploy. Each phase verifies the next is safe.
 - Default `RUNTIME_FIELD_ENCRYPTION=disabled` → writes still v0.
 - Reads tolerate v0 (plaintext pass-through) and v1 (decrypt via adapter).
 
-**Wired in this PR:**
+**Wired in phase 1:**
 
 - ✅ Adapter injected into `PostgresRuntimeApiStore.__init__`.
 - ✅ Encryption module + factory + KMS client.
-- ✅ Backfill job scaffold (currently targets `agent_messages.content_text`
-  only; phase-1b will widen).
+- ✅ Backfill job scaffold (originally targeted `agent_messages.content_text`
+  only).
 - ✅ Unit tests for round-trip, AAD swap rejection, DEK cache.
 
-**Pending (phase-1b, follow-up PR before phase 2):**
+### Phase 2 — per-column wiring + flip writes
 
-- Per-column encrypt-on-write / decrypt-on-read wiring across the 13+
-  targeted columns. Phase 2's env-var flip is a no-op until this lands.
+The per-call-site encrypt-on-write / decrypt-on-read wiring landed
+alongside a small `FieldCodec` facade in
+`agent_runtime/persistence/encryption.py`. The codec hides the (text vs
+JSONB) marshaling and the (v0 vs v1) version branching so each
+INSERT/SELECT is one extra line. JSONB columns store envelopes wrapped
+as `{"$enc": "v1:..."}` so the column stays valid JSONB at the Postgres
+level; text columns store the envelope string directly.
 
-### Phase 2 — flip writes to envelope_v1
+**Wired columns** (verified end-to-end via the projection tests in
+`tests/unit/runtime_adapters/postgres/test_field_encryption_projections.py`):
 
-After phase-1b ships and is verified in staging:
+- ✅ `agent_messages.content_text`, `content_json`, `metadata_json`
+- ✅ `runtime_audit_log.metadata_json_redacted` (SIEM export decrypts
+  per-row before forwarding)
+- ✅ `runtime_events.payload_json_redacted`, `metadata_json_redacted`
+
+**Still wire-pending** (schema columns exist but no active write path
+in `PostgresRuntimeApiStore` yet — wiring lands when those tables get a
+writer): `runtime_subagent_results.response_text`,
+`runtime_tool_invocations.{args_json_redacted, result_summary_json_redacted}`,
+`runtime_memory_items.content_summary`, and the `runtime_context_payload_blobs`
+sidecar.
+
+After phase-2 wiring is verified in staging, operators set:
 
 ```bash
 RUNTIME_FIELD_ENCRYPTION=envelope_v1

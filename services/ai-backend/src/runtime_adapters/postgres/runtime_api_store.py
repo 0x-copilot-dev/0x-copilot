@@ -38,6 +38,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.encryption import (
+    FieldCodec,
     FieldEncryption,
     FieldEncryptionFactory,
 )
@@ -94,6 +95,14 @@ from runtime_api.schemas import (
 )
 
 
+class _Tables:
+    """SQL table-name constants — used by C7 field encryption AAD binding."""
+
+    AGENT_MESSAGES = "agent_messages"
+    RUNTIME_AUDIT_LOG = "runtime_audit_log"
+    RUNTIME_EVENTS = "runtime_events"
+
+
 class _Columns:
     """SQL column-name constants for dict-row access."""
 
@@ -115,6 +124,7 @@ class _Columns:
     DELETED_AT = "deleted_at"
     DISPLAY_TITLE = "display_title"
     EDITED_AT = "edited_at"
+    ENCRYPTION_VERSION = "encryption_version"
     EVENT_TYPE = "event_type"
     EXPIRES_AT = "expires_at"
     ID = "id"
@@ -321,6 +331,16 @@ class PostgresRuntimeApiStore:
             if field_encryption is not None
             else FieldEncryptionFactory.from_env()
         )
+        # C7 phase 2: codec is the per-call-site facade (encrypt/decrypt
+        # text + jsonb + version-aware reads). ``RUNTIME_FIELD_ENCRYPTION
+        # _STRICT_READS=true`` is set by operators after backfill confirms
+        # ``min(encryption_version)=1`` and turns v0 reads into errors so
+        # any missed sweep surfaces immediately instead of silently
+        # returning plaintext.
+        strict_reads = os.environ.get(
+            "RUNTIME_FIELD_ENCRYPTION_STRICT_READS", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._codec = FieldCodec(self._field_encryption, strict_reads=strict_reads)
         self._metrics = PoolMetrics(service=_PoolEnv.SERVICE_NAME, role=role)
         if pool is not None:
             self._pool = pool
@@ -678,7 +698,9 @@ class PostgresRuntimeApiStore:
                 if request.idempotency_key is not None:
                     cur = await conn.execute(
                         """
-                        SELECT r.*, m.content_text AS user_content_text
+                        SELECT r.*,
+                               m.content_text AS user_content_text,
+                               m.encryption_version AS user_content_version
                         FROM agent_runs r
                         JOIN agent_messages m ON m.id = r.user_message_id
                         WHERE r.org_id = %s AND r.user_id = %s AND r.idempotency_key = %s
@@ -687,9 +709,21 @@ class PostgresRuntimeApiStore:
                     )
                     existing = await cur.fetchone()
                     if existing is not None:
+                        # C7 phase 2: the joined ``user_content_text`` may
+                        # be a v1 envelope; decrypt before comparing
+                        # against the caller's plaintext input.
+                        existing_user_text = self._codec.decrypt_text(
+                            existing[_Columns.USER_CONTENT_TEXT],
+                            encryption_version=int(
+                                existing.get("user_content_version", 0) or 0
+                            ),
+                            table=_Tables.AGENT_MESSAGES,
+                            column=_Columns.CONTENT_TEXT,
+                            org_id=context.org_id,
+                        )
                         if (
                             existing[_Columns.CONVERSATION_ID],
-                            existing[_Columns.USER_CONTENT_TEXT],
+                            existing_user_text,
                         ) != (request.conversation_id, request.user_input):
                             raise RuntimeApiError(
                                 RuntimeErrorCode.VALIDATION_ERROR,
@@ -1052,14 +1086,23 @@ class PostgresRuntimeApiStore:
                     "__event_type__": event_type,
                 }
                 sig = signer.sign(prev_hash=prev_hash, payload=payload)
+                # C7 phase 2: encrypt the redacted metadata blob; the
+                # rest of the row is HMAC-chain-signed clear (the chain
+                # is the load-bearing tamper guard, not the metadata).
+                metadata_encrypted = self._codec.encrypt_jsonb(
+                    metadata,
+                    table=_Tables.RUNTIME_AUDIT_LOG,
+                    column=_Columns.METADATA_JSON_REDACTED,
+                    org_id=org_id,
+                )
                 await conn.execute(
                     """
                     INSERT INTO runtime_audit_log (
                         id, org_id, user_id, actor_type, action, resource_type, resource_id,
                         run_id, trace_id, outcome, metadata_json_redacted, created_at,
-                        seq, prev_hash, signature, key_version
+                        seq, prev_hash, signature, key_version, encryption_version
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         audit_id,
@@ -1078,12 +1121,13 @@ class PostgresRuntimeApiStore:
                         if isinstance(data.get(_Fields.TRACE_ID), str)
                         else None,
                         str(data.get(_Fields.OUTCOME, "success")),
-                        Jsonb(metadata),
+                        Jsonb(metadata_encrypted),
                         now,
                         seq + 1,
                         sig.prev_hash,
                         sig.signature,
                         sig.key_version,
+                        self._codec.write_version,
                     ),
                 )
 
@@ -1104,7 +1148,7 @@ class PostgresRuntimeApiStore:
                         """
                         SELECT id, org_id, user_id, actor_type, event_type,
                                resource_type, resource_id, outcome,
-                               metadata_json_redacted, created_at
+                               metadata_json_redacted, encryption_version, created_at
                           FROM runtime_audit_log
                          ORDER BY created_at ASC, id ASC
                          LIMIT %s
@@ -1116,7 +1160,7 @@ class PostgresRuntimeApiStore:
                         """
                         SELECT id, org_id, user_id, actor_type, event_type,
                                resource_type, resource_id, outcome,
-                               metadata_json_redacted, created_at
+                               metadata_json_redacted, encryption_version, created_at
                           FROM runtime_audit_log
                          WHERE id > %s
                          ORDER BY created_at ASC, id ASC
@@ -1125,7 +1169,23 @@ class PostgresRuntimeApiStore:
                         (after_id, bounded),
                     )
                 rows = await cur.fetchall()
-        return tuple(dict(row) for row in rows)
+        # C7 phase 2: SIEM consumers receive plaintext metadata. Decrypt
+        # per-row using the row's own encryption_version so v0 (legacy)
+        # rows pass through and v1 rows get unwrapped.
+        decoded: list[dict] = []
+        for row in rows:
+            row_dict = dict(row)
+            row_dict[_Columns.METADATA_JSON_REDACTED] = self._codec.decrypt_jsonb(
+                row_dict.get(_Columns.METADATA_JSON_REDACTED),
+                encryption_version=int(
+                    row_dict.get(_Columns.ENCRYPTION_VERSION, 0) or 0
+                ),
+                table=_Tables.RUNTIME_AUDIT_LOG,
+                column=_Columns.METADATA_JSON_REDACTED,
+                org_id=str(row_dict[_Columns.ORG_ID]),
+            )
+            decoded.append(row_dict)
+        return tuple(decoded)
 
     async def delete_user_history(
         self,
@@ -1252,27 +1312,35 @@ class PostgresRuntimeApiStore:
                 deletion_sig = signer.sign(
                     prev_hash=prev_hash, payload=deletion_payload
                 )
+                # C7 phase 2: encrypt the redacted metadata JSON.
+                deletion_metadata_encrypted = self._codec.encrypt_jsonb(
+                    deletion_metadata,
+                    table=_Tables.RUNTIME_AUDIT_LOG,
+                    column=_Columns.METADATA_JSON_REDACTED,
+                    org_id=org_id,
+                )
                 await conn.execute(
                     """
                     INSERT INTO runtime_audit_log (
                         id, org_id, user_id, actor_type, action, resource_type, resource_id,
                         run_id, trace_id, outcome, metadata_json_redacted, created_at,
-                        seq, prev_hash, signature, key_version
+                        seq, prev_hash, signature, key_version, encryption_version
                     )
                     VALUES (%s, %s, %s, 'user', 'user_history_deleted', 'user_history', %s,
-                            NULL, NULL, 'success', %s, %s, %s, %s, %s, %s)
+                            NULL, NULL, 'success', %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         audit_event_id,
                         org_id,
                         user_id,
                         user_id,
-                        Jsonb(deletion_metadata),
+                        Jsonb(deletion_metadata_encrypted),
                         now,
                         last_seq + 1,
                         deletion_sig.prev_hash,
                         deletion_sig.signature,
                         deletion_sig.key_version,
+                        self._codec.write_version,
                     ),
                 )
                 evidence_id = f"deletion_evidence_{ts_ns}"
@@ -2782,6 +2850,26 @@ class PostgresRuntimeApiStore:
                     payload=event.payload,
                     metadata=event.metadata,
                 )
+                # C7 phase 2: encrypt payload_json_redacted +
+                # metadata_json_redacted with AAD bound to (table,
+                # column, org_id). The presentation_json is NOT encrypted
+                # because it's the projector's pre-rendered card the
+                # frontend reads on every event — encrypting it would
+                # add a KMS roundtrip per stream tick.
+                event_org_id = str(run[_Columns.ORG_ID])
+                version = self._codec.write_version
+                payload_encrypted = self._codec.encrypt_jsonb(
+                    envelope.payload,
+                    table=_Tables.RUNTIME_EVENTS,
+                    column=_Columns.PAYLOAD_JSON_REDACTED,
+                    org_id=event_org_id,
+                )
+                metadata_encrypted = self._codec.encrypt_jsonb(
+                    envelope.metadata,
+                    table=_Tables.RUNTIME_EVENTS,
+                    column=_Columns.METADATA_JSON_REDACTED,
+                    org_id=event_org_id,
+                )
                 await conn.execute(
                     """
                     INSERT INTO runtime_events (
@@ -2789,18 +2877,19 @@ class PostgresRuntimeApiStore:
                         source, event_type, parent_event_id, span_id, parent_span_id,
                         parent_task_id, task_id, subagent_id, display_title, summary, status,
                         trace_id, payload_json_redacted, metadata_json_redacted, visibility,
-                        redaction_state, activity_kind, presentation_json, created_at
+                        redaction_state, activity_kind, presentation_json, created_at,
+                        encryption_version
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
                         envelope.event_id,
                         envelope.run_id,
                         envelope.conversation_id,
-                        run[_Columns.ORG_ID],
+                        event_org_id,
                         envelope.sequence_no,
                         envelope.event_protocol_version,
                         envelope.source.value,
@@ -2815,13 +2904,14 @@ class PostgresRuntimeApiStore:
                         envelope.summary,
                         envelope.status,
                         envelope.trace_id,
-                        Jsonb(envelope.payload),
-                        Jsonb(envelope.metadata),
+                        Jsonb(payload_encrypted),
+                        Jsonb(metadata_encrypted),
                         envelope.visibility.value,
                         envelope.redaction_state.value,
                         envelope.activity_kind,
                         Jsonb(envelope.presentation),
                         envelope.created_at,
+                        version,
                     ),
                 )
         return envelope
@@ -3029,24 +3119,49 @@ class PostgresRuntimeApiStore:
             idempotency_key=row[_Columns.IDEMPOTENCY_KEY],
         )
 
-    @classmethod
-    def _message_record(cls, row: dict[str, object]) -> MessageRecord:
+    def _message_record(self, row: dict[str, object]) -> MessageRecord:
+        # C7 phase 2: decrypt content_text / content_json / metadata_json
+        # using the row's encryption_version. Rows pre-phase-2 stay v0
+        # (plaintext) and pass through unchanged.
+        version = int(row.get(_Columns.ENCRYPTION_VERSION, 0) or 0)
+        org_id = str(row[_Columns.ORG_ID])
+        content_text = self._codec.decrypt_text(
+            row[_Columns.CONTENT_TEXT],
+            encryption_version=version,
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.CONTENT_TEXT,
+            org_id=org_id,
+        )
+        content_json = self._codec.decrypt_jsonb(
+            row[_Columns.CONTENT_JSON],
+            encryption_version=version,
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.CONTENT_JSON,
+            org_id=org_id,
+        )
+        metadata_json = self._codec.decrypt_jsonb(
+            row[_Columns.METADATA_JSON],
+            encryption_version=version,
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.METADATA_JSON,
+            org_id=org_id,
+        )
         return MessageRecord(
             message_id=row[_Columns.ID],
             conversation_id=row[_Columns.CONVERSATION_ID],
-            org_id=row[_Columns.ORG_ID],
+            org_id=org_id,
             run_id=row[_Columns.RUN_ID],
             role=row[_Columns.ROLE],
-            content_text=row[_Columns.CONTENT_TEXT],
+            content_text=content_text,
             content_format=row[_Columns.CONTENT_FORMAT],
-            content=tuple(dict(part) for part in row[_Columns.CONTENT_JSON]),
+            content=tuple(dict(part) for part in content_json),
             attachments=tuple(
                 dict(attachment) for attachment in row[_Columns.ATTACHMENTS_JSON]
             ),
             quote=dict(row[_Columns.QUOTE_JSON])
             if row[_Columns.QUOTE_JSON] is not None
             else None,
-            metadata=dict(row[_Columns.METADATA_JSON]),
+            metadata=dict(metadata_json),
             parent_message_id=row[_Columns.PARENT_MESSAGE_ID],
             source_message_id=row[_Columns.SOURCE_MESSAGE_ID],
             branch_id=row[_Columns.BRANCH_ID],
@@ -3092,8 +3207,7 @@ class PostgresRuntimeApiStore:
             latest_sequence_no=row[_Columns.LATEST_SEQUENCE_NO],
         )
 
-    @classmethod
-    def _event_envelope(cls, row: dict[str, object]) -> RuntimeEventEnvelope:
+    def _event_envelope(self, row: dict[str, object]) -> RuntimeEventEnvelope:
         stored_activity = row.get(_Columns.ACTIVITY_KIND)
         if stored_activity is None:
             stored_activity = RuntimeEventPresentationProjector.activity_kind_for(
@@ -3101,12 +3215,30 @@ class PostgresRuntimeApiStore:
                 source=StreamEventSource(row[_Columns.SOURCE]),
             )
 
+        # C7 phase 2: decrypt JSONB envelopes for the two encrypted columns.
+        version = int(row.get(_Columns.ENCRYPTION_VERSION, 0) or 0)
+        org_id = str(row[_Columns.ORG_ID])
+        payload_json = self._codec.decrypt_jsonb(
+            row[_Columns.PAYLOAD_JSON_REDACTED],
+            encryption_version=version,
+            table=_Tables.RUNTIME_EVENTS,
+            column=_Columns.PAYLOAD_JSON_REDACTED,
+            org_id=org_id,
+        )
+        metadata_json = self._codec.decrypt_jsonb(
+            row[_Columns.METADATA_JSON_REDACTED],
+            encryption_version=version,
+            table=_Tables.RUNTIME_EVENTS,
+            column=_Columns.METADATA_JSON_REDACTED,
+            org_id=org_id,
+        )
+
         stored_presentation = row.get(_Columns.PRESENTATION_JSON)
         if stored_presentation is not None:
             presentation = dict(stored_presentation)
         else:
             presentation = RuntimeEventPresentationProjector.presentation_metadata(
-                dict(row[_Columns.METADATA_JSON_REDACTED])
+                dict(metadata_json or {})
             )
 
         return RuntimeEventEnvelope(
@@ -3130,26 +3262,47 @@ class PostgresRuntimeApiStore:
             visibility=row[_Columns.VISIBILITY],
             redaction_state=row[_Columns.REDACTION_STATE],
             presentation=presentation,
-            payload=dict(row[_Columns.PAYLOAD_JSON_REDACTED]),
-            metadata=dict(row[_Columns.METADATA_JSON_REDACTED]),
+            payload=dict(payload_json or {}),
+            metadata=dict(metadata_json or {}),
             created_at=row[_Columns.CREATED_AT],
         )
 
-    @classmethod
     async def _insert_message(
-        cls, conn: psycopg.AsyncConnection, message: MessageRecord
+        self, conn: psycopg.AsyncConnection, message: MessageRecord
     ) -> None:
+        # C7 phase 2: encrypt content_text / content_json / metadata_json
+        # per the codec's active mode. ``encryption_version`` reflects the
+        # mode used here so reads of THIS row know whether to decrypt.
+        version = self._codec.write_version
+        content_text = self._codec.encrypt_text(
+            message.content_text,
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.CONTENT_TEXT,
+            org_id=message.org_id,
+        )
+        content_json = self._codec.encrypt_jsonb(
+            list(message.content),
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.CONTENT_JSON,
+            org_id=message.org_id,
+        )
+        metadata_json = self._codec.encrypt_jsonb(
+            dict(message.metadata),
+            table=_Tables.AGENT_MESSAGES,
+            column=_Columns.METADATA_JSON,
+            org_id=message.org_id,
+        )
         await conn.execute(
             """
             INSERT INTO agent_messages (
                 id, conversation_id, org_id, run_id, role, content_text, content_format,
                 content_json, attachments_json, quote_json, metadata_json,
                 parent_message_id, source_message_id, branch_id, token_count, trace_id,
-                status, created_at, edited_at, deleted_at
+                status, created_at, edited_at, deleted_at, encryption_version
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s
+                %s, %s, %s, %s
             )
             """,
             (
@@ -3158,12 +3311,12 @@ class PostgresRuntimeApiStore:
                 message.org_id,
                 message.run_id,
                 message.role.value,
-                message.content_text,
+                content_text,
                 message.content_format,
-                Jsonb(message.content),
+                Jsonb(content_json),
                 Jsonb(message.attachments),
                 Jsonb(message.quote) if message.quote is not None else None,
-                Jsonb(message.metadata),
+                Jsonb(metadata_json),
                 message.parent_message_id,
                 message.source_message_id,
                 message.branch_id,
@@ -3173,6 +3326,7 @@ class PostgresRuntimeApiStore:
                 message.created_at,
                 message.edited_at,
                 message.deleted_at,
+                version,
             ),
         )
 

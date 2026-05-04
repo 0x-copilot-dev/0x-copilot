@@ -23,10 +23,15 @@ from psycopg.rows import dict_row
 
 from agent_runtime.persistence.encryption import (
     EncryptionUnavailableError,
+    FieldCodec,
     FieldEncryption,
     NullFieldEncryption,
 )
 from agent_runtime.persistence.encryption_metrics import FieldEncryptionMetrics
+
+import json
+
+from psycopg.types.json import Jsonb
 
 
 _LOGGER = logging.getLogger("ai_backend.field_encryption_backfill")
@@ -41,11 +46,39 @@ class BackfillTarget:
     column_type: str  # "text" or "json"
 
 
-# Phase 1 ships one canonical target so the framework has a tested surface.
-# Phase 2 adds the rest from the C7 spec; gated on operator readiness.
-_PHASE_1_TARGETS: tuple[BackfillTarget, ...] = (
+# Default target set covers every column wired by C7 phase 2.
+#
+# Skipped intentionally:
+#   - runtime_subagent_results.response_text
+#   - runtime_tool_invocations.{args,result_summary}_json_redacted
+#   - runtime_memory_items.content_summary
+# Those tables have schema columns prepared by 0011 but no active write
+# path in PostgresRuntimeApiStore yet — backfill them once the writer
+# code lands so we don't rewrite an empty table on every run.
+_DEFAULT_TARGETS: tuple[BackfillTarget, ...] = (
     BackfillTarget(table="agent_messages", column="content_text", column_type="text"),
+    BackfillTarget(table="agent_messages", column="content_json", column_type="json"),
+    BackfillTarget(table="agent_messages", column="metadata_json", column_type="json"),
+    BackfillTarget(
+        table="runtime_audit_log",
+        column="metadata_json_redacted",
+        column_type="json",
+    ),
+    BackfillTarget(
+        table="runtime_events",
+        column="payload_json_redacted",
+        column_type="json",
+    ),
+    BackfillTarget(
+        table="runtime_events",
+        column="metadata_json_redacted",
+        column_type="json",
+    ),
 )
+
+
+# Back-compat alias — phase 1 callers used the narrower name.
+_PHASE_1_TARGETS = _DEFAULT_TARGETS
 
 
 class FieldEncryptionBackfill:
@@ -74,6 +107,10 @@ class FieldEncryptionBackfill:
             )
         self._database_url = database_url
         self._field_encryption = field_encryption
+        # Use the codec so JSONB columns get the correct
+        # ``{"$enc": "v1:..."}`` wrapper rather than a raw envelope
+        # string (which Postgres would reject as invalid JSONB).
+        self._codec = FieldCodec(field_encryption)
         self._targets = targets
         self._batch_size = batch_size or int(
             os.environ.get("RUNTIME_ENCRYPTION_BACKFILL_BATCH", "100")
@@ -138,13 +175,10 @@ class FieldEncryptionBackfill:
                     return 0
                 count = 0
                 for row in rows:
-                    plaintext = self._coerce_to_bytes(row["payload"])
+                    org_id = str(row["org_id"])
                     try:
-                        ciphertext = self._field_encryption.encrypt(
-                            plaintext,
-                            table=target.table,
-                            column=target.column,
-                            org_id=str(row["org_id"]),
+                        stored_value = self._encrypt_for_target(
+                            target, row["payload"], org_id=org_id
                         )
                     except EncryptionUnavailableError:
                         # KMS is wedged — abort the batch; outer loop will
@@ -154,7 +188,7 @@ class FieldEncryptionBackfill:
                     cur.execute(
                         update_sql,
                         {
-                            "value": ciphertext,
+                            "value": stored_value,
                             "id": row["id"],
                         },
                     )
@@ -162,14 +196,37 @@ class FieldEncryptionBackfill:
                 conn.commit()
         return count
 
+    def _encrypt_for_target(
+        self, target: BackfillTarget, value: Any, *, org_id: str
+    ) -> Any:
+        if target.column_type == "json":
+            # Already-encrypted rows show up as `{"$enc": "..."}`; skip
+            # them. The WHERE encryption_version=0 should already exclude
+            # those, but defensive-program against a partial backfill.
+            if isinstance(value, dict) and len(value) == 1 and "$enc" in value:
+                return Jsonb(value)
+            encrypted = self._codec.encrypt_jsonb(
+                value, table=target.table, column=target.column, org_id=org_id
+            )
+            return Jsonb(encrypted)
+        # Text column.
+        if isinstance(value, str) and value.startswith("v1:"):
+            return value
+        plaintext = self._coerce_text_to_bytes(value)
+        return self._codec.encrypt_text(
+            plaintext.decode("utf-8"),
+            table=target.table,
+            column=target.column,
+            org_id=org_id,
+        )
+
     @staticmethod
-    def _coerce_to_bytes(value: Any) -> bytes:
+    def _coerce_text_to_bytes(value: Any) -> bytes:
         if isinstance(value, bytes):
             return value
         if isinstance(value, str):
             return value.encode("utf-8")
-        # JSONB / dict: serialize stably so re-encrypted bytes are
-        # decryptable as the same logical structure.
-        import json
-
         return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    # Phase-1 alias kept so existing tests + any operator scripts keep working.
+    _coerce_to_bytes = _coerce_text_to_bytes
