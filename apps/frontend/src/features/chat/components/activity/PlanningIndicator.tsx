@@ -11,7 +11,11 @@ export type RunIndicator = {
 // often produces visible model_delta text within a frame of run start, so
 // without a floor the pulsating "Planning next step..." hint would render for
 // one paint and disappear before the user could perceive it.
-const MIN_VISIBLE_MS = 700;
+//
+// The CSS pulse animation is 1.2s long (see styles.css:
+// .aui-planning-indicator__word). 1500ms covers one full cycle plus the
+// staggered word delays, so the user sees at least one complete pulse.
+const MIN_VISIBLE_MS = 1500;
 
 export function PlanningIndicator({
   label,

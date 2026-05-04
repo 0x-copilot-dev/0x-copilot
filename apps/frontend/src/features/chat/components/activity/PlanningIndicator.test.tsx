@@ -26,7 +26,7 @@ describe("PlanningIndicator", () => {
       vi.useRealTimers();
     });
 
-    it("keeps the indicator visible for at least 700ms after a brief flash", () => {
+    it("keeps the indicator visible for at least one full pulse cycle after a brief flash", () => {
       const { container, rerender } = render(
         <PlanningIndicator label="Planning next step..." visible={false} />,
       );
@@ -46,13 +46,13 @@ describe("PlanningIndicator", () => {
       rerender(
         <PlanningIndicator label="Planning next step..." visible={false} />,
       );
-      // Still visible — only 50ms elapsed, floor is 700ms.
+      // Still visible — only 50ms elapsed, floor is 1500ms.
       expect(indicator()?.getAttribute("data-visible")).toBe("true");
 
       act(() => {
-        vi.advanceTimersByTime(640);
+        vi.advanceTimersByTime(1440);
       });
-      // Still inside the 700ms window.
+      // Still inside the 1500ms window.
       expect(indicator()?.getAttribute("data-visible")).toBe("true");
 
       act(() => {
@@ -71,7 +71,7 @@ describe("PlanningIndicator", () => {
       expect(indicator()?.getAttribute("data-visible")).toBe("true");
 
       act(() => {
-        vi.advanceTimersByTime(900);
+        vi.advanceTimersByTime(1700);
       });
       rerender(
         <PlanningIndicator label="Planning next step..." visible={false} />,

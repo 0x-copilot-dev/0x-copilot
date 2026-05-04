@@ -806,17 +806,17 @@ p {
 }
 
 .aui-planning-indicator__word {
-  animation: planning-word-pulse 2.4s ease-in-out infinite;
+  animation: planning-word-pulse 1.2s ease-in-out infinite;
   display: inline-block;
   will-change: opacity;
 }
 
 .aui-planning-indicator__word--2 {
-  animation-delay: 160ms;
+  animation-delay: 100ms;
 }
 
 .aui-planning-indicator__word--3 {
-  animation-delay: 320ms;
+  animation-delay: 200ms;
 }
 
 .aui-welcome {
