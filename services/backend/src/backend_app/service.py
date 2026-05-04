@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import base64
-import hashlib
 import json
 import os
-from secrets import token_urlsafe
 
 import yaml
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+from backend_app.identity._pkce import compute_challenge, generate_verifier
 
 from backend_app.contracts import (
     AuditEventRecord,
@@ -286,7 +285,7 @@ class McpRegistryService:
                 self._audit(updated, "mcp_auth_unsupported", conn=conn)
             raise ValueError("MCP server does not support OAuth authentication")
 
-        verifier = token_urlsafe(64)
+        verifier = generate_verifier()
         expires_at = datetime.now(timezone.utc) + self.auth_session_ttl
         session = McpAuthSessionRecord(
             server_id=record.server_id,
@@ -301,7 +300,7 @@ class McpRegistryService:
             record=record,
             redirect_uri=request.redirect_uri,
             state=session.state,
-            code_challenge=self._code_challenge(session.code_verifier),
+            code_challenge=compute_challenge(session.code_verifier),
             token_vault=self.token_vault,
         )
         session = session.model_copy(update={"auth_url": authorization.auth_url})
@@ -685,11 +684,6 @@ class McpRegistryService:
         }:
             return f"{record.display_name} MCP server."
         return f"{record.display_name} MCP server requires authentication before tools can load."
-
-    @classmethod
-    def _code_challenge(cls, verifier: str) -> str:
-        digest = hashlib.sha256(verifier.encode("ascii")).digest()
-        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
 class SkillRegistryService:

@@ -1,12 +1,11 @@
 """PKCE primitives + state/nonce generators.
 
-Extracted from the existing MCP OAuth 2.1 flow so the new OIDC SSO module
-(A3) can reuse the same primitives. Mirrors the spec from RFC 7636 §4.
+Single source of truth for the verifier/challenge pair used by both the
+OIDC SSO module (A3) and the MCP OAuth 2.1 flow ([backend_app.service]).
+Mirrors RFC 7636 §4. Keeping both flows on these helpers means a future
+change (e.g. wider verifier, hardware RNG) lands in one place.
 
-These are stateless, side-effect-free helpers — no class wrapper. The
-``mcp_oauth.py`` callers do their own PKCE assembly inline; they are
-intentionally not refactored here to keep the existing test surface intact
-(C2's hard requirement: avoid blast radius outside the explicit PR scope).
+Stateless, side-effect-free; no class wrapper.
 """
 
 from __future__ import annotations

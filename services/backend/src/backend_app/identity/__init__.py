@@ -39,6 +39,9 @@ from backend_app.identity.passwords import (
     ResetTokenRejected,
     WeakPasswordError,
 )
+
+# LocalAuthDisabled is consumed by the password routes which import it via
+# the identity package. Re-exported above; nothing else to add.
 from backend_app.identity.session_store import (
     InMemorySessionStore,
     PostgresSessionStore,

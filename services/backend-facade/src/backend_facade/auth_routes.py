@@ -40,9 +40,11 @@ def register_auth_routes(app: FastAPI) -> None:
 
     @app.get("/v1/auth/sessions")
     async def list_sessions(request: Request) -> dict[str, object]:
-        identity = FacadeAuthenticator.authenticate_request(request)
         backend_url = settings_for(app).backend_url
         async with httpx.AsyncClient(timeout=10) as client:
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request, backend_url=backend_url, http_client=client
+            )
             response = await client.get(
                 f"{backend_url}/internal/v1/auth/sessions",
                 params={"org_id": identity.org_id, "user_id": identity.user_id},
@@ -56,22 +58,48 @@ def register_auth_routes(app: FastAPI) -> None:
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def revoke_session(request: Request, session_id: str) -> Response:
-        identity = FacadeAuthenticator.authenticate_request(request)
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            # cache_bypass=True: revoking a session is a sensitive operation
+            # that must run against the canonical DB state, not a cached
+            # identity that could itself be revoked already.
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request,
+                backend_url=backend_url,
+                http_client=client,
+                cache_bypass=True,
+            )
         await _revoke(app, identity, session_id, reason="user_revoked")
+        # Best-effort: drop the caller's own cached identity so the very next
+        # request reflects the new state if they revoked their own session.
+        token = _bearer_from_request(request)
+        if token is not None:
+            FacadeAuthenticator.invalidate_touch_cache(
+                FacadeAuthenticator.token_hash_from_signature(token)
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/v1/auth/logout")
     async def logout(request: Request) -> Response:
-        identity = FacadeAuthenticator.authenticate_request(request)
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request,
+                backend_url=backend_url,
+                http_client=client,
+                cache_bypass=True,
+            )
         # Best-effort: derive the session_id from the bearer's `sid` claim;
         # if there isn't one (back-compat token without sid), there is no
-        # server-side session to revoke and we fall through to 204. The
-        # bearer cookie / localStorage clearing is the client's job.
+        # server-side session to revoke and we fall through to 204.
         token = _bearer_from_request(request)
         if token is not None:
             session_id = FacadeAuthenticator.session_id_from_token(token)
             if session_id is not None:
                 await _revoke(app, identity, session_id, reason="logout")
+            FacadeAuthenticator.invalidate_touch_cache(
+                FacadeAuthenticator.token_hash_from_signature(token)
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ------------------------------------------------------------------

@@ -276,6 +276,20 @@ class PasswordService:
         )
         return record
 
+    # Identity policy ---------------------------------------------------
+    def _identity_policy_allows_local(self, *, org_id: str) -> bool:
+        """Default open: when no policy row exists the local path stays on.
+
+        Single-tenant deploys typically never write the row (default OK);
+        bank/gov SaaS orgs explicitly UPSERT ``local_password_enabled=False``
+        to lock the route down to SAML/OIDC.
+        """
+
+        policy = self._identity_store.get_identity_policy(org_id=org_id)
+        if policy is None:
+            return True
+        return policy.local_password_enabled
+
     # Login -------------------------------------------------------------
     def login(
         self,
@@ -286,6 +300,24 @@ class PasswordService:
         ip: str | None = None,
         user_agent: str | None = None,
     ) -> LocalLoginResult:
+        if not self._identity_policy_allows_local(org_id=org_id):
+            # Don't even hash. Audit the rejection for compliance — bank
+            # auditors will want a row per "local login attempted on a
+            # locked-down org" so they can prove the toggle is enforced.
+            self._identity_store.append_login_attempt(
+                LoginAttemptRecord(
+                    org_id=org_id,
+                    email_attempted=email,
+                    auth_kind=LoginAttemptKind.LOCAL,
+                    outcome=LoginAttemptOutcome.PROVIDER_REJECTED,
+                    ip=ip,
+                    user_agent=user_agent,
+                    failure_reason="local_password_disabled",
+                )
+            )
+            raise LocalAuthDisabled(
+                "local password authentication is disabled for this organization"
+            )
         user = self._identity_store.get_user_by_email(org_id=org_id, email=email)
         if user is None:
             # Constant-time path: still hash + verify a dummy.

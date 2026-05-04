@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 
 from backend_app.app import create_app
 from backend_app.contracts import (
+    IdentityPolicyRecord,
+    LoginAttemptKind,
+    LoginAttemptOutcome,
     OrganizationRecord,
     PasswordPolicyRecord,
     RoleRecord,
@@ -22,6 +25,7 @@ from backend_app.identity import (
     InMemoryIdentityStore,
     InMemoryPasswordStore,
     InMemorySessionStore,
+    LocalAuthDisabled,
     LoginRejectedError,
     PasswordChangeRejected,
     PasswordHasherConfig,
@@ -240,6 +244,69 @@ class TestLogin(PasswordFixtureMixin):
         attempts = ctx["identity_store"].list_login_attempts(org_id=ctx["org"].org_id)
         assert len(attempts) == 1
         assert attempts[0].outcome.value == "bad_password"
+
+
+# ---------------------------------------------------------------------------
+# Identity policy: local_password_enabled=False locks the path
+# ---------------------------------------------------------------------------
+
+
+class TestLocalAuthDisabled(PasswordFixtureMixin):
+    def test_login_raises_local_auth_disabled_when_policy_off(self) -> None:
+        svc, ctx = self.build()
+        svc.set_password(
+            org_id=ctx["org"].org_id,
+            user_id=ctx["user"].user_id,
+            new_password="CorrectPass1!",
+        )
+        ctx["identity_store"].upsert_identity_policy(
+            IdentityPolicyRecord(
+                org_id=ctx["org"].org_id,
+                local_password_enabled=False,
+            )
+        )
+        with pytest.raises(LocalAuthDisabled):
+            svc.login(
+                org_id=ctx["org"].org_id,
+                email="alice@acme.com",
+                password="CorrectPass1!",
+            )
+
+    def test_login_disabled_audits_provider_rejected_attempt(self) -> None:
+        svc, ctx = self.build()
+        ctx["identity_store"].upsert_identity_policy(
+            IdentityPolicyRecord(
+                org_id=ctx["org"].org_id,
+                local_password_enabled=False,
+            )
+        )
+        with pytest.raises(LocalAuthDisabled):
+            svc.login(
+                org_id=ctx["org"].org_id,
+                email="alice@acme.com",
+                password="anything",
+            )
+        attempts = ctx["identity_store"].list_login_attempts(org_id=ctx["org"].org_id)
+        assert len(attempts) == 1
+        assert attempts[0].auth_kind == LoginAttemptKind.LOCAL
+        assert attempts[0].outcome == LoginAttemptOutcome.PROVIDER_REJECTED
+        assert attempts[0].failure_reason == "local_password_disabled"
+
+    def test_login_works_when_policy_row_absent(self) -> None:
+        # No identity_policy row → default-open. Verifies the SaaS happy path
+        # isn't disrupted by the new check.
+        svc, ctx = self.build()
+        svc.set_password(
+            org_id=ctx["org"].org_id,
+            user_id=ctx["user"].user_id,
+            new_password="CorrectPass1!",
+        )
+        result = svc.login(
+            org_id=ctx["org"].org_id,
+            email="alice@acme.com",
+            password="CorrectPass1!",
+        )
+        assert result.user_id == ctx["user"].user_id
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +616,28 @@ class TestLocalLoginRoute(_BackendRouteFixtureMixin):
             },
         )
         assert response.status_code == 401
+
+    def test_verify_route_returns_404_when_local_disabled(self, monkeypatch) -> None:
+        # Spec A4 §1.2: "/v1/auth/login for that org returns 404" — backend
+        # verify route mirrors the same status so the facade can pass it
+        # through unchanged.
+        client = self.client(monkeypatch)
+        org_id, _ = self.seed_user(
+            client.app, email="alice@acme.com", password="CorrectPass1!"
+        )
+        client.app.state.identity_store.upsert_identity_policy(
+            IdentityPolicyRecord(org_id=org_id, local_password_enabled=False)
+        )
+        response = client.post(
+            "/internal/v1/auth/local/verify",
+            headers=self.service_headers(org_id=org_id),
+            json={
+                "org_id": org_id,
+                "email": "alice@acme.com",
+                "password": "CorrectPass1!",
+            },
+        )
+        assert response.status_code == 404
 
 
 class TestPasswordResetRoute(_BackendRouteFixtureMixin):

@@ -23,6 +23,7 @@ from typing import Any, Protocol
 from backend_app.contracts import (
     AuthProviderRecord,
     IdentityAuditEventRecord,
+    IdentityPolicyRecord,
     LoginAttemptRecord,
     OrganizationMemberRecord,
     OrganizationRecord,
@@ -157,6 +158,12 @@ class IdentityStore(Protocol):
         limit: int = 100,
     ) -> tuple[LoginAttemptRecord, ...]: ...
 
+    # Identity policy (auth-method toggles) -----------------------------
+    def get_identity_policy(self, *, org_id: str) -> IdentityPolicyRecord | None: ...
+    def upsert_identity_policy(
+        self, record: IdentityPolicyRecord, *, conn: Any | None = None
+    ) -> IdentityPolicyRecord: ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory adapter
@@ -175,6 +182,7 @@ class InMemoryIdentityStore:
     auth_providers: dict[str, AuthProviderRecord] = field(default_factory=dict)
     identity_audit_events: list[IdentityAuditEventRecord] = field(default_factory=list)
     login_attempts: list[LoginAttemptRecord] = field(default_factory=list)
+    identity_policies: dict[str, IdentityPolicyRecord] = field(default_factory=dict)
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -571,6 +579,19 @@ class InMemoryIdentityStore:
         ]
         rows.sort(key=lambda r: r.created_at, reverse=True)
         return tuple(rows[:limit])
+
+    # Identity policy ---------------------------------------------------
+    def get_identity_policy(self, *, org_id: str) -> IdentityPolicyRecord | None:
+        return self.identity_policies.get(org_id)
+
+    def upsert_identity_policy(
+        self, record: IdentityPolicyRecord, *, conn: Any | None = None
+    ) -> IdentityPolicyRecord:
+        del conn
+        updated = record.model_copy(update={"updated_at": _now()})
+        self.identity_policies[record.org_id] = updated
+        _log_write("identity_policies", record.org_id, "upsert")
+        return updated
 
 
 # ---------------------------------------------------------------------------
@@ -1219,6 +1240,43 @@ class PostgresIdentityStore:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         return tuple(_row_to_login_attempt(row) for row in rows)
+
+    # Identity policy ---------------------------------------------------
+    def get_identity_policy(self, *, org_id: str) -> IdentityPolicyRecord | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                "SELECT org_id, local_password_enabled, updated_at "
+                "FROM identity_policies WHERE org_id = %s",
+                (org_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return IdentityPolicyRecord.model_validate(dict(row))
+
+    def upsert_identity_policy(
+        self, record: IdentityPolicyRecord, *, conn: Any | None = None
+    ) -> IdentityPolicyRecord:
+        # Atomic insert-or-update keyed on PK; ``updated_at`` always refreshed
+        # on conflict so callers can rely on the column.
+        updated = record.model_copy(update={"updated_at": _now()})
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO identity_policies (
+                    org_id, local_password_enabled, updated_at
+                ) VALUES (%s, %s, %s)
+                ON CONFLICT (org_id) DO UPDATE SET
+                    local_password_enabled = EXCLUDED.local_password_enabled,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    updated.org_id,
+                    updated.local_password_enabled,
+                    updated.updated_at,
+                ),
+            )
+        return updated
 
 
 # ---------------------------------------------------------------------------

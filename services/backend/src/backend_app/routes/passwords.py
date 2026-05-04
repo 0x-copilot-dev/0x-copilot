@@ -27,6 +27,7 @@ from backend_app.contracts import (
 from backend_app.identity import (
     BootstrapAdminService,
     BootstrapRefused,
+    LocalAuthDisabled,
     LoginRejectedError,
     PasswordChangeRejected,
     PasswordService,
@@ -57,6 +58,11 @@ def register_password_routes(
                 ip=payload.ip,
                 user_agent=payload.user_agent,
             )
+        except LocalAuthDisabled as exc:
+            # Spec A4 §1.2: when ``identity_policy.local_password_enabled``
+            # is false the route must 404, not 401 — conveys "this IdP isn't
+            # enabled for this org" instead of "wrong password".
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
         except LoginRejectedError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 

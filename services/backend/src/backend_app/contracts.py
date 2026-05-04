@@ -1388,6 +1388,30 @@ class LocalCredentialRecord(BackendContract):
         return Validators.normalize_id(value)
 
 
+class IdentityPolicyRecord(BackendContract):
+    """Per-org auth-method toggle row.
+
+    Holds the on/off flags that gate which IdPs the org accepts at all.
+    Distinct from ``PasswordPolicyRecord`` (rotation, complexity) and
+    ``LockoutPolicyRecord`` (failure-count thresholds): when this row says
+    ``local_password_enabled=False`` the local-password route returns 404
+    regardless of how strong the candidate password is.
+
+    Reusable: A6 will add ``mfa_required``, A7 will add ``scim_required``
+    here so a bank/gov deployment can lock down to SAML+SCIM only via a
+    single UPDATE.
+    """
+
+    org_id: str
+    local_password_enabled: bool = True
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("org_id")
+    @classmethod
+    def _normalize_org(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
 class PasswordPolicyRecord(BackendContract):
     """Per-org password policy. One row per org; defaults match OWASP."""
 

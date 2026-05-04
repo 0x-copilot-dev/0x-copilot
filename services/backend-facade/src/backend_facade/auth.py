@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 import base64
 import hashlib
 import hmac
 import json
 import os
+import time
+from threading import Lock
 from typing import Any
 
+import httpx
 from enterprise_service_contracts.auth_claims import (
     CLAIM_SID,
     ENV_REQUIRE_SESSION_BINDING,
@@ -24,6 +28,16 @@ from enterprise_service_contracts.headers import (
     USER_HEADER,
 )
 from fastapi import HTTPException, Request, status
+
+
+# Per-process cache of canonical session identities returned by the backend
+# touch endpoint. Spec A2 §2.4: "Per-request cache: a small LRU(maxsize=128)
+# keyed on (token_hash, current_minute_bucket) — capped TTL 30s. Strictly
+# per-process; no shared cache." The bucket trick keeps cache invalidation
+# implicit — as the wall clock crosses the next 30s boundary the old key is
+# never read again and falls out of the LRU naturally.
+_TOUCH_CACHE_TTL_SECONDS = 30
+_TOUCH_CACHE_MAX_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,94 @@ class AuthenticatedIdentity:
         return scoped
 
 
+class _TouchCache:
+    """TTL-bucketed LRU for the canonical identity returned by the backend
+    session touch endpoint.
+
+    Key = ``(token_hash, time_bucket)`` where ``time_bucket = floor(now /
+    TTL_SECONDS)``. Crossing a bucket boundary forces a fresh touch even if
+    the LRU still has the prior bucket; in steady state each session pays
+    one touch per ``TTL_SECONDS`` window. Size-bounded so a flood of
+    distinct tokens cannot push working sessions out — oldest evict first.
+
+    Reusable: sensitive routes that need DB-backed instant revocation pass
+    ``cache_bypass=True``; read-mostly routes amortise touch cost.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_size: int = _TOUCH_CACHE_MAX_SIZE,
+        ttl_seconds: int = _TOUCH_CACHE_TTL_SECONDS,
+    ) -> None:
+        self._max_size = max_size
+        self._ttl_seconds = max(1, ttl_seconds)
+        self._entries: OrderedDict[tuple[str, int], AuthenticatedIdentity] = (
+            OrderedDict()
+        )
+        self._lock = Lock()
+        self.hits = 0
+        self.misses = 0
+
+    def _bucket(self, *, now: float | None = None) -> int:
+        return int((now if now is not None else time.time()) // self._ttl_seconds)
+
+    def get(
+        self, *, token_hash: str, now: float | None = None
+    ) -> AuthenticatedIdentity | None:
+        key = (token_hash, self._bucket(now=now))
+        with self._lock:
+            value = self._entries.get(key)
+            if value is None:
+                self.misses += 1
+                return None
+            self._entries.move_to_end(key)
+            self.hits += 1
+            return value
+
+    def put(
+        self,
+        *,
+        token_hash: str,
+        identity: AuthenticatedIdentity,
+        now: float | None = None,
+    ) -> None:
+        key = (token_hash, self._bucket(now=now))
+        with self._lock:
+            self._entries[key] = identity
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_size:
+                self._entries.popitem(last=False)
+
+    def invalidate(self, *, token_hash: str) -> None:
+        """Drop every bucketed entry for this token. Called on logout/revoke
+        so the immediately-following request never sees a stale identity."""
+
+        with self._lock:
+            doomed = [key for key in self._entries if key[0] == token_hash]
+            for key in doomed:
+                del self._entries[key]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+            self.hits = 0
+            self.misses = 0
+
+
+# Module-level singleton; bound per worker process. Tests can clear via
+# ``FacadeAuthenticator.touch_cache().clear()`` between cases.
+_TOUCH_CACHE = _TouchCache()
+
+
+class SessionRevoked(HTTPException):
+    """Raised when the backend touch endpoint reports the session is no longer
+    active (revoked, expired, or replaced). Mapped to 401 by FastAPI."""
+
+    def __init__(self, detail: str = "Session no longer active") -> None:
+        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
 class FacadeAuthenticator:
     """Class-scoped auth behavior for the product-facing facade."""
 
@@ -82,6 +184,89 @@ class FacadeAuthenticator:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         token = header.split(" ", maxsplit=1)[1].strip()
         return cls.verify_identity_token(token, cls._auth_secret())
+
+    @classmethod
+    async def verify_with_touch(
+        cls,
+        request: Request,
+        *,
+        backend_url: str,
+        http_client: httpx.AsyncClient,
+        cache_bypass: bool = False,
+    ) -> AuthenticatedIdentity:
+        """HMAC-verify locally → call backend touch (cached) → canonical identity.
+
+        The backend's ``sessions`` row is the source of truth; roles, scopes,
+        and revocation state come from there, not from the bearer payload.
+        Pass ``cache_bypass=True`` from sensitive routes (admin, revoke,
+        logout) so the touch happens even within the cache window.
+
+        Falls back to the sync ``authenticate_request`` path for back-compat
+        bearers that lack a ``sid`` claim — those carry no server-side
+        session to touch and behave exactly as before A2.
+        """
+
+        identity = cls.authenticate_request(request)
+        bearer = _bearer_from_authorization_header(request)
+        if bearer is None:
+            # Dev-bypass path. Nothing to touch.
+            return identity
+        sid = cls.session_id_from_token(bearer)
+        if sid is None:
+            # Back-compat token without a `sid` claim. The session-binding
+            # gate in ``verify_identity_token`` already enforced the policy.
+            return identity
+        token_hash = cls.token_hash_from_signature(bearer)
+        if not cache_bypass:
+            cached = _TOUCH_CACHE.get(token_hash=token_hash)
+            if cached is not None:
+                return cached
+
+        response = await http_client.post(
+            f"{backend_url}/internal/v1/auth/sessions/touch",
+            json={"session_id": sid, "token_hash": token_hash},
+            headers={
+                SERVICE_TOKEN_HEADER: cls._service_token(),
+                ORG_HEADER: identity.org_id,
+                USER_HEADER: identity.user_id,
+            },
+            timeout=5.0,
+        )
+        if response.status_code == status.HTTP_401_UNAUTHORIZED:
+            _TOUCH_CACHE.invalidate(token_hash=token_hash)
+            raise SessionRevoked()
+        if response.status_code >= 400:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "Backend session-touch upstream returned an error",
+            )
+        body = response.json() if response.content else {}
+        canonical = AuthenticatedIdentity(
+            org_id=str(body.get("org_id") or identity.org_id),
+            user_id=str(body.get("user_id") or identity.user_id),
+            roles=tuple(body.get("roles") or identity.roles),
+            permission_scopes=tuple(
+                body.get("permission_scopes") or identity.permission_scopes
+            ),
+            connector_scopes={
+                str(connector): tuple(scopes or ())
+                for connector, scopes in (body.get("connector_scopes") or {}).items()
+            },
+        )
+        _TOUCH_CACHE.put(token_hash=token_hash, identity=canonical)
+        return canonical
+
+    @staticmethod
+    def touch_cache() -> _TouchCache:
+        """Expose the per-process touch cache (mainly for tests / metrics)."""
+
+        return _TOUCH_CACHE
+
+    @staticmethod
+    def invalidate_touch_cache(token_hash: str) -> None:
+        """Drop a token's cached identity — used by logout/revoke routes."""
+
+        _TOUCH_CACHE.invalidate(token_hash=token_hash)
 
     @classmethod
     def service_headers(cls, identity: AuthenticatedIdentity) -> dict[str, str]:
@@ -121,9 +306,9 @@ class FacadeAuthenticator:
         # When REQUIRE_SESSION_BINDING is on, a bearer issued by an A2-aware
         # path (dev-mint or future A3..A5 logins) carries a `sid` claim. We
         # reject any bearer that lacks one so the externally-minted-token
-        # back-door is closed. The backend touch (per-request session DB
-        # check + revocation gate) lands in a follow-up; here we enforce the
-        # static shape so the UI stops accepting unbound tokens.
+        # back-door is closed. The full per-request DB touch lives in
+        # ``verify_with_touch``; this static check is the cheap reject before
+        # any backend round-trip.
         if cls._require_session_binding() and not _has_sid_claim(payload):
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
@@ -154,8 +339,8 @@ class FacadeAuthenticator:
     def token_hash_from_signature(cls, token: str) -> str:
         """sha256 of the token's signature half.
 
-        Used by ``/v1/auth/logout`` and the eventual per-request touch path
-        to identify the session row without exposing the bearer payload.
+        Used by ``/v1/auth/logout`` and the per-request touch path to
+        identify the session row without exposing the bearer payload.
         """
 
         try:
@@ -308,3 +493,10 @@ class FacadeAuthenticator:
 def _has_sid_claim(payload: dict[str, Any]) -> bool:
     sid = payload.get(CLAIM_SID)
     return isinstance(sid, str) and bool(sid)
+
+
+def _bearer_from_authorization_header(request: Request) -> str | None:
+    header = request.headers.get(AUTH_HEADER, "")
+    if not header.lower().startswith("bearer "):
+        return None
+    return header.split(" ", maxsplit=1)[1].strip() or None
