@@ -1,0 +1,35 @@
+# C12 restore-drill expected counts.
+#
+# CI workflow ``.github/workflows/postgres-restore-drill.yml`` boots a
+# clean Postgres, applies every migration in services/backend/migrations
+# and services/ai-backend/migrations, then loads
+# ``tests/fixtures/postgres-restore/seed.sql`` (the synthetic restore
+# fixture). The two ``restore_smoke.py`` scripts compare per-table
+# COUNT(*) against the entries below.
+#
+# Update this file when the seed fixture changes. Manifest drift fails
+# CI with a helpful diff.
+#
+# Tables not listed (e.g. C7's runtime_context_payload_blobs sidecar,
+# tables prepared but lacking writers in the live code) are expected to
+# be empty after seed; the smoke script tolerates absent entries as 0.
+
+backend:
+  organizations: 2
+  users: 3
+  roles: 4
+  role_assignments: 3
+  auth_providers: 2
+  identity_audit_events: 0
+  login_attempts: 0
+  mcp_servers: 1
+  mcp_auth_connections: 0
+  skills: 1
+  identity_policies: 2
+
+ai-backend:
+  agent_conversations: 2
+  agent_messages: 4
+  agent_runs: 2
+  runtime_events: 6
+  runtime_run_usage: 2
