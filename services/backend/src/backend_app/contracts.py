@@ -689,6 +689,12 @@ class AuditEventRecord(BackendContract):
     action: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Chain fields populated by the store on append; optional so existing
+    # callers don't need to construct them.
+    seq: int | None = None
+    prev_hash: bytes | None = None
+    signature: bytes | None = None
+    key_version: int | None = None
 
 
 class SkillAuditEventRecord(BackendContract):
@@ -699,6 +705,10 @@ class SkillAuditEventRecord(BackendContract):
     action: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    seq: int | None = None
+    prev_hash: bytes | None = None
+    signature: bytes | None = None
+    key_version: int | None = None
 
 
 class OAuthTokenRequest(BackendContract):
@@ -786,6 +796,10 @@ class DeployAuditEventRecord(BackendContract):
     force_deploy: bool
     actor_kind: str = "ci"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    seq: int | None = None
+    prev_hash: bytes | None = None
+    signature: bytes | None = None
+    key_version: int | None = None
 
 
 class DeployAuditEventResponse(BackendContract):

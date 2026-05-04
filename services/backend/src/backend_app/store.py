@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 from typing import Any
 
+from backend_app.audit_chain import AuditChainSigner
 from backend_app.contracts import (
     AuditEventRecord,
     DeployAuditEventRecord,
@@ -17,6 +18,35 @@ from backend_app.contracts import (
     SkillRecord,
     TokenEnvelope,
 )
+
+
+class _AuditChain:
+    """Shared chain-state holder for in-memory audit stores.
+
+    Tracks the most recent signature per (table, org) so each new row is
+    signed against its predecessor without needing an O(N) scan of the list.
+    """
+
+    def __init__(self, signer: AuditChainSigner | None = None) -> None:
+        self._signer = signer or AuditChainSigner.from_env()
+        self._heads_by_org: dict[str, bytes] = {}
+        self._counts_by_org: dict[str, int] = {}
+
+    @property
+    def signer(self) -> AuditChainSigner:
+        return self._signer
+
+    def next(
+        self, *, org_id: str, payload: dict[str, Any]
+    ) -> tuple[int, bytes | None, bytes, int]:
+        """Return ``(seq, prev_hash, signature, key_version)`` for a new row."""
+
+        prev = self._heads_by_org.get(org_id)
+        sig = self._signer.sign(prev_hash=prev, payload=payload)
+        seq = self._counts_by_org.get(org_id, 0) + 1
+        self._counts_by_org[org_id] = seq
+        self._heads_by_org[org_id] = sig.signature
+        return seq, sig.prev_hash, sig.signature, sig.key_version
 
 
 class PostgresConnectionPool:
@@ -66,6 +96,7 @@ class InMemoryMcpStore:
     auth_sessions: dict[str, McpAuthSessionRecord] = field(default_factory=dict)
     tokens_by_server: dict[str, TokenEnvelope] = field(default_factory=dict)
     audit_events: list[AuditEventRecord] = field(default_factory=list)
+    _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
     def create_server(self, record: McpServerRecord) -> McpServerRecord:
         self.servers[record.server_id] = record
@@ -116,8 +147,50 @@ class InMemoryMcpStore:
         return self.tokens_by_server.get(server_id)
 
     def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
-        self.audit_events.append(record)
-        return record
+        signed = _sign_mcp_audit(record, self._chain)
+        self.audit_events.append(signed)
+        return signed
+
+
+def _take_audit_chain_lock(cur, *, table: str, org_id: str) -> None:  # type: ignore[no-untyped-def]
+    """Serialize concurrent audit inserts within one (table, org) chain.
+
+    Two concurrent appends would otherwise both read the same prev_hash and
+    produce a forked chain. ``pg_advisory_xact_lock`` releases automatically
+    at transaction end, so the lock scope matches the insert's atomic unit.
+    The lock key is a 64-bit hash of the table name + org_id; collisions
+    between unrelated chains are theoretically possible but harmless (extra
+    serialization of unrelated chains, never lost integrity).
+    """
+
+    import hashlib
+
+    digest = hashlib.sha256(f"audit_chain:{table}:{org_id}".encode("utf-8")).digest()
+    lock_key = int.from_bytes(digest[:8], "big", signed=True)
+    cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
+
+def _sign_mcp_audit(record: AuditEventRecord, chain: _AuditChain) -> AuditEventRecord:
+    payload = {
+        "audit_id": record.audit_id,
+        "org_id": record.org_id,
+        "user_id": record.user_id,
+        "server_id": record.server_id,
+        "action": record.action,
+        "metadata": record.metadata,
+        "created_at": record.created_at,
+    }
+    seq, prev_hash, signature, key_version = chain.next(
+        org_id=record.org_id, payload=payload
+    )
+    return record.model_copy(
+        update={
+            "seq": seq,
+            "prev_hash": prev_hash,
+            "signature": signature,
+            "key_version": key_version,
+        }
+    )
 
 
 class PostgresMcpStore:
@@ -314,16 +387,52 @@ class PostgresMcpStore:
                 )
 
     def append_audit(self, record: AuditEventRecord) -> AuditEventRecord:
+        signer = AuditChainSigner.from_env()
         with self._connect() as conn:
             with conn.cursor() as cur:
+                _take_audit_chain_lock(
+                    cur, table="mcp_audit_events", org_id=record.org_id
+                )
+                cur.execute(
+                    """
+                    SELECT seq, signature
+                      FROM mcp_audit_events
+                     WHERE org_id = %(org_id)s
+                     ORDER BY seq DESC NULLS LAST
+                     LIMIT 1
+                    """,
+                    {"org_id": record.org_id},
+                )
+                head = cur.fetchone()
+                last_seq = (
+                    int(head["seq"]) if head and head.get("seq") is not None else 0
+                )
+                prev_hash = (
+                    bytes(head["signature"])
+                    if head and head.get("signature") is not None
+                    else None
+                )
+                seq = last_seq + 1
+                payload = {
+                    "audit_id": record.audit_id,
+                    "org_id": record.org_id,
+                    "user_id": record.user_id,
+                    "server_id": record.server_id,
+                    "action": record.action,
+                    "metadata": record.metadata,
+                    "created_at": record.created_at,
+                }
+                sig = signer.sign(prev_hash=prev_hash, payload=payload)
                 cur.execute(
                     """
                     INSERT INTO mcp_audit_events (
                       audit_id, org_id, user_id, server_id, action,
-                      metadata, created_at
+                      metadata, created_at,
+                      seq, prev_hash, signature, key_version
                     ) VALUES (
                       %(audit_id)s, %(org_id)s, %(user_id)s, %(server_id)s,
-                      %(action)s, %(metadata)s, %(created_at)s
+                      %(action)s, %(metadata)s, %(created_at)s,
+                      %(seq)s, %(prev_hash)s, %(signature)s, %(key_version)s
                     )
                     """,
                     {
@@ -334,9 +443,20 @@ class PostgresMcpStore:
                         "action": record.action,
                         "metadata": json.dumps(record.metadata),
                         "created_at": record.created_at,
+                        "seq": seq,
+                        "prev_hash": sig.prev_hash,
+                        "signature": sig.signature,
+                        "key_version": sig.key_version,
                     },
                 )
-        return record
+        return record.model_copy(
+            update={
+                "seq": seq,
+                "prev_hash": sig.prev_hash,
+                "signature": sig.signature,
+                "key_version": sig.key_version,
+            }
+        )
 
     def _fetch_one_server(
         self, query: str, params: dict[str, object]
@@ -432,6 +552,7 @@ class InMemorySkillStore:
 
     skills: dict[str, SkillRecord] = field(default_factory=dict)
     audit_events: list[SkillAuditEventRecord] = field(default_factory=list)
+    _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
     def create_skill(self, record: SkillRecord) -> SkillRecord:
         self.skills[record.skill_id] = record
@@ -489,8 +610,34 @@ class InMemorySkillStore:
     def append_skill_audit(
         self, record: SkillAuditEventRecord
     ) -> SkillAuditEventRecord:
-        self.audit_events.append(record)
-        return record
+        signed = _sign_skill_audit(record, self._chain)
+        self.audit_events.append(signed)
+        return signed
+
+
+def _sign_skill_audit(
+    record: SkillAuditEventRecord, chain: _AuditChain
+) -> SkillAuditEventRecord:
+    payload = {
+        "audit_id": record.audit_id,
+        "org_id": record.org_id,
+        "user_id": record.user_id,
+        "skill_id": record.skill_id,
+        "action": record.action,
+        "metadata": record.metadata,
+        "created_at": record.created_at,
+    }
+    seq, prev_hash, signature, key_version = chain.next(
+        org_id=record.org_id, payload=payload
+    )
+    return record.model_copy(
+        update={
+            "seq": seq,
+            "prev_hash": prev_hash,
+            "signature": signature,
+            "key_version": key_version,
+        }
+    )
 
 
 class PostgresSkillStore:
@@ -602,15 +749,51 @@ class PostgresSkillStore:
     def append_skill_audit(
         self, record: SkillAuditEventRecord
     ) -> SkillAuditEventRecord:
+        signer = AuditChainSigner.from_env()
         with self._connect() as conn:
             with conn.cursor() as cur:
+                _take_audit_chain_lock(
+                    cur, table="skill_audit_events", org_id=record.org_id
+                )
+                cur.execute(
+                    """
+                    SELECT seq, signature
+                      FROM skill_audit_events
+                     WHERE org_id = %(org_id)s
+                     ORDER BY seq DESC NULLS LAST
+                     LIMIT 1
+                    """,
+                    {"org_id": record.org_id},
+                )
+                head = cur.fetchone()
+                last_seq = (
+                    int(head["seq"]) if head and head.get("seq") is not None else 0
+                )
+                prev_hash = (
+                    bytes(head["signature"])
+                    if head and head.get("signature") is not None
+                    else None
+                )
+                seq = last_seq + 1
+                payload = {
+                    "audit_id": record.audit_id,
+                    "org_id": record.org_id,
+                    "user_id": record.user_id,
+                    "skill_id": record.skill_id,
+                    "action": record.action,
+                    "metadata": record.metadata,
+                    "created_at": record.created_at,
+                }
+                sig = signer.sign(prev_hash=prev_hash, payload=payload)
                 cur.execute(
                     """
                     INSERT INTO skill_audit_events (
-                      audit_id, org_id, user_id, skill_id, action, metadata, created_at
+                      audit_id, org_id, user_id, skill_id, action, metadata, created_at,
+                      seq, prev_hash, signature, key_version
                     ) VALUES (
                       %(audit_id)s, %(org_id)s, %(user_id)s, %(skill_id)s,
-                      %(action)s, %(metadata)s, %(created_at)s
+                      %(action)s, %(metadata)s, %(created_at)s,
+                      %(seq)s, %(prev_hash)s, %(signature)s, %(key_version)s
                     )
                     """,
                     {
@@ -621,9 +804,20 @@ class PostgresSkillStore:
                         "action": record.action,
                         "metadata": json.dumps(record.metadata),
                         "created_at": record.created_at,
+                        "seq": seq,
+                        "prev_hash": sig.prev_hash,
+                        "signature": sig.signature,
+                        "key_version": sig.key_version,
                     },
                 )
-        return record
+        return record.model_copy(
+            update={
+                "seq": seq,
+                "prev_hash": sig.prev_hash,
+                "signature": sig.signature,
+                "key_version": sig.key_version,
+            }
+        )
 
     def _fetch_one(self, query: str, params: dict[str, object]) -> SkillRecord | None:
         rows = self._fetch_many(query, params)
@@ -718,9 +912,44 @@ class InMemoryDeployAuditStore:
     """
 
     audit_events: list[DeployAuditEventRecord] = field(default_factory=list)
+    _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
     def append_deploy_audit(
         self, record: DeployAuditEventRecord
     ) -> DeployAuditEventRecord:
-        self.audit_events.append(record)
-        return record
+        signed = _sign_deploy_audit(record, self._chain)
+        self.audit_events.append(signed)
+        return signed
+
+
+def _sign_deploy_audit(
+    record: DeployAuditEventRecord, chain: _AuditChain
+) -> DeployAuditEventRecord:
+    payload = {
+        "audit_id": record.audit_id,
+        "org_id": record.org_id,
+        "user_id": record.user_id,
+        "tenant_id": record.tenant_id,
+        "environment": record.environment,
+        "release_sha": record.release_sha,
+        "image_digests": [d.model_dump() for d in record.image_digests],
+        "approver": record.approver,
+        "workflow_run_url": record.workflow_run_url,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+        "outcome": record.outcome,
+        "force_deploy": record.force_deploy,
+        "actor_kind": record.actor_kind,
+        "created_at": record.created_at,
+    }
+    seq, prev_hash, signature, key_version = chain.next(
+        org_id=record.org_id, payload=payload
+    )
+    return record.model_copy(
+        update={
+            "seq": seq,
+            "prev_hash": prev_hash,
+            "signature": signature,
+            "key_version": key_version,
+        }
+    )

@@ -121,9 +121,7 @@ export function bootstrapTelemetry(options: BootstrapOptions = {}): void {
   bootstrapped = true;
 
   const endpoint =
-    options.endpoint === null
-      ? null
-      : (options.endpoint ?? "/v1/telemetry/otlp/v1/traces");
+    options.endpoint === null ? null : (options.endpoint ?? defaultEndpoint());
   const version =
     options.serviceVersion ??
     (typeof __BUILD_SHA__ !== "undefined" ? __BUILD_SHA__ : "dev");
@@ -167,6 +165,26 @@ export function bootstrapTelemetry(options: BootstrapOptions = {}): void {
 /** Acquire a tracer with the standard service name. */
 export function appTracer(): ReturnType<typeof trace.getTracer> {
   return trace.getTracer(SERVICE_NAME);
+}
+
+/**
+ * Build the default OTLP endpoint as an absolute URL.
+ *
+ * The OTLP/HTTP exporter requires an absolute URL (it parses with `new URL`
+ * without a base). In a normal browser environment we pin it to the same
+ * origin as the page so traces flow through the facade passthrough; in
+ * non-browser environments (vitest jsdom without `window.location`, SSR)
+ * we return `null` and the SDK runs without an exporter.
+ */
+function defaultEndpoint(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const origin = window.location?.origin;
+  if (!origin || origin === "null") {
+    return null;
+  }
+  return `${origin}/v1/telemetry/otlp/v1/traces`;
 }
 
 /** Test-only hook that allows re-bootstrapping in vitest. */
