@@ -1,5 +1,14 @@
 """Durable persistence contracts and provider ports for the agent runtime."""
 
+from agent_runtime.persistence.encryption import (
+    CiphertextDecodeError,
+    EncryptionUnavailableError,
+    EnvelopeFieldEncryption,
+    FieldEncryption,
+    FieldEncryptionError,
+    FieldEncryptionFactory,
+    NullFieldEncryption,
+)
 from agent_runtime.persistence.errors import (
     ConcurrentMemoryItemUpdateError,
     ConcurrentRunUpdateError,
@@ -54,15 +63,22 @@ __all__ = [
     "CapabilitySnapshotRecord",
     "CheckpointRecord",
     "CheckpointStorePort",
+    "CiphertextDecodeError",
     "CompressionEventRecord",
     "ConcurrentMemoryItemUpdateError",
     "ConcurrentRunUpdateError",
     "ConsumerCursorRecord",
     "ContextPayloadRecord",
+    "EncryptionUnavailableError",
+    "EnvelopeFieldEncryption",
+    "FieldEncryption",
+    "FieldEncryptionError",
+    "FieldEncryptionFactory",
     "MemoryItemRecord",
     "MemoryMetadataPort",
     "MemoryScopeRecord",
     "ModelPricingRecord",
+    "NullFieldEncryption",
     "OutboxEventRecord",
     "OutboxStatus",
     "PayloadKind",

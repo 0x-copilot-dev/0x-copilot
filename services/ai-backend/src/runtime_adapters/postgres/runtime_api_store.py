@@ -36,6 +36,10 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.encryption import (
+    FieldEncryption,
+    FieldEncryptionFactory,
+)
 from agent_runtime.persistence.pool_metrics import PoolMetrics
 from agent_runtime.persistence.records import (
     BudgetEnforcement,
@@ -290,11 +294,23 @@ class PostgresRuntimeApiStore:
         pool_min_size: int | None = None,
         pool_max_size: int | None = None,
         pool_acquire_timeout_seconds: float | None = None,
+        field_encryption: FieldEncryption | None = None,
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
         self.database_url = database_url
         self._role = role
+        # C7 phase 1: ``field_encryption`` defaults to ``NullFieldEncryption``
+        # so writes stay v0 (plaintext) until an operator flips
+        # ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``. The injection point is
+        # available now so phase 2 wiring (encrypt-on-write, decrypt-on-read
+        # for every targeted column) can happen without touching the
+        # constructor again.
+        self._field_encryption: FieldEncryption = (
+            field_encryption
+            if field_encryption is not None
+            else FieldEncryptionFactory.from_env()
+        )
         self._metrics = PoolMetrics(service=_PoolEnv.SERVICE_NAME, role=role)
         if pool is not None:
             self._pool = pool
