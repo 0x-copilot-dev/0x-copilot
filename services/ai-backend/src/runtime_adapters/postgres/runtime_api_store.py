@@ -35,6 +35,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
     StreamEventSource,
 )
+from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.encryption import (
     FieldEncryption,
@@ -173,6 +174,9 @@ class _PoolEnv:
     STATEMENT_TIMEOUT_MS = "RUNTIME_DB_STATEMENT_TIMEOUT_MS"
     LOCK_TIMEOUT_MS = "RUNTIME_DB_LOCK_TIMEOUT_MS"
     IDLE_IN_TXN_TIMEOUT_MS = "RUNTIME_DB_IDLE_IN_TXN_TIMEOUT_MS"
+    # C10 read-replica routing.
+    READ_REPLICA_URL = "RUNTIME_DB_READ_REPLICA_URL"
+    READ_REPLICA_MAX_LAG_SECONDS = "RUNTIME_DB_READ_REPLICA_MAX_LAG_SECONDS"
 
     DEFAULT_POOL_MIN_SIZE = 5
     DEFAULT_POOL_MAX_SIZE = 50
@@ -299,6 +303,8 @@ class PostgresRuntimeApiStore:
         pool_max_size: int | None = None,
         pool_acquire_timeout_seconds: float | None = None,
         field_encryption: FieldEncryption | None = None,
+        replica_pool: AsyncConnectionPool | None = None,
+        replica_database_url: str | None = None,
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
@@ -354,6 +360,30 @@ class PostgresRuntimeApiStore:
             )
             self._owns_pool = True
             self._metrics.bind_pool(self._pool)
+        # C10: optional read replica.  Falls back to primary on health
+        # failure or if unset.  Constructor wiring keeps the test harness
+        # injectable; env-driven config kicks in only when no explicit
+        # replica was passed.
+        self._replica_pool: AsyncConnectionPool | None = replica_pool
+        self._owns_replica_pool = False
+        self._replica_healthy = self._replica_pool is not None
+        if self._replica_pool is None:
+            replica_url = (
+                replica_database_url
+                if replica_database_url is not None
+                else os.environ.get(_PoolEnv.READ_REPLICA_URL, "").strip() or None
+            )
+            if replica_url and database_url is not None:
+                self._replica_pool = AsyncConnectionPool(
+                    conninfo=replica_url,
+                    min_size=2,
+                    max_size=max(2, max_size // 2) if pool is None else 10,
+                    timeout=acquire_timeout if pool is None else 5.0,
+                    kwargs=_PoolEnv.build_pool_kwargs(role=f"{role}-replica"),
+                    open=False,
+                )
+                self._owns_replica_pool = True
+                self._replica_healthy = True
 
     async def open(self) -> None:
         """Open the underlying pool. Required when this store owns the pool."""
@@ -361,12 +391,24 @@ class PostgresRuntimeApiStore:
         if self._owns_pool:
             await self._pool.open()
             await self._pool.wait()
+        if self._owns_replica_pool and self._replica_pool is not None:
+            try:
+                await self._replica_pool.open()
+                await self._replica_pool.wait()
+            except Exception:
+                # Replica unreachable at boot — degrade silently to primary.
+                self._replica_healthy = False
 
     async def close(self) -> None:
         """Close the connection pool when this store owns it."""
 
         if self._owns_pool:
             await self._pool.close()
+        if self._owns_replica_pool and self._replica_pool is not None:
+            try:
+                await self._replica_pool.close()
+            except Exception:
+                pass
 
     async def __aenter__(self) -> PostgresRuntimeApiStore:
         await self.open()
@@ -426,6 +468,34 @@ class PostgresRuntimeApiStore:
                 "SELECT set_config('app.role', %s, true)",
                 (role,),
             )
+            yield conn
+
+    @asynccontextmanager
+    async def _read_only_connection(
+        self, *, org_id: str | None = None
+    ) -> AsyncIterator[psycopg.AsyncConnection]:  # type: ignore[type-arg]
+        """C10 — pick the replica when healthy; fall back to primary.
+
+        Used by ``@reader``-annotated methods. Tenant scoping (RLS session
+        var from C5) still applies on the replica because policies
+        replicate by default. Failures while opening the replica
+        connection silently degrade to the primary so the request still
+        succeeds — degraded latency is better than a 5xx.
+        """
+
+        if self._replica_pool is not None and self._replica_healthy:
+            try:
+                async with self._replica_pool.connection() as conn:
+                    if org_id is not None:
+                        await conn.execute(
+                            "SELECT set_config('app.current_org_id', %s, true)",
+                            (org_id,),
+                        )
+                    yield conn
+                return
+            except Exception:
+                self._replica_healthy = False
+        async with self._tenant_connection(org_id=org_id) as conn:
             yield conn
 
     async def migrate(self) -> None:
@@ -1585,6 +1655,7 @@ class PostgresRuntimeApiStore:
                 ),
             )
 
+    @reader
     async def query_user_daily_usage(
         self,
         *,
@@ -1593,7 +1664,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyUserRow]:
-        async with self._tenant_connection(org_id=org_id) as conn:
+        async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_usage_daily_user
@@ -1607,6 +1678,7 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._user_daily_row(r) for r in rows)
 
+    @reader
     async def query_org_daily_usage(
         self,
         *,
@@ -1614,7 +1686,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
-        async with self._tenant_connection(org_id=org_id) as conn:
+        async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_usage_daily_org
@@ -1692,6 +1764,7 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._run_usage_record(r) for r in rows)
 
+    @reader
     async def query_top_conversations(
         self,
         *,
@@ -1701,7 +1774,7 @@ class PostgresRuntimeApiStore:
         end: datetime,
         limit: int,
     ) -> Sequence[tuple[str, int]]:
-        async with self._tenant_connection(org_id=org_id) as conn:
+        async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT conversation_id, SUM(total_tokens) AS total
@@ -1718,13 +1791,14 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple((str(r["conversation_id"]), int(r["total"] or 0)) for r in rows)
 
+    @reader
     async def query_model_call_usage_for_run(
         self,
         *,
         org_id: str,
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
-        async with self._tenant_connection(org_id=org_id) as conn:
+        async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM runtime_model_call_usage

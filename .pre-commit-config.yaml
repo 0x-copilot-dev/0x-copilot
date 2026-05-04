@@ -90,3 +90,16 @@ repos:
         language: system
         pass_filenames: false
         files: ^services/backend/src/backend_app/service\.py$
+      - id: check-reader-methods
+        name: "@reader-tagged methods must not contain write SQL"
+        description: |
+          C10 read-replica safety: methods marked with the ``@reader``
+          decorator may be routed to a read-only Postgres replica. The AST
+          walker rejects any string literal inside a ``@reader`` method that
+          matches the word ``INSERT|UPDATE|DELETE|TRUNCATE|MERGE`` (whole
+          word, case-insensitive) so accidental writes never land on a path
+          that may target the replica.
+        entry: python tools/check_reader_methods.py
+        language: system
+        pass_filenames: false
+        files: ^services/ai-backend/src/.*\.py$
