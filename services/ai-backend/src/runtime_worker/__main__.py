@@ -9,6 +9,10 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.usage_rollup_loop import (
+    UsageRollupLoop,
+    UsageRollupLoopEnv,
+)
 
 
 _ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres"})
@@ -34,6 +38,7 @@ class RuntimeWorkerEntrypoint:
             )
             await async_ports.store.open()
             await async_ports.store.migrate()
+            rollup_loop: UsageRollupLoop | None = None
             try:
                 worker = RuntimeWorker(
                     persistence=async_ports.persistence,
@@ -50,10 +55,24 @@ class RuntimeWorkerEntrypoint:
                         "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
                     },
                 )
+                if UsageRollupLoopEnv.env_bool(
+                    UsageRollupLoopEnv.ENABLED, default=True
+                ):
+                    rollup_loop = UsageRollupLoop(persistence=async_ports.persistence)
+                    await rollup_loop.start()
+                    logger.info(
+                        "usage_rollup_loop_started",
+                        metadata={
+                            "interval_seconds": rollup_loop._interval,
+                            "late_arrival_minutes": rollup_loop._late_arrival_minutes,
+                        },
+                    )
                 await worker.run_forever(
                     poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
                 )
             finally:
+                if rollup_loop is not None:
+                    await rollup_loop.stop()
                 await async_ports.store.close()
             return
 

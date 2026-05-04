@@ -11,6 +11,7 @@ from agent_runtime.api.constants import Keys, Messages
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
+from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
 
@@ -54,6 +55,17 @@ class StreamUpdateProcessor:
         # `duration_ms` field on the matching SUBAGENT_COMPLETED payload so
         # consumers don't have to join started/completed events themselves.
         self._subagent_started_at: dict[tuple[str, str], datetime] = {}
+        # Per-run metrics handle, set by the run handler so we can attach the
+        # subagent token rollup to SUBAGENT_COMPLETED payloads (B2).
+        self._metrics_by_run: dict[str, AssistantRunMetrics] = {}
+
+    def bind_metrics(self, run_id: str, metrics: AssistantRunMetrics) -> None:
+        """Register the per-run metrics object so SUBAGENT_COMPLETED can rollup."""
+
+        self._metrics_by_run[run_id] = metrics
+
+    def discard_metrics(self, run_id: str) -> None:
+        self._metrics_by_run.pop(run_id, None)
 
     async def process(
         self,
@@ -95,6 +107,11 @@ class StreamUpdateProcessor:
             duration_ms = self._subagent_duration_ms(run.run_id, task_id)
             if duration_ms is not None:
                 payload["duration_ms"] = duration_ms
+            metrics = self._metrics_by_run.get(run.run_id)
+            if metrics is not None:
+                rollup = metrics.per_call.subagent_rollup(task_id)
+                if rollup.call_count > 0:
+                    payload["usage"] = rollup.model_dump(mode="json")
         subagent_id = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
         await self.event_producer.append_api_event(
             run=run,

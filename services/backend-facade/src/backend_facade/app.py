@@ -538,6 +538,85 @@ def create_app(
             identity=identity,
         )
 
+    # ------------------------------------------------------------------
+    # Usage endpoints (B4) — token + cost analytics, scoped to the caller.
+    # ``/v1/usage/org`` is admin-only; until A10 RBAC ships, gating is by
+    # role check at the AI-backend layer (the facade just forwards the
+    # verified identity).
+    # ------------------------------------------------------------------
+
+    @app.get("/v1/usage/me")
+    async def usage_me(
+        request: Request,
+        period: str = Query("7d"),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/usage/me",
+            params=identity.scoped_params({"period": period}),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/me/conversations")
+    async def usage_me_conversations(
+        request: Request,
+        period: str = Query("7d"),
+        limit: int = Query(10, ge=1, le=100),
+    ) -> list[dict[str, object]]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(  # type: ignore[return-value]
+            app,
+            "GET",
+            "/v1/usage/me/conversations",
+            params=identity.scoped_params({"period": period, "limit": limit}),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/runs/{run_id}")
+    async def usage_run(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/usage/runs/{run_id}",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/conversations/{conversation_id}")
+    async def usage_conversation(
+        request: Request,
+        conversation_id: str,
+        period: str = Query("30d"),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/usage/conversations/{conversation_id}",
+            params=identity.scoped_params({"period": period}),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/org")
+    async def usage_org(
+        request: Request,
+        period: str = Query("month"),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/usage/org",
+            params=identity.scoped_params({"period": period}),
+            identity=identity,
+        )
+
     register_health_routes(app)
 
     return app

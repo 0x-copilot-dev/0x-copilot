@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.usage_service import UsageQueryService
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.schemas import (
     ApprovalDecisionRequest,
@@ -24,6 +29,19 @@ from runtime_api.schemas import (
     RuntimeRequestContext,
     RuntimeEventReplayResponse,
     RunStatusResponse,
+)
+from runtime_api.schemas.usage import (
+    ConversationUsageResponse,
+    RunUsageBreakdown,
+    RunUsageCallRow,
+    UsageConversationRow,
+    UsageDailyRow,
+    UsageMeResponse,
+    UsageModelRow,
+    UsageOrgResponse,
+    UsagePeriodWindow,
+    UsageRunRow,
+    UsageTotals,
 )
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
@@ -356,6 +374,403 @@ class RuntimeApiRouter:
             methods=["DELETE"],
             response_model=HistoryDeletionResponse,
             name=Keys.RouteName.DELETE_USER_HISTORY,
+        )
+        return router
+
+
+class UsageApiRoutes:
+    """Read endpoints for token usage + cost (B4).
+
+    Backed by ``runtime_usage_daily_user`` / ``runtime_usage_daily_org``
+    rollup tables when warm; fall back to a 30-day-capped scan of
+    ``runtime_run_usage`` otherwise. The cold-start fallback is a stop-gap
+    until the rollup loop has finished its first pass — reads are bounded
+    to 30 days so an accidental cold-start can't trigger a full-table
+    scan.
+    """
+
+    _COLD_START_CAP_DAYS = 30
+
+    @classmethod
+    async def usage_me(
+        cls,
+        request: Request,
+        period: Literal["today", "7d", "30d", "month"] = Query("7d"),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> UsageMeResponse:
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        rows = await persistence.query_user_daily_usage(
+            org_id=org_id,
+            user_id=user_id,
+            start_day=start,
+            end_day=end,
+        )
+        cold_start = False
+        if not rows:
+            cold_start = True
+            rows = cls._cold_start_user_rollup(
+                await persistence.query_run_usage_for_range(
+                    org_id=org_id,
+                    user_id=user_id,
+                    start=cls._cap_cold_start(start, end),
+                    end=end,
+                )
+            )
+        total = cls._totals_from_rows(rows)
+        return UsageMeResponse(
+            period=UsagePeriodWindow(start=start, end=end),
+            total=total,
+            by_day=cls._rows_by_day(rows),
+            by_model=cls._rows_by_model(rows),
+            cold_start_fallback=cold_start,
+        )
+
+    @classmethod
+    async def usage_me_conversations(
+        cls,
+        request: Request,
+        period: Literal["today", "7d", "30d", "month"] = Query("7d"),
+        limit: int = Query(10, ge=1, le=100),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> tuple[UsageConversationRow, ...]:
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        rows = await persistence.query_top_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+        return tuple(
+            UsageConversationRow(
+                conversation_id=r.conversation_id,
+                title=getattr(r, "title", None),
+                input=int(getattr(r, "input_tokens", 0) or 0),
+                output=int(getattr(r, "output_tokens", 0) or 0),
+                cached_input=int(getattr(r, "cached_input_tokens", 0) or 0),
+                total=int(getattr(r, "total_tokens", 0) or 0),
+                runs_count=int(getattr(r, "runs_count", 0) or 0),
+                cost_micro_usd=getattr(r, "cost_micro_usd", None),
+            )
+            for r in rows
+        )
+
+    @classmethod
+    async def usage_run(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> RunUsageBreakdown:
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = cls._persistence(request)
+        run_row = await persistence.query_run_usage(org_id=org_id, run_id=run_id)
+        if run_row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+        call_rows = await persistence.query_model_call_usage_for_run(
+            org_id=org_id, run_id=run_id
+        )
+        return RunUsageBreakdown(
+            run_id=run_row.run_id,
+            org_id=run_row.org_id,
+            user_id=run_row.user_id,
+            conversation_id=run_row.conversation_id,
+            model_provider=run_row.model_provider,
+            model_name=run_row.model_name,
+            started_at=run_row.started_at,
+            completed_at=run_row.completed_at,
+            duration_ms=run_row.duration_ms,
+            chunk_count=run_row.chunk_count,
+            status=run_row.status,
+            total=UsageTotals(
+                input=run_row.input_tokens,
+                output=run_row.output_tokens,
+                cached_input=run_row.cached_input_tokens,
+                total=run_row.total_tokens,
+                runs_count=1,
+                cost_micro_usd=run_row.cost_micro_usd,
+            ),
+            by_call=tuple(
+                RunUsageCallRow(
+                    id=row.id,
+                    parent_event_id=row.parent_event_id,
+                    task_id=row.task_id,
+                    subagent_id=row.subagent_id,
+                    model_provider=row.model_provider,
+                    model_name=row.model_name,
+                    input=row.input_tokens,
+                    output=row.output_tokens,
+                    cached_input=row.cached_input_tokens,
+                    total=row.total_tokens,
+                    duration_ms=row.duration_ms,
+                    cost_micro_usd=row.cost_micro_usd,
+                    created_at=row.created_at,
+                )
+                for row in call_rows
+            ),
+        )
+
+    @classmethod
+    async def usage_conversation(
+        cls,
+        request: Request,
+        conversation_id: str,
+        period: Literal["today", "7d", "30d", "month"] = Query("30d"),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ConversationUsageResponse:
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        # Reuse query_run_usage_for_range and filter by conversation_id —
+        # this avoids a second port method while remaining bounded by
+        # the period window.
+        rows = [
+            r
+            for r in await persistence.query_run_usage_for_range(
+                org_id=org_id,
+                user_id=user_id,
+                start=start,
+                end=end,
+            )
+            if r.conversation_id == conversation_id
+        ]
+        total = UsageTotals(
+            input=sum(r.input_tokens for r in rows),
+            output=sum(r.output_tokens for r in rows),
+            cached_input=sum(r.cached_input_tokens for r in rows),
+            total=sum(r.total_tokens for r in rows),
+            runs_count=len(rows),
+            cost_micro_usd=cls._sum_costs(rows),
+        )
+        return ConversationUsageResponse(
+            conversation_id=conversation_id,
+            period=UsagePeriodWindow(start=start, end=end),
+            total=total,
+            by_run=tuple(
+                UsageRunRow(
+                    run_id=r.run_id,
+                    started_at=r.started_at,
+                    completed_at=r.completed_at,
+                    status=r.status,
+                    total=UsageTotals(
+                        input=r.input_tokens,
+                        output=r.output_tokens,
+                        cached_input=r.cached_input_tokens,
+                        total=r.total_tokens,
+                        runs_count=1,
+                        cost_micro_usd=r.cost_micro_usd,
+                    ),
+                )
+                for r in rows
+            ),
+        )
+
+    @classmethod
+    async def usage_org(
+        cls,
+        request: Request,
+        period: Literal["today", "7d", "30d", "month"] = Query("month"),
+        org_id: str | None = Query(None, min_length=1),
+    ) -> UsageOrgResponse:
+        # ``user_id`` is unused for the admin org view but the standard
+        # scoped_identity helper requires it; pass a placeholder so the
+        # facade-derived identity can override.
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id="__org_admin__"
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        rows = await persistence.query_org_daily_usage(
+            org_id=org_id, start_day=start, end_day=end
+        )
+        cold_start = False
+        if not rows:
+            cold_start = True
+            run_rows = await persistence.query_run_usage_for_range(
+                org_id=org_id,
+                user_id=None,
+                start=cls._cap_cold_start(start, end),
+                end=end,
+            )
+            rows = UsageQueryService.rollup_org_rows(
+                run_rows, refreshed_at=datetime.now(timezone.utc)
+            )
+        total = cls._totals_from_rows(rows)
+        return UsageOrgResponse(
+            period=UsagePeriodWindow(start=start, end=end),
+            total=total,
+            by_day=cls._rows_by_day(rows),
+            by_model=cls._rows_by_model(rows),
+            cold_start_fallback=cold_start,
+        )
+
+    # --- helpers -----------------------------------------------------------
+
+    @classmethod
+    def _persistence(cls, request: Request):  # type: ignore[no-untyped-def]
+        return RuntimeApiRoutes.service(request).persistence
+
+    @classmethod
+    def _cap_cold_start(cls, start: datetime, end: datetime) -> datetime:
+        """Clamp the cold-start scan window to ``_COLD_START_CAP_DAYS``."""
+
+        from datetime import timedelta
+
+        capped = end - timedelta(days=cls._COLD_START_CAP_DAYS)
+        return max(start, capped)
+
+    @classmethod
+    def _cold_start_user_rollup(cls, run_rows):  # type: ignore[no-untyped-def]
+        return UsageQueryService.rollup_user_rows(
+            run_rows, refreshed_at=datetime.now(timezone.utc)
+        )
+
+    @classmethod
+    def _totals_from_rows(cls, rows) -> UsageTotals:  # type: ignore[no-untyped-def]
+        input_tokens = sum(r.input_tokens for r in rows)
+        output_tokens = sum(r.output_tokens for r in rows)
+        cached_input_tokens = sum(r.cached_input_tokens for r in rows)
+        total_tokens = sum(r.total_tokens for r in rows)
+        runs_count = sum(r.runs_count for r in rows)
+        cost = cls._sum_costs(rows)
+        return UsageTotals(
+            input=input_tokens,
+            output=output_tokens,
+            cached_input=cached_input_tokens,
+            total=total_tokens,
+            runs_count=runs_count,
+            cost_micro_usd=cost,
+        )
+
+    @classmethod
+    def _rows_by_day(cls, rows) -> tuple[UsageDailyRow, ...]:  # type: ignore[no-untyped-def]
+        per_day: dict[str, dict[str, int | None]] = defaultdict(
+            lambda: {
+                "input": 0,
+                "output": 0,
+                "cached_input": 0,
+                "total": 0,
+                "runs_count": 0,
+                "cost_micro_usd": None,
+            }
+        )
+        for r in rows:
+            day = r.day.date().isoformat() if hasattr(r.day, "date") else str(r.day)
+            bucket = per_day[day]
+            bucket["input"] = (bucket["input"] or 0) + int(r.input_tokens)
+            bucket["output"] = (bucket["output"] or 0) + int(r.output_tokens)
+            bucket["cached_input"] = (bucket["cached_input"] or 0) + int(
+                r.cached_input_tokens
+            )
+            bucket["total"] = (bucket["total"] or 0) + int(r.total_tokens)
+            bucket["runs_count"] = (bucket["runs_count"] or 0) + int(r.runs_count)
+            if r.cost_micro_usd is not None:
+                bucket["cost_micro_usd"] = (
+                    bucket["cost_micro_usd"] or 0
+                ) + r.cost_micro_usd
+        return tuple(
+            UsageDailyRow(day=day, **bucket)  # type: ignore[arg-type]
+            for day, bucket in sorted(per_day.items())
+        )
+
+    @classmethod
+    def _rows_by_model(cls, rows) -> tuple[UsageModelRow, ...]:  # type: ignore[no-untyped-def]
+        per_model: dict[tuple[str, str], dict[str, int | None]] = defaultdict(
+            lambda: {
+                "input": 0,
+                "output": 0,
+                "cached_input": 0,
+                "total": 0,
+                "runs_count": 0,
+                "cost_micro_usd": None,
+            }
+        )
+        for r in rows:
+            key = (r.model_provider, r.model_name)
+            bucket = per_model[key]
+            bucket["input"] = (bucket["input"] or 0) + int(r.input_tokens)
+            bucket["output"] = (bucket["output"] or 0) + int(r.output_tokens)
+            bucket["cached_input"] = (bucket["cached_input"] or 0) + int(
+                r.cached_input_tokens
+            )
+            bucket["total"] = (bucket["total"] or 0) + int(r.total_tokens)
+            bucket["runs_count"] = (bucket["runs_count"] or 0) + int(r.runs_count)
+            if r.cost_micro_usd is not None:
+                bucket["cost_micro_usd"] = (
+                    bucket["cost_micro_usd"] or 0
+                ) + r.cost_micro_usd
+        return tuple(
+            UsageModelRow(provider=provider, model=model, **bucket)  # type: ignore[arg-type]
+            for (provider, model), bucket in sorted(per_model.items())
+        )
+
+    @staticmethod
+    def _sum_costs(rows) -> int | None:  # type: ignore[no-untyped-def]
+        total: int | None = None
+        for r in rows:
+            cost = getattr(r, "cost_micro_usd", None)
+            if cost is None:
+                continue
+            total = (total or 0) + cost
+        return total
+
+
+class UsageApiRouter:
+    """Build the ``/v1/usage`` router."""
+
+    @classmethod
+    def create_router(cls) -> APIRouter:
+        router = APIRouter(prefix="/v1/usage", tags=["usage"])
+        router.add_api_route(
+            "/me",
+            UsageApiRoutes.usage_me,
+            methods=["GET"],
+            response_model=UsageMeResponse,
+            name=Keys.RouteName.USAGE_ME,
+        )
+        router.add_api_route(
+            "/me/conversations",
+            UsageApiRoutes.usage_me_conversations,
+            methods=["GET"],
+            response_model=tuple[UsageConversationRow, ...],
+            name=Keys.RouteName.USAGE_ME_CONVERSATIONS,
+        )
+        router.add_api_route(
+            "/runs/{run_id}",
+            UsageApiRoutes.usage_run,
+            methods=["GET"],
+            response_model=RunUsageBreakdown,
+            name=Keys.RouteName.USAGE_RUN,
+        )
+        router.add_api_route(
+            "/conversations/{conversation_id}",
+            UsageApiRoutes.usage_conversation,
+            methods=["GET"],
+            response_model=ConversationUsageResponse,
+            name=Keys.RouteName.USAGE_CONVERSATION,
+        )
+        router.add_api_route(
+            "/org",
+            UsageApiRoutes.usage_org,
+            methods=["GET"],
+            response_model=UsageOrgResponse,
+            name=Keys.RouteName.USAGE_ORG,
         )
         return router
 

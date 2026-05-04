@@ -36,6 +36,7 @@ from runtime_api.schemas.conversations import (
 from runtime_api.schemas.errors import ApiErrorResponse
 from runtime_api.schemas.events import (
     AssistantPerformanceMetrics,
+    AssistantSubagentUsageRollup,
     AssistantUsageMetrics,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
@@ -98,6 +99,7 @@ __all__ = [
     "RuntimeEventPresentation",
     "RuntimeEventPresentationPreviewRow",
     "AssistantPerformanceMetrics",
+    "AssistantSubagentUsageRollup",
     "AssistantUsageMetrics",
     "RuntimeEventEnvelope",
     "RuntimeEventReplayResponse",

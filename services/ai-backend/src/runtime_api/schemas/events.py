@@ -600,6 +600,23 @@ class AssistantUsageMetrics(RuntimeContract):
     output_per_second: float | None = Field(default=None, ge=0)
 
 
+class AssistantSubagentUsageRollup(RuntimeContract):
+    """Aggregate token usage for one subagent task (B2).
+
+    Sum of every ``MODEL_CALL_COMPLETED`` row attributed to a single
+    ``task_id`` between SUBAGENT_STARTED and SUBAGENT_COMPLETED. ``call_count``
+    is the number of distinct LLM calls. Optional payload on
+    ``SUBAGENT_COMPLETED`` events; absent when the worker can't correlate
+    calls to the task (e.g. provider didn't return a stable message id).
+    """
+
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cached_input: NonNegativeInt = 0
+    total: NonNegativeInt = 0
+    call_count: NonNegativeInt = 0
+
+
 class AssistantPerformanceMetrics(RuntimeContract):
     """Assistant response timing and exact provider usage metadata."""
 

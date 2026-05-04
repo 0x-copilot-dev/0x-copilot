@@ -244,12 +244,18 @@ class AsyncPersistencePort(Protocol):
     async def query_run_usage_for_range(
         self,
         *,
-        org_id: str,
+        org_id: str | None,
         user_id: str | None,
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeRunUsageRecord]:
-        """Read raw run-usage rows for cold-start fallback when rollups are empty (B4)."""
+        """Read raw run-usage rows for the rollup loop + cold-start fallback.
+
+        ``org_id=None`` is the rollup-loop signal to scan across tenants;
+        adapter implementations must restrict to ``app.role='worker'``
+        equivalent semantics so the scan matches the operator role
+        running the worker.
+        """
 
     async def query_top_conversations(
         self,

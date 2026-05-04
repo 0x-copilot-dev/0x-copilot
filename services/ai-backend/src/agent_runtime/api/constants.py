@@ -91,6 +91,12 @@ class Keys:
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
+        # Usage endpoints (B4)
+        USAGE_ME = "usage_me"
+        USAGE_ME_CONVERSATIONS = "usage_me_conversations"
+        USAGE_RUN = "usage_run"
+        USAGE_CONVERSATION = "usage_conversation"
+        USAGE_ORG = "usage_org"
 
 
 class Values:

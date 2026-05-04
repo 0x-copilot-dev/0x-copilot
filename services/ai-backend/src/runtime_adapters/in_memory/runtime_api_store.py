@@ -670,7 +670,7 @@ class InMemoryRuntimeApiStore:
     def query_run_usage_for_range(
         self,
         *,
-        org_id: str,
+        org_id: str | None,
         user_id: str | None,
         start: datetime,
         end: datetime,
@@ -680,7 +680,7 @@ class InMemoryRuntimeApiStore:
                 (
                     row
                     for row in self.run_usage.values()
-                    if row.org_id == org_id
+                    if (org_id is None or row.org_id == org_id)
                     and (user_id is None or row.user_id == user_id)
                     and start <= row.completed_at <= end
                     and (user_id is None or row.pii_purged_at is None)

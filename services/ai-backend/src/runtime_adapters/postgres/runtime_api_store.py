@@ -1577,13 +1577,22 @@ class PostgresRuntimeApiStore:
     async def query_run_usage_for_range(
         self,
         *,
-        org_id: str,
+        org_id: str | None,
         user_id: str | None,
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeRunUsageRecord]:
-        # Cold-start fallback only — capped by the caller (B4 enforces 30d).
-        if user_id is not None:
+        # Cold-start fallback (per-tenant) AND rollup-loop scan (org_id=None).
+        # Caller bounds the window: API endpoints cap at 30d, rollup loop at
+        # the configured trailing window (default 2d).
+        if org_id is None:
+            sql = """
+                SELECT * FROM runtime_run_usage
+                 WHERE completed_at BETWEEN %s AND %s
+                 ORDER BY completed_at DESC
+            """
+            params: tuple[object, ...] = (start, end)
+        elif user_id is not None:
             sql = """
                 SELECT * FROM runtime_run_usage
                  WHERE org_id = %s AND user_id = %s
@@ -1591,7 +1600,7 @@ class PostgresRuntimeApiStore:
                    AND pii_purged_at IS NULL
                  ORDER BY completed_at DESC
             """
-            params: tuple[object, ...] = (org_id, user_id, start, end)
+            params = (org_id, user_id, start, end)
         else:
             sql = """
                 SELECT * FROM runtime_run_usage
@@ -1600,7 +1609,15 @@ class PostgresRuntimeApiStore:
                  ORDER BY completed_at DESC
             """
             params = (org_id, start, end)
-        async with self._tenant_connection(org_id=org_id) as conn:
+        # When ``org_id`` is None we're scanning across tenants for the
+        # rollup loop — use the worker role connection so the
+        # outbox-style ``tenant_or_worker`` precedent applies once Stage 3
+        # of C5 enables RLS broadly.
+        if org_id is None:
+            cm = self._role_connection("worker")
+        else:
+            cm = self._tenant_connection(org_id=org_id)
+        async with cm as conn:
             cur = await conn.execute(sql, params)
             rows = await cur.fetchall()
         return tuple(self._run_usage_record(r) for r in rows)

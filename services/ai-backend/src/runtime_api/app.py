@@ -24,7 +24,11 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
-from runtime_api.http.routes import InternalRuntimeApiRouter, RuntimeApiRouter
+from runtime_api.http.routes import (
+    InternalRuntimeApiRouter,
+    RuntimeApiRouter,
+    UsageApiRouter,
+)
 from runtime_api.routes.health import register_health_routes
 from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
@@ -80,6 +84,7 @@ class RuntimeApiAppFactory:
             }
 
         app.include_router(RuntimeApiRouter.create_router())
+        app.include_router(UsageApiRouter.create_router())
         app.include_router(InternalRuntimeApiRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error

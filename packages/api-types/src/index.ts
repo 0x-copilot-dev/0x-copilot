@@ -145,6 +145,7 @@ export type RuntimeApiEventType =
   | "observation"
   | "error"
   | "model_call_started"
+  | "model_call_completed"
   | "model_delta"
   | "final_response"
   | "heartbeat"
@@ -186,6 +187,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "observation",
   "error",
   "model_call_started",
+  "model_call_completed",
   "model_delta",
   "final_response",
   "heartbeat",
@@ -284,6 +286,138 @@ export interface AssistantPerformanceMetrics {
     cached_input?: number;
     output_per_second?: number;
   };
+}
+
+export interface AssistantSubagentUsageRollup {
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  call_count: number;
+}
+
+// ------------------------------------------------------------------
+// Usage endpoints (B4)
+//
+// All cost figures are micro-USD integers (1 USD = 1_000_000 micro_usd)
+// — never floats — and are `null` when the model has no priced row in
+// the server-side pricing catalog. Currency code is always "USD" today;
+// it is returned alongside so consumers don't have to hard-code it.
+// ------------------------------------------------------------------
+
+export type UsagePeriod = "today" | "7d" | "30d" | "month";
+
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  runs_count: number;
+  cost_micro_usd: number | null;
+}
+
+export interface UsageDailyRow {
+  day: string;
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  runs_count: number;
+  cost_micro_usd: number | null;
+}
+
+export interface UsageModelRow {
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  runs_count: number;
+  cost_micro_usd: number | null;
+}
+
+export interface UsageConversationRow {
+  conversation_id: string;
+  title: string | null;
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  runs_count: number;
+  cost_micro_usd: number | null;
+}
+
+export interface UsagePeriodWindow {
+  start: string;
+  end: string;
+}
+
+export interface UsageMeResponse {
+  period: UsagePeriodWindow;
+  currency: "USD";
+  total: UsageTotals;
+  by_day: UsageDailyRow[];
+  by_model: UsageModelRow[];
+  cold_start_fallback: boolean;
+}
+
+export interface UsageOrgResponse {
+  period: UsagePeriodWindow;
+  currency: "USD";
+  total: UsageTotals;
+  by_day: UsageDailyRow[];
+  by_model: UsageModelRow[];
+  by_user: UsageConversationRow[];
+  cold_start_fallback: boolean;
+}
+
+export interface RunUsageCallRow {
+  id: string;
+  parent_event_id: string | null;
+  task_id: string | null;
+  subagent_id: string | null;
+  model_provider: string;
+  model_name: string;
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  duration_ms: number;
+  cost_micro_usd: number | null;
+  created_at: string;
+}
+
+export interface RunUsageBreakdown {
+  run_id: string;
+  org_id: string;
+  user_id: string;
+  conversation_id: string;
+  model_provider: string;
+  model_name: string;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  chunk_count: number;
+  status: string;
+  total: UsageTotals;
+  by_call: RunUsageCallRow[];
+}
+
+export interface UsageRunRow {
+  run_id: string;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  total: UsageTotals;
+}
+
+export interface ConversationUsageResponse {
+  conversation_id: string;
+  period: UsagePeriodWindow;
+  currency: "USD";
+  total: UsageTotals;
+  by_run: UsageRunRow[];
 }
 
 export interface MessageListResponse {
@@ -620,6 +754,17 @@ export interface SubagentActivityPayload {
   short_summary?: string;
   summary?: string;
   message?: string;
+  duration_ms?: number;
+  // Present on subagent_completed when the worker correlated the
+  // subagent's LLM calls back to its task_id (B2). Absent when the
+  // provider did not return stable message ids for the subagent.
+  usage?: AssistantSubagentUsageRollup;
+  [key: string]: unknown;
+}
+
+export interface ModelCallCompletedPayload {
+  message_id: string;
+  performance_metrics: AssistantPerformanceMetrics;
   [key: string]: unknown;
 }
 
@@ -675,6 +820,7 @@ export interface RuntimeEventPayloadByType {
   observation: RuntimeTextPayload;
   error: RuntimeTextPayload;
   model_call_started: RuntimeLifecyclePayload;
+  model_call_completed: ModelCallCompletedPayload;
   model_delta: RuntimeTextPayload;
   final_response: RuntimeTextPayload;
   heartbeat: RuntimeLifecyclePayload;
@@ -943,4 +1089,155 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+// ---------------------------------------------------------------------------
+// Auth (A2 sessions, A3 OIDC, A4 local password, A6 MFA, A8 lockout)
+//
+// Mirrors the public ``/v1/auth/*`` surface served by ``backend-facade``.
+// All shapes are additive: existing identity payloads (``SessionResponse``)
+// remain unchanged.
+// ---------------------------------------------------------------------------
+
+export type AuthProviderKind = "local" | "oidc" | "saml" | "scim";
+
+export interface AuthProviderSummary {
+  provider_id: string;
+  kind: AuthProviderKind;
+  display_name: string;
+  enabled: boolean;
+}
+
+export interface AuthProvidersResponse {
+  providers: AuthProviderSummary[];
+}
+
+export interface LoginRequest {
+  org_id: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  user_id: string;
+  session_id: string;
+  bearer_token: string;
+  expires_at: string;
+  requires_password_change?: boolean;
+  requires_mfa?: boolean;
+}
+
+export interface AccountSession {
+  session_id: string;
+  org_id: string;
+  user_id: string;
+  auth_provider_id?: string | null;
+  device_label?: string | null;
+  client_ip?: string | null;
+  user_agent?: string | null;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  mfa_satisfied: boolean;
+}
+
+export interface AccountSessionListResponse {
+  sessions: AccountSession[];
+}
+
+// MFA -----------------------------------------------------------------------
+
+export type MfaFactorKind = "totp" | "webauthn";
+export type MfaChallengeKind = "totp" | "webauthn" | "recovery";
+
+export interface MfaFactorSummary {
+  factor_id: string;
+  kind: MfaFactorKind;
+  display_name: string;
+  enabled: boolean;
+  enrolled_at: string;
+  last_used_at?: string | null;
+}
+
+export interface MfaFactorListResponse {
+  factors: MfaFactorSummary[];
+}
+
+export interface TotpEnrollResponse {
+  factor_id: string;
+  otpauth_url: string;
+  secret_b32: string;
+  recovery_codes: string[];
+}
+
+export interface TotpConfirmRequest {
+  factor_id: string;
+  code: string;
+}
+
+export interface MfaChallengeRequest {
+  kind: MfaChallengeKind;
+  factor_id?: string | null;
+}
+
+export interface MfaChallengeResponse {
+  challenge_id: string;
+  nonce: string;
+  kind: MfaChallengeKind;
+  expected_factor_id?: string | null;
+  expires_at: string;
+  // Present when ``kind === 'webauthn'`` — the
+  // ``PublicKeyCredentialRequestOptions`` JSON the navigator consumes.
+  webauthn_options?: Record<string, unknown> | null;
+}
+
+export interface MfaVerifyRequest {
+  challenge_id: string;
+  code?: string;
+  assertion?: Record<string, unknown>;
+  expected_origin?: string;
+}
+
+export interface MfaVerifyResponse {
+  factor_id: string;
+  kind: MfaChallengeKind;
+  mfa_satisfied_at: string;
+}
+
+export interface MfaRecoveryConsumeRequest {
+  code: string;
+}
+
+// Login attempts (A8) -------------------------------------------------------
+
+export type LoginAttemptKind =
+  | "local"
+  | "oidc"
+  | "saml"
+  | "mfa"
+  | "scim_token"
+  | "api_key";
+export type LoginAttemptOutcome =
+  | "success"
+  | "bad_password"
+  | "unknown_user"
+  | "locked_out"
+  | "mfa_failed"
+  | "provider_rejected";
+
+export interface LoginAttempt {
+  attempt_id: string;
+  org_id?: string | null;
+  email_attempted?: string | null;
+  user_id?: string | null;
+  auth_kind: LoginAttemptKind;
+  outcome: LoginAttemptOutcome;
+  ip?: string | null;
+  user_agent?: string | null;
+  failure_reason?: string | null;
+  created_at: string;
+}
+
+export interface LoginAttemptListResponse {
+  attempts: LoginAttempt[];
 }

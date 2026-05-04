@@ -101,6 +101,7 @@ class RuntimeApiEventType(StrEnum):
     OBSERVATION = "observation"
     ERROR = "error"
     MODEL_CALL_STARTED = "model_call_started"
+    MODEL_CALL_COMPLETED = "model_call_completed"
     MODEL_DELTA = "model_delta"
     FINAL_RESPONSE = "final_response"
     HEARTBEAT = "heartbeat"

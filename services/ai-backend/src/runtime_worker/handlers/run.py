@@ -167,6 +167,7 @@ class RuntimeRunHandler:
         await self.audit_emitter.emit_run_started(run)
         run_start_perf = time.perf_counter()
         metrics = AssistantRunMetrics.from_run(run)
+        self.stream_event_mapper.update_processor.bind_metrics(run.run_id, metrics)
 
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
@@ -279,6 +280,7 @@ class RuntimeRunHandler:
                 status=AgentRunStatus.TIMED_OUT.value,
             )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
+            self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             return
         except Exception as exc:
             await self._reconcile_inflight_tool_calls(
@@ -308,6 +310,7 @@ class RuntimeRunHandler:
                 status=AgentRunStatus.FAILED.value,
             )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
+            self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
 
         completed = await with_optimistic_retry(
@@ -316,6 +319,7 @@ class RuntimeRunHandler:
             )
         )
         self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
+        self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
         completed_at = completed.completed_at or datetime.now(timezone.utc)
         metrics_payload = metrics.to_payload(completed_at=completed_at)
         await self._append_lifecycle(
@@ -372,6 +376,7 @@ class RuntimeRunHandler:
                 exc_info=True,
             )
             return
+        await self._record_per_call_usage(run, metrics=metrics)
         try:
             pricing = await self.pricing_catalog.lookup(
                 provider=run.model_provider,
@@ -396,6 +401,67 @@ class RuntimeRunHandler:
         except Exception:
             logging.getLogger(__name__).warning(
                 "runtime_run_usage_cost_write_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
+
+    async def _record_per_call_usage(
+        self,
+        run: RunRecord,
+        *,
+        metrics: AssistantRunMetrics,
+    ) -> None:
+        """Best-effort write of per-LLM-call usage rows (B2).
+
+        Reconciliation invariant: ``sum(model_call_usage rows for run_id)``
+        equals ``runtime_run_usage`` for that run. The records are built
+        from the same accumulator that produced the run-level row, so the
+        invariant holds by construction.
+
+        Cost stamping for per-call rows is best-effort: each row gets
+        priced against the same pricing snapshot as the run-level row.
+        Failures here never break the run lifecycle.
+        """
+
+        try:
+            records = metrics.model_call_usage_records(run, trace_id=run.trace_id)
+            if not records:
+                return
+            for record in records:
+                await self.persistence.record_model_call_usage(record)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "runtime_model_call_usage_write_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
+            return
+        # Cost stamp per call.
+        try:
+            pricing = await self.pricing_catalog.lookup(
+                provider=run.model_provider,
+                model_name=run.model_name,
+                region="global",
+                at=datetime.now(timezone.utc),
+            )
+            if pricing is None:
+                return
+            for record in records:
+                cost_micro_usd = CostCalculator.compute(
+                    input_tokens=record.input_tokens,
+                    output_tokens=record.output_tokens,
+                    cached_input_tokens=record.cached_input_tokens,
+                    pricing=pricing,
+                )
+                await self.persistence.update_model_call_usage_cost(
+                    usage_id=record.id,
+                    cost_micro_usd=cost_micro_usd,
+                    pricing_id=pricing.id,
+                    pricing_version=pricing.pricing_version,
+                )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "runtime_model_call_usage_cost_write_failed",
                 extra={"metadata": {"run_id": run.run_id}},
                 exc_info=True,
             )
