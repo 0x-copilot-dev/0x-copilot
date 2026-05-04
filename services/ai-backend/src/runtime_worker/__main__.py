@@ -9,6 +9,10 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
+from agent_runtime.observability.db_statement_metrics import (
+    DbStatementMetricsCollector,
+    DbStatementMetricsCollectorEnv,
+)
 from runtime_worker.jobs.retention_sweeper import (
     RetentionSweeperLoop,
     RetentionSweeperLoopEnv,
@@ -44,6 +48,7 @@ class RuntimeWorkerEntrypoint:
             await async_ports.store.migrate()
             rollup_loop: UsageRollupLoop | None = None
             retention_loop: RetentionSweeperLoop | None = None
+            statement_collector: DbStatementMetricsCollector | None = None
             try:
                 worker = RuntimeWorker(
                     persistence=async_ports.persistence,
@@ -88,10 +93,35 @@ class RuntimeWorkerEntrypoint:
                             "dry_run": retention_loop._dry_run,
                         },
                     )
+                # C11: opt-in (default off). Operator must have
+                # ``pg_stat_statements`` installed; the scraper logs
+                # once and exits if not.
+                if DbStatementMetricsCollectorEnv.env_bool(
+                    DbStatementMetricsCollectorEnv.ENABLED, default=False
+                ):
+
+                    async def _scrape_query(sql: str) -> list[dict]:
+                        store = async_ports.store
+                        async with store._role_connection("worker") as conn:  # type: ignore[attr-defined]
+                            async with conn.cursor() as cur:
+                                await cur.execute(sql)
+                                rows = await cur.fetchall()
+                        return list(rows)
+
+                    statement_collector = DbStatementMetricsCollector(
+                        run_query=_scrape_query
+                    )
+                    await statement_collector.start()
+                    logger.info(
+                        "db_statement_metrics_collector_started",
+                        metadata={"interval_seconds": statement_collector._interval},
+                    )
                 await worker.run_forever(
                     poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
                 )
             finally:
+                if statement_collector is not None:
+                    await statement_collector.stop()
                 if retention_loop is not None:
                     await retention_loop.stop()
                 if rollup_loop is not None:

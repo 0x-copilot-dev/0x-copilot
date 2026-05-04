@@ -1,0 +1,33 @@
+{
+  "title": "DB Statement Performance (C11)",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "title": "Top 10 slowest digests (cumulative seconds)",
+      "type": "barchart",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (digest) (rate(db_statement_total_time_seconds[5m])))"
+        }
+      ]
+    },
+    {
+      "title": "Top 10 hottest digests (calls/sec)",
+      "type": "barchart",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (digest) (rate(db_statement_calls_total[5m])))"
+        }
+      ]
+    },
+    {
+      "title": "Rows per call by digest",
+      "type": "barchart",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (digest) (rate(db_statement_rows_total[5m])) / sum by (digest) (rate(db_statement_calls_total[5m])))"
+        }
+      ]
+    }
+  ]
+}
