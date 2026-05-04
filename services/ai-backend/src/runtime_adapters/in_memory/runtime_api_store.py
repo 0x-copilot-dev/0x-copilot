@@ -13,6 +13,13 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import (
+    BudgetEnforcement,
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetStateRecord,
+    BudgetStatus,
+    BudgetWithState,
+    ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
@@ -90,6 +97,13 @@ class InMemoryRuntimeApiStore:
         self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
         # Compression events (B5 read-only path; no writer wired yet).
         self.compression_events: list[CompressionEventRecord] = []
+        # Budgets (B7).
+        self.budgets: dict[str, BudgetRecord] = {}
+        # Keyed by (budget_id, period_start_isoformat) so the same budget
+        # can have one state row per period and we don't accidentally
+        # blow up old periods on a roll-over.
+        self.budget_states: dict[tuple[str, str], BudgetStateRecord] = {}
+        self.budget_reservations: dict[str, BudgetReservationRecord] = {}
 
     def create_conversation(
         self, request: CreateConversationRequest
@@ -764,6 +778,233 @@ class InMemoryRuntimeApiStore:
                 key=lambda e: e.created_at,
             )
         )
+
+    # ------------------------------------------------------------------
+    # Budgets (B7).
+    # ------------------------------------------------------------------
+
+    def lookup_budgets_for_run(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> Sequence[BudgetWithState]:
+        from datetime import date, datetime, timezone
+
+        from agent_runtime.budgets.period import BudgetPeriodCalculator
+
+        now = datetime.now(timezone.utc)
+        results: list[BudgetWithState] = []
+        for budget in self.budgets.values():
+            if budget.org_id != org_id:
+                continue
+            if budget.scope.value == "user" and budget.user_id != user_id:
+                continue
+            window = BudgetPeriodCalculator.window(budget.period, now=now)
+            state_key = (budget.id, window.period_start.isoformat())
+            state = self.budget_states.get(state_key)
+            if state is not None:
+                # Inflate by active (unconsumed) reservations against
+                # the same period — matches the postgres query semantics.
+                reserved_micro = sum(
+                    r.reserved_micro_usd
+                    for r in self.budget_reservations.values()
+                    if r.budget_id == budget.id
+                    and r.period_start == window.period_start
+                    and r.consumed_at is None
+                )
+                reserved_tokens = sum(
+                    r.reserved_tokens
+                    for r in self.budget_reservations.values()
+                    if r.budget_id == budget.id
+                    and r.period_start == window.period_start
+                    and r.consumed_at is None
+                )
+                state = state.model_copy(
+                    update={
+                        "current_spend_micro_usd": state.current_spend_micro_usd
+                        + reserved_micro,
+                        "current_spend_tokens": state.current_spend_tokens
+                        + reserved_tokens,
+                    }
+                )
+            else:
+                # No state row yet for this period — synthesize a zero
+                # so the enforcer's reservation-aware math still picks
+                # up other runs' reservations against this fresh period.
+                reserved_micro = sum(
+                    r.reserved_micro_usd
+                    for r in self.budget_reservations.values()
+                    if r.budget_id == budget.id
+                    and r.period_start == window.period_start
+                    and r.consumed_at is None
+                )
+                reserved_tokens = sum(
+                    r.reserved_tokens
+                    for r in self.budget_reservations.values()
+                    if r.budget_id == budget.id
+                    and r.period_start == window.period_start
+                    and r.consumed_at is None
+                )
+                if reserved_micro > 0 or reserved_tokens > 0:
+                    state = BudgetStateRecord(
+                        budget_id=budget.id,
+                        period_start=window.period_start,
+                        period_end=window.period_end,
+                        current_spend_micro_usd=reserved_micro,
+                        current_spend_tokens=reserved_tokens,
+                    )
+            results.append(BudgetWithState(budget=budget, state=state))
+        # Sort for determinism in tests.
+        results.sort(key=lambda e: e.budget.id)
+        # Suppress unused warnings if branch is dead.
+        _ = (date, BudgetEnforcement)
+        return tuple(results)
+
+    def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        period_end,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now,
+    ) -> ChargeOutcome:
+        key = (budget_id, period_start.isoformat())
+        state = self.budget_states.get(key)
+        if state is None:
+            state = BudgetStateRecord(
+                budget_id=budget_id,
+                period_start=period_start,
+                period_end=period_end,
+                current_spend_micro_usd=0,
+                current_spend_tokens=0,
+            )
+        if state.last_charged_run_id == run_id:
+            return ChargeOutcome.IDEMPOTENT_NOOP
+        self.budget_states[key] = state.model_copy(
+            update={
+                "current_spend_micro_usd": state.current_spend_micro_usd
+                + delta_micro_usd,
+                "current_spend_tokens": state.current_spend_tokens + delta_tokens,
+                "row_version": state.row_version + 1,
+                "last_charged_run_id": run_id,
+                "updated_at": now,
+            }
+        )
+        return ChargeOutcome.APPLIED
+
+    def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now,
+    ) -> BudgetReservationRecord | None:
+        # Idempotent on (budget_id, run_id) for active reservations.
+        existing = next(
+            (
+                r
+                for r in self.budget_reservations.values()
+                if r.budget_id == budget_id
+                and r.run_id == run_id
+                and r.consumed_at is None
+            ),
+            None,
+        )
+        if existing is not None:
+            return None
+        from agent_runtime.budgets.reservations import BudgetReservationManager
+
+        record = BudgetReservationRecord(
+            budget_id=budget_id,
+            period_start=period_start,
+            run_id=run_id,
+            reserved_micro_usd=reserved_micro_usd,
+            reserved_tokens=reserved_tokens,
+            expires_at=BudgetReservationManager.expires_at(now=now, ttl_seconds=60),
+        )
+        self.budget_reservations[record.reservation_id] = record
+        return record
+
+    def consume_budget_reservation(
+        self,
+        *,
+        reservation_id: str,
+        now,
+    ) -> None:
+        record = self.budget_reservations.get(reservation_id)
+        if record is None or record.consumed_at is not None:
+            return
+        self.budget_reservations[reservation_id] = record.model_copy(
+            update={"consumed_at": now}
+        )
+
+    def reap_expired_budget_reservations(self, *, now) -> int:
+        purged = 0
+        for reservation_id, record in list(self.budget_reservations.items()):
+            if record.consumed_at is None and record.expires_at < now:
+                del self.budget_reservations[reservation_id]
+                purged += 1
+        return purged
+
+    def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        return tuple(
+            sorted(
+                (b for b in self.budgets.values() if b.org_id == org_id),
+                key=lambda b: b.created_at,
+                reverse=True,
+            )
+        )
+
+    def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        record = self.budgets.get(budget_id)
+        if record is None or record.org_id != org_id:
+            return None
+        return record
+
+    def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        # Enforce the spec's UNIQUE (org_id, COALESCE(user_id,'<org>'), scope, period).
+        for existing in self.budgets.values():
+            if (
+                existing.org_id == record.org_id
+                and (existing.user_id or "<org>") == (record.user_id or "<org>")
+                and existing.scope == record.scope
+                and existing.period == record.period
+            ):
+                raise ValueError("budget already exists for that scope/period")
+        self.budgets[record.id] = record
+        return record
+
+    def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        if record.id not in self.budgets:
+            raise KeyError(record.id)
+        self.budgets[record.id] = record
+        return record
+
+    def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        record = self.budgets.get(budget_id)
+        if record is None or record.org_id != org_id:
+            return
+        del self.budgets[budget_id]
+        # Cascade — match the FK ON DELETE CASCADE in the migration.
+        self.budget_states = {
+            key: state
+            for key, state in self.budget_states.items()
+            if state.budget_id != budget_id
+        }
+        self.budget_reservations = {
+            rid: r
+            for rid, r in self.budget_reservations.items()
+            if r.budget_id != budget_id
+        }
+        # Suppress unused import warnings if BudgetStatus isn't used here yet.
+        _ = BudgetStatus
 
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with a monotonically increasing run sequence number."""

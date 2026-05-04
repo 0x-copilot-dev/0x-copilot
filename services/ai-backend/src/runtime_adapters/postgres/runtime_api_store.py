@@ -38,6 +38,15 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.pool_metrics import PoolMetrics
 from agent_runtime.persistence.records import (
+    BudgetEnforcement,
+    BudgetPeriod,
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetScope,
+    BudgetStateRecord,
+    BudgetStatus,
+    BudgetWithState,
+    ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
@@ -1705,6 +1714,383 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._compression_event_record(r) for r in rows)
+
+    # ------------------------------------------------------------------
+    # Budgets (B7).
+    # ------------------------------------------------------------------
+
+    async def lookup_budgets_for_run(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> Sequence[BudgetWithState]:
+        # ``LEFT JOIN LATERAL`` collapses three queries (budget, state for
+        # the current period, sum of unconsumed reservations for the
+        # current period) into one round-trip. Period start is computed
+        # in SQL so the API doesn't have to know UTC midnight semantics.
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                WITH active AS (
+                    SELECT * FROM usage_budgets
+                     WHERE org_id = %s
+                       AND status = 'active'
+                       AND (scope = 'org' OR (scope = 'user' AND user_id = %s))
+                ),
+                period AS (
+                    SELECT
+                        b.id AS budget_id,
+                        CASE
+                            WHEN b.period = 'day' THEN date_trunc('day', now() AT TIME ZONE 'UTC')::date
+                            WHEN b.period = 'month' THEN date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                        END AS period_start,
+                        CASE
+                            WHEN b.period = 'day' THEN date_trunc('day', now() AT TIME ZONE 'UTC')::date
+                            WHEN b.period = 'month' THEN (date_trunc('month', now() AT TIME ZONE 'UTC')
+                                + interval '1 month' - interval '1 day')::date
+                        END AS period_end
+                      FROM active b
+                ),
+                reserved AS (
+                    SELECT r.budget_id,
+                           r.period_start,
+                           COALESCE(SUM(r.reserved_micro_usd), 0) AS reserved_micro,
+                           COALESCE(SUM(r.reserved_tokens), 0) AS reserved_tokens
+                      FROM usage_budget_reservations r
+                      JOIN period p ON p.budget_id = r.budget_id AND p.period_start = r.period_start
+                     WHERE r.consumed_at IS NULL
+                     GROUP BY r.budget_id, r.period_start
+                )
+                SELECT
+                    b.id, b.org_id, b.user_id, b.scope, b.period, b.enforcement,
+                    b.limit_micro_usd, b.limit_tokens, b.status,
+                    b.created_at, b.updated_at, b.created_by_user_id,
+                    p.period_start, p.period_end,
+                    COALESCE(s.current_spend_micro_usd, 0) AS current_spend_micro_usd,
+                    COALESCE(s.current_spend_tokens, 0) AS current_spend_tokens,
+                    COALESCE(s.row_version, 1) AS row_version,
+                    s.last_charged_run_id,
+                    COALESCE(s.updated_at, b.updated_at) AS state_updated_at,
+                    COALESCE(r.reserved_micro, 0) AS reserved_micro,
+                    COALESCE(r.reserved_tokens, 0) AS reserved_tokens,
+                    (s.budget_id IS NOT NULL) AS has_state
+                  FROM active b
+                  JOIN period p ON p.budget_id = b.id
+                  LEFT JOIN usage_budget_state s
+                    ON s.budget_id = b.id AND s.period_start = p.period_start
+                  LEFT JOIN reserved r
+                    ON r.budget_id = b.id AND r.period_start = p.period_start
+                 ORDER BY b.id ASC
+                """,
+                (org_id, user_id),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._budget_with_state(row) for row in rows)
+
+    async def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        period_end,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now: datetime,
+    ) -> ChargeOutcome:
+        async with self._role_connection("worker") as conn:
+            # Try INSERT first so a fresh-period charge succeeds without
+            # a separate "create state row" call. ON CONFLICT DO NOTHING
+            # then we run the UPDATE branch below for the existing row.
+            await conn.execute(
+                """
+                INSERT INTO usage_budget_state (
+                    budget_id, period_start, period_end,
+                    current_spend_micro_usd, current_spend_tokens,
+                    row_version, last_charged_run_id, updated_at
+                ) VALUES (%s, %s, %s, 0, 0, 1, NULL, %s)
+                ON CONFLICT (budget_id, period_start) DO NOTHING
+                """,
+                (budget_id, period_start, period_end, now),
+            )
+            cur = await conn.execute(
+                """
+                UPDATE usage_budget_state
+                   SET current_spend_micro_usd = current_spend_micro_usd + %s,
+                       current_spend_tokens = current_spend_tokens + %s,
+                       row_version = row_version + 1,
+                       last_charged_run_id = %s,
+                       updated_at = %s
+                 WHERE budget_id = %s
+                   AND period_start = %s
+                   AND last_charged_run_id IS DISTINCT FROM %s
+                RETURNING row_version
+                """,
+                (
+                    delta_micro_usd,
+                    delta_tokens,
+                    run_id,
+                    now,
+                    budget_id,
+                    period_start,
+                    run_id,
+                ),
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return ChargeOutcome.APPLIED
+            # Either idempotent re-charge or row_version drift — disambiguate.
+            cur = await conn.execute(
+                """
+                SELECT last_charged_run_id
+                  FROM usage_budget_state
+                 WHERE budget_id = %s AND period_start = %s
+                """,
+                (budget_id, period_start),
+            )
+            existing = await cur.fetchone()
+            if existing is not None and existing.get("last_charged_run_id") == run_id:
+                return ChargeOutcome.IDEMPOTENT_NOOP
+            return ChargeOutcome.EXHAUSTED_RETRIES
+
+    async def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now: datetime,
+    ) -> BudgetReservationRecord | None:
+        from agent_runtime.budgets.reservations import BudgetReservationManager
+
+        from uuid import uuid4
+
+        reservation_id = uuid4().hex
+        expires_at = BudgetReservationManager.expires_at(now=now, ttl_seconds=60)
+        async with self._role_connection("worker") as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO usage_budget_reservations (
+                    reservation_id, budget_id, period_start, run_id,
+                    reserved_micro_usd, reserved_tokens, expires_at, consumed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)
+                ON CONFLICT (budget_id, run_id) WHERE consumed_at IS NULL DO NOTHING
+                RETURNING reservation_id, expires_at
+                """,
+                (
+                    reservation_id,
+                    budget_id,
+                    period_start,
+                    run_id,
+                    reserved_micro_usd,
+                    reserved_tokens,
+                    expires_at,
+                ),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return BudgetReservationRecord(
+            reservation_id=str(row["reservation_id"]),
+            budget_id=budget_id,
+            period_start=period_start,
+            run_id=run_id,
+            reserved_micro_usd=reserved_micro_usd,
+            reserved_tokens=reserved_tokens,
+            expires_at=self._coerce_datetime(row["expires_at"]),
+        )
+
+    async def consume_budget_reservation(
+        self, *, reservation_id: str, now: datetime
+    ) -> None:
+        async with self._role_connection("worker") as conn:
+            await conn.execute(
+                """
+                UPDATE usage_budget_reservations
+                   SET consumed_at = %s
+                 WHERE reservation_id = %s AND consumed_at IS NULL
+                """,
+                (now, reservation_id),
+            )
+
+    async def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+        async with self._role_connection("worker") as conn:
+            cur = await conn.execute(
+                """
+                DELETE FROM usage_budget_reservations
+                 WHERE consumed_at IS NULL AND expires_at < %s
+                """,
+                (now,),
+            )
+            return cur.rowcount or 0
+
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM usage_budgets
+                 WHERE org_id = %s
+                 ORDER BY created_at DESC
+                """,
+                (org_id,),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._budget_record(row) for row in rows)
+
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM usage_budgets WHERE org_id = %s AND id = %s
+                """,
+                (org_id, budget_id),
+            )
+            row = await cur.fetchone()
+        return self._budget_record(row) if row is not None else None
+
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO usage_budgets (
+                    id, org_id, user_id, scope, period, enforcement,
+                    limit_micro_usd, limit_tokens, status,
+                    created_at, updated_at, created_by_user_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    record.id,
+                    record.org_id,
+                    record.user_id,
+                    record.scope.value,
+                    record.period.value,
+                    record.enforcement.value,
+                    record.limit_micro_usd,
+                    record.limit_tokens,
+                    record.status.value,
+                    record.created_at,
+                    record.updated_at,
+                    record.created_by_user_id,
+                ),
+            )
+        return record
+
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            await conn.execute(
+                """
+                UPDATE usage_budgets SET
+                    enforcement = %s,
+                    limit_micro_usd = %s,
+                    limit_tokens = %s,
+                    status = %s,
+                    updated_at = %s
+                 WHERE id = %s AND org_id = %s
+                """,
+                (
+                    record.enforcement.value,
+                    record.limit_micro_usd,
+                    record.limit_tokens,
+                    record.status.value,
+                    record.updated_at,
+                    record.id,
+                    record.org_id,
+                ),
+            )
+        return record
+
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            await conn.execute(
+                "DELETE FROM usage_budgets WHERE org_id = %s AND id = %s",
+                (org_id, budget_id),
+            )
+
+    @classmethod
+    def _budget_record(cls, row: dict[str, object]) -> BudgetRecord:
+        return BudgetRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            user_id=(str(row["user_id"]) if row.get("user_id") is not None else None),
+            scope=BudgetScope(str(row["scope"])),
+            period=BudgetPeriod(str(row["period"])),
+            enforcement=BudgetEnforcement(str(row["enforcement"])),
+            limit_micro_usd=(
+                int(row["limit_micro_usd"])
+                if row.get("limit_micro_usd") is not None
+                else None
+            ),
+            limit_tokens=(
+                int(row["limit_tokens"])
+                if row.get("limit_tokens") is not None
+                else None
+            ),
+            status=BudgetStatus(str(row["status"])),
+            created_at=cls._coerce_datetime(row["created_at"]),
+            updated_at=cls._coerce_datetime(row["updated_at"]),
+            created_by_user_id=str(row["created_by_user_id"]),
+        )
+
+    @classmethod
+    def _budget_with_state(cls, row: dict[str, object]) -> BudgetWithState:
+        budget = BudgetRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            user_id=(str(row["user_id"]) if row.get("user_id") is not None else None),
+            scope=BudgetScope(str(row["scope"])),
+            period=BudgetPeriod(str(row["period"])),
+            enforcement=BudgetEnforcement(str(row["enforcement"])),
+            limit_micro_usd=(
+                int(row["limit_micro_usd"])
+                if row.get("limit_micro_usd") is not None
+                else None
+            ),
+            limit_tokens=(
+                int(row["limit_tokens"])
+                if row.get("limit_tokens") is not None
+                else None
+            ),
+            status=BudgetStatus(str(row["status"])),
+            created_at=cls._coerce_datetime(row["created_at"]),
+            updated_at=cls._coerce_datetime(row["updated_at"]),
+            created_by_user_id=str(row["created_by_user_id"]),
+        )
+        period_start = row["period_start"]
+        period_end = row["period_end"]
+        # Inflate spend by active reservations so the enforcer sees the
+        # right headroom in one read.
+        current_micro = int(row.get("current_spend_micro_usd") or 0) + int(
+            row.get("reserved_micro") or 0
+        )
+        current_tokens = int(row.get("current_spend_tokens") or 0) + int(
+            row.get("reserved_tokens") or 0
+        )
+        # Synthesize a state row when none exists but reservations do —
+        # the enforcer can't distinguish "no state" from "zero spend"
+        # without seeing the reservations.
+        has_state = (
+            bool(row.get("has_state")) or current_micro > 0 or current_tokens > 0
+        )
+        state: BudgetStateRecord | None = None
+        if has_state:
+            state = BudgetStateRecord(
+                budget_id=budget.id,
+                period_start=period_start,
+                period_end=period_end,
+                current_spend_micro_usd=current_micro,
+                current_spend_tokens=current_tokens,
+                row_version=int(row.get("row_version") or 1),
+                last_charged_run_id=(
+                    str(row["last_charged_run_id"])
+                    if row.get("last_charged_run_id") is not None
+                    else None
+                ),
+                updated_at=cls._coerce_datetime(row["state_updated_at"]),
+            )
+        return BudgetWithState(budget=budget, state=state)
 
     @classmethod
     def _run_usage_record(cls, row: dict[str, object]) -> RuntimeRunUsageRecord:

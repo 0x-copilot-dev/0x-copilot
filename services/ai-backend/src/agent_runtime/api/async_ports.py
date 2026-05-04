@@ -15,6 +15,10 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetWithState,
+    ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
     RuntimeModelCallUsageRecord,
@@ -303,6 +307,85 @@ class AsyncPersistencePort(Protocol):
         run_id: str,
     ) -> Sequence[CompressionEventRecord]:
         """Return compression events for a run, ordered by ``created_at`` (B5)."""
+
+    # ------------------------------------------------------------------
+    # Budgets (B7).
+    #
+    # ``lookup_budgets_for_run`` is the hot path on the worker preflight.
+    # It returns the ``BudgetWithState`` join including any active
+    # reservations rolled into ``current_spend_*`` (so the enforcer can
+    # decide without a second query).
+    #
+    # ``charge_budget`` is the post-run hook. CAS on ``row_version`` AND
+    # idempotency on ``last_charged_run_id`` mean the same run cannot
+    # double-charge under retry.
+    # ------------------------------------------------------------------
+
+    async def lookup_budgets_for_run(
+        self, *, org_id: str, user_id: str
+    ) -> Sequence[BudgetWithState]:
+        """Active budgets matching ``(org_id, user_id)`` plus their state."""
+
+    async def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,  # datetime.date — typed as object to avoid an extra import
+        period_end: object,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now: datetime,
+    ) -> ChargeOutcome:
+        """Apply a charge to a budget's state via CAS UPDATE.
+
+        Returns :class:`ChargeOutcome.IDEMPOTENT_NOOP` when the same
+        ``run_id`` has already been charged, :class:`APPLIED` on a fresh
+        write, and :class:`EXHAUSTED_RETRIES` when row_version drift
+        does not stabilize within the adapter's internal retry budget.
+        """
+
+    async def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,  # datetime.date
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now: datetime,
+    ) -> BudgetReservationRecord | None:
+        """Create a pre-flight reservation, idempotent on (budget_id, run_id).
+
+        Returns ``None`` when the run already holds an unconsumed
+        reservation against this budget (idempotent retry path).
+        """
+
+    async def consume_budget_reservation(
+        self, *, reservation_id: str, now: datetime
+    ) -> None:
+        """Mark a reservation consumed so the reaper skips it."""
+
+    async def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+        """Purge reservations whose ``expires_at < now`` and are unconsumed.
+
+        Returns the number purged, for observability.
+        """
+
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        """List configured budgets for an org (admin endpoint)."""
+
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        """Fetch one budget scoped to an org."""
+
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Insert a new budget."""
+
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Update mutable fields on an existing budget."""
+
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        """Hard-delete a budget (cascades to state + reservations)."""
 
 
 @runtime_checkable

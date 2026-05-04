@@ -328,6 +328,38 @@ class AsyncInMemoryRuntimeApiStore:
             org_id=org_id, run_id=run_id
         )
 
+    # Budgets (B7) ---------------------------------------------------------
+
+    async def lookup_budgets_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.lookup_budgets_for_run(**kwargs)
+
+    async def charge_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.charge_budget(**kwargs)
+
+    async def reserve_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.reserve_budget(**kwargs)
+
+    async def consume_budget_reservation(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.consume_budget_reservation(**kwargs)
+
+    async def reap_expired_budget_reservations(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.reap_expired_budget_reservations(**kwargs)
+
+    async def list_budgets(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.list_budgets(**kwargs)
+
+    async def get_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.get_budget(**kwargs)
+
+    async def create_budget(self, record):  # type: ignore[no-untyped-def]
+        return self._store.create_budget(record)
+
+    async def update_budget(self, record):  # type: ignore[no-untyped-def]
+        return self._store.update_budget(record)
+
+    async def delete_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.delete_budget(**kwargs)
+
     # EventStorePort ------------------------------------------------------
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:

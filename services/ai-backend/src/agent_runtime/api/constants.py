@@ -98,6 +98,12 @@ class Keys:
         USAGE_RUN = "usage_run"
         USAGE_CONVERSATION = "usage_conversation"
         USAGE_ORG = "usage_org"
+        # Budget endpoints (B7)
+        BUDGETS_LIST = "budgets_list"
+        BUDGETS_CREATE = "budgets_create"
+        BUDGETS_UPDATE = "budgets_update"
+        BUDGETS_DELETE = "budgets_delete"
+        BUDGETS_ME = "budgets_me"
 
 
 class Values:

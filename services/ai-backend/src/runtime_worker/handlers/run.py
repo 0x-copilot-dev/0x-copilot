@@ -9,6 +9,14 @@ import time
 from datetime import datetime, timezone
 
 from agent_runtime.api.presentation_templates import _ErrorMessage
+from agent_runtime.budgets import (
+    BudgetCharger,
+    BudgetEnforcer,
+    BudgetEstimator,
+    BudgetPreflightAllow,
+    BudgetPreflightDeny,
+    BudgetPreflightWarn,
+)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -27,6 +35,7 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
+from agent_runtime.persistence.records import BudgetReservationRecord
 from agent_runtime.pricing import CostCalculator, ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
@@ -127,6 +136,8 @@ class RuntimeRunHandler:
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
         self.pricing_catalog = ModelPricingCatalog(self.persistence)
+        self.budget_enforcer = BudgetEnforcer(self.persistence)
+        self.budget_charger = BudgetCharger(self.persistence)
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -156,6 +167,16 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             )
 
+        # B7 — pre-run budget preflight. Allow / Warn / Deny.
+        # Done BEFORE flipping status to RUNNING so a Deny path leaves
+        # the run in QUEUED→FAILED transition with a distinct
+        # safe_error_code='budget_exceeded' (so the UI can show
+        # "budget exceeded" instead of generic failure).
+        budget_decision = await self._preflight_budgets(run, command)
+        if isinstance(budget_decision, BudgetPreflightDeny):
+            await self._reject_run_for_budget(run, budget_decision)
+            return
+
         run = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.RUNNING
@@ -164,10 +185,17 @@ class RuntimeRunHandler:
         await self._append_lifecycle(
             run, RuntimeApiEventType.RUN_STARTED, "Run started"
         )
+        if isinstance(budget_decision, BudgetPreflightWarn):
+            await self._emit_budget_warning(run, budget_decision)
         await self.audit_emitter.emit_run_started(run)
         run_start_perf = time.perf_counter()
         metrics = AssistantRunMetrics.from_run(run)
         self.stream_event_mapper.update_processor.bind_metrics(run.run_id, metrics)
+        budget_reservations: tuple[BudgetReservationRecord, ...] = (
+            budget_decision.reservations
+            if isinstance(budget_decision, (BudgetPreflightAllow, BudgetPreflightWarn))
+            else ()
+        )
 
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
@@ -278,6 +306,7 @@ class RuntimeRunHandler:
                 metrics=metrics,
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.TIMED_OUT.value,
+                budget_reservations=budget_reservations,
             )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
@@ -308,6 +337,7 @@ class RuntimeRunHandler:
                 metrics=metrics,
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.FAILED.value,
+                budget_reservations=budget_reservations,
             )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
@@ -341,7 +371,140 @@ class RuntimeRunHandler:
             metrics=metrics,
             completed_at=completed_at,
             status=AgentRunStatus.COMPLETED.value,
+            budget_reservations=budget_reservations,
         )
+
+    async def _preflight_budgets(
+        self,
+        run: RunRecord,
+        command: RuntimeRunCommand,
+    ):
+        """B7: estimate the run's spend and check it against active budgets.
+
+        Failures fail-open: a transient persistence error must not block
+        the run. We log + return Allow so the run proceeds as if no
+        budgets were configured. Hard caps are still enforced when the
+        DB is healthy, which is the common case.
+        """
+
+        try:
+            pricing = await self.pricing_catalog.lookup(
+                provider=run.model_provider,
+                model_name=run.model_name,
+                region="global",
+                at=datetime.now(timezone.utc),
+            )
+            request_options = command.runtime_context.model_profile
+            # Conservative pre-build proxy: 4 chars/token × the model's
+            # configured input window. The estimator multiplies by the
+            # safety margin and the post-run charge keys on observed
+            # tokens — so over-estimating here only delays a true Deny,
+            # it never silently busts a hard cap.
+            max_input_tokens = getattr(request_options, "max_input_tokens", None)
+            prompt_chars = (max_input_tokens or 0) * 4
+            estimate = BudgetEstimator.estimate(
+                prompt_chars=prompt_chars,
+                max_output_tokens=getattr(request_options, "max_output_tokens", None),
+                pricing=pricing,
+            )
+            return await self.budget_enforcer.preflight(
+                org_id=command.org_id,
+                user_id=command.user_id,
+                run_id=command.run_id,
+                estimate=estimate,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "budget_preflight_failed",
+                extra={"metadata": {"run_id": command.run_id}},
+                exc_info=True,
+            )
+            return BudgetPreflightAllow()
+
+    async def _reject_run_for_budget(
+        self,
+        run: RunRecord,
+        decision: "BudgetPreflightDeny",
+    ) -> None:
+        """Mark the run FAILED with a distinct safe_error_code + emit RUN_REJECTED."""
+
+        failed = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=run.run_id,
+                status=AgentRunStatus.FAILED,
+            )
+        )
+        await self.event_producer.append_api_event(
+            run=failed,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.RUN_REJECTED,
+            summary="Run rejected: budget exceeded",
+            payload={
+                "reason": decision.reason,
+                "budget_id": decision.budget.id,
+                "scope": decision.budget.scope.value,
+                "period": decision.budget.period.value,
+                "current_micro_usd": decision.current_micro_usd,
+                "current_tokens": decision.current_tokens,
+                "limit_micro_usd": decision.budget.limit_micro_usd,
+                "limit_tokens": decision.budget.limit_tokens,
+            },
+        )
+        await self.audit_emitter.emit_run_failed(
+            failed,
+            status=AgentRunStatus.FAILED,
+            error_class="BudgetExceeded",
+            error_code="budget_exceeded",
+            duration_ms=0,
+        )
+
+    async def _emit_budget_warning(
+        self,
+        run: RunRecord,
+        decision: "BudgetPreflightWarn",
+    ) -> None:
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.BUDGET_WARNING,
+            summary="Budget soft cap crossed",
+            payload={
+                "budget_id": decision.budget.id,
+                "scope": decision.budget.scope.value,
+                "period": decision.budget.period.value,
+                "current_micro_usd": decision.current_micro_usd,
+                "current_tokens": decision.current_tokens,
+                "limit_micro_usd": decision.budget.limit_micro_usd,
+                "limit_tokens": decision.budget.limit_tokens,
+                "severity": "soft_cap",
+            },
+        )
+
+    async def _charge_budgets(
+        self,
+        run: RunRecord,
+        *,
+        observed_micro_usd: int | None,
+        observed_tokens: int,
+        reservations: Sequence[BudgetReservationRecord],
+    ) -> None:
+        """Best-effort post-run budget charge. Idempotent on run_id."""
+
+        try:
+            await self.budget_charger.charge_run(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                run_id=run.run_id,
+                observed_micro_usd=observed_micro_usd,
+                observed_tokens=observed_tokens,
+                reservations=tuple(reservations),
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "budget_charge_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
 
     async def _record_run_usage(
         self,
@@ -350,6 +513,7 @@ class RuntimeRunHandler:
         metrics: AssistantRunMetrics,
         completed_at: datetime,
         status: str,
+        budget_reservations: Sequence[BudgetReservationRecord] = (),
     ) -> None:
         """Best-effort write of the per-run usage row + cost stamp (B1, B3).
 
@@ -362,13 +526,21 @@ class RuntimeRunHandler:
         After the row is written we look up pricing-as-of ``completed_at``
         and stamp the cost. Pricing miss → row stays at ``cost_micro_usd
         IS NULL`` (B3 spec: unknown models are null-safe).
+
+        Finally (B7) we charge the observed spend against any matching
+        budgets, idempotent on ``run_id``. Reservations from the
+        preflight are consumed inside the charger so the reaper skips
+        them.
         """
 
+        cost_micro_usd_observed: int | None = None
+        observed_tokens = 0
         try:
             usage_record = metrics.to_usage_record(
                 run, completed_at=completed_at, status=status
             )
             await self.persistence.record_run_usage(usage_record)
+            observed_tokens = usage_record.total_tokens
         except Exception:
             logging.getLogger(__name__).warning(
                 "runtime_run_usage_write_failed",
@@ -384,26 +556,35 @@ class RuntimeRunHandler:
                 region="global",
                 at=completed_at,
             )
-            if pricing is None:
-                return
-            cost_micro_usd = CostCalculator.compute(
-                input_tokens=usage_record.input_tokens,
-                output_tokens=usage_record.output_tokens,
-                cached_input_tokens=usage_record.cached_input_tokens,
-                pricing=pricing,
-            )
-            await self.persistence.update_run_usage_cost(
-                run_id=run.run_id,
-                cost_micro_usd=cost_micro_usd,
-                pricing_id=pricing.id,
-                pricing_version=pricing.pricing_version,
-            )
+            if pricing is not None:
+                computed_cost: int = CostCalculator.compute(
+                    input_tokens=usage_record.input_tokens,
+                    output_tokens=usage_record.output_tokens,
+                    cached_input_tokens=usage_record.cached_input_tokens,
+                    pricing=pricing,
+                )
+                cost_micro_usd_observed = computed_cost
+                await self.persistence.update_run_usage_cost(
+                    run_id=run.run_id,
+                    cost_micro_usd=computed_cost,
+                    pricing_id=pricing.id,
+                    pricing_version=pricing.pricing_version,
+                )
         except Exception:
             logging.getLogger(__name__).warning(
                 "runtime_run_usage_cost_write_failed",
                 extra={"metadata": {"run_id": run.run_id}},
                 exc_info=True,
             )
+        # B7 — apply observed spend against active budgets. Idempotent on
+        # run_id; reservations from preflight are consumed in the same
+        # call so the reaper skips them.
+        await self._charge_budgets(
+            run,
+            observed_micro_usd=cost_micro_usd_observed,
+            observed_tokens=observed_tokens,
+            reservations=budget_reservations,
+        )
 
     async def _record_per_call_usage(
         self,

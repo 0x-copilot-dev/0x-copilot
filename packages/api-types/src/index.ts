@@ -149,7 +149,9 @@ export type RuntimeApiEventType =
   | "model_delta"
   | "final_response"
   | "heartbeat"
-  | "presentation_updated";
+  | "presentation_updated"
+  | "budget_warning"
+  | "run_rejected";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -192,6 +194,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   "final_response",
   "heartbeat",
   "presentation_updated",
+  "budget_warning",
+  "run_rejected",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -884,6 +888,41 @@ export interface RuntimeEventPayloadByType {
   final_response: RuntimeTextPayload;
   heartbeat: RuntimeLifecyclePayload;
   presentation_updated: PresentationUpdatedPayload;
+  budget_warning: BudgetWarningPayload;
+  run_rejected: RunRejectedPayload;
+}
+
+// B7 — budget enforcement event payloads.
+//
+// `BudgetWarningPayload` fires when a soft cap is crossed (the run still
+// proceeds). `RunRejectedPayload` fires when a hard cap would be
+// exceeded — the run is rejected before the LLM is called and the
+// envelope's `event_type` is `run_rejected` rather than `run_failed` so
+// the UI can render "budget exceeded" instead of a generic failure.
+
+export type BudgetScope = "org" | "user";
+export type BudgetPeriod = "day" | "month";
+
+export interface BudgetWarningPayload {
+  budget_id: string;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  current_micro_usd: number;
+  current_tokens: number;
+  limit_micro_usd: number | null;
+  limit_tokens: number | null;
+  severity: "soft_cap";
+}
+
+export interface RunRejectedPayload {
+  reason: "budget_exceeded";
+  budget_id: string;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  current_micro_usd: number;
+  current_tokens: number;
+  limit_micro_usd: number | null;
+  limit_tokens: number | null;
 }
 
 export type StructuredRuntimeEventEnvelope<

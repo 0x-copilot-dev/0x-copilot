@@ -631,6 +631,80 @@ def create_app(
             identity=identity,
         )
 
+    # ------------------------------------------------------------------
+    # Budgets (B7). Admin endpoints are gated by the same
+    # FacadeAuthenticator path used elsewhere; the ``admin:budgets``
+    # scope check lands in A10. ``/v1/budgets/me`` is open to any
+    # authenticated user.
+    # ------------------------------------------------------------------
+
+    @app.get("/v1/budgets")
+    async def list_budgets(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/budgets",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.post("/v1/budgets")
+    async def create_budget(
+        request: Request,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            "/v1/budgets",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.get("/v1/budgets/me")
+    async def my_budgets(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/budgets/me",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.patch("/v1/budgets/{budget_id}")
+    async def update_budget(
+        request: Request,
+        budget_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "PATCH",
+            f"/v1/budgets/{budget_id}",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/budgets/{budget_id}")
+    async def delete_budget(
+        request: Request,
+        budget_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "DELETE",
+            f"/v1/budgets/{budget_id}",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     register_health_routes(app)
 
     return app

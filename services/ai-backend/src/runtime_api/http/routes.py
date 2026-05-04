@@ -31,6 +31,14 @@ from runtime_api.schemas import (
     RuntimeEventReplayResponse,
     RunStatusResponse,
 )
+from runtime_api.schemas.budgets import (
+    BudgetCreateRequest,
+    BudgetListResponse,
+    BudgetMeResponse,
+    BudgetMeRow,
+    BudgetUpdateRequest,
+    BudgetView,
+)
 from runtime_api.schemas.usage import (
     ConversationUsageResponse,
     RunUsageBreakdown,
@@ -44,6 +52,8 @@ from runtime_api.schemas.usage import (
     UsageRunRow,
     UsageTotals,
 )
+from agent_runtime.budgets.period import BudgetPeriodCalculator
+from agent_runtime.persistence.records import BudgetRecord, BudgetStatus
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_api.system_skills import (
@@ -794,6 +804,219 @@ class UsageApiRouter:
             methods=["GET"],
             response_model=UsageOrgResponse,
             name=Keys.RouteName.USAGE_ORG,
+        )
+        return router
+
+
+class BudgetApiRoutes:
+    """Admin CRUD + per-user remaining-headroom endpoints for B7 budgets.
+
+    Admin endpoints (``GET/POST/PATCH/DELETE /v1/budgets``) are gated by
+    the same `RuntimeServiceAuthenticator` flow used by other v1/agent
+    routes; the actual ``admin:budgets`` scope check will land in A10
+    when the scope catalog ships. ``/v1/budgets/me`` is open to any
+    authenticated user — it only returns budgets that match their
+    ``(org_id, user_id)``.
+    """
+
+    @classmethod
+    async def list_budgets(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> BudgetListResponse:
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = RuntimeApiRoutes.service(request).persistence
+        rows = await persistence.list_budgets(org_id=org_id)
+        return BudgetListResponse(
+            budgets=tuple(cls._to_view(record) for record in rows)
+        )
+
+    @classmethod
+    async def create_budget(
+        cls,
+        request: Request,
+        payload: BudgetCreateRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> BudgetView:
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = RuntimeApiRoutes.service(request).persistence
+        record = BudgetRecord(
+            org_id=org_id,
+            user_id=payload.user_id,
+            scope=payload.scope,
+            period=payload.period,
+            enforcement=payload.enforcement,
+            limit_micro_usd=payload.limit_micro_usd,
+            limit_tokens=payload.limit_tokens,
+            status=BudgetStatus.ACTIVE,
+            created_by_user_id=user_id,
+        )
+        try:
+            persisted = await persistence.create_budget(record)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return cls._to_view(persisted)
+
+    @classmethod
+    async def update_budget(
+        cls,
+        request: Request,
+        budget_id: str,
+        payload: BudgetUpdateRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> BudgetView:
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = RuntimeApiRoutes.service(request).persistence
+        existing = await persistence.get_budget(org_id=org_id, budget_id=budget_id)
+        if existing is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "budget not found")
+        update: dict[str, object] = {"updated_at": datetime.now(timezone.utc)}
+        if payload.enforcement is not None:
+            update["enforcement"] = payload.enforcement
+        if payload.limit_micro_usd is not None:
+            update["limit_micro_usd"] = payload.limit_micro_usd
+        if payload.limit_tokens is not None:
+            update["limit_tokens"] = payload.limit_tokens
+        if payload.status is not None:
+            update["status"] = payload.status
+        merged = existing.model_copy(update=update)
+        persisted = await persistence.update_budget(merged)
+        return cls._to_view(persisted)
+
+    @classmethod
+    async def delete_budget(
+        cls,
+        request: Request,
+        budget_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> dict[str, str]:
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = RuntimeApiRoutes.service(request).persistence
+        await persistence.delete_budget(org_id=org_id, budget_id=budget_id)
+        return {"status": "deleted"}
+
+    @classmethod
+    async def my_budgets(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> BudgetMeResponse:
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = RuntimeApiRoutes.service(request).persistence
+        entries = await persistence.lookup_budgets_for_run(
+            org_id=org_id, user_id=user_id
+        )
+        rows: list[BudgetMeRow] = []
+        for entry in entries:
+            window = BudgetPeriodCalculator.window(entry.budget.period)
+            current_micro = (
+                entry.state.current_spend_micro_usd if entry.state is not None else 0
+            )
+            current_tokens = (
+                entry.state.current_spend_tokens if entry.state is not None else 0
+            )
+            remaining_micro = (
+                max(0, entry.budget.limit_micro_usd - current_micro)
+                if entry.budget.limit_micro_usd is not None
+                else None
+            )
+            remaining_tokens = (
+                max(0, entry.budget.limit_tokens - current_tokens)
+                if entry.budget.limit_tokens is not None
+                else None
+            )
+            rows.append(
+                BudgetMeRow(
+                    id=entry.budget.id,
+                    scope=entry.budget.scope,
+                    period=entry.budget.period,
+                    enforcement=entry.budget.enforcement,
+                    status=entry.budget.status,
+                    limit_micro_usd=entry.budget.limit_micro_usd,
+                    limit_tokens=entry.budget.limit_tokens,
+                    current_micro_usd=current_micro,
+                    current_tokens=current_tokens,
+                    remaining_micro_usd=remaining_micro,
+                    remaining_tokens=remaining_tokens,
+                    period_start=window.period_start,
+                    period_end=window.period_end,
+                )
+            )
+        return BudgetMeResponse(budgets=tuple(rows))
+
+    @staticmethod
+    def _to_view(record: BudgetRecord) -> BudgetView:
+        return BudgetView(
+            id=record.id,
+            org_id=record.org_id,
+            user_id=record.user_id,
+            scope=record.scope,
+            period=record.period,
+            enforcement=record.enforcement,
+            limit_micro_usd=record.limit_micro_usd,
+            limit_tokens=record.limit_tokens,
+            status=record.status,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            created_by_user_id=record.created_by_user_id,
+        )
+
+
+class BudgetApiRouter:
+    """Build the ``/v1/budgets/*`` router."""
+
+    @classmethod
+    def create_router(cls) -> APIRouter:
+        router = APIRouter(prefix="/v1/budgets", tags=["budgets"])
+        router.add_api_route(
+            "",
+            BudgetApiRoutes.list_budgets,
+            methods=["GET"],
+            response_model=BudgetListResponse,
+            name=Keys.RouteName.BUDGETS_LIST,
+        )
+        router.add_api_route(
+            "",
+            BudgetApiRoutes.create_budget,
+            methods=["POST"],
+            response_model=BudgetView,
+            name=Keys.RouteName.BUDGETS_CREATE,
+        )
+        router.add_api_route(
+            "/me",
+            BudgetApiRoutes.my_budgets,
+            methods=["GET"],
+            response_model=BudgetMeResponse,
+            name=Keys.RouteName.BUDGETS_ME,
+        )
+        router.add_api_route(
+            "/{budget_id}",
+            BudgetApiRoutes.update_budget,
+            methods=["PATCH"],
+            response_model=BudgetView,
+            name=Keys.RouteName.BUDGETS_UPDATE,
+        )
+        router.add_api_route(
+            "/{budget_id}",
+            BudgetApiRoutes.delete_budget,
+            methods=["DELETE"],
+            name=Keys.RouteName.BUDGETS_DELETE,
         )
         return router
 

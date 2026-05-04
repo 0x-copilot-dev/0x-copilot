@@ -2,6 +2,17 @@
 
 from agent_runtime.persistence.records.approvals import PersistenceApprovalRequestRecord
 from agent_runtime.persistence.records.audit import AuditLogRecord
+from agent_runtime.persistence.records.budgets import (
+    BudgetEnforcement,
+    BudgetPeriod,
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetScope,
+    BudgetStateRecord,
+    BudgetStatus,
+    BudgetWithState,
+    ChargeOutcome,
+)
 from agent_runtime.persistence.records.checkpoints import CheckpointRecord
 from agent_runtime.persistence.records.common import (
     ApprovalRiskClass,
@@ -91,5 +102,14 @@ __all__ = [
     "UsageDailyUserRow",
     "AuditLogRecord",
     "CheckpointRecord",
+    "BudgetEnforcement",
+    "BudgetPeriod",
+    "BudgetRecord",
+    "BudgetReservationRecord",
+    "BudgetScope",
+    "BudgetStateRecord",
+    "BudgetStatus",
+    "BudgetWithState",
+    "ChargeOutcome",
     "PERSISTENCE_TABLE_RECORDS",
 ]

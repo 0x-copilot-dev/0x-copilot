@@ -106,6 +106,10 @@ class RuntimeApiEventType(StrEnum):
     FINAL_RESPONSE = "final_response"
     HEARTBEAT = "heartbeat"
     PRESENTATION_UPDATED = "presentation_updated"
+    # Budget enforcement (B7). RUN_REJECTED is distinct from RUN_FAILED so
+    # the UI can show "budget exceeded" rather than a generic error.
+    BUDGET_WARNING = "budget_warning"
+    RUN_REJECTED = "run_rejected"
 
     @classmethod
     def from_stream_event_type(

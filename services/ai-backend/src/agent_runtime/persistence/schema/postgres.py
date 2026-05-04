@@ -37,6 +37,14 @@ AGENT_RUNTIME_TABLES = (
     "runtime_deletion_evidence",
     "runtime_checkpoints",
 )
+# Tables added in subsequent migrations. Listed separately because
+# ``AGENT_RUNTIME_TABLES`` is asserted to live entirely inside the
+# initial migration; later-migration tables fail that check.
+USAGE_BUDGET_TABLES = (
+    "usage_budgets",
+    "usage_budget_state",
+    "usage_budget_reservations",
+)
 
 
 def _migration_sql(filename: str) -> str:

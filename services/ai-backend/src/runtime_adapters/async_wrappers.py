@@ -273,6 +273,40 @@ class SyncToAsyncPersistence:
             self._port.query_compression_events_for_run, **kwargs
         )
 
+    # Budgets (B7) ---------------------------------------------------------
+
+    async def lookup_budgets_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.lookup_budgets_for_run, **kwargs)
+
+    async def charge_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.charge_budget, **kwargs)
+
+    async def reserve_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.reserve_budget, **kwargs)
+
+    async def consume_budget_reservation(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.consume_budget_reservation, **kwargs)
+
+    async def reap_expired_budget_reservations(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.reap_expired_budget_reservations, **kwargs
+        )
+
+    async def list_budgets(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.list_budgets, **kwargs)
+
+    async def get_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.get_budget, **kwargs)
+
+    async def create_budget(self, record):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.create_budget, record)
+
+    async def update_budget(self, record):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.update_budget, record)
+
+    async def delete_budget(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.delete_budget, **kwargs)
+
 
 class SyncToAsyncEventStore:
     """Wrap a sync :class:`EventStorePort` in async signatures."""
