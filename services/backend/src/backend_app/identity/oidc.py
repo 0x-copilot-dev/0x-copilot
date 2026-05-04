@@ -44,6 +44,7 @@ from backend_app.contracts import (
     SessionMintResult,
     UserRecord,
 )
+from backend_app.identity.lockout import LockoutService
 from backend_app.identity._pkce import (
     compute_challenge,
     generate_nonce,
@@ -233,11 +234,13 @@ class OidcService:
         token_endpoint_client: TokenEndpointClient | None = None,
         id_token_verifier: IdTokenVerifier | None = None,
         jwks_provider: JwksProvider | None = None,
+        lockout: LockoutService | None = None,
     ) -> None:
         self._identity_store = identity_store
         self._oidc_store = oidc_store
         self._sessions = sessions
         self._token_vault = token_vault
+        self._lockout = lockout
         self._token_endpoint_client = (
             token_endpoint_client or HttpxTokenEndpointClient()
         )
@@ -361,6 +364,13 @@ class OidcService:
                 user_agent=user_agent,
                 failure_reason=str(exc),
             )
+            # No user resolved yet — record_failure is a no-op for
+            # user_id=None but the sliding-window count grows in
+            # login_attempts so a later resolved user trips the lockout.
+            if self._lockout is not None:
+                self._lockout.record_failure(
+                    org_id=consumed.org_id, user_id=None, email=None
+                )
             raise
 
         subject = claims.get("sub")
@@ -378,6 +388,11 @@ class OidcService:
             ip=ip,
             user_agent=user_agent,
         )
+        if self._lockout is not None:
+            # Lockout pre-check after the user is known but before we mint
+            # the session. A locked user with a fresh IdP assertion still
+            # 423s (spec §2.5).
+            self._lockout.check_or_raise(org_id=user.org_id, user_id=user.user_id)
         self._sync_role_assignments(
             provider=provider, config=config, user=user, claims=claims
         )
@@ -393,6 +408,8 @@ class OidcService:
             ip=ip,
             user_agent=user_agent,
         )
+        if self._lockout is not None:
+            self._lockout.record_success(org_id=user.org_id, user_id=user.user_id)
         return OidcCallbackResult(
             user_id=user.user_id,
             session_id=session.session_id,

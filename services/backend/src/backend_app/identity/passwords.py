@@ -32,6 +32,7 @@ from backend_app.contracts import (
     PasswordPolicyRecord,
     PasswordResetTokenRecord,
 )
+from backend_app.identity.lockout import LockoutService
 from backend_app.identity.password_store import PasswordStore
 from backend_app.identity.sessions import SessionService
 from backend_app.identity.store import IdentityStore
@@ -144,10 +145,14 @@ class PasswordService:
         sessions: SessionService,
         hasher_config: PasswordHasherConfig | None = None,
         pepper: str | None = None,
+        lockout: LockoutService | None = None,
     ) -> None:
         self._identity_store = identity_store
         self._password_store = password_store
         self._sessions = sessions
+        # Optional so existing tests / dev wiring without lockout still
+        # work; production composes this from app.state during create_app.
+        self._lockout = lockout
         self._config = hasher_config or PasswordHasherConfig.from_env()
         self._pepper = (
             pepper if pepper is not None else os.environ.get("PASSWORD_PEPPER", "")
@@ -319,6 +324,11 @@ class PasswordService:
                 "local password authentication is disabled for this organization"
             )
         user = self._identity_store.get_user_by_email(org_id=org_id, email=email)
+        if self._lockout is not None and user is not None:
+            # Lockout pre-check happens BEFORE the constant-time hash work
+            # so a locked user can't side-step by triggering the slow path.
+            # Records an audit row + 423 if active.
+            self._lockout.check_or_raise(org_id=org_id, user_id=user.user_id)
         if user is None:
             # Constant-time path: still hash + verify a dummy.
             self.verify(self._dummy_hash, password)
@@ -354,6 +364,14 @@ class PasswordService:
                     user_agent=user_agent,
                 )
             )
+            if self._lockout is not None:
+                # Sliding-window count includes the row we just appended;
+                # if the threshold is now crossed, this writes the active
+                # lockout row + audit. The next attempt will hit
+                # check_or_raise above.
+                self._lockout.record_failure(
+                    org_id=org_id, user_id=user.user_id, email=email
+                )
             raise LoginRejectedError()
 
         self._password_store.update_credential_last_used(
@@ -420,6 +438,11 @@ class PasswordService:
                 user_agent=user_agent,
             )
         )
+        if self._lockout is not None:
+            # Successful verify clears any active auto-unlock window so a
+            # later failure starts the count fresh; permanent lockouts
+            # require admin unlock and are NOT cleared here.
+            self._lockout.record_success(org_id=org_id, user_id=user.user_id)
         return LocalLoginResult(
             user_id=user.user_id,
             session_id=session.session_id,

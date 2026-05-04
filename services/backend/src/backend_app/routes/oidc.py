@@ -19,6 +19,7 @@ from backend_app.contracts import (
     OidcProvidersResponse,
 )
 from backend_app.identity import (
+    AccountLocked,
     IdTokenVerificationError,
     IdentityStore,
     OidcConfigError,
@@ -75,6 +76,15 @@ def register_oidc_routes(
                 ip=payload.ip,
                 user_agent=payload.user_agent,
             )
+        except AccountLocked as exc:
+            headers = (
+                {"Retry-After": str(exc.retry_after_seconds)}
+                if exc.retry_after_seconds > 0
+                else {}
+            )
+            raise HTTPException(
+                status.HTTP_423_LOCKED, str(exc), headers=headers
+            ) from exc
         except OidcStateMismatch as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         except IdTokenVerificationError as exc:

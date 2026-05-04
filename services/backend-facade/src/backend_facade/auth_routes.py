@@ -281,6 +281,34 @@ def register_auth_routes(app: FastAPI) -> None:
         _raise_for_upstream(response)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    # ------------------------------------------------------------------
+    # Login attempts (A8) — caller's own history.
+    #
+    # Spec §2.3 ``GET /v1/auth/me/login-attempts``. Backend validates the
+    # service token + identity headers; we never accept ``user_id`` from
+    # the client query, only from the verified bearer's identity.
+    # ------------------------------------------------------------------
+
+    @app.get("/v1/auth/me/login-attempts")
+    async def list_my_login_attempts(
+        request: Request,
+        limit: int = Query(20, ge=1, le=200),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"{backend_url}/internal/v1/auth/me/login-attempts",
+                params={
+                    "org_id": identity.org_id,
+                    "user_id": identity.user_id,
+                    "limit": limit,
+                },
+                headers=FacadeAuthenticator.service_headers(identity),
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
 
 def _identity_envelope(identity: AuthenticatedIdentity) -> dict[str, object]:
     return {

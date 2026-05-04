@@ -39,9 +39,12 @@ from backend_app.identity import (
     BootstrapAdminService,
     IdentityStore,
     InMemoryIdentityStore,
+    InMemoryLockoutStore,
     InMemoryOidcStore,
     InMemoryPasswordStore,
     InMemorySessionStore,
+    LockoutService,
+    LockoutStore,
     OidcService,
     OidcStore,
     PasswordService,
@@ -58,6 +61,7 @@ from backend_app.observability import (
 )
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
+from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.sessions import register_session_routes
@@ -156,6 +160,8 @@ def create_app(
     token_vault: TokenVault | None = None,
     password_store: PasswordStore | None = None,
     password_service: PasswordService | None = None,
+    lockout_store: LockoutStore | None = None,
+    lockout_service: LockoutService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -182,6 +188,23 @@ def create_app(
         register_session_routes(app, resolved_session_service)
         app.state.session_sweeper = SessionSweeper(sessions=resolved_session_service)
 
+        # Lockout (A8): wired before OIDC + local-password so both flows
+        # share the same per-org policy + active-lockout writes. Defaults
+        # to ``enforce_lockout=False`` per spec — the migration ships
+        # without changing existing login behavior.
+        resolved_lockout_store: LockoutStore = lockout_store or InMemoryLockoutStore()
+        app.state.lockout_store = resolved_lockout_store
+        resolved_lockout_service = lockout_service or LockoutService(
+            identity_store=resolved_identity_store,
+            lockout_store=resolved_lockout_store,
+        )
+        app.state.lockout_service = resolved_lockout_service
+        register_lockout_routes(
+            app,
+            identity_store=resolved_identity_store,
+            lockout_service=resolved_lockout_service,
+        )
+
         # OIDC depends on a session service (it mints sessions on callback).
         # If the session secret is unavailable, OIDC routes are also omitted.
         resolved_oidc_store: OidcStore = oidc_store or InMemoryOidcStore()
@@ -194,6 +217,7 @@ def create_app(
                 oidc_store=resolved_oidc_store,
                 sessions=resolved_session_service,
                 token_vault=resolved_token_vault,
+                lockout=resolved_lockout_service,
             )
             app.state.oidc_service = resolved_oidc_service
             register_oidc_routes(
@@ -213,6 +237,7 @@ def create_app(
             identity_store=resolved_identity_store,
             password_store=resolved_password_store,
             sessions=resolved_session_service,
+            lockout=resolved_lockout_service,
         )
         app.state.password_service = resolved_password_service
         bootstrap_service = BootstrapAdminService(

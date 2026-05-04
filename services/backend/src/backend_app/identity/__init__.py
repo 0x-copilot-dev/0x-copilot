@@ -1,4 +1,4 @@
-"""Identity & access (A1..A4) — schema, sessions, OIDC SSO, local password."""
+"""Identity & access (A1..A8) — schema, sessions, OIDC, local password, lockout."""
 
 from backend_app.identity.jwks import (
     HttpxJwksFetcher,
@@ -6,6 +6,15 @@ from backend_app.identity.jwks import (
     IdTokenVerifier,
     JwksFetcherError,
     JwksProvider,
+)
+from backend_app.identity.lockout import (
+    AccountLocked,
+    LockoutService,
+)
+from backend_app.identity.lockout_store import (
+    InMemoryLockoutStore,
+    LockoutStore,
+    PostgresLockoutStore,
 )
 from backend_app.identity.oidc import (
     HttpxTokenEndpointClient,
@@ -64,6 +73,7 @@ from backend_app.identity.store import (
 
 
 __all__ = [
+    "AccountLocked",
     "BootstrapAdminService",
     "BootstrapRefused",
     "DevMintNotAllowed",
@@ -73,12 +83,15 @@ __all__ = [
     "IdTokenVerifier",
     "IdentityStore",
     "InMemoryIdentityStore",
+    "InMemoryLockoutStore",
     "InMemoryOidcStore",
     "InMemoryPasswordStore",
     "InMemorySessionStore",
     "JwksFetcherError",
     "JwksProvider",
     "LocalAuthDisabled",
+    "LockoutService",
+    "LockoutStore",
     "LoginRejectedError",
     "OidcConfigError",
     "OidcProviderConfig",
@@ -93,6 +106,7 @@ __all__ = [
     "PasswordService",
     "PasswordStore",
     "PostgresIdentityStore",
+    "PostgresLockoutStore",
     "PostgresOidcStore",
     "PostgresPasswordStore",
     "PostgresSessionStore",

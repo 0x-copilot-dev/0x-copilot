@@ -25,6 +25,7 @@ from backend_app.contracts import (
     PasswordResetRequestResult,
 )
 from backend_app.identity import (
+    AccountLocked,
     BootstrapAdminService,
     BootstrapRefused,
     LocalAuthDisabled,
@@ -58,6 +59,19 @@ def register_password_routes(
                 ip=payload.ip,
                 user_agent=payload.user_agent,
             )
+        except AccountLocked as exc:
+            # Spec A8 §1.2: 423 LOCKED with ``Retry-After`` so the client
+            # knows when to retry. Lockout supersedes the password check —
+            # a locked user with the right credential still 423s (NIST SP
+            # 800-63B §5.2.2).
+            headers = (
+                {"Retry-After": str(exc.retry_after_seconds)}
+                if exc.retry_after_seconds > 0
+                else {}
+            )
+            raise HTTPException(
+                status.HTTP_423_LOCKED, str(exc), headers=headers
+            ) from exc
         except LocalAuthDisabled as exc:
             # Spec A4 §1.2: when ``identity_policy.local_password_enabled``
             # is false the route must 404, not 401 — conveys "this IdP isn't

@@ -1507,3 +1507,68 @@ class BootstrapAdminRequest(BackendContract):
     email: str
     display_name: str
     setup_token: str
+
+
+# -----------------------------------------------------------------------------
+# Account lockouts (A8)
+# -----------------------------------------------------------------------------
+
+
+class LockoutPolicyRecord(BackendContract):
+    """Per-org sliding-window lockout policy.
+
+    ``enforce_lockout`` defaults to ``False`` so the migration can land
+    without immediately gating any user — operators see the failure curve
+    in ``login_attempts`` first, then flip the toggle per-org.
+    """
+
+    policy_id: str = Field(default_factory=lambda: f"lkp_{uuid4().hex}")
+    org_id: str
+    enforce_lockout: bool = False
+    max_failures: int = 5
+    failure_window_seconds: int = 300
+    lockout_duration_seconds: int = 900
+    permanent_after_n_lockouts: int = 0
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("policy_id", "org_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class AccountLockoutRecord(BackendContract):
+    """One row per lockout window.
+
+    ``unlocked_at`` distinguishes ended lockouts from active ones; the
+    partial unique index ``WHERE unlocked_at IS NULL`` enforces "at most
+    one active lockout per (org, user)".
+    """
+
+    lockout_id: str = Field(default_factory=lambda: f"lko_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    locked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    lock_reason: str
+    auto_unlock_at: datetime | None = None
+    unlocked_at: datetime | None = None
+    unlocked_by_user_id: str | None = None
+    unlock_reason: str | None = None
+
+    @field_validator("lockout_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class AccountLockoutListResponse(BackendContract):
+    lockouts: tuple[AccountLockoutRecord, ...] = ()
+
+
+class LoginAttemptListResponse(BackendContract):
+    attempts: tuple[LoginAttemptRecord, ...] = ()
+
+
+class AccountUnlockRequest(BackendContract):
+    org_id: str
+    reason: str | None = None
