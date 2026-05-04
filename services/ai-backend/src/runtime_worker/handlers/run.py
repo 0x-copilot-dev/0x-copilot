@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 from agent_runtime.api.presentation_templates import _ErrorMessage
@@ -35,6 +36,7 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeRunCommand,
 )
+from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
@@ -122,6 +124,7 @@ class RuntimeRunHandler:
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
+        self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -159,6 +162,8 @@ class RuntimeRunHandler:
         await self._append_lifecycle(
             run, RuntimeApiEventType.RUN_STARTED, "Run started"
         )
+        await self.audit_emitter.emit_run_started(run)
+        run_start_perf = time.perf_counter()
         metrics = AssistantRunMetrics.from_run(run)
 
         try:
@@ -258,9 +263,16 @@ class RuntimeRunHandler:
             await self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
             )
+            await self.audit_emitter.emit_run_failed(
+                failed,
+                status=AgentRunStatus.TIMED_OUT,
+                error_class="TimeoutError",
+                error_code=ToolErrorCode.TOOL_RUN_TIMEOUT.value,
+                duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
+            )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             return
-        except Exception:
+        except Exception as exc:
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.FAILED,
@@ -273,6 +285,13 @@ class RuntimeRunHandler:
             )
             await self._append_lifecycle(
                 failed, RuntimeApiEventType.RUN_FAILED, "Run failed"
+            )
+            await self.audit_emitter.emit_run_failed(
+                failed,
+                status=AgentRunStatus.FAILED,
+                error_class=type(exc).__name__,
+                error_code=ToolErrorCode.TOOL_EXCEPTION.value,
+                duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
             )
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             raise
@@ -295,6 +314,10 @@ class RuntimeRunHandler:
                 metrics_payload,
             ),
             metadata=AssistantRunMetrics.metadata(metrics_payload),
+        )
+        await self.audit_emitter.emit_run_completed(
+            completed,
+            duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
         )
 
     async def _messages_for_run(

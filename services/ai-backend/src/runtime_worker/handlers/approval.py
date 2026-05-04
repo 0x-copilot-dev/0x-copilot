@@ -33,6 +33,7 @@ from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RunRecord,
 )
+from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -84,6 +85,7 @@ class RuntimeApprovalHandler:
             on_event_appended=on_event_appended,
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
+        self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
         run = await self.persistence.get_run(
@@ -111,6 +113,11 @@ class RuntimeApprovalHandler:
                 "Approval command run_id does not match persisted approval.",
                 retryable=False,
             )
+        await self.audit_emitter.emit_approval_decision(
+            approval,
+            decision=command.decision,
+            decided_by_user_id=getattr(command, "decided_by_user_id", None),
+        )
         metadata = approval.metadata
         approval_kind = StreamTextHelper.extract(
             metadata.get(self._Fields.APPROVAL_KIND)

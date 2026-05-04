@@ -11,6 +11,11 @@ import httpx
 from pydantic import BaseModel, Field
 
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
+from backend_facade.deployment_profile import (
+    DeploymentProfile,
+    log_profile,
+    resolve_or_exit,
+)
 from backend_facade.observability import (
     RequestContextMiddleware,
     TelemetryBootstrap,
@@ -18,6 +23,7 @@ from backend_facade.observability import (
     current_context,
     emit_access_log,
 )
+from backend_facade.routes.health import register_health_routes
 from backend_facade.settings import FacadeSettings
 
 
@@ -54,17 +60,29 @@ def create_app(
     *,
     configure_logging_on_create: bool = True,
     configure_telemetry_on_create: bool = True,
+    deployment: DeploymentProfile | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
     if configure_telemetry_on_create:
         TelemetryBootstrap.configure()
         TelemetryBootstrap.instrument_httpx_clients()
+    resolved_deployment = deployment or resolve_or_exit()
+    log_profile(resolved_deployment)
     app = FastAPI(title="Enterprise Search Backend Facade")
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     if configure_telemetry_on_create:
         TelemetryBootstrap.instrument_fastapi(app)
     app.state.settings = settings or FacadeSettings.load()
+    app.state.deployment = resolved_deployment
+
+    @app.get("/v1/health")
+    async def health() -> dict[str, object]:
+        return {
+            "service": "backend-facade",
+            "deployment_profile": resolved_deployment.name,
+            "feature_toggles_hash": resolved_deployment.toggles_hash(),
+        }
 
     @app.post("/v1/telemetry/otlp/v1/traces")
     async def telemetry_otlp_traces(request: Request) -> Response:
@@ -516,6 +534,8 @@ def create_app(
             params=identity.scoped_params({"reason": reason} if reason else None),
             identity=identity,
         )
+
+    register_health_routes(app)
 
     return app
 

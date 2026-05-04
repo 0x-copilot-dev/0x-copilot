@@ -7,6 +7,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.deployment_profile import (
+    DeploymentProfile,
+    log_profile,
+    resolve_or_exit,
+)
 from backend_app.contracts import (
     CreateMcpServerRequest,
     CreateSkillRequest,
@@ -36,6 +41,8 @@ from backend_app.observability import (
     configure_logging,
     emit_access_log,
 )
+from backend_app.routes.audit_export import register_audit_export_routes
+from backend_app.routes.health import register_health_routes
 from backend_app.service import (
     DeployAuditService,
     McpRegistryService,
@@ -73,11 +80,14 @@ def create_app(
     *,
     configure_logging_on_create: bool = True,
     configure_telemetry_on_create: bool = True,
+    deployment: DeploymentProfile | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
     if configure_telemetry_on_create:
         TelemetryBootstrap.configure()
+    resolved_deployment = deployment or resolve_or_exit()
+    log_profile(resolved_deployment)
     app = FastAPI(title="Enterprise Search Backend", lifespan=_lifespan)
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     if configure_telemetry_on_create:
@@ -85,6 +95,15 @@ def create_app(
     app.state.mcp_service = service or McpRegistryService()
     app.state.skill_service = skill_service or SkillRegistryService()
     app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()
+    app.state.deployment = resolved_deployment
+
+    @app.get("/v1/health")
+    def health() -> dict[str, object]:
+        return {
+            "service": "backend",
+            "deployment_profile": resolved_deployment.name,
+            "feature_toggles_hash": resolved_deployment.toggles_hash(),
+        }
 
     @app.post("/v1/mcp/servers", response_model=McpServerResponse)
     def create_server(
@@ -476,6 +495,9 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    register_audit_export_routes(app)
+    register_health_routes(app)
 
     return app
 
