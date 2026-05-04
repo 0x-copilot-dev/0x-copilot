@@ -138,9 +138,10 @@ RUNTIME_KMS_KEY_ID=alias/<prod-cmk>
 
 All new writes use v1; existing v0 rows untouched until backfill runs.
 
-### Phase 3 — backfill
+### Phase 3 — backfill + strict-reads gate
 
-Per-table, rate-limited, resumable. Run during low-traffic windows.
+**Step 1: backfill.** Per-table, rate-limited, resumable. Run during
+low-traffic windows.
 
 ```bash
 .venv/bin/python -m runtime_worker.jobs.encrypt_existing_columns \
@@ -148,21 +149,43 @@ Per-table, rate-limited, resumable. Run during low-traffic windows.
     --batch-size 200
 ```
 
-Verify:
+**Step 2: precondition check.** Before flipping the strict-reads gate,
+prove that no `encryption_version=0` rows remain on any targeted
+table. The exit code drives the deploy step:
 
-```sql
-SELECT encryption_version, COUNT(*)
-  FROM agent_messages
- GROUP BY encryption_version;
+```bash
+.venv/bin/python scripts/count_unencrypted_rows.py
+# 0 → safe to flip strict reads
+# 2 → backfill not yet complete (re-run encrypt_existing_columns)
+# 1 → DB error or migration mismatch
 ```
 
-When `min(encryption_version)=1` everywhere, phase 3 is done.
+`--json` emits a machine-readable per-table count for CI gates.
+
+**Step 3: flip strict reads.** Once step 2 returns `0`:
+
+```bash
+RUNTIME_FIELD_ENCRYPTION_STRICT_READS=true
+```
+
+This makes any `encryption_version=0` read raise
+`EncryptionVersionRequired` instead of silently returning plaintext.
+The error names the offending `(table, column, org_id)` so an
+operator can immediately find any row backfill missed (e.g. one that
+arrived between the backfill batch and the strict-reads flip).
+
+The gate has a deliberate safety net: when the active adapter is still
+`NullFieldEncryption` (operator misconfiguration), `STRICT_READS=true`
+is a no-op rather than wedging the deploy. The flag only fires once
+the codec is actually `envelope_v1`.
 
 ### Phase 4 — remove v0 read path (separate small PR)
 
-Once every targeted column has `min(encryption_version)=1`, a follow-up PR
-deletes the plaintext-tolerant branch from each read site. This is the
-only way the `pg_dump` snapshot test can guarantee no plaintext PII.
+Once strict reads have run for one operations cycle without
+`EncryptionVersionRequired` firing, a follow-up PR deletes the
+plaintext-tolerant branch from each read site. This is the only way
+the `pg_dump` snapshot test can guarantee no plaintext PII at the
+source-code level.
 
 ## CMK rotation
 
