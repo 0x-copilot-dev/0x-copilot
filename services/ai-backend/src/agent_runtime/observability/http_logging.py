@@ -22,6 +22,7 @@ import logging
 import os
 import time
 import traceback
+import warnings
 from typing import Any, ClassVar
 import uuid
 
@@ -274,6 +275,18 @@ class LoggingConfigurator:
 
         for noisy in ("uvicorn.access",):
             logging.getLogger(noisy).disabled = True
+
+        # Pydantic v2 emits one UserWarning per non-matching variant when the
+        # OpenAI SDK's `ParsedResponse[T]` (a parameterized member of a
+        # discriminated union) is serialized — every Responses-API call
+        # downstream of LangChain's structured-output adapter spams the log.
+        # Suppress narrowly so other Pydantic UserWarnings still surface.
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            module="pydantic.main",
+            message=r".*Pydantic serializer warnings:.*PydanticSerializationUnexpectedValue.*",
+        )
 
         if env is not None:
             os.environ.setdefault("RUNTIME_ENVIRONMENT", env)

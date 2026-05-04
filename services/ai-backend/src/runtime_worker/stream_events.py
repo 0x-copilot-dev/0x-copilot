@@ -140,12 +140,8 @@ class StreamOrchestrator:
             if event_type is None:
                 continue
             if (
-                event_type
-                in {
-                    RuntimeApiEventType.APPROVAL_REQUESTED,
-                    RuntimeApiEventType.MCP_AUTH_REQUIRED,
-                }
-                and source_tool_call_id is not None
+                source_tool_call_id is not None
+                and self._approval_event_morphs_tool_bubble(event_type, payload)
             ):
                 payload = {
                     **payload,
@@ -223,6 +219,30 @@ class StreamOrchestrator:
             StreamTextHelper.extract(message_payload.get(Keys.Field.TOOL_CALL_ID))
             or StreamTextHelper.extract(message_payload.get(Keys.Field.CALL_ID))
             or StreamTextHelper.extract(message_payload.get(Keys.Field.ID))
+        )
+
+    @classmethod
+    def _approval_event_morphs_tool_bubble(
+        cls,
+        event_type: RuntimeApiEventType,
+        payload: Mapping[str, object],
+    ) -> bool:
+        """True when the approval/auth event should reuse the originating tool's UI slot.
+
+        Frontend renders mcp_auth_required and mcp_tool approvals by morphing
+        the tool's existing card via ``source_tool_call_id``. Other approval
+        kinds (ask_a_question, action) are free-standing interrupts unrelated
+        to whichever tool happened to finish in the same stream chunk; if they
+        carry ``source_tool_call_id`` they displace that tool's bubble in the
+        chat timeline.
+        """
+        if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return True
+        if event_type is not RuntimeApiEventType.APPROVAL_REQUESTED:
+            return False
+        return (
+            StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_KIND))
+            == ApiValues.ApprovalKind.MCP_TOOL
         )
 
     async def create_approval_request(
