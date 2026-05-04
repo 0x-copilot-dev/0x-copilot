@@ -36,7 +36,16 @@ from backend_app.contracts import (
     UpdateSkillRequest,
 )
 from backend_app.identity import (
+    BootstrapAdminService,
+    IdentityStore,
+    InMemoryIdentityStore,
+    InMemoryOidcStore,
+    InMemoryPasswordStore,
     InMemorySessionStore,
+    OidcService,
+    OidcStore,
+    PasswordService,
+    PasswordStore,
     SessionAuthSecretMissing,
     SessionService,
 )
@@ -49,7 +58,10 @@ from backend_app.observability import (
 )
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
+from backend_app.routes.oidc import register_oidc_routes
+from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.sessions import register_session_routes
+from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     DeployAuditService,
     McpRegistryService,
@@ -87,6 +99,22 @@ async def _lifespan(application: FastAPI):
         PostgresConnectionPool.close_shared()
 
 
+def _default_token_vault() -> TokenVault | None:
+    """Build the default TokenVault if a secret is available.
+
+    OIDC needs the vault to encrypt refresh tokens at rest. Where the secret
+    isn't configured (fresh dev box) we omit the OIDC routes rather than
+    crash boot. Production profiles enforce the vault via the deployment
+    profile (the TokenVaultFactory itself fails closed under managed /
+    self-hosted profiles when the secret is missing).
+    """
+
+    try:
+        return TokenVaultFactory.create()
+    except Exception:
+        return None
+
+
 def _default_session_service(
     deployment: DeploymentProfile,
 ) -> SessionService | None:
@@ -122,6 +150,12 @@ def create_app(
     configure_telemetry_on_create: bool = True,
     deployment: DeploymentProfile | None = None,
     session_service: SessionService | None = None,
+    identity_store: IdentityStore | None = None,
+    oidc_store: OidcStore | None = None,
+    oidc_service: OidcService | None = None,
+    token_vault: TokenVault | None = None,
+    password_store: PasswordStore | None = None,
+    password_service: PasswordService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -137,6 +171,9 @@ def create_app(
     app.state.skill_service = skill_service or SkillRegistryService()
     app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()
     app.state.deployment = resolved_deployment
+    # Identity store is shared by sessions + OIDC (and later A4..A10).
+    resolved_identity_store: IdentityStore = identity_store or InMemoryIdentityStore()
+    app.state.identity_store = resolved_identity_store
     resolved_session_service = session_service or _default_session_service(
         resolved_deployment
     )
@@ -144,6 +181,50 @@ def create_app(
         app.state.session_service = resolved_session_service
         register_session_routes(app, resolved_session_service)
         app.state.session_sweeper = SessionSweeper(sessions=resolved_session_service)
+
+        # OIDC depends on a session service (it mints sessions on callback).
+        # If the session secret is unavailable, OIDC routes are also omitted.
+        resolved_oidc_store: OidcStore = oidc_store or InMemoryOidcStore()
+        app.state.oidc_store = resolved_oidc_store
+        resolved_token_vault = token_vault or _default_token_vault()
+        if resolved_token_vault is not None:
+            app.state.token_vault = resolved_token_vault
+            resolved_oidc_service = oidc_service or OidcService(
+                identity_store=resolved_identity_store,
+                oidc_store=resolved_oidc_store,
+                sessions=resolved_session_service,
+                token_vault=resolved_token_vault,
+            )
+            app.state.oidc_service = resolved_oidc_service
+            register_oidc_routes(
+                app,
+                service=resolved_oidc_service,
+                identity_store=resolved_identity_store,
+            )
+
+        # Local password (A4): same gating as OIDC — needs the session
+        # service. Argon2id is always available because argon2-cffi is a
+        # hard dep.
+        resolved_password_store: PasswordStore = (
+            password_store or InMemoryPasswordStore()
+        )
+        app.state.password_store = resolved_password_store
+        resolved_password_service = password_service or PasswordService(
+            identity_store=resolved_identity_store,
+            password_store=resolved_password_store,
+            sessions=resolved_session_service,
+        )
+        app.state.password_service = resolved_password_service
+        bootstrap_service = BootstrapAdminService(
+            identity_store=resolved_identity_store,
+            password_service=resolved_password_service,
+        )
+        app.state.bootstrap_admin_service = bootstrap_service
+        register_password_routes(
+            app,
+            service=resolved_password_service,
+            bootstrap=bootstrap_service,
+        )
 
     @app.get("/v1/health")
     def health() -> dict[str, object]:

@@ -1215,3 +1215,271 @@ class SessionListItem(BackendContract):
 
 class SessionListResponse(BackendContract):
     sessions: tuple[SessionListItem, ...] = ()
+
+
+# -----------------------------------------------------------------------------
+# OIDC SSO (A3)
+# -----------------------------------------------------------------------------
+
+
+class OidcAuthenticationRecord(BackendContract):
+    """One OIDC authorize-code request in flight.
+
+    Created when the user clicks the "Sign in with X" button; consumed when
+    the IdP redirects back to /v1/auth/oidc/callback. ``state`` is the unique
+    CSRF token, ``nonce`` is the OIDC nonce claim, ``code_verifier`` powers
+    PKCE.
+    """
+
+    auth_id: str = Field(default_factory=lambda: f"oac_{uuid4().hex}")
+    org_id: str
+    provider_id: str
+    state: str
+    nonce: str
+    code_verifier: str
+    redirect_uri: str
+    return_to: str | None = None
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("auth_id", "org_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class OidcIdentityRecord(BackendContract):
+    """Mapping from IdP `sub` claim to a local user.
+
+    A user can have several OIDC identities (one per provider). The
+    ``(provider_id, subject)`` pair is unique among non-unlinked rows.
+    """
+
+    identity_id: str = Field(default_factory=lambda: f"oid_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    provider_id: str
+    subject: str
+    email_at_link: str | None = None
+    linked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    unlinked_at: datetime | None = None
+    claims_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("identity_id", "org_id", "user_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class OidcRefreshTokenRecord(BackendContract):
+    """Encrypted refresh token from the OIDC provider."""
+
+    token_id: str = Field(default_factory=lambda: f"ort_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    provider_id: str
+    encrypted_refresh_token: str
+    scope: tuple[str, ...] = ()
+    expires_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    revoked_at: datetime | None = None
+
+    @field_validator("token_id", "org_id", "user_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class OidcJwksCacheRecord(BackendContract):
+    """Cached JWKS document for an OIDC provider."""
+
+    cache_id: str = Field(default_factory=lambda: f"jwk_{uuid4().hex}")
+    provider_id: str
+    jwks: dict[str, Any]
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+
+    @field_validator("cache_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class OidcAuthorizeResult(BackendContract):
+    """Returned by the backend authorize endpoint."""
+
+    auth_url: str
+    state: str
+    expires_at: datetime
+
+
+class OidcCallbackResult(BackendContract):
+    """Returned by the backend callback endpoint after a successful exchange."""
+
+    user_id: str
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+    return_to: str | None = None
+
+
+class OidcProviderSummary(BackendContract):
+    """Per-provider entry in the public providers list."""
+
+    provider_id: str
+    kind: AuthProviderKind
+    display_name: str
+    enabled: bool
+
+
+class OidcProvidersResponse(BackendContract):
+    providers: tuple[OidcProviderSummary, ...] = ()
+
+
+class OidcAuthorizeRequest(BackendContract):
+    org_id: str
+    provider_id: str
+    redirect_uri: str
+    return_to: str | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class OidcCallbackRequest(BackendContract):
+    state: str
+    code: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+# -----------------------------------------------------------------------------
+# Local password authentication (A4)
+# -----------------------------------------------------------------------------
+
+
+class LocalCredentialRecord(BackendContract):
+    """A user's argon2id-hashed password.
+
+    ``password_hash`` is the full argon2id encoded string (algorithm,
+    parameters, salt, hash). ``previous_hashes`` keeps the last N hashes for
+    the reuse-window policy check.
+    """
+
+    credential_id: str = Field(default_factory=lambda: f"crd_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    password_hash: str
+    password_set_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    must_rotate_at: datetime | None = None
+    last_used_at: datetime | None = None
+    previous_hashes: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator("credential_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class PasswordPolicyRecord(BackendContract):
+    """Per-org password policy. One row per org; defaults match OWASP."""
+
+    policy_id: str = Field(default_factory=lambda: f"pwp_{uuid4().hex}")
+    org_id: str
+    min_length: int = 12
+    require_upper: bool = True
+    require_lower: bool = True
+    require_digit: bool = True
+    require_symbol: bool = False
+    rotation_days: int | None = None
+    reuse_window: int = 5
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("policy_id", "org_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class PasswordResetTokenRecord(BackendContract):
+    """Single-use reset token. Only the sha256 hash is stored at rest."""
+
+    token_id: str = Field(default_factory=lambda: f"prt_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    token_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    request_ip: str | None = None
+
+    @field_validator("token_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class LocalLoginRequest(BackendContract):
+    org_id: str
+    email: str
+    password: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class LocalLoginResult(BackendContract):
+    user_id: str
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+    requires_password_change: bool = False
+
+
+class PasswordChangeRequest(BackendContract):
+    org_id: str
+    user_id: str
+    current_password: str
+    new_password: str
+
+
+class PasswordResetRequestRequest(BackendContract):
+    """Anti-enumeration: always returns 200 even when email is unknown."""
+
+    org_id: str
+    email: str
+    ip: str | None = None
+
+
+class PasswordResetRequestResult(BackendContract):
+    """Surface to the caller. ``token`` is non-None ONLY in dev / tests so
+    the fixture can pick up the token without hitting an email worker.
+    Production builds set ``token=None`` and rely on the notify event.
+    """
+
+    accepted: bool = True
+    token: str | None = None
+
+
+class PasswordResetConfirmRequest(BackendContract):
+    token: str
+    new_password: str
+
+
+class BootstrapAdminRequest(BackendContract):
+    """One-time first-run admin creation.
+
+    The setup token comes from the operator's env (``BOOTSTRAP_ADMIN_TOKEN``)
+    and is matched in the service. Refused if any admin user already exists.
+    """
+
+    org_id: str
+    email: str
+    display_name: str
+    setup_token: str

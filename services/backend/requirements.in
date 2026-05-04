@@ -17,3 +17,5 @@ opentelemetry-instrumentation-fastapi==0.62b1
 opentelemetry-instrumentation-httpx==0.62b1
 opentelemetry-instrumentation-psycopg==0.62b1
 yoyo-migrations==9.0.0
+argon2-cffi==23.1.0
+pyjwt[crypto]==2.9.0
