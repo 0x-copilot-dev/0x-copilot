@@ -44,6 +44,7 @@ from backend_app.identity import (
     InMemoryOidcStore,
     InMemoryPasswordStore,
     InMemorySamlStore,
+    InMemoryScimStore,
     InMemorySessionStore,
     LockoutService,
     LockoutStore,
@@ -57,6 +58,8 @@ from backend_app.identity import (
     SamlService,
     SamlStore,
     SamlVerifier,
+    ScimService,
+    ScimStore,
     SessionAuthSecretMissing,
     SessionService,
 )
@@ -74,6 +77,7 @@ from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.saml import register_saml_routes
+from backend_app.routes.scim import register_scim_routes
 from backend_app.routes.sessions import register_session_routes
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
@@ -195,6 +199,8 @@ def create_app(
     saml_store: SamlStore | None = None,
     saml_service: SamlService | None = None,
     saml_verifier: SamlVerifier | None = None,
+    scim_store: ScimStore | None = None,
+    scim_service: ScimService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -302,6 +308,20 @@ def create_app(
                 service=resolved_saml_service,
                 identity_store=resolved_identity_store,
             )
+
+        # SCIM (A7): no session-service dependency (it operates on its
+        # own bearer-token surface) but the routes still piggyback on the
+        # session_service block because the rest of the auth machinery is
+        # only wired here. ScimService is purely identity-store + scim-store
+        # composition.
+        resolved_scim_store: ScimStore = scim_store or InMemoryScimStore()
+        app.state.scim_store = resolved_scim_store
+        resolved_scim_service = scim_service or ScimService(
+            identity_store=resolved_identity_store,
+            scim_store=resolved_scim_store,
+        )
+        app.state.scim_service = resolved_scim_service
+        register_scim_routes(app, service=resolved_scim_service)
 
         # Local password (A4): same gating as OIDC — needs the session
         # service. Argon2id is always available because argon2-cffi is a

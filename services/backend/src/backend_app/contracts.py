@@ -1929,3 +1929,139 @@ class SamlConsumeRequest(BackendContract):
     relay_state: str | None = None
     ip: str | None = None
     user_agent: str | None = None
+
+
+# -----------------------------------------------------------------------------
+# SCIM 2.0 (A7)
+# -----------------------------------------------------------------------------
+
+
+class ScimTokenRecord(BackendContract):
+    """A per-org SCIM bearer token.
+
+    ``token_hash`` is sha256 of the plaintext returned at mint;
+    ``token_prefix`` is the first 8 chars of that plaintext so an admin
+    listing can identify a token without re-revealing it (mirrors GitHub
+    PAT handling).
+
+    Mint never auto-revokes prior tokens — admins handle rotation
+    explicitly so the IdP can swap credentials with both old and new
+    accepted simultaneously.
+    """
+
+    token_id: str = Field(default_factory=lambda: f"sct_{uuid4().hex}")
+    org_id: str
+    provider_id: str
+    token_hash: str
+    token_prefix: str
+    created_by_user_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+    @field_validator("token_id", "org_id", "provider_id", "created_by_user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class ScimExternalIdRecord(BackendContract):
+    """Maps an IdP-supplied ``externalId`` to a local user_id or group_id.
+
+    Exactly one of ``user_id`` / ``group_id`` is populated — the DB CHECK
+    enforces this; the model_validator below mirrors that for in-memory
+    adapters.
+    """
+
+    mapping_id: str = Field(default_factory=lambda: f"sxi_{uuid4().hex}")
+    org_id: str
+    user_id: str | None = None
+    group_id: str | None = None
+    provider_id: str
+    external_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("mapping_id", "org_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> "ScimExternalIdRecord":
+        if (self.user_id is None) == (self.group_id is None):
+            raise ValueError(
+                "scim_external_ids row must reference exactly one of user_id, group_id"
+            )
+        return self
+
+
+class ScimGroupRecord(BackendContract):
+    """A SCIM-managed group within one org."""
+
+    group_id: str = Field(default_factory=lambda: f"scg_{uuid4().hex}")
+    org_id: str
+    display_name: str
+    external_id: str | None = None
+    mapped_role_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
+
+    @field_validator("group_id", "org_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> str:
+        return Validators.normalize_text(value)
+
+
+class ScimGroupMemberRecord(BackendContract):
+    """One ``(group, user)`` membership. ``removed_at`` flips on remove."""
+
+    membership_id: str = Field(default_factory=lambda: f"sgm_{uuid4().hex}")
+    org_id: str
+    group_id: str
+    user_id: str
+    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    removed_at: datetime | None = None
+
+    @field_validator("membership_id", "org_id", "group_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class ScimTokenMintResult(BackendContract):
+    """Returned ONCE on mint. Plaintext is never available again."""
+
+    token_id: str
+    plaintext: str
+    token_prefix: str
+    created_at: datetime
+    expires_at: datetime | None = None
+
+
+class ScimTokenSummary(BackendContract):
+    """Public-safe view of a SCIM token (no plaintext, no full hash)."""
+
+    token_id: str
+    token_prefix: str
+    created_by_user_id: str
+    created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class ScimTokenListResponse(BackendContract):
+    tokens: tuple[ScimTokenSummary, ...] = ()
+
+
+class ScimTokenMintRequest(BackendContract):
+    org_id: str
+    created_by_user_id: str
+    expires_at: datetime | None = None

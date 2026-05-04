@@ -80,6 +80,22 @@ from backend_app.identity.saml_store import (
     SamlReplayDetected,
     SamlStore,
 )
+from backend_app.identity.scim import (
+    ResolvedScimToken,
+    ScimAuthError,
+    ScimBadRequest,
+    ScimConflict,
+    ScimError,
+    ScimNotFound,
+    ScimService,
+    ScimUnsupportedFilter,
+)
+from backend_app.identity.scim_filter import ScimFilterError
+from backend_app.identity.scim_store import (
+    InMemoryScimStore,
+    PostgresScimStore,
+    ScimStore,
+)
 from backend_app.identity.passwords import (
     BootstrapAdminService,
     BootstrapRefused,
@@ -187,6 +203,18 @@ __all__ = [
     "SamlUserNotProvisioned",
     "SamlVerifier",
     "SamlVerifierError",
+    "InMemoryScimStore",
+    "PostgresScimStore",
+    "ResolvedScimToken",
+    "ScimAuthError",
+    "ScimBadRequest",
+    "ScimConflict",
+    "ScimError",
+    "ScimFilterError",
+    "ScimNotFound",
+    "ScimService",
+    "ScimStore",
+    "ScimUnsupportedFilter",
     "SessionAuthSecretMissing",
     "SessionInvalidToken",
     "SessionNotActive",

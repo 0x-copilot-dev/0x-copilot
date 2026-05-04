@@ -70,9 +70,17 @@ class IdentityStore(Protocol):
     def create_user(
         self, record: UserRecord, *, conn: Any | None = None
     ) -> UserRecord: ...
-    def get_user(self, *, org_id: str, user_id: str) -> UserRecord | None: ...
+    def get_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> UserRecord | None: ...
     def get_user_by_email(self, *, org_id: str, email: str) -> UserRecord | None: ...
-    def list_users(self, *, org_id: str) -> tuple[UserRecord, ...]: ...
+    def list_users(
+        self, *, org_id: str, include_deleted: bool = False
+    ) -> tuple[UserRecord, ...]: ...
     def update_user(
         self, record: UserRecord, *, conn: Any | None = None
     ) -> UserRecord: ...
@@ -257,9 +265,17 @@ class InMemoryIdentityStore:
         _log_write("users", record.org_id, "insert")
         return record
 
-    def get_user(self, *, org_id: str, user_id: str) -> UserRecord | None:
+    def get_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> UserRecord | None:
         record = self.users.get(user_id)
-        if record is None or record.org_id != org_id or record.deleted_at is not None:
+        if record is None or record.org_id != org_id:
+            return None
+        if record.deleted_at is not None and not include_deleted:
             return None
         return record
 
@@ -274,13 +290,16 @@ class InMemoryIdentityStore:
                 return record
         return None
 
-    def list_users(self, *, org_id: str) -> tuple[UserRecord, ...]:
+    def list_users(
+        self, *, org_id: str, include_deleted: bool = False
+    ) -> tuple[UserRecord, ...]:
         return tuple(
             sorted(
                 (
                     record
                     for record in self.users.values()
-                    if record.org_id == org_id and record.deleted_at is None
+                    if record.org_id == org_id
+                    and (include_deleted or record.deleted_at is None)
                 ),
                 key=lambda r: r.created_at,
             )
@@ -762,15 +781,18 @@ class PostgresIdentityStore:
         _log_write("users", record.org_id, "insert")
         return record
 
-    def get_user(self, *, org_id: str, user_id: str) -> UserRecord | None:
+    def get_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> UserRecord | None:
+        sql = "SELECT * FROM users WHERE user_id = %s AND org_id = %s"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
         with self._cursor(None) as cur:
-            cur.execute(
-                """
-                SELECT * FROM users
-                WHERE user_id = %s AND org_id = %s AND deleted_at IS NULL
-                """,
-                (user_id, org_id),
-            )
+            cur.execute(sql, (user_id, org_id))
             row = cur.fetchone()
         return _row_to_user(row) if row else None
 
@@ -787,16 +809,15 @@ class PostgresIdentityStore:
             row = cur.fetchone()
         return _row_to_user(row) if row else None
 
-    def list_users(self, *, org_id: str) -> tuple[UserRecord, ...]:
+    def list_users(
+        self, *, org_id: str, include_deleted: bool = False
+    ) -> tuple[UserRecord, ...]:
+        sql = "SELECT * FROM users WHERE org_id = %s"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += " ORDER BY created_at"
         with self._cursor(None) as cur:
-            cur.execute(
-                """
-                SELECT * FROM users
-                WHERE org_id = %s AND deleted_at IS NULL
-                ORDER BY created_at
-                """,
-                (org_id,),
-            )
+            cur.execute(sql, (org_id,))
             rows = cur.fetchall()
         return tuple(_row_to_user(row) for row in rows)
 
