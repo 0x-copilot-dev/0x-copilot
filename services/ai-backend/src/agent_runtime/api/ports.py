@@ -21,6 +21,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeRunCommand,
     RunRecord,
+    WorkspaceDefaultsRecord,
 )
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 
@@ -64,8 +65,15 @@ class PersistencePort(Protocol):
         user_id: str,
         limit: int,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> Sequence[ConversationRecord]:
-        """Return conversations for the tenant/user scope, newest first."""
+        """Return conversations for the tenant/user scope, newest first.
+
+        ``include_deleted`` (PR 1.6) filters by ``deleted_at IS NULL``
+        when False (the default sidebar query). Setting it to True
+        returns soft-deleted rows still inside the retention window
+        (the C8 sweeper reaps them on TTL).
+        """
 
     def list_messages(
         self,
@@ -108,6 +116,21 @@ class PersistencePort(Protocol):
 
     def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
+
+    def get_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the most recent non-terminal run for one conversation.
+
+        Used by the soft-delete path (PR 1.6) so deleting a chat with a
+        running agent cancels the run via the existing cancel pipeline
+        (no new event family). Implementations filter rows whose
+        ``status`` is one of ``QUEUED / RUNNING / WAITING_FOR_APPROVAL
+        / CANCELLING``; returns ``None`` when nothing is in flight.
+        """
 
     def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
         """Update mutable run status and return the new record."""
@@ -216,6 +239,77 @@ class PersistencePort(Protocol):
         reason: str | None = None,
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
+
+    # ----- PR 1.6: workspace defaults + conversation lifecycle ----- #
+
+    def get_workspace_defaults(
+        self,
+        *,
+        org_id: str,
+    ) -> WorkspaceDefaultsRecord | None:
+        """Return the persisted workspace defaults row, or ``None`` when absent.
+
+        ``retention_days`` on the returned record is **not** read from
+        ``workspace_defaults`` — that's the service's job (it composes
+        from ``retention_policies``). The adapter only fills in the
+        columns it owns: default_model, default_connectors, updated_*.
+        """
+
+    def upsert_workspace_defaults(
+        self,
+        *,
+        record: WorkspaceDefaultsRecord,
+    ) -> WorkspaceDefaultsRecord:
+        """Insert-or-update the workspace defaults row for ``record.org_id``.
+
+        Single-row upsert (org_id PK). The service is responsible for
+        any audit row + retention upserts that go alongside.
+        """
+
+    def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Apply a lifecycle PATCH to one conversation row.
+
+        ``*_changed`` flags signal "the caller wants this column
+        rewritten" — distinguishing "field omitted" (leave alone) from
+        "field set to null" (clear). Returns the post-update row, or
+        ``None`` when no row matches the (org, user, conversation)
+        scope. Caller computes the audit diff from before/after.
+        """
+
+    def soft_delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Stamp ``deleted_at`` (idempotent: no-op when already deleted)."""
+
+    def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Clear ``deleted_at``. Returns ``None`` when the row was already
+        reaped by the retention sweeper (vs. simply not deleted).
+        """
 
 
 @runtime_checkable

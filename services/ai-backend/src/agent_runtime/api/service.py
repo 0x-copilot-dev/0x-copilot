@@ -48,6 +48,7 @@ from runtime_api.schemas import (
     ConversationListResponse,
     ConversationRecord,
     ConversationResponse,
+    ConversationStatus,
     CreateConversationRequest,
     CreateRunRequest,
     CreateRunResponse,
@@ -64,6 +65,9 @@ from runtime_api.schemas import (
     RunRecord,
     RunStatusResponse,
     UpdateConversationConnectorsRequest,
+    UpdateConversationRequest,
+    UpdateWorkspaceDefaultsRequest,
+    WorkspaceDefaultsResponse,
 )
 from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
@@ -210,20 +214,110 @@ class RuntimeApiService:
     async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationResponse:
-        """Create or idempotently return a conversation."""
+        """Create or idempotently return a conversation.
+
+        PR 1.6: when the request omits per-chat connector scopes (the
+        normal browser-driven path), seed ``enabled_connectors`` from
+        the workspace defaults row. The header-driven service-to-service
+        path stays unchanged.
+        """
 
         conversation = await self.persistence.create_conversation(request)
+        seeded = await self._seed_default_connectors_if_needed(
+            conversation=conversation
+        )
         await self.persistence.write_audit_log(
             event_type="conversation_created",
             record={
-                "org_id": conversation.org_id,
-                "user_id": conversation.user_id,
+                "org_id": seeded.org_id,
+                "user_id": seeded.user_id,
                 "resource_type": "conversation",
-                "resource_id": conversation.conversation_id,
+                "resource_id": seeded.conversation_id,
                 "outcome": "success",
             },
         )
-        return conversation.to_response()
+        return seeded.to_response()
+
+    async def _apply_workspace_default_model(
+        self, *, request: CreateRunRequest
+    ) -> CreateRunRequest:
+        """Fall back to workspace defaults when the request omits model.
+
+        ``ModelConfigResolver`` already handles a fully-empty selection
+        by walking to ``settings.default_model``. We slot workspace
+        defaults in *between* the request and the deployment fallback
+        so an admin's "default everyone to Atlas Reasoning" sticks.
+
+        Idempotent: a request that already pins a provider+model_name
+        passes through unchanged.
+        """
+
+        if request.org_id is None:
+            return request
+        if request.model is not None and (
+            request.model.provider is not None and request.model.model_name is not None
+        ):
+            return request
+        defaults = await self._workspace_defaults().get_record(org_id=request.org_id)
+        if defaults is None or defaults.default_model is None:
+            return request
+        from runtime_api.schemas import ModelSelectionRequest
+
+        existing = request.model
+        merged = ModelSelectionRequest(
+            provider=(
+                existing.provider
+                if existing is not None and existing.provider is not None
+                else defaults.default_model.provider
+            ),
+            model_name=(
+                existing.model_name
+                if existing is not None and existing.model_name is not None
+                else defaults.default_model.model_name
+            ),
+            temperature=existing.temperature if existing is not None else None,
+            timeout_seconds=(
+                existing.timeout_seconds if existing is not None else None
+            ),
+            max_input_tokens=(
+                existing.max_input_tokens if existing is not None else None
+            ),
+            supports_streaming=(
+                existing.supports_streaming if existing is not None else None
+            ),
+            reasoning=existing.reasoning if existing is not None else None,
+        )
+        return request.model_copy(update={"model": merged})
+
+    async def _seed_default_connectors_if_needed(
+        self, *, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        """Materialise workspace default_connectors onto a fresh row.
+
+        Only fires when the row carries an empty ``enabled_connectors``
+        map (the create-conversation path leaves it ``{}`` until a
+        PATCH from the client). Idempotent — calling this on a row
+        that already has overrides is a no-op.
+        """
+
+        if conversation.enabled_connectors:
+            return conversation
+        defaults = await self._workspace_defaults().get_record(
+            org_id=conversation.org_id
+        )
+        if defaults is None or not defaults.default_connectors:
+            return conversation
+        # Reuse the existing connector PATCH path — same audit trail,
+        # same merge semantics, no duplicated UPDATE SQL.
+        now = datetime.now(timezone.utc)
+        updated = await self.persistence.update_conversation_connectors(
+            org_id=conversation.org_id,
+            user_id=conversation.user_id,
+            conversation_id=conversation.conversation_id,
+            scopes_patch=defaults.default_connectors,
+            now=now,
+        )
+        return updated or conversation
 
     async def get_conversation(
         self,
@@ -248,8 +342,15 @@ class RuntimeApiService:
         user_id: str,
         limit: int = Values.DEFAULT_CONVERSATION_LIMIT,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> ConversationListResponse:
-        """Return scoped conversation metadata newest first."""
+        """Return scoped conversation metadata newest first.
+
+        ``include_deleted`` (PR 1.6) flips between the default sidebar
+        view (active rows only) and the "Show deleted" filter that
+        powers Restore. Deleted rows are still inside the retention
+        window — the C8 sweeper reaps them on TTL.
+        """
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
         records = await self.persistence.list_conversations(
@@ -257,6 +358,7 @@ class RuntimeApiService:
             user_id=user_id,
             limit=bounded_limit,
             include_archived=include_archived,
+            include_deleted=include_deleted,
         )
         return ConversationListResponse(
             conversations=tuple(record.to_response() for record in records),
@@ -437,6 +539,14 @@ class RuntimeApiService:
             request = self._apply_conversation_scope_fallback(
                 request=request, conversation=conversation_for_scope
             )
+
+        # PR 1.6: if the request did not pin a model, fall back to the
+        # workspace default before model resolution. Existing chain:
+        #   request.model → assistant.model → settings.default_model
+        # New chain:
+        #   request.model → assistant.model → workspace_defaults.default_model
+        #                                    → settings.default_model
+        request = await self._apply_workspace_default_model(request=request)
 
         request = self._request_with_runtime_context(request)
         context = request.runtime_context
@@ -1429,6 +1539,280 @@ class RuntimeApiService:
                 retryable=False,
             )
         return run
+
+    # ==================================================================
+    # PR 1.6 — workspace defaults + conversation lifecycle
+    # ==================================================================
+
+    def _workspace_defaults(self):
+        """Build a ``WorkspaceDefaultsService`` over our async persistence.
+
+        Lazy import keeps the module-level dependency graph one-way
+        (``workspace_defaults_service`` imports from
+        ``runtime_api.schemas``; we don't want this file to be loaded
+        while the schemas package is still resolving).
+        """
+
+        from agent_runtime.api.workspace_defaults_service import (
+            WorkspaceDefaultsService,
+        )
+
+        return WorkspaceDefaultsService(
+            persistence=self.persistence,
+            settings=self.settings,
+        )
+
+    async def get_workspace_defaults(self, *, org_id: str) -> WorkspaceDefaultsResponse:
+        """Public ``GET /v1/agent/workspace/defaults`` (PR 1.6)."""
+
+        return await self._workspace_defaults().get(org_id=org_id)
+
+    async def update_workspace_defaults(
+        self,
+        *,
+        org_id: str,
+        actor_user_id: str,
+        request: UpdateWorkspaceDefaultsRequest,
+    ) -> WorkspaceDefaultsResponse:
+        """Public ``PUT /v1/agent/workspace/defaults`` (PR 1.6).
+
+        Composes the workspace_defaults upsert + retention policy
+        upserts and writes one audit row.
+        """
+
+        response, audit_metadata = await self._workspace_defaults().update(
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            request=request,
+        )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.WORKSPACE_DEFAULTS_UPDATE,
+            record={
+                "org_id": org_id,
+                "user_id": actor_user_id,
+                "resource_type": "workspace_defaults",
+                "resource_id": org_id,
+                "outcome": "success",
+                "metadata": audit_metadata,
+            },
+        )
+        return response
+
+    async def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        request: UpdateConversationRequest,
+    ) -> ConversationResponse:
+        """Public ``PATCH /v1/agent/conversations/{id}`` (PR 1.6).
+
+        Lifecycle PATCH: title/folder/archived. Each field is optional;
+        we use ``model_fields_set`` to honour RFC 7396 merge-patch
+        semantics (omitted = no-op, explicit null = clear).
+        """
+
+        before = await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        fields_set = request.model_fields_set
+        title_changed = "title" in fields_set
+        folder_changed = "folder" in fields_set
+        archived_changed = "archived" in fields_set
+        now = datetime.now(timezone.utc)
+        updated = await self.persistence.update_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            title=request.title,
+            title_changed=title_changed,
+            folder=request.folder,
+            folder_changed=folder_changed,
+            archived=request.archived,
+            archived_changed=archived_changed,
+            now=now,
+        )
+        if updated is None:
+            # Race: row vanished between the scope read and the UPDATE.
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.CONVERSATION_UPDATE,
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation_id,
+                "outcome": "success",
+                "metadata": _conversation_lifecycle_audit_metadata(
+                    before=before,
+                    after=updated,
+                    fields_set=fields_set,
+                ),
+            },
+        )
+        return updated.to_response()
+
+    async def delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Public ``DELETE /v1/agent/conversations/{id}`` (PR 1.6).
+
+        Soft-deletes the row (stamps ``deleted_at``). When an active
+        run exists for this conversation, it is cancelled first via
+        the existing ``cancel_run`` path so the SSE stream emits
+        ``run_cancelled`` and clients close cleanly.
+        """
+
+        conversation = await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        await self._cancel_active_run_for_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        now = datetime.now(timezone.utc)
+        await self.persistence.soft_delete_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            now=now,
+        )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.CONVERSATION_DELETE,
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation_id,
+                "outcome": "success",
+                "metadata": {
+                    "folder": conversation.folder,
+                    "previously_deleted_at": (
+                        conversation.deleted_at.isoformat()
+                        if conversation.deleted_at is not None
+                        else None
+                    ),
+                },
+            },
+        )
+
+    async def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> ConversationResponse:
+        """Public ``POST /v1/agent/conversations/{id}/restore`` (PR 1.6)."""
+
+        # We must not consult ``_conversation_for_scope`` here directly
+        # because the row is soft-deleted; a normal scope read would
+        # still find it but distinguish ``None`` adapters from "row
+        # already reaped" only via ``deleted_at``. Use the adapter
+        # directly so a missing row (reaped) is a 404.
+        now = datetime.now(timezone.utc)
+        restored = await self.persistence.restore_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            now=now,
+        )
+        if restored is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.CONVERSATION_RESTORE,
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation_id,
+                "outcome": "success",
+                "metadata": {},
+            },
+        )
+        return restored.to_response()
+
+    async def _cancel_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Cancel any non-terminal run on the conversation.
+
+        Reuses the existing ``cancel_run`` path so the SSE handshake
+        and audit chain stay identical to a user-initiated cancel.
+        We tolerate "no active run" silently — the typical case.
+        """
+
+        active_run = await self.persistence.get_active_run_for_conversation(
+            org_id=org_id, conversation_id=conversation_id
+        )
+        if active_run is None:
+            return
+        await self.cancel_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=active_run.run_id,
+            request=CancelRunRequest(
+                requested_by_user_id=user_id,
+                reason="conversation_deleted",
+            ),
+        )
+
+
+def _conversation_lifecycle_audit_metadata(
+    *,
+    before: ConversationRecord,
+    after: ConversationRecord,
+    fields_set: frozenset[str] | set[str],
+) -> dict[str, object]:
+    """Build before/after/diff metadata for a lifecycle PATCH (PR 1.6)."""
+
+    diff_keys: list[str] = []
+    before_blob: dict[str, object] = {}
+    after_blob: dict[str, object] = {}
+    if "title" in fields_set:
+        before_blob["title"] = before.title
+        after_blob["title"] = after.title
+        if before.title != after.title:
+            diff_keys.append("title")
+    if "folder" in fields_set:
+        before_blob["folder"] = before.folder
+        after_blob["folder"] = after.folder
+        if before.folder != after.folder:
+            diff_keys.append("folder")
+    if "archived" in fields_set:
+        before_blob["archived"] = before.status == ConversationStatus.ARCHIVED
+        after_blob["archived"] = after.status == ConversationStatus.ARCHIVED
+        if before_blob["archived"] != after_blob["archived"]:
+            diff_keys.append("archived")
+    return {
+        "before": before_blob,
+        "after": after_blob,
+        "diff_keys": diff_keys,
+    }
 
 
 def _display_model_name(model_name: str) -> str:

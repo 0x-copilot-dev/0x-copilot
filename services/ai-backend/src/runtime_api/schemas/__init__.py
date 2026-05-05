@@ -41,11 +41,22 @@ from runtime_api.schemas.conversations import (
     ConversationRecord,
     ConversationResponse,
     CreateConversationRequest,
+    FOLDER_MAX_LENGTH,
     HistoryDeletionResponse,
     MessageListResponse,
     MessageRecord,
     MessageResponse,
+    TITLE_MAX_LENGTH,
     UpdateConversationConnectorsRequest,
+    UpdateConversationRequest,
+)
+from runtime_api.schemas.workspace_defaults import (
+    DefaultModelSelection,
+    RETENTION_DAYS_BOUNDS,
+    UpdateWorkspaceDefaultsRequest,
+    WorkspaceDefaultsRecord,
+    WorkspaceDefaultsResponse,
+    update_workspace_defaults_request_to_record,
 )
 from runtime_api.schemas.drafts import (
     Draft,
@@ -91,6 +102,7 @@ from runtime_api.schemas.workspace import (
     SubagentEntry,
     SubagentListResponse,
     SubagentStatusFilter,
+    SubagentTokenUsage,
 )
 
 __all__ = [
@@ -119,7 +131,16 @@ __all__ = [
     "ConversationListResponse",
     "ConversationRecord",
     "ConversationResponse",
+    "DefaultModelSelection",
+    "FOLDER_MAX_LENGTH",
+    "RETENTION_DAYS_BOUNDS",
+    "TITLE_MAX_LENGTH",
     "UpdateConversationConnectorsRequest",
+    "UpdateConversationRequest",
+    "UpdateWorkspaceDefaultsRequest",
+    "WorkspaceDefaultsRecord",
+    "WorkspaceDefaultsResponse",
+    "update_workspace_defaults_request_to_record",
     "MessageRecord",
     "MessageResponse",
     "MessageListResponse",
@@ -170,4 +191,5 @@ __all__ = [
     "SubagentEntry",
     "SubagentListResponse",
     "SubagentStatusFilter",
+    "SubagentTokenUsage",
 ]

@@ -272,6 +272,58 @@ export interface Conversation {
    */
   enabled_connectors?: ConversationConnectorScopes;
   connectors_updated_at?: string | null;
+  /**
+   * PR 1.6 — conversation lifecycle additions. ``deleted_at`` is the
+   * soft-delete tombstone (the C8 retention sweeper reaps the row on
+   * TTL); ``folder`` is a flat sidebar grouping label;
+   * ``parent_conversation_id`` is forward-declared for Wave 6 fork
+   * lineage. All three are optional for backwards compat with older
+   * server payloads pre-migration 0020.
+   */
+  deleted_at?: string | null;
+  folder?: string | null;
+  parent_conversation_id?: string | null;
+}
+
+/**
+ * PR 1.6 — body for ``PATCH /v1/agent/conversations/{id}``.
+ *
+ * RFC 7396 merge-patch semantics: omit a field to leave it untouched,
+ * send `null` to clear (folder/title) or un-archive (`archived: false`).
+ * Empty-string folders are normalised to `null` server-side.
+ */
+export interface UpdateConversationRequest {
+  title?: string | null;
+  folder?: string | null;
+  archived?: boolean;
+}
+
+/**
+ * PR 1.6 — body for ``PUT /v1/agent/workspace/defaults``.
+ *
+ * Full-document replace (not merge-patch) — the admin Settings panel
+ * always submits the full state. ``retention_days`` composes a
+ * ``scope='org'`` row across the relevant kinds in the existing C8
+ * retention pipeline; no separate retention storage is introduced.
+ */
+export interface UpdateWorkspaceDefaultsRequest {
+  default_model: WorkspaceDefaultModel;
+  default_connectors: ConversationConnectorScopes;
+  retention_days: number;
+}
+
+export interface WorkspaceDefaultModel {
+  provider: string;
+  model_name: string;
+  reasoning?: Record<string, unknown> | null;
+}
+
+export interface WorkspaceDefaultsResponse {
+  default_model: WorkspaceDefaultModel;
+  default_connectors: ConversationConnectorScopes;
+  retention_days: number;
+  updated_at: string | null;
+  updated_by_user_id: string | null;
 }
 
 /**
@@ -1216,6 +1268,18 @@ export type SubagentLifecycleStatus =
 
 export type SubagentStatusFilter = "all" | "running" | "recent";
 
+/**
+ * PR 1.5 AC-2 — per-subagent token rollup over `runtime_model_call_usage`.
+ * `null` on the entry when no model call has been logged for the subagent
+ * (rare but possible for sub-second cancellations).
+ */
+export interface SubagentTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+}
+
 export interface SubagentEntry {
   task_id: string;
   parent_run_id: string;
@@ -1229,6 +1293,7 @@ export interface SubagentEntry {
   result_summary: string | null;
   safe_error_code: string | null;
   safe_error_message: string | null;
+  token_usage: SubagentTokenUsage | null;
 }
 
 export interface SubagentListResponse {

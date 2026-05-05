@@ -264,6 +264,7 @@ def create_app(
         request: Request,
         limit: int = Query(30, ge=1, le=200),
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         return await forward_json_to_ai(
@@ -271,7 +272,11 @@ def create_app(
             "GET",
             "/v1/agent/conversations",
             params=identity.scoped_params(
-                {"limit": limit, "include_archived": include_archived}
+                {
+                    "limit": limit,
+                    "include_archived": include_archived,
+                    "include_deleted": include_deleted,
+                }
             ),
             identity=identity,
         )
@@ -334,6 +339,81 @@ def create_app(
             app,
             "PATCH",
             f"/v1/agent/conversations/{conversation_id}/connectors",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    # PR 1.6 — conversation lifecycle (title/folder/archived) + soft-delete + restore.
+    @app.patch("/v1/agent/conversations/{conversation_id}")
+    async def update_conversation(
+        request: Request,
+        conversation_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "PATCH",
+            f"/v1/agent/conversations/{conversation_id}",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/agent/conversations/{conversation_id}")
+    async def delete_conversation(
+        request: Request,
+        conversation_id: str,
+    ) -> Response:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        # The runtime API returns 204 — preserve that shape (no JSON body).
+        await forward_json_to_ai(
+            app,
+            "DELETE",
+            f"/v1/agent/conversations/{conversation_id}",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+        return Response(status_code=204)
+
+    @app.post("/v1/agent/conversations/{conversation_id}/restore")
+    async def restore_conversation(
+        request: Request,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            f"/v1/agent/conversations/{conversation_id}/restore",
+            params=identity.scoped_params(),
+            json={},
+            identity=identity,
+        )
+
+    # PR 1.6 — workspace defaults (model + connectors + retention slider).
+    @app.get("/v1/agent/workspace/defaults")
+    async def get_workspace_defaults(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/agent/workspace/defaults",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.put("/v1/agent/workspace/defaults")
+    async def put_workspace_defaults(
+        request: Request,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "PUT",
+            "/v1/agent/workspace/defaults",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,

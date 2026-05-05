@@ -43,6 +43,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeRunCommand,
     RunRecord,
+    WorkspaceDefaultsRecord,
 )
 
 
@@ -90,6 +91,7 @@ class SyncToAsyncPersistence:
         user_id: str,
         limit: int,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> Sequence[ConversationRecord]:
         return await asyncio.to_thread(
             self._port.list_conversations,
@@ -97,6 +99,7 @@ class SyncToAsyncPersistence:
             user_id=user_id,
             limit=limit,
             include_archived=include_archived,
+            include_deleted=include_deleted,
         )
 
     async def list_messages(
@@ -150,6 +153,18 @@ class SyncToAsyncPersistence:
 
     async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         return await asyncio.to_thread(self._port.get_run, org_id=org_id, run_id=run_id)
+
+    async def get_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        return await asyncio.to_thread(
+            self._port.get_active_run_for_conversation,
+            org_id=org_id,
+            conversation_id=conversation_id,
+        )
 
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
@@ -278,6 +293,84 @@ class SyncToAsyncPersistence:
             org_id=org_id,
             user_id=user_id,
             reason=reason,
+        )
+
+    # ----- PR 1.6: workspace defaults + conversation lifecycle ----- #
+
+    async def get_workspace_defaults(
+        self,
+        *,
+        org_id: str,
+    ) -> WorkspaceDefaultsRecord | None:
+        return await asyncio.to_thread(self._port.get_workspace_defaults, org_id=org_id)
+
+    async def upsert_workspace_defaults(
+        self,
+        *,
+        record: WorkspaceDefaultsRecord,
+    ) -> WorkspaceDefaultsRecord:
+        return await asyncio.to_thread(
+            self._port.upsert_workspace_defaults, record=record
+        )
+
+    async def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        return await asyncio.to_thread(
+            self._port.update_conversation,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            title=title,
+            title_changed=title_changed,
+            folder=folder,
+            folder_changed=folder_changed,
+            archived=archived,
+            archived_changed=archived_changed,
+            now=now,
+        )
+
+    async def soft_delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        return await asyncio.to_thread(
+            self._port.soft_delete_conversation,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            now=now,
+        )
+
+    async def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        return await asyncio.to_thread(
+            self._port.restore_conversation,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            now=now,
         )
 
     # Usage + pricing (B1, B2, B3, B4) — defer to the underlying sync port.

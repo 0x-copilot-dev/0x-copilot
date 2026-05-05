@@ -46,6 +46,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeRunCommand,
     RunRecord,
+    WorkspaceDefaultsRecord,
 )
 
 
@@ -87,8 +88,13 @@ class AsyncPersistencePort(Protocol):
         user_id: str,
         limit: int,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> Sequence[ConversationRecord]:
-        """Return conversations for the tenant/user scope, newest first."""
+        """Return conversations for the tenant/user scope, newest first.
+
+        ``include_deleted`` (PR 1.6) excludes soft-deleted rows by
+        default; setting it True returns them too.
+        """
 
     async def list_messages(
         self,
@@ -128,6 +134,14 @@ class AsyncPersistencePort(Protocol):
         conversation: ConversationRecord,
     ) -> tuple[RunRecord, MessageRecord, bool]:
         """Create a user message and run, or return an idempotent existing run."""
+
+    async def get_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the most recent non-terminal run for one conversation (PR 1.6)."""
 
     async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
@@ -237,6 +251,63 @@ class AsyncPersistencePort(Protocol):
         reason: str | None = None,
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
+
+    # ----- PR 1.6: workspace defaults + conversation lifecycle ----- #
+
+    async def get_workspace_defaults(
+        self,
+        *,
+        org_id: str,
+    ) -> WorkspaceDefaultsRecord | None:
+        """Return the persisted workspace defaults row, or ``None``.
+
+        Retention is composed by the service from ``retention_policies``
+        — the adapter only fills the columns it owns (default_model,
+        default_connectors, updated_*).
+        """
+
+    async def upsert_workspace_defaults(
+        self,
+        *,
+        record: WorkspaceDefaultsRecord,
+    ) -> WorkspaceDefaultsRecord:
+        """Insert-or-update one (org_id) row."""
+
+    async def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Apply a lifecycle PATCH to one conversation row (PR 1.6)."""
+
+    async def soft_delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Stamp ``deleted_at`` (idempotent: no-op when already deleted)."""
+
+    async def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Clear ``deleted_at``; ``None`` if the row was already reaped."""
 
     # ------------------------------------------------------------------
     # Usage + pricing (B1, B2, B3, B4).

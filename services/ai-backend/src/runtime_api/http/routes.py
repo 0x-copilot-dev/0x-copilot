@@ -101,6 +101,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
         limit: int = Query(30, ge=1, le=200),
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> ConversationListResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.service(request).list_conversations(
@@ -108,6 +109,7 @@ class RuntimeApiRoutes:
             user_id=user_id,
             limit=limit,
             include_archived=include_archived,
+            include_deleted=include_deleted,
         )
 
     @classmethod
@@ -551,6 +553,14 @@ class RuntimeApiRouter:
         register_draft_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
+        # PR 1.6 — Workspace defaults + conversation lifecycle
+        # (PATCH / DELETE / restore). Lives in its own module to
+        # minimise merge friction with PR 1.4.1 (approval forwarding).
+        from runtime_api.http.workspace_defaults_routes import (
+            register_workspace_defaults_routes,
+        )
+
+        register_workspace_defaults_routes(router)
         return router
 
 

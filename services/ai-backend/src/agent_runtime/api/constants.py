@@ -128,6 +128,12 @@ class Keys:
         RETENTION_LIST = "retention_list"
         RETENTION_UPSERT = "retention_upsert"
         RETENTION_DELETE = "retention_delete"
+        # PR 1.6 — workspace defaults + conversation lifecycle.
+        GET_WORKSPACE_DEFAULTS = "get_workspace_defaults"
+        UPDATE_WORKSPACE_DEFAULTS = "update_workspace_defaults"
+        UPDATE_CONVERSATION = "update_conversation"
+        DELETE_CONVERSATION = "delete_conversation"
+        RESTORE_CONVERSATION = "restore_conversation"
 
 
 class Values:
@@ -232,6 +238,15 @@ class Messages:
         # PR 1.2 — per-chat connector scope mutation; metadata captures
         # ``before`` / ``after`` / ``diff_keys`` for forensic replay.
         CONVERSATION_CONNECTORS_UPDATE = "conversation.connectors.update"
+        # PR 1.6 — workspace defaults + conversation lifecycle audit.
+        # ``WORKSPACE_DEFAULTS_UPDATE`` metadata cross-references the
+        # ``retention_policies`` rows it inserted/updated via
+        # ``retention_policy_ids`` so SIEM can chase one event back to
+        # all the storage rows it affected.
+        WORKSPACE_DEFAULTS_UPDATE = "workspace.defaults.update"
+        CONVERSATION_UPDATE = "conversation.update"
+        CONVERSATION_DELETE = "conversation.delete"
+        CONVERSATION_RESTORE = "conversation.restore"
 
     class Event:
         APPROVAL_RESOLVED = "Approval decision was recorded."

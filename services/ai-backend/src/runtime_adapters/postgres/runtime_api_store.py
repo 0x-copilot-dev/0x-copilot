@@ -82,6 +82,7 @@ from runtime_api.schemas import (
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
+    DefaultModelSelection,
     HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
@@ -93,6 +94,7 @@ from runtime_api.schemas import (
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
+    WorkspaceDefaultsRecord,
 )
 
 
@@ -134,6 +136,12 @@ class _Columns:
     FORWARDED_TO_USER_ID = "forwarded_to_user_id"
     ENABLED_CONNECTORS = "enabled_connectors"
     DELETED_AT = "deleted_at"
+    # PR 1.6 — workspace defaults + conversation lifecycle columns.
+    DEFAULT_MODEL = "default_model"
+    DEFAULT_CONNECTORS = "default_connectors"
+    UPDATED_BY_USER_ID = "updated_by_user_id"
+    FOLDER = "folder"
+    PARENT_CONVERSATION_ID = "parent_conversation_id"
     DISPLAY_TITLE = "display_title"
     EDITED_AT = "edited_at"
     ENCRYPTION_VERSION = "encryption_version"
@@ -658,15 +666,24 @@ class PostgresRuntimeApiStore:
         user_id: str,
         limit: int,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> Sequence[ConversationRecord]:
-        """Return scoped conversations ordered by latest update."""
+        """Return scoped conversations ordered by latest update.
+
+        ``include_deleted`` (PR 1.6) skips soft-deleted rows by default
+        (the sidebar query). The partial index
+        ``idx_agent_conversations_org_user_active_updated`` (migration
+        0020) covers this hot path; the full-coverage index from
+        migration 0001 still serves the ``include_deleted=true`` case.
+        """
 
         archived_filter = "" if include_archived else "AND status <> 'archived'"
+        deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_conversations
-                WHERE org_id = %s AND user_id = %s {archived_filter}
+                WHERE org_id = %s AND user_id = %s {archived_filter} {deleted_filter}
                 ORDER BY updated_at DESC
                 LIMIT %s
                 """,
@@ -712,6 +729,208 @@ class PostgresRuntimeApiStore:
                  RETURNING *
                 """,
                 (Jsonb(patch_jsonb), now, now, conversation_id, org_id, user_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
+    # --- PR 1.6: workspace defaults + conversation lifecycle ---------- #
+
+    async def get_workspace_defaults(
+        self, *, org_id: str
+    ) -> WorkspaceDefaultsRecord | None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT org_id, default_model, default_connectors,
+                       updated_at, updated_by_user_id
+                  FROM workspace_defaults
+                 WHERE org_id = %s
+                """,
+                (org_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._workspace_defaults_record(row)
+
+    async def upsert_workspace_defaults(
+        self, *, record: WorkspaceDefaultsRecord
+    ) -> WorkspaceDefaultsRecord:
+        # Retention is composed by the service from ``retention_policies``
+        # — never touched here. Persist only the columns owned by the
+        # workspace_defaults table.
+        default_model_json = (
+            record.default_model.model_dump(mode="json", exclude_none=True)
+            if record.default_model is not None
+            else {}
+        )
+        default_connectors_json: dict[str, list[str] | None] = {
+            connector_id: (list(scopes) if scopes is not None else None)
+            for connector_id, scopes in record.default_connectors.items()
+        }
+        now = record.updated_at or datetime.now(timezone.utc)
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO workspace_defaults
+                       (org_id, default_model, default_connectors,
+                        updated_at, updated_by_user_id)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (org_id) DO UPDATE
+                   SET default_model       = EXCLUDED.default_model,
+                       default_connectors  = EXCLUDED.default_connectors,
+                       updated_at          = EXCLUDED.updated_at,
+                       updated_by_user_id  = EXCLUDED.updated_by_user_id
+                 RETURNING org_id, default_model, default_connectors,
+                           updated_at, updated_by_user_id
+                """,
+                (
+                    record.org_id,
+                    Jsonb(default_model_json),
+                    Jsonb(default_connectors_json),
+                    now,
+                    record.updated_by_user_id,
+                ),
+            )
+            row = await cur.fetchone()
+        return self._workspace_defaults_record(row)
+
+    @classmethod
+    def _workspace_defaults_record(
+        cls, row: dict[str, object]
+    ) -> WorkspaceDefaultsRecord:
+        """Hydrate one workspace_defaults row.
+
+        ``retention_days`` is intentionally None — composed by the
+        service from ``retention_policies`` (we never persist it on
+        this row).
+        """
+
+        default_model_json = row.get(_Columns.DEFAULT_MODEL) or {}
+        default_model: DefaultModelSelection | None = None
+        if isinstance(default_model_json, dict) and default_model_json:
+            try:
+                default_model = DefaultModelSelection.model_validate(
+                    dict(default_model_json)
+                )
+            except Exception:
+                # Forward-compat: stored shape may have evolved beyond
+                # what this binary understands. Treat as no default
+                # rather than crashing the read path.
+                default_model = None
+        return WorkspaceDefaultsRecord(
+            org_id=str(row[_Columns.ORG_ID]),
+            default_model=default_model,
+            default_connectors=cls._coerce_enabled_connectors(
+                row.get(_Columns.DEFAULT_CONNECTORS)
+            ),
+            retention_days=None,
+            updated_at=row.get(_Columns.UPDATED_AT),
+            updated_by_user_id=row.get(_Columns.UPDATED_BY_USER_ID),
+        )
+
+    async def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Apply a lifecycle PATCH (title / folder / archived) atomically.
+
+        Builds a SET clause from the ``*_changed`` flags so the column
+        list mirrors the caller's intent exactly. ``updated_at`` is
+        always bumped (idempotent no-op refreshes the row's
+        last-touched timestamp).
+        """
+
+        sets: list[str] = ["updated_at = %s"]
+        params: list[object] = [now]
+        if title_changed:
+            sets.append("title = %s")
+            params.append(title)
+        if folder_changed:
+            sets.append("folder = %s")
+            params.append(folder)
+        if archived_changed:
+            if archived:
+                sets.append("status = 'archived'")
+                sets.append("archived_at = %s")
+                params.append(now)
+            else:
+                sets.append("status = 'active'")
+                sets.append("archived_at = NULL")
+        params.extend([conversation_id, org_id, user_id])
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                f"""
+                UPDATE agent_conversations
+                   SET {", ".join(sets)}
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                tuple(params),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
+    async def soft_delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Stamp ``deleted_at`` (idempotent on already-deleted rows)."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_conversations
+                   SET deleted_at = COALESCE(deleted_at, %s),
+                       updated_at = %s
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                (now, now, conversation_id, org_id, user_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
+    async def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Clear ``deleted_at``. Returns ``None`` when the row was reaped."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_conversations
+                   SET deleted_at = NULL,
+                       updated_at = %s
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                (now, conversation_id, org_id, user_id),
             )
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
@@ -907,6 +1126,31 @@ class PostgresRuntimeApiStore:
             cur = await conn.execute(
                 "SELECT * FROM agent_runs WHERE id = %s AND org_id = %s",
                 (run_id, org_id),
+            )
+            row = await cur.fetchone()
+        return self._run_record(row) if row is not None else None
+
+    async def get_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the most recent non-terminal run on a conversation (PR 1.6)."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                   AND status IN (
+                       'queued', 'running', 'waiting_for_approval', 'cancelling'
+                   )
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (org_id, conversation_id),
             )
             row = await cur.fetchone()
         return self._run_record(row) if row is not None else None
@@ -3352,6 +3596,12 @@ class PostgresRuntimeApiStore:
                 row.get(_Columns.ENABLED_CONNECTORS)
             ),
             connectors_updated_at=row.get(_Columns.CONNECTORS_UPDATED_AT),
+            # PR 1.6 — lifecycle columns. ``row.get`` keeps the hydrator
+            # forward-compatible with rows from databases pre-migration
+            # 0020 (returns None when the column is absent).
+            deleted_at=row.get(_Columns.DELETED_AT),
+            folder=row.get(_Columns.FOLDER),
+            parent_conversation_id=row.get(_Columns.PARENT_CONVERSATION_ID),
         )
 
     @staticmethod

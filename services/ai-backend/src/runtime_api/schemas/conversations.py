@@ -33,6 +33,17 @@ class _Fields:
     BRANCH_ID = "branch_id"
     ENABLED_CONNECTORS = "enabled_connectors"
     SCOPES = "scopes"
+    # PR 1.6
+    FOLDER = "folder"
+    TITLE = "title"
+    ARCHIVED = "archived"
+
+
+# PR 1.6 — UI cap. Strings longer than this in PATCH bodies bounce 422.
+# 64 chars matches the design's sidebar truncation budget; longer
+# folders ruin the visual rhythm of grouped chats.
+FOLDER_MAX_LENGTH = 64
+TITLE_MAX_LENGTH = 240
 
 
 class CreateConversationRequest(RuntimeContract):
@@ -83,6 +94,17 @@ class ConversationRecord(RuntimeContract):
     idempotency_key: str | None = None
     enabled_connectors: ConversationConnectorScopes = Field(default_factory=dict)
     connectors_updated_at: datetime | None = None
+    # PR 1.6 — conversation lifecycle (migration 0020).
+    # ``deleted_at`` is the soft-delete tombstone consulted by
+    # ``list_conversations`` (excluded by default) and reaped by the C8
+    # retention sweeper once the resolved messages TTL elapses.
+    # ``folder`` is a flat string label the sidebar groups by (no folder
+    # table — folders are personal organisational labels in v1).
+    # ``parent_conversation_id`` is forward-declared for Wave 6 fork
+    # lineage; nullable + unset today.
+    deleted_at: datetime | None = None
+    folder: str | None = None
+    parent_conversation_id: str | None = None
 
     @field_validator(
         Keys.Field.CONVERSATION_ID,
@@ -137,6 +159,9 @@ class ConversationRecord(RuntimeContract):
             schema_version=self.schema_version,
             enabled_connectors=self.enabled_connectors,
             connectors_updated_at=self.connectors_updated_at,
+            deleted_at=self.deleted_at,
+            folder=self.folder,
+            parent_conversation_id=self.parent_conversation_id,
         )
 
 
@@ -156,6 +181,10 @@ class ConversationResponse(RuntimeContract):
     schema_version: PositiveInt
     enabled_connectors: ConversationConnectorScopes = Field(default_factory=dict)
     connectors_updated_at: datetime | None = None
+    # PR 1.6 — lifecycle additions; absent on rows pre-migration 0020 stay None.
+    deleted_at: datetime | None = None
+    folder: str | None = None
+    parent_conversation_id: str | None = None
 
 
 class ConversationListResponse(RuntimeContract):
@@ -234,6 +263,51 @@ class ConversationConnectorScopesResponse(RuntimeContract):
     conversation_id: str
     scopes: ConversationConnectorScopes = Field(default_factory=dict)
     updated_at: datetime | None = None
+
+
+class UpdateConversationRequest(RuntimeContract):
+    """RFC 7396 merge-patch body for ``PATCH /v1/agent/conversations/{id}``
+    (PR 1.6).
+
+    All fields optional; omit a field to leave it untouched. Sending
+    ``null`` clears (folder/title) or un-archives (``archived: false``).
+    The service writes one ``conversation.update`` audit row per call
+    with the before/after diff.
+    """
+
+    title: str | None = None
+    folder: str | None = None
+    archived: bool | None = None
+    # Pydantic distinguishes "omitted" from "explicit null" via
+    # ``model_dump(exclude_unset=True)`` — the service uses that to
+    # decide which columns to UPDATE. We carry an internal sentinel set
+    # so adapters know the patch's intent without reflecting on the
+    # Pydantic model from the persistence layer.
+
+    @field_validator(_Fields.TITLE, mode="before")
+    @classmethod
+    def _normalize_title(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = ValueNormalizer.normalize_optional_text(value, _Fields.TITLE)
+        if normalized is not None and len(normalized) > TITLE_MAX_LENGTH:
+            raise ValueError(f"title must be at most {TITLE_MAX_LENGTH} characters")
+        return normalized
+
+    @field_validator(_Fields.FOLDER, mode="before")
+    @classmethod
+    def _normalize_folder(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("folder must be a string or null")
+        stripped = value.strip()
+        if not stripped:
+            # Empty string treated as null (clear folder).
+            return None
+        if len(stripped) > FOLDER_MAX_LENGTH:
+            raise ValueError(f"folder must be at most {FOLDER_MAX_LENGTH} characters")
+        return stripped
 
 
 class MessageRecord(RuntimeContract):

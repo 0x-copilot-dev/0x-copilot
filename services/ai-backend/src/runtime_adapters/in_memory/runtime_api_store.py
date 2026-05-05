@@ -55,6 +55,7 @@ from runtime_api.schemas import (
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
     RunRecord,
+    WorkspaceDefaultsRecord,
 )
 
 
@@ -107,6 +108,8 @@ class InMemoryRuntimeApiStore:
         # Retention policies (C8). Keyed by org_id; the per-(scope,
         # resource_id, kind) uniqueness is enforced at upsert time.
         self.retention_policies: dict[str, tuple] = {}
+        # Workspace defaults (PR 1.6). Keyed by org_id; one row per org.
+        self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
 
     def create_conversation(
         self, request: CreateConversationRequest
@@ -170,8 +173,13 @@ class InMemoryRuntimeApiStore:
         user_id: str,
         limit: int,
         include_archived: bool = False,
+        include_deleted: bool = False,
     ) -> Sequence[ConversationRecord]:
-        """Return scoped conversations ordered by latest update."""
+        """Return scoped conversations ordered by latest update.
+
+        ``include_deleted`` (PR 1.6) excludes ``deleted_at IS NOT NULL``
+        rows by default; setting True returns the soft-deleted ones.
+        """
 
         records = [
             conversation
@@ -183,6 +191,12 @@ class InMemoryRuntimeApiStore:
                 conversation
                 for conversation in records
                 if conversation.status != ConversationStatus.ARCHIVED
+            ]
+        if not include_deleted:
+            records = [
+                conversation
+                for conversation in records
+                if conversation.deleted_at is None
             ]
         return tuple(
             sorted(
@@ -246,6 +260,114 @@ class InMemoryRuntimeApiStore:
                 "connectors_updated_at": now,
                 "updated_at": now,
             }
+        )
+        self.conversations[conversation_id] = updated
+        return updated
+
+    # --- PR 1.6: workspace defaults + conversation lifecycle ---------- #
+
+    def get_workspace_defaults(self, *, org_id: str) -> WorkspaceDefaultsRecord | None:
+        return self.workspace_defaults.get(org_id)
+
+    def upsert_workspace_defaults(
+        self, *, record: WorkspaceDefaultsRecord
+    ) -> WorkspaceDefaultsRecord:
+        # Retention is composed by the service from ``retention_policies``;
+        # adapters never see that field on the persisted record. We strip
+        # it here so the in-memory snapshot mirrors what postgres stores.
+        persisted = record.model_copy(update={"retention_days": None})
+        self.workspace_defaults[record.org_id] = persisted
+        return persisted
+
+    def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Apply a lifecycle PATCH idempotently.
+
+        ``*_changed`` distinguishes "field omitted" (leave alone) from
+        "field set to null" (clear/un-archive). When no flag is True we
+        still bump ``updated_at`` and return the row so callers can
+        round-trip an idempotent no-op.
+        """
+
+        conversation = self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        update: dict[str, object] = {"updated_at": now}
+        if title_changed:
+            update["title"] = title
+        if folder_changed:
+            update["folder"] = folder
+        if archived_changed:
+            if archived:
+                update["status"] = ConversationStatus.ARCHIVED
+                update["archived_at"] = now
+            else:
+                update["status"] = ConversationStatus.ACTIVE
+                update["archived_at"] = None
+        updated = conversation.model_copy(update=update)
+        self.conversations[conversation_id] = updated
+        return updated
+
+    def soft_delete_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Stamp ``deleted_at`` (idempotent on re-call).
+
+        Idempotent: a row already deleted returns its existing record
+        unchanged. Callers above (the service) cancel any active run
+        before invoking this method.
+        """
+
+        conversation = self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.deleted_at is not None:
+            return conversation
+        updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
+        self.conversations[conversation_id] = updated
+        return updated
+
+    def restore_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Clear ``deleted_at``. Returns ``None`` if the row was reaped."""
+
+        conversation = self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.deleted_at is None:
+            # Nothing to restore — callers can treat this as a 204.
+            return conversation
+        updated = conversation.model_copy(
+            update={"deleted_at": None, "updated_at": now}
         )
         self.conversations[conversation_id] = updated
         return updated
@@ -354,6 +476,31 @@ class InMemoryRuntimeApiStore:
         if run is None or run.org_id != org_id:
             return None
         return run
+
+    def get_active_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the most recent non-terminal run for one conversation."""
+
+        non_terminal = {
+            AgentRunStatus.QUEUED,
+            AgentRunStatus.RUNNING,
+            AgentRunStatus.WAITING_FOR_APPROVAL,
+            AgentRunStatus.CANCELLING,
+        }
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id
+            and run.conversation_id == conversation_id
+            and run.status in non_terminal
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.created_at)
 
     def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
         """Update run status and relevant timestamps."""
