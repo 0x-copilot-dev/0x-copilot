@@ -652,8 +652,14 @@ class RuntimeApiService:
     APPROVAL_FORWARDABLE_KINDS = frozenset(
         {
             Values.ApprovalKind.ACTION,
-            Values.ApprovalKind.MCP_AUTH,
             Values.ApprovalKind.MCP_TOOL,
+            # PR 1.4.1 Gap #4 — mcp_auth was previously listed but the
+            # OAuth flow binds tokens to whoever completes it. Forwarding
+            # would either silently rebind to the recipient's identity
+            # (footgun) or require the requester to come back and re-auth
+            # (defeats the point). We narrow the contract instead. The FE
+            # already hides the forward button for mcp_auth approvals;
+            # contract is now consistent.
         }
     )
 

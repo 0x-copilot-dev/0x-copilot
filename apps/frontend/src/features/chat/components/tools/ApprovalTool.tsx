@@ -17,12 +17,31 @@ import { PresentationResultRows } from "../activity/PresentationResultRows";
 import { presentationFromArgs } from "../activity/presentationHelpers";
 import { approvalDetailsContent } from "../details/approvalDetailsContent";
 import { AskAQuestionTool } from "./AskAQuestionTool";
+import {
+  WorkspaceMemberPicker,
+  type WorkspaceMember,
+  type WorkspaceMemberLoader,
+} from "./WorkspaceMemberPicker";
+
+export interface ApprovalToolExtraProps {
+  /** Optional: load workspace members for the forward picker. Default
+   * is a passthrough loader that mirrors the typed user_id; the
+   * production loader hits ``GET /v1/workspace/members?q=`` and lands
+   * in a follow-up alongside the @-mention picker (W3.1). */
+  loadWorkspaceMembers?: WorkspaceMemberLoader;
+  /** Optional: the caller's own user_id, excluded from the forward
+   * picker so they can't pick themselves (server also rejects with 422). */
+  selfUserId?: string;
+}
 
 export function ApprovalTool({
   args,
   result,
   resume,
-}: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
+  loadWorkspaceMembers,
+  selfUserId,
+}: ToolCallMessagePartProps<Record<string, unknown>> &
+  ApprovalToolExtraProps): ReactElement {
   const presentation = presentationFromArgs(args);
   const approvalId = String(args.approval_id ?? "");
   const toolName = stringValue(args.tool_name);
@@ -62,22 +81,22 @@ export function ApprovalTool({
   const forwardedAt = stringValue(resultRecord.forwarded_at);
 
   const [forwarding, setForwarding] = useState(false);
-  const [forwardTargetUserId, setForwardTargetUserId] = useState("");
 
   const submit = (decision: ApprovalDecision): void => {
     resume({ decision, approval_id: approvalId });
   };
-  const submitForward = (userId: string): void => {
+  const submitForward = (member: WorkspaceMember): void => {
     const target: ApprovalForwardTarget = {
       kind: "workspace_user",
-      user_id: userId,
+      user_id: member.user_id,
     };
     resume({
       decision: "forwarded",
       approval_id: approvalId,
       // approval_kind is checked in ChatScreen.tsx::isApprovalResumePayload
-      // to route MCP-auth flows separately. Forwarding `mcp_auth` is not
-      // supported in v1; the picker is hidden for that kind below.
+      // to route MCP-auth flows separately. PR 1.4.1 Phase C narrows the
+      // server contract: mcp_auth and ask_a_question approvals are not
+      // forwardable; the picker is hidden for those kinds below.
       approval_kind: approvalKind ?? undefined,
       forward_to: target,
     });
@@ -168,20 +187,16 @@ export function ApprovalTool({
           </Button>
           {canForward ? (
             forwarding ? (
-              <ForwardPicker
-                value={forwardTargetUserId}
-                onChange={setForwardTargetUserId}
-                onCancel={() => {
+              <WorkspaceMemberPicker
+                loadMembers={loadWorkspaceMembers}
+                excludeUserIds={
+                  selfUserId !== undefined ? [selfUserId] : undefined
+                }
+                onPick={(member) => {
+                  submitForward(member);
                   setForwarding(false);
-                  setForwardTargetUserId("");
                 }}
-                onConfirm={() => {
-                  const trimmed = forwardTargetUserId.trim();
-                  if (trimmed.length === 0) {
-                    return;
-                  }
-                  submitForward(trimmed);
-                }}
+                onCancel={() => setForwarding(false)}
               />
             ) : (
               <Button
@@ -198,61 +213,6 @@ export function ApprovalTool({
         </div>
       ) : null}
     </ActivityCard>
-  );
-}
-
-// PR 1.4 — minimal inline picker. v1 takes a free-text user_id; the
-// workspace-member directory picker comes with W3.1's @-mention component.
-// Server-side validators reject self-forward and cross-org targets so a
-// hand-typed id can't escape the workspace boundary.
-function ForwardPicker({
-  value,
-  onChange,
-  onCancel,
-  onConfirm,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-}): ReactElement {
-  return (
-    <div className="aui-tool-card__forward-picker">
-      <input
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="user_id (e.g. marcus)"
-        aria-label="Forward to user id"
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            onConfirm();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          }
-        }}
-      />
-      <Button
-        type="button"
-        size="sm"
-        title="Forward this decision"
-        onClick={onConfirm}
-        disabled={value.trim().length === 0}
-      >
-        Forward
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        title="Cancel forwarding"
-        onClick={onCancel}
-      >
-        Cancel
-      </Button>
-    </div>
   );
 }
 

@@ -392,6 +392,38 @@ class TestServiceDecideForwarded:
             )
         assert exc.value.http_status == 422
 
+    def test_decide_forwarded_rejects_mcp_auth_kind(self) -> None:
+        """PR 1.4.1 Gap #4 — mcp_auth was previously listed in
+        APPROVAL_FORWARDABLE_KINDS but the OAuth flow binds tokens to
+        whoever completes it; forwarding either silently rebinds to the
+        recipient's identity (footgun) or requires the requester to
+        re-auth (defeats the point). The contract narrowed in Phase C
+        rejects mcp_auth at the API edge with 422.
+        """
+
+        from runtime_api.http.errors import RuntimeApiError
+
+        store = InMemoryRuntimeApiStore()
+        _seed_run_and_pending_approval(store, approval_kind="mcp_auth")
+        service = _make_service(store)
+
+        request = ApprovalDecisionRequest(
+            decision=ApprovalDecision.FORWARDED,
+            decided_by_user_id=_Values.REQUESTER_USER_ID,
+            forward_to=ApprovalForwardTarget(
+                kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
+            ),
+        )
+        with pytest.raises(RuntimeApiError) as exc:
+            asyncio.run(
+                service.record_approval_decision(
+                    org_id=_Values.ORG_ID,
+                    approval_id=_Values.PARENT_APPROVAL_ID,
+                    request=request,
+                )
+            )
+        assert exc.value.http_status == 422
+
     def test_decide_forwarded_rejects_already_resolved_parent(self) -> None:
         from runtime_api.http.errors import RuntimeApiError
 
