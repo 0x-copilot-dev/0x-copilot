@@ -222,6 +222,11 @@ class Messages:
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
         SAFE_FALLBACK = "The runtime API could not complete the request safely."
+        # PR 1.6 — workspace defaults model validation. Messages stay
+        # generic (no leaking the catalog membership rules) and pair
+        # with a 422 so the FE can render a field-level error.
+        UNKNOWN_MODEL_PROVIDER = "Default model provider is not in the catalog."
+        UNKNOWN_MODEL_NAME = "Default model name is not in the catalog."
 
     class Audit:
         # PR 1.4 — append-only audit action for the forward link. The

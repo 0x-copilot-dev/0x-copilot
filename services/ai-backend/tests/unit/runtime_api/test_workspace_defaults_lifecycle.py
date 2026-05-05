@@ -365,3 +365,318 @@ class TestConversationLifecycleRoute(WorkspaceDefaultsFixtureMixin):
             AgentRunStatus.CANCELLING,
             AgentRunStatus.CANCELLED,
         }
+
+
+class TestWorkspaceDefaultsAdditionalCoverage(WorkspaceDefaultsFixtureMixin):
+    """Gap-closure tests added after the doc audit (PR 1.6 follow-up)."""
+
+    def test_get_defaults_for_foreign_org_does_not_leak(self) -> None:
+        # The trusted identity controls the scope, so foreign-org reads
+        # are physically impossible — a request pretending to read
+        # "another org" gets that org's *own* effective defaults
+        # (deployment fallback when empty). The contract is "the wire
+        # cannot leak data across tenants" and that's verified by the
+        # response carrying no provenance from the impersonation
+        # attempt.
+        client, _ = self.create_client()
+        headers = self._headers()
+        headers["x-enterprise-org-id"] = "org_other"
+        response = client.get("/v1/agent/workspace/defaults", headers=headers)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # Deployment fallback for an unknown org — never the source
+        # org's defaults.
+        assert body["updated_at"] is None
+        assert body["default_connectors"] == {}
+
+    def test_put_rejects_unknown_model_provider(self) -> None:
+        client, _ = self.create_client()
+        payload = self._defaults_payload()
+        payload["default_model"] = {
+            "provider": "totally-fake-provider",
+            "model_name": "gpt-5.4-mini",
+        }
+        response = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=payload,
+        )
+        assert response.status_code == 422, response.text
+        assert "provider" in response.text.lower()
+
+    def test_put_rejects_unknown_model_name(self) -> None:
+        client, _ = self.create_client()
+        payload = self._defaults_payload()
+        payload["default_model"] = {
+            "provider": "openai",
+            "model_name": "gpt-9000-not-shipping",
+        }
+        response = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=payload,
+        )
+        assert response.status_code == 422, response.text
+
+    def test_create_conversation_with_explicit_connectors_wins(self) -> None:
+        # Defaults are off-by-default for slack; the request explicitly
+        # sets a different state and that wins.
+        client, _ = self.create_client()
+        client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=self._defaults_payload(slack_paused=True),
+        )
+        # Bypass the seed by PATCHing scopes immediately after create.
+        # The seed only fires when ``enabled_connectors`` is empty at
+        # create time; once a PATCH lands, the row is the source of
+        # truth.
+        conversation_id = self._create_conversation(client)
+        client.patch(
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            headers=self._headers(),
+            json={"scopes": {"slack": ["read"]}},
+        )
+        get = client.get(
+            f"/v1/agent/conversations/{conversation_id}",
+            headers=self._headers(),
+        )
+        assert get.json()["enabled_connectors"]["slack"] == ["read"]
+
+    def test_delete_audit_records_retention_until(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self._create_conversation(client)
+        response = client.delete(
+            f"/v1/agent/conversations/{conversation_id}",
+            headers=self._headers(),
+        )
+        assert response.status_code == 204, response.text
+        events = [
+            record
+            for event_type, record in store.audit_log
+            if event_type == Messages.Audit.CONVERSATION_DELETE
+        ]
+        assert len(events) == 1, events
+        meta = events[0]["metadata"]
+        assert meta["conversation_id"] == conversation_id
+        # Deployment fallback gives 365-day messages retention, so the
+        # forensic field must be populated.
+        assert meta["retention_until"] is not None
+
+    def test_admin_override_can_patch_member_chat(self) -> None:
+        # Owner creates a chat, admin patches its folder; audit row
+        # records ``override_by_admin`` + the owner's user_id so SIEM
+        # can reconstruct who acted on whose data.
+        client, store = self.create_client()
+        conversation_id = self._create_conversation(client)
+
+        admin_headers = {
+            "x-enterprise-service-token": _SERVICE_TOKEN,
+            "x-enterprise-org-id": self.Values.ORG_ID,
+            "x-enterprise-user-id": "support_admin",
+            "x-enterprise-roles": "admin,employee",
+            "x-enterprise-permission-scopes": ",".join((RUNTIME_USE, ADMIN_USERS)),
+            "x-enterprise-connector-scopes": "{}",
+        }
+        response = client.patch(
+            f"/v1/agent/conversations/{conversation_id}",
+            headers=admin_headers,
+            json={"folder": "Audit"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["folder"] == "Audit"
+
+        events = [
+            record
+            for event_type, record in store.audit_log
+            if event_type == Messages.Audit.CONVERSATION_UPDATE
+        ]
+        meta = events[-1]["metadata"]
+        assert meta.get("override_by_admin") is True
+        assert meta.get("conversation_owner_user_id") == self.Values.USER_ID
+
+    def test_admin_override_can_delete_member_chat(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self._create_conversation(client)
+
+        admin_headers = {
+            "x-enterprise-service-token": _SERVICE_TOKEN,
+            "x-enterprise-org-id": self.Values.ORG_ID,
+            "x-enterprise-user-id": "support_admin",
+            "x-enterprise-roles": "admin,employee",
+            "x-enterprise-permission-scopes": ",".join((RUNTIME_USE, ADMIN_USERS)),
+            "x-enterprise-connector-scopes": "{}",
+        }
+        response = client.delete(
+            f"/v1/agent/conversations/{conversation_id}",
+            headers=admin_headers,
+        )
+        assert response.status_code == 204, response.text
+        assert store.conversations[conversation_id].deleted_at is not None
+
+        events = [
+            record
+            for event_type, record in store.audit_log
+            if event_type == Messages.Audit.CONVERSATION_DELETE
+        ]
+        meta = events[-1]["metadata"]
+        assert meta.get("override_by_admin") is True
+        assert meta.get("conversation_owner_user_id") == self.Values.USER_ID
+
+    def test_non_admin_outsider_cannot_patch_other_user_chat(self) -> None:
+        # Outsider in same org but no admin scope: 404 (same opacity
+        # as PR 1.2.1 connector PATCH).
+        client, _ = self.create_client()
+        conversation_id = self._create_conversation(client)
+        outsider_headers = {
+            "x-enterprise-service-token": _SERVICE_TOKEN,
+            "x-enterprise-org-id": self.Values.ORG_ID,
+            "x-enterprise-user-id": "other_member",
+            "x-enterprise-roles": "employee",
+            "x-enterprise-permission-scopes": RUNTIME_USE,
+            "x-enterprise-connector-scopes": "{}",
+        }
+        response = client.patch(
+            f"/v1/agent/conversations/{conversation_id}",
+            headers=outsider_headers,
+            json={"folder": "Mine"},
+        )
+        assert response.status_code == 404, response.text
+
+
+class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
+    """Verify the model resolution chain extension (doc §2.8).
+
+    Chain: request.model → assistant → workspace_defaults.default_model
+    → settings.default_model. We exercise the workspace_defaults slot
+    directly via the unit-level service so the test is independent of
+    the queue / worker.
+    """
+
+    def test_create_run_uses_workspace_default_when_request_omits_model(
+        self,
+    ) -> None:
+        client, store = self.create_client()
+        # Seed defaults with a different model than the deployment default.
+        admin_headers = self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS))
+        payload = self._defaults_payload()
+        payload["default_model"] = {
+            "provider": "anthropic",
+            "model_name": "claude-opus-4-7",
+        }
+        put = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=admin_headers,
+            json=payload,
+        )
+        assert put.status_code == 200, put.text
+        # The workspace default is now claude-opus-4-7. Verify the
+        # service-level helper that creates a run carries that model
+        # forward when the request didn't pin one.
+        from runtime_api.schemas import (
+            CreateRunRequest,
+            RuntimeRequestContext,
+        )
+
+        async def _exercise() -> str:
+            service: RuntimeApiService = client.app.state.runtime_api_service
+            request = CreateRunRequest(
+                conversation_id="conv_x",
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+                user_input="hi",
+                content_format="text",
+                model=None,  # explicit absence — defaults should fill in
+                request_context=RuntimeRequestContext(
+                    roles=("employee",),
+                    permission_scopes=(RUNTIME_USE,),
+                    connector_scopes={},
+                ),
+            )
+            request = await service._apply_workspace_default_model(request=request)
+            assert request.model is not None
+            return request.model.model_name or ""
+
+        import asyncio
+
+        resolved = asyncio.run(_exercise())
+        assert resolved == "claude-opus-4-7", resolved
+
+    def test_create_run_falls_back_to_settings_when_no_defaults(self) -> None:
+        # No defaults row → ``_apply_workspace_default_model`` is a
+        # no-op (request.model stays None) and the existing chain in
+        # ``_request_with_runtime_context`` lands on
+        # ``settings.default_model``.
+        client, _ = self.create_client()
+        from runtime_api.schemas import (
+            CreateRunRequest,
+            RuntimeRequestContext,
+        )
+
+        async def _exercise() -> bool:
+            service: RuntimeApiService = client.app.state.runtime_api_service
+            request = CreateRunRequest(
+                conversation_id="conv_x",
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+                user_input="hi",
+                content_format="text",
+                model=None,
+                request_context=RuntimeRequestContext(
+                    roles=("employee",),
+                    permission_scopes=(RUNTIME_USE,),
+                    connector_scopes={},
+                ),
+            )
+            after = await service._apply_workspace_default_model(request=request)
+            return after.model is None
+
+        import asyncio
+
+        # No defaults persisted → no fallback applied; the resolver
+        # downstream will use settings.default_model.
+        assert asyncio.run(_exercise()) is True
+
+    def test_create_run_request_model_wins_over_workspace_default(self) -> None:
+        client, _ = self.create_client()
+        admin_headers = self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS))
+        payload = self._defaults_payload()
+        payload["default_model"] = {
+            "provider": "anthropic",
+            "model_name": "claude-opus-4-7",
+        }
+        client.put(
+            "/v1/agent/workspace/defaults",
+            headers=admin_headers,
+            json=payload,
+        )
+        from runtime_api.schemas import (
+            CreateRunRequest,
+            ModelSelectionRequest,
+            RuntimeRequestContext,
+        )
+
+        async def _exercise() -> str:
+            service: RuntimeApiService = client.app.state.runtime_api_service
+            request = CreateRunRequest(
+                conversation_id="conv_x",
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+                user_input="hi",
+                content_format="text",
+                model=ModelSelectionRequest(
+                    provider="openai", model_name="gpt-5.4-mini"
+                ),
+                request_context=RuntimeRequestContext(
+                    roles=("employee",),
+                    permission_scopes=(RUNTIME_USE,),
+                    connector_scopes={},
+                ),
+            )
+            after = await service._apply_workspace_default_model(request=request)
+            assert after.model is not None
+            return after.model.model_name or ""
+
+        import asyncio
+
+        assert asyncio.run(_exercise()) == "gpt-5.4-mini"

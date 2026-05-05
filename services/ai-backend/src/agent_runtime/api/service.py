@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from starlette import status
 
@@ -1577,9 +1577,13 @@ class RuntimeApiService:
         """Public ``PUT /v1/agent/workspace/defaults`` (PR 1.6).
 
         Composes the workspace_defaults upsert + retention policy
-        upserts and writes one audit row.
+        upserts and writes one audit row. Validates the requested
+        default model against the same catalog ``list_models`` exposes
+        — bouncing typos as 422 instead of letting them silently
+        corrupt every future ``create_run`` for the org.
         """
 
+        self._validate_workspace_default_model(request)
         response, audit_metadata = await self._workspace_defaults().update(
             org_id=org_id,
             actor_user_id=actor_user_id,
@@ -1605,27 +1609,37 @@ class RuntimeApiService:
         user_id: str,
         conversation_id: str,
         request: UpdateConversationRequest,
+        allow_admin_override: bool = False,
     ) -> ConversationResponse:
         """Public ``PATCH /v1/agent/conversations/{id}`` (PR 1.6).
 
         Lifecycle PATCH: title/folder/archived. Each field is optional;
         we use ``model_fields_set`` to honour RFC 7396 merge-patch
         semantics (omitted = no-op, explicit null = clear).
+
+        ``allow_admin_override`` mirrors PR 1.2.1: an actor with the
+        ``ADMIN_USERS`` permission scope can PATCH another member's
+        chat in the same tenant; the audit row records
+        ``override_by_admin=True`` plus the owner's user_id.
         """
 
-        before = await self._conversation_for_scope(
+        before, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
-            user_id=user_id,
+            actor_user_id=user_id,
             conversation_id=conversation_id,
+            allow_admin_override=allow_admin_override,
         )
         fields_set = request.model_fields_set
         title_changed = "title" in fields_set
         folder_changed = "folder" in fields_set
         archived_changed = "archived" in fields_set
         now = datetime.now(timezone.utc)
+        # Persistence UPDATE filters by owner user_id; for admin
+        # overrides we use the owner's id (from the loaded record), not
+        # the actor's. The actor is captured separately in audit metadata.
         updated = await self.persistence.update_conversation(
             org_id=org_id,
-            user_id=user_id,
+            user_id=before.user_id,
             conversation_id=conversation_id,
             title=request.title,
             title_changed=title_changed,
@@ -1643,6 +1657,14 @@ class RuntimeApiService:
                 http_status=status.HTTP_404_NOT_FOUND,
                 retryable=False,
             )
+        audit_metadata = _conversation_lifecycle_audit_metadata(
+            before=before,
+            after=updated,
+            fields_set=fields_set,
+        )
+        if is_admin_override:
+            audit_metadata["override_by_admin"] = True
+            audit_metadata["conversation_owner_user_id"] = before.user_id
         await self.persistence.write_audit_log(
             event_type=Messages.Audit.CONVERSATION_UPDATE,
             record={
@@ -1651,11 +1673,7 @@ class RuntimeApiService:
                 "resource_type": "conversation",
                 "resource_id": conversation_id,
                 "outcome": "success",
-                "metadata": _conversation_lifecycle_audit_metadata(
-                    before=before,
-                    after=updated,
-                    fields_set=fields_set,
-                ),
+                "metadata": audit_metadata,
             },
         )
         return updated.to_response()
@@ -1666,6 +1684,7 @@ class RuntimeApiService:
         org_id: str,
         user_id: str,
         conversation_id: str,
+        allow_admin_override: bool = False,
     ) -> None:
         """Public ``DELETE /v1/agent/conversations/{id}`` (PR 1.6).
 
@@ -1673,25 +1692,48 @@ class RuntimeApiService:
         run exists for this conversation, it is cancelled first via
         the existing ``cancel_run`` path so the SSE stream emits
         ``run_cancelled`` and clients close cleanly.
+
+        ``allow_admin_override`` mirrors PR 1.2.1 / connector PATCH:
+        an actor with ``ADMIN_USERS`` can soft-delete another member's
+        chat in the same tenant; the audit row records the override
+        and the owner's user_id for SIEM reconstruction.
         """
 
-        conversation = await self._conversation_for_scope(
+        conversation, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
-            user_id=user_id,
+            actor_user_id=user_id,
             conversation_id=conversation_id,
+            allow_admin_override=allow_admin_override,
         )
         await self._cancel_active_run_for_conversation(
             org_id=org_id,
-            user_id=user_id,
+            user_id=conversation.user_id,
             conversation_id=conversation_id,
         )
         now = datetime.now(timezone.utc)
         await self.persistence.soft_delete_conversation(
             org_id=org_id,
-            user_id=user_id,
+            user_id=conversation.user_id,
             conversation_id=conversation_id,
             now=now,
         )
+        retention_until = await self._resolve_conversation_retention_until(
+            org_id=org_id,
+            user_id=conversation.user_id,
+            conversation_id=conversation_id,
+            assistant_id=conversation.assistant_id,
+            deleted_at=now,
+        )
+        audit_metadata: dict[str, object] = {
+            "conversation_id": conversation_id,
+            "folder": conversation.folder,
+            "retention_until": (
+                retention_until.isoformat() if retention_until is not None else None
+            ),
+        }
+        if is_admin_override:
+            audit_metadata["override_by_admin"] = True
+            audit_metadata["conversation_owner_user_id"] = conversation.user_id
         await self.persistence.write_audit_log(
             event_type=Messages.Audit.CONVERSATION_DELETE,
             record={
@@ -1700,14 +1742,7 @@ class RuntimeApiService:
                 "resource_type": "conversation",
                 "resource_id": conversation_id,
                 "outcome": "success",
-                "metadata": {
-                    "folder": conversation.folder,
-                    "previously_deleted_at": (
-                        conversation.deleted_at.isoformat()
-                        if conversation.deleted_at is not None
-                        else None
-                    ),
-                },
+                "metadata": audit_metadata,
             },
         )
 
@@ -1717,18 +1752,44 @@ class RuntimeApiService:
         org_id: str,
         user_id: str,
         conversation_id: str,
+        allow_admin_override: bool = False,
     ) -> ConversationResponse:
-        """Public ``POST /v1/agent/conversations/{id}/restore`` (PR 1.6)."""
+        """Public ``POST /v1/agent/conversations/{id}/restore`` (PR 1.6).
 
-        # We must not consult ``_conversation_for_scope`` here directly
-        # because the row is soft-deleted; a normal scope read would
-        # still find it but distinguish ``None`` adapters from "row
-        # already reaped" only via ``deleted_at``. Use the adapter
-        # directly so a missing row (reaped) is a 404.
+        ``allow_admin_override`` mirrors PR 1.2.1: an actor with
+        ``ADMIN_USERS`` can restore another member's chat in the same
+        tenant.
+        """
+
+        # Soft-deleted rows are still visible to the owner via
+        # ``get_conversation`` (the adapter doesn't filter by
+        # ``deleted_at``). For admin overrides we fall through to
+        # ``get_conversation_for_org`` which is also deleted-row-aware.
         now = datetime.now(timezone.utc)
+        owner_user_id = user_id
+        is_admin_override = False
+        if allow_admin_override:
+            owner_lookup = await self.persistence.get_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+            if owner_lookup is None:
+                admin_view = await self.persistence.get_conversation_for_org(
+                    org_id=org_id, conversation_id=conversation_id
+                )
+                if admin_view is None:
+                    raise RuntimeApiError(
+                        RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                        Messages.Error.CONVERSATION_NOT_FOUND,
+                        http_status=status.HTTP_404_NOT_FOUND,
+                        retryable=False,
+                    )
+                owner_user_id = admin_view.user_id
+                is_admin_override = True
         restored = await self.persistence.restore_conversation(
             org_id=org_id,
-            user_id=user_id,
+            user_id=owner_user_id,
             conversation_id=conversation_id,
             now=now,
         )
@@ -1739,6 +1800,10 @@ class RuntimeApiService:
                 http_status=status.HTTP_404_NOT_FOUND,
                 retryable=False,
             )
+        audit_metadata: dict[str, object] = {"conversation_id": conversation_id}
+        if is_admin_override:
+            audit_metadata["override_by_admin"] = True
+            audit_metadata["conversation_owner_user_id"] = owner_user_id
         await self.persistence.write_audit_log(
             event_type=Messages.Audit.CONVERSATION_RESTORE,
             record={
@@ -1747,7 +1812,7 @@ class RuntimeApiService:
                 "resource_type": "conversation",
                 "resource_id": conversation_id,
                 "outcome": "success",
-                "metadata": {},
+                "metadata": audit_metadata,
             },
         )
         return restored.to_response()
@@ -1780,6 +1845,84 @@ class RuntimeApiService:
                 reason="conversation_deleted",
             ),
         )
+
+    def _validate_workspace_default_model(
+        self, request: UpdateWorkspaceDefaultsRequest
+    ) -> None:
+        """Reject unknown providers / model names with typed 422s.
+
+        Provider validation reuses ``ModelConfigResolver._normalize_provider``
+        (the same alias table the run path enforces), so the ground
+        truth of "what providers exist" lives in one place.
+        Model-name validation reuses ``list_models().models``: the
+        catalog the FE picker reads from is the same set the admin
+        is allowed to nominate as a default. No second source of
+        truth, no manual list to drift.
+        """
+
+        try:
+            self.model_resolver._normalize_provider(request.default_model.provider)
+        except AgentRuntimeError as exc:
+            raise RuntimeApiError(
+                exc.code,
+                Messages.Error.UNKNOWN_MODEL_PROVIDER,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            ) from exc
+        catalog_ids = {model.id for model in self.list_models().models}
+        catalog_names = {model.model_name for model in self.list_models().models}
+        if (
+            request.default_model.model_name not in catalog_ids
+            and request.default_model.model_name not in catalog_names
+        ):
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.UNKNOWN_MODEL_NAME,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+
+    async def _resolve_conversation_retention_until(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        assistant_id: str,
+        deleted_at: datetime,
+    ) -> datetime | None:
+        """Resolve the moment the C8 sweeper would reap this conversation.
+
+        Walks the same most-specific policy precedence the sweeper
+        uses (``conversation > assistant > user > org > deployment``)
+        for ``RetentionKind.MESSAGES``. Returns ``None`` when no TTL
+        applies (single-tenant deploys without seeded policies). The
+        forensic value lives in the audit row so SIEM can answer "when
+        will this become unrecoverable?" without re-walking policy at
+        read time.
+        """
+
+        from agent_runtime.persistence.records.retention import RetentionKind
+        from agent_runtime.retention import (
+            DEPLOYMENT_DEFAULT_TTL_SECONDS,
+            RetentionPolicyResolver,
+        )
+
+        policies = await self.persistence.list_retention_policies(org_id=org_id)
+        resolver = RetentionPolicyResolver(
+            org_id=org_id,
+            policies=policies,
+            deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
+        )
+        resolved = resolver.resolve(
+            kind=RetentionKind.MESSAGES,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if resolved.ttl_seconds is None:
+            return None
+        return deleted_at + timedelta(seconds=resolved.ttl_seconds)
 
 
 def _conversation_lifecycle_audit_metadata(

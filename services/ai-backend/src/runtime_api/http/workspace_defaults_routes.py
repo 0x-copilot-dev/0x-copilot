@@ -28,6 +28,18 @@ from runtime_api.schemas import (
 )
 
 
+def _is_admin(request: Request) -> bool:
+    """Return True iff the trusted identity carries the admin scope.
+
+    Mirrors the gate used by the connector PATCH route (PR 1.2.1) so
+    audit semantics line up across every conversation-mutating
+    endpoint in the runtime API.
+    """
+
+    identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+    return identity is not None and ADMIN_USERS in identity.permission_scopes
+
+
 class WorkspaceDefaultsRoutes:
     """Route handlers for workspace defaults (PR 1.6).
 
@@ -94,6 +106,7 @@ class ConversationLifecycleRoutes:
             user_id=user_id,
             conversation_id=conversation_id,
             request=payload,
+            allow_admin_override=_is_admin(request),
         )
 
     @classmethod
@@ -111,6 +124,7 @@ class ConversationLifecycleRoutes:
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
+            allow_admin_override=_is_admin(request),
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -129,6 +143,7 @@ class ConversationLifecycleRoutes:
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
+            allow_admin_override=_is_admin(request),
         )
 
 
