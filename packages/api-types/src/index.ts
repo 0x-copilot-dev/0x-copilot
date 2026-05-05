@@ -242,6 +242,31 @@ export interface SessionResponse {
   identity: SessionIdentity;
 }
 
+/**
+ * PR 2.2 — one row in the UserCard workspace switcher (sidebar). Mirrors
+ * `services/backend/src/backend_app/routes/me.py::Workspace` shape; keep
+ * in lockstep on rename / removal.
+ *
+ * `role` is the human-readable display name of the caller's primary role
+ * in this workspace (Admin / Member / etc.); `null` when no role is
+ * assigned. `last_active_at` is `users.last_seen_at` for that org. The
+ * v1 endpoint returns only the caller's current workspace; multi-
+ * workspace listing widens later (no FE change required).
+ */
+export interface Workspace {
+  org_id: string;
+  display_name: string;
+  slug: string;
+  role: string | null;
+  member_count: number;
+  last_active_at: string | null;
+  is_current: boolean;
+}
+
+export interface WorkspaceListResponse {
+  workspaces: Workspace[];
+}
+
 export interface CreateConversationRequest {
   org_id: string;
   user_id: string;

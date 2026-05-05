@@ -1,0 +1,100 @@
+import type { Conversation } from "@enterprise-search/api-types";
+
+/**
+ * Sidebar grouping reducer (PR 2.2).
+ *
+ * Day-buckets the user's conversations into `Today / Yesterday / Earlier`
+ * against the **user's local timezone** via `Intl.DateTimeFormat`. Within
+ * the `Earlier` bucket, optional `folder` strings are surfaced as
+ * named sub-groups (`Earlier · Launches`, `Earlier · Personal`). Folder-
+ * less conversations group under a single `Earlier` heading.
+ *
+ * The function is intentionally pure: `now` is injected so tests can
+ * drive timezone + DST scenarios without touching the system clock.
+ *
+ * It also drops soft-deleted rows (`deleted_at !== null`) by default
+ * — the PR 1.6 list endpoint already filters them server-side, but the
+ * reducer is defensive in case stale rows ride a cached response.
+ */
+
+export interface ConversationGroup {
+  id: string;
+  label: string;
+  conversations: Conversation[];
+}
+
+const DAY_MS = 86_400_000;
+
+export function groupConversations(
+  conversations: readonly Conversation[],
+  now: Date,
+): ConversationGroup[] {
+  const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short" });
+  const todayKey = fmtDate.format(now);
+  const yesterdayKey = fmtDate.format(new Date(now.getTime() - DAY_MS));
+
+  const today: Conversation[] = [];
+  const yesterday: Conversation[] = [];
+  // Folder name → rows. `__none__` is a sentinel for the no-folder bucket.
+  const earlierByFolder = new Map<string, Conversation[]>();
+
+  // Stable input order: most-recently-updated first.
+  const sorted = [...conversations]
+    .filter((c) => !c.deleted_at)
+    .sort(
+      (a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
+
+  for (const conversation of sorted) {
+    const updated = new Date(conversation.updated_at);
+    const key = fmtDate.format(updated);
+    if (key === todayKey) {
+      today.push(conversation);
+      continue;
+    }
+    if (key === yesterdayKey) {
+      yesterday.push(conversation);
+      continue;
+    }
+    const folder = conversation.folder?.trim() || "__none__";
+    let bucket = earlierByFolder.get(folder);
+    if (!bucket) {
+      bucket = [];
+      earlierByFolder.set(folder, bucket);
+    }
+    bucket.push(conversation);
+  }
+
+  const groups: ConversationGroup[] = [];
+  if (today.length > 0) {
+    groups.push({ id: "today", label: "Today", conversations: today });
+  }
+  if (yesterday.length > 0) {
+    groups.push({
+      id: "yesterday",
+      label: "Yesterday",
+      conversations: yesterday,
+    });
+  }
+  // Folders ordered alphabetically; the un-foldered bucket appears last.
+  const folderNames = [...earlierByFolder.keys()]
+    .filter((name) => name !== "__none__")
+    .sort((a, b) => a.localeCompare(b));
+  for (const folder of folderNames) {
+    groups.push({
+      id: `earlier:${folder}`,
+      label: `Earlier · ${folder}`,
+      conversations: earlierByFolder.get(folder) ?? [],
+    });
+  }
+  const noFolder = earlierByFolder.get("__none__");
+  if (noFolder && noFolder.length > 0) {
+    groups.push({
+      id: "earlier",
+      label: "Earlier",
+      conversations: noFolder,
+    });
+  }
+  return groups;
+}

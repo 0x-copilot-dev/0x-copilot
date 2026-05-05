@@ -4,7 +4,8 @@ import type {
   ApprovalForwardTarget,
 } from "@enterprise-search/api-types";
 import { Badge, Button } from "@enterprise-search/design-system";
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
+import { useApprovalFocus } from "../../approval/ApprovalFocusContext";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
 import {
   humanizeIdentifier,
@@ -85,6 +86,31 @@ export function ApprovalTool({
   const submit = (decision: ApprovalDecision): void => {
     resume({ decision, approval_id: approvalId });
   };
+
+  // PR 2.2 — register with the ApprovalFocusContext so a global ⌘↩
+  // keymap binding can approve the topmost unresolved card without
+  // mouse focus / scroll-into-view ceremony. Only register while the
+  // approval is unresolved AND the user can act on it (we exclude
+  // ask_a_question, which has its own answer flow, plus already-
+  // forwarded cards waiting on someone else).
+  const approvalFocus = useApprovalFocus();
+  useEffect(() => {
+    const canConsent =
+      !resolved && approvalId.length > 0 && !isAskAQuestion && !isForwarded;
+    if (!canConsent) {
+      return;
+    }
+    approvalFocus.register({
+      approvalId,
+      approve: () => submit("approved"),
+    });
+    return () => approvalFocus.unregister(approvalId);
+    // `submit` closes over `resume` + `approvalId`; we intentionally
+    // do not list `submit` in the dep array (it's recreated each
+    // render) — re-register cycles each render would churn the order.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalId, isAskAQuestion, isForwarded, resolved, approvalFocus]);
+
   const submitForward = (member: WorkspaceMember): void => {
     const target: ApprovalForwardTarget = {
       kind: "workspace_user",

@@ -55,6 +55,7 @@ import {
   type ThinkingDepth,
 } from "./depth";
 import { useLocalStorageState } from "../../utils/useLocalStorageState";
+import { ApprovalFocusProvider } from "./approval/ApprovalFocusContext";
 
 type ChatSettingsTarget = "general" | "connectors" | "skills";
 import {
@@ -950,92 +951,100 @@ export function ChatScreen({
 
   return (
     <AssistantRuntimeProvider runtime={runtime} aui={aui}>
-      <main
-        className={
-          sidebarCollapsed
-            ? "aui-workspace aui-workspace--sidebar-collapsed"
-            : "aui-workspace"
-        }
-      >
-        <AssistantThreadList
-          activeRunId={activeRunId}
-          collapsed={sidebarCollapsed}
-          conversations={conversations}
-          loading={historyLoading}
-          onOpenSettings={() => onOpenSettings("general")}
-          onRefresh={() => void refreshConversations()}
-        />
-        <AssistantThread
-          topbar={
-            <Topbar
-              workspace={null}
-              folder={currentConversation?.folder ?? null}
-              title={currentConversation?.title ?? null}
-              runUiState={
-                historyError !== null
-                  ? { ...runUiState, headerStatus: historyError }
-                  : oauthStatus !== null
-                    ? { ...runUiState, headerStatus: oauthStatus }
-                    : activeRunId === null
-                      ? { ...runUiState, headerStatus: status }
-                      : runUiState
-              }
-              sidebarCollapsed={sidebarCollapsed}
-              onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-              panelOpen={panelOpen}
-              onTogglePanel={() => setPanelOpen((current) => !current)}
-              connectors={activeConnectorGlyphs}
-              connectorsOpen={false}
-              onOpenConnectors={() => onOpenSettings("connectors")}
-              usagePct={null}
-              onOpenUsage={() => setDetailsPanel("usage")}
-              models={demoModels}
-              selectedModel={selectedModelId}
-              onModelChange={setSelectedModelId}
-              depth={depth}
-              onDepthChange={setDepth}
-              depthVisible={depthVisible}
-              onShare={() => void onShare()}
-              onOpenSettings={() => onOpenSettings("general")}
-            />
+      <ApprovalFocusProvider>
+        <main
+          className={
+            sidebarCollapsed
+              ? "aui-workspace aui-workspace--sidebar-collapsed"
+              : "aui-workspace"
           }
         >
-          <CitationsProvider citations={activeCitations}>
-            <ThreadBody
-              connectors={connectors}
-              skills={skills}
-              onMcpAuthConnect={onMcpAuthConnect}
-              onMcpAuthSkip={onMcpAuthSkip}
-              onOpenMcpSettings={() => onOpenSettings("connectors")}
-              onOpenSkillsSettings={() => onOpenSettings("skills")}
-              onShowConnectors={() => setShowConnectorSuggestions(true)}
-              onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
-              runIndicator={runIndicator}
-              connectorSuggestions={
-                showConnectorSuggestions && suggestedServers.length > 0 ? (
-                  <ConnectorSuggestionCard
-                    servers={suggestedServers}
-                    onConnect={(serverId) =>
-                      void connectors.authenticate(serverId)
-                    }
-                    onSkip={(serverId) => void connectors.skipAuth(serverId)}
-                    onNone={() => setShowConnectorSuggestions(false)}
-                  />
-                ) : null
-              }
-            />
-          </CitationsProvider>
-        </AssistantThread>
-        {detailsPanel !== null ? (
-          <DetailsPanelHost
-            kind={detailsPanel}
-            conversationId={conversationId}
-            identity={identity}
-            citations={activeCitations}
-            onClose={() => setDetailsPanel(null)}
+          <AssistantThreadList
+            activeRunId={activeRunId}
+            activeConversationId={conversationId}
+            collapsed={sidebarCollapsed}
+            conversations={conversations}
+            loading={historyLoading}
+            onOpenSettings={() => onOpenSettings("general")}
+            onRefresh={() => void refreshConversations()}
+            onSwitchToThread={(id) => void loadConversationById(id)}
+            onStartNewChat={onStartNewChat}
+            onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
           />
-        ) : null}
-      </main>
+          <AssistantThread
+            topbar={
+              <Topbar
+                workspace={null}
+                folder={currentConversation?.folder ?? null}
+                title={currentConversation?.title ?? null}
+                runUiState={
+                  historyError !== null
+                    ? { ...runUiState, headerStatus: historyError }
+                    : oauthStatus !== null
+                      ? { ...runUiState, headerStatus: oauthStatus }
+                      : activeRunId === null
+                        ? { ...runUiState, headerStatus: status }
+                        : runUiState
+                }
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={() =>
+                  setSidebarCollapsed((current) => !current)
+                }
+                panelOpen={panelOpen}
+                onTogglePanel={() => setPanelOpen((current) => !current)}
+                connectors={activeConnectorGlyphs}
+                connectorsOpen={false}
+                onOpenConnectors={() => onOpenSettings("connectors")}
+                usagePct={null}
+                onOpenUsage={() => setDetailsPanel("usage")}
+                models={demoModels}
+                selectedModel={selectedModelId}
+                onModelChange={setSelectedModelId}
+                depth={depth}
+                onDepthChange={setDepth}
+                depthVisible={depthVisible}
+                onShare={() => void onShare()}
+                onOpenSettings={() => onOpenSettings("general")}
+              />
+            }
+          >
+            <CitationsProvider citations={activeCitations}>
+              <ThreadBody
+                connectors={connectors}
+                skills={skills}
+                onMcpAuthConnect={onMcpAuthConnect}
+                onMcpAuthSkip={onMcpAuthSkip}
+                onOpenMcpSettings={() => onOpenSettings("connectors")}
+                onOpenSkillsSettings={() => onOpenSettings("skills")}
+                onShowConnectors={() => setShowConnectorSuggestions(true)}
+                onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+                runIndicator={runIndicator}
+                connectorSuggestions={
+                  showConnectorSuggestions && suggestedServers.length > 0 ? (
+                    <ConnectorSuggestionCard
+                      servers={suggestedServers}
+                      onConnect={(serverId) =>
+                        void connectors.authenticate(serverId)
+                      }
+                      onSkip={(serverId) => void connectors.skipAuth(serverId)}
+                      onNone={() => setShowConnectorSuggestions(false)}
+                    />
+                  ) : null
+                }
+              />
+            </CitationsProvider>
+          </AssistantThread>
+          {detailsPanel !== null ? (
+            <DetailsPanelHost
+              kind={detailsPanel}
+              conversationId={conversationId}
+              identity={identity}
+              citations={activeCitations}
+              onClose={() => setDetailsPanel(null)}
+            />
+          ) : null}
+        </main>
+      </ApprovalFocusProvider>
     </AssistantRuntimeProvider>
   );
 }

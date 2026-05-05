@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
 from backend_facade.auth_routes import register_auth_routes
+from backend_facade.me_routes import register_me_routes
 from backend_facade.scim_routes import register_scim_routes
 from backend_facade.deployment_profile import (
     DeploymentProfile,
@@ -87,6 +88,7 @@ def create_app(
         }
 
     register_auth_routes(app)
+    register_me_routes(app)
     register_scim_routes(app)
 
     @app.post("/v1/telemetry/otlp/v1/traces")

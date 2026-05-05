@@ -83,6 +83,7 @@ from backend_app.observability import (
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
 from backend_app.routes.lockouts import register_lockout_routes
+from backend_app.routes.me import register_me_routes
 from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
@@ -829,6 +830,7 @@ def create_app(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     register_audit_export_routes(app)
+    register_me_routes(app)
     register_siem_admin_routes(app)
     register_health_routes(app)
 
