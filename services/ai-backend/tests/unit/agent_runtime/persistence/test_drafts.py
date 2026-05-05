@@ -244,8 +244,13 @@ class TestDraftService:
         assert result.draft.status == DraftStatus.SEND_PENDING_APPROVAL
         assert result.draft.target_connector == "slack"
         assert result.draft.target_metadata == {"channel": "#announcements"}
+        # PR 1.3.5 phase 1 refactor: ``approval_id`` is now the persisted
+        # ``ApprovalRequestRecord.approval_id`` (UUID hex from the record's
+        # default factory) rather than a ``draft_send:`` prefixed string.
+        # The audit row + APPROVAL_REQUESTED event still carry the
+        # draft/version metadata so SIEM can join chains end-to-end.
         assert result.approval_id is not None
-        assert result.approval_id.startswith("draft_send:")
+        assert len(result.approval_id) == 32  # uuid4().hex
 
     async def test_send_audits_proposed(self) -> None:
         audit_calls: list[tuple[str, dict]] = []
