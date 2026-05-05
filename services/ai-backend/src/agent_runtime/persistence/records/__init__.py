@@ -14,6 +14,12 @@ from agent_runtime.persistence.records.budgets import (
     ChargeOutcome,
 )
 from agent_runtime.persistence.records.checkpoints import CheckpointRecord
+from agent_runtime.persistence.records.citations import CitationRecord
+from agent_runtime.persistence.records.drafts import (
+    DraftPath,
+    DraftRecord,
+    DraftStatus,
+)
 from agent_runtime.persistence.records.common import (
     ApprovalRiskClass,
     AsyncTaskStatus,
@@ -76,6 +82,8 @@ PERSISTENCE_TABLE_RECORDS = (
     CapabilitySnapshotRecord,
     AuditLogRecord,
     CheckpointRecord,
+    CitationRecord,
+    DraftRecord,
 )
 
 __all__ = [
@@ -112,6 +120,10 @@ __all__ = [
     "UsageDailyUserRow",
     "AuditLogRecord",
     "CheckpointRecord",
+    "CitationRecord",
+    "DraftPath",
+    "DraftRecord",
+    "DraftStatus",
     "BudgetEnforcement",
     "BudgetPeriod",
     "BudgetRecord",

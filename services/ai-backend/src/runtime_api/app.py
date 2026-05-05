@@ -77,6 +77,7 @@ class RuntimeApiAppFactory:
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
         app.state.deployment = resolved_deployment
+        app.state.draft_service = cls.default_draft_service(app)
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
@@ -133,6 +134,26 @@ class RuntimeApiAppFactory:
             settings=settings,
             on_event_appended=event_bus.notify_sync,
         )
+
+    @classmethod
+    def default_draft_service(cls, app):
+        """Wire the Workspace-pane draft service for the configured backend."""
+
+        from agent_runtime.api.draft_service import DraftService
+        from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
+        from runtime_adapters.postgres.draft_store import PostgresDraftStore
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        ports = getattr(app.state, "runtime_ports", None)
+        if async_ports is not None and async_ports.backend == "postgres":
+            store = PostgresDraftStore(async_ports.store)
+            persistence = async_ports.persistence
+        else:
+            store = InMemoryDraftStore()
+            persistence = (
+                (async_ports or ports).persistence if (async_ports or ports) else None
+            )
+        return DraftService(store=store, persistence=persistence)
 
     @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:

@@ -40,6 +40,16 @@ from runtime_api.schemas.conversations import (
     MessageRecord,
     MessageResponse,
 )
+from runtime_api.schemas.drafts import (
+    Draft,
+    DraftDiscardRequest,
+    DraftListResponse,
+    DraftPatchRequest,
+    DraftSection,
+    DraftSendRequest,
+    DraftSendResponse,
+    DraftStatus,
+)
 from runtime_api.schemas.errors import ApiErrorResponse
 from runtime_api.schemas.events import (
     AssistantPerformanceMetrics,
@@ -126,4 +136,12 @@ __all__ = [
     "RuntimeRunCommand",
     "RuntimeCancelCommand",
     "RuntimeApprovalResolvedCommand",
+    "Draft",
+    "DraftDiscardRequest",
+    "DraftListResponse",
+    "DraftPatchRequest",
+    "DraftSection",
+    "DraftSendRequest",
+    "DraftSendResponse",
+    "DraftStatus",
 ]

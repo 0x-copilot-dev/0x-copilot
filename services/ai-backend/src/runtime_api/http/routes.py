@@ -25,6 +25,7 @@ from runtime_api.schemas import (
     ApprovalDecisionResponse,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationConnectorScopesResponse,
     ConversationContextResponse,
     ConversationListResponse,
     ConversationResponse,
@@ -37,6 +38,7 @@ from runtime_api.schemas import (
     RuntimeRequestContext,
     RuntimeEventReplayResponse,
     RunStatusResponse,
+    UpdateConversationConnectorsRequest,
 )
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
@@ -149,6 +151,23 @@ class RuntimeApiRoutes:
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
+        )
+
+    @classmethod
+    async def update_conversation_connectors(
+        cls,
+        request: Request,
+        conversation_id: str,
+        payload: UpdateConversationConnectorsRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ConversationConnectorScopesResponse:
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.service(request).update_conversation_connectors(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            request=payload,
         )
 
     @classmethod
@@ -369,6 +388,13 @@ class RuntimeApiRouter:
             name=Keys.RouteName.GET_CONVERSATION_CONTEXT,
         )
         router.add_api_route(
+            "/conversations/{conversation_id}/connectors",
+            RuntimeApiRoutes.update_conversation_connectors,
+            methods=["PATCH"],
+            response_model=ConversationConnectorScopesResponse,
+            name=Keys.RouteName.UPDATE_CONVERSATION_CONNECTORS,
+        )
+        router.add_api_route(
             "/models",
             RuntimeApiRoutes.list_models,
             methods=["GET"],
@@ -423,6 +449,10 @@ class RuntimeApiRouter:
             response_model=HistoryDeletionResponse,
             name=Keys.RouteName.DELETE_USER_HISTORY,
         )
+        # PR 1.3 — Workspace-pane draft artifacts.
+        from runtime_api.http.drafts import register_draft_routes
+
+        register_draft_routes(router)
         return router
 
 

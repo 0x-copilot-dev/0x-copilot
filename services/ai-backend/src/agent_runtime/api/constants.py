@@ -108,6 +108,12 @@ class Keys:
         RETENTION_LIST = "retention_list"
         RETENTION_UPSERT = "retention_upsert"
         RETENTION_DELETE = "retention_delete"
+        # Drafts (PR 1.3)
+        LIST_DRAFTS = "list_drafts"
+        GET_DRAFT = "get_draft"
+        PATCH_DRAFT = "patch_draft"
+        SEND_DRAFT = "send_draft"
+        DISCARD_DRAFT = "discard_draft"
 
 
 class Values:

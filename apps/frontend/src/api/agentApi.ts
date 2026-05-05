@@ -9,11 +9,19 @@ import type {
   CreateConversationRequest,
   CreateRunRequest,
   CreateRunResponse,
+  ConversationConnectorScopesResponse,
+  Draft,
+  DraftDiscardRequest,
+  DraftListResponse,
+  DraftPatchRequest,
+  DraftSendRequest,
+  DraftSendResponse,
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
+  UpdateConversationConnectorScopesRequest,
   UsageConversationRow,
   UsageMeResponse,
   UsagePeriod,
@@ -21,7 +29,13 @@ import type {
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
-import { correlationHeaders, httpGet, httpPost, httpPostQuery } from "./http";
+import {
+  correlationHeaders,
+  httpGet,
+  httpPatchQuery,
+  httpPost,
+  httpPostQuery,
+} from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
 
@@ -112,6 +126,26 @@ export function getConversationContext(
 ): Promise<ConversationContextResponse> {
   return httpGet<ConversationContextResponse>(
     `/v1/agent/conversations/${conversationId}/context`,
+    identity,
+  );
+}
+
+/**
+ * PR 1.2: merge-patch the per-chat connector scope override.
+ *
+ * `scopes` follows RFC 7396 merge-patch — keys present overwrite the
+ * stored value (including `null` to pause); keys absent leave the stored
+ * value untouched. The response carries the full effective scope map
+ * after the merge.
+ */
+export function updateConversationConnectorScopes(
+  conversationId: string,
+  request: UpdateConversationConnectorScopesRequest,
+  identity: RequestIdentity,
+): Promise<ConversationConnectorScopesResponse> {
+  return httpPatchQuery<ConversationConnectorScopesResponse>(
+    `/v1/agent/conversations/${conversationId}/connectors`,
+    request,
     identity,
   );
 }
@@ -222,6 +256,68 @@ export function decideApproval(
     }
     return (await response.json()) as ApprovalDecisionResponse;
   });
+}
+
+// PR 1.3 — Workspace-pane drafts. All paths proxied via backend-facade.
+
+export function listDrafts(
+  conversationId: string,
+  identity: RequestIdentity,
+): Promise<DraftListResponse> {
+  return httpGet<DraftListResponse>(
+    `/v1/agent/conversations/${conversationId}/drafts`,
+    identity,
+  );
+}
+
+export function getDraft(
+  draftId: string,
+  identity: RequestIdentity,
+  options: { version?: number } = {},
+): Promise<Draft> {
+  return httpGet<Draft>(
+    `/v1/agent/drafts/${draftId}`,
+    identity,
+    options.version !== undefined
+      ? { version: String(options.version) }
+      : undefined,
+  );
+}
+
+export function patchDraft(
+  draftId: string,
+  request: DraftPatchRequest,
+  identity: RequestIdentity,
+): Promise<Draft> {
+  return httpPatchQuery<Draft>(
+    `/v1/agent/drafts/${draftId}`,
+    request,
+    identity,
+  );
+}
+
+export function sendDraft(
+  draftId: string,
+  request: DraftSendRequest,
+  identity: RequestIdentity,
+): Promise<DraftSendResponse> {
+  return httpPostQuery<DraftSendResponse>(
+    `/v1/agent/drafts/${draftId}/send`,
+    request,
+    identity,
+  );
+}
+
+export function discardDraft(
+  draftId: string,
+  request: DraftDiscardRequest,
+  identity: RequestIdentity,
+): Promise<Draft> {
+  return httpPostQuery<Draft>(
+    `/v1/agent/drafts/${draftId}/discard`,
+    request,
+    identity,
+  );
 }
 
 export function replayRunEvents(

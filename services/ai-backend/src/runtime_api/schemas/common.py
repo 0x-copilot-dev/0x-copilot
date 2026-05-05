@@ -72,6 +72,7 @@ class RuntimeActivityKind(StrEnum):
     APPROVAL = "approval"
     HEARTBEAT = "heartbeat"
     EVENT = "event"
+    DRAFT = "draft"
 
 
 class RuntimeApiEventType(StrEnum):
@@ -110,6 +111,10 @@ class RuntimeApiEventType(StrEnum):
     # the UI can show "budget exceeded" rather than a generic error.
     BUDGET_WARNING = "budget_warning"
     RUN_REJECTED = "run_rejected"
+    # PR 1.3 — Workspace pane Draft tab. Emitted by DraftBackend on every
+    # successful awrite/aedit and by RuntimeApiService on user PATCH /
+    # POST send / POST discard.
+    DRAFT_UPDATED = "draft_updated"
 
     @classmethod
     def from_stream_event_type(

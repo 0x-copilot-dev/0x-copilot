@@ -94,7 +94,8 @@ def create_agent_runtime(
     )
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
     deep_backend = _composed_deep_backend(
-        runtime_dependencies.subagent_artifacts_backend
+        runtime_dependencies.subagent_artifacts_backend,
+        drafts_backend=runtime_dependencies.drafts_backend,
     )
     skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
         runtime_dependencies.skill_source_config
@@ -371,24 +372,35 @@ def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
 
 def _composed_deep_backend(
     subagent_artifacts_backend: object | None,
+    *,
+    drafts_backend: object | None = None,
 ) -> object | None:
-    """Wrap the subagent artifacts backend in a deepagents `CompositeBackend`.
+    """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
-    deepagents' `CompositeBackend` routes paths to per-prefix backends and
-    falls back to a default. Routing `/subagents/` to our read-only projection
-    keeps existing FS paths (`/memories/`, `/skills/`, etc.) backed by
-    deepagents' own `StateBackend` default.
+    ``CompositeBackend`` routes paths to per-prefix backends and falls back to
+    a default. We register two prefixes:
+
+    - ``/subagents/`` → read-only subagent execution trace projection.
+    - ``/drafts/`` → versioned, append-only Workspace-pane draft persistence
+      (PR 1.3). Catches the agent's existing ``write_file`` / ``edit_file``
+      tool calls and turns them into ``runtime_drafts`` rows + ``DRAFT_UPDATED``
+      events.
+
+    Other FS paths (``/memories/``, ``/skills/``, …) stay on deepagents'
+    ``StateBackend`` default.
     """
 
-    if subagent_artifacts_backend is None:
+    routes: dict[str, object] = {}
+    if subagent_artifacts_backend is not None:
+        routes["/subagents/"] = subagent_artifacts_backend
+    if drafts_backend is not None:
+        routes["/drafts/"] = drafts_backend
+    if not routes:
         return None
     from deepagents.backends.composite import CompositeBackend
     from deepagents.backends.state import StateBackend
 
-    return CompositeBackend(
-        default=StateBackend(),
-        routes={"/subagents/": subagent_artifacts_backend},
-    )
+    return CompositeBackend(default=StateBackend(), routes=routes)
 
 
 def _parse_context(

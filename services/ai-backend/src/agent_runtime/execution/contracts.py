@@ -361,6 +361,12 @@ class RuntimeDependencies(RuntimeContract):
     # `CompositeBackend` so the supervisor's `ls` and `read_file` tools can read
     # it without affecting `/memories/`, `/skills/`, etc.
     subagent_artifacts_backend: object | None = None
+    # Optional Deep Agents backend that captures `/drafts/<uuid>.md` writes
+    # and persists them as versioned `runtime_drafts` rows. Constructed by the
+    # run handler from the draft store + event producer; the factory routes
+    # the `/drafts/` prefix to it so the agent's existing `write_file` /
+    # `edit_file` tools produce Workspace-pane drafts without a new tool.
+    drafts_backend: object | None = None
 
     @field_validator(
         "tool_registry",

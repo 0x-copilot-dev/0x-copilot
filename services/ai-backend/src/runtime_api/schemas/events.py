@@ -210,6 +210,8 @@ class RuntimeEventPresentationProjector:
             return RuntimeActivityKind.REASONING
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return RuntimeActivityKind.MCP_AUTH
+        if event_type is RuntimeApiEventType.DRAFT_UPDATED:
+            return RuntimeActivityKind.DRAFT
         if event_type in {
             RuntimeApiEventType.APPROVAL_REQUESTED,
             RuntimeApiEventType.APPROVAL_RESOLVED,

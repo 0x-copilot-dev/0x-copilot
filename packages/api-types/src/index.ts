@@ -110,7 +110,8 @@ export type RuntimeActivityKind =
   | "mcp_auth"
   | "approval"
   | "heartbeat"
-  | "event";
+  | "event"
+  | "draft";
 export type RuntimeEventSource =
   | "main_agent"
   | "runtime"
@@ -151,7 +152,8 @@ export type RuntimeApiEventType =
   | "heartbeat"
   | "presentation_updated"
   | "budget_warning"
-  | "run_rejected";
+  | "run_rejected"
+  | "draft_updated";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -196,6 +198,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "presentation_updated",
   "budget_warning",
   "run_rejected",
+  "draft_updated",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -208,6 +211,7 @@ export const RUNTIME_ACTIVITY_KINDS = [
   "approval",
   "heartbeat",
   "event",
+  "draft",
 ] as const satisfies readonly RuntimeActivityKind[];
 
 export type ApprovalDecision = "approved" | "rejected";
@@ -890,6 +894,7 @@ export interface RuntimeEventPayloadByType {
   presentation_updated: PresentationUpdatedPayload;
   budget_warning: BudgetWarningPayload;
   run_rejected: RunRejectedPayload;
+  draft_updated: DraftUpdatedPayload;
 }
 
 // B7 — budget enforcement event payloads.
@@ -923,6 +928,84 @@ export interface RunRejectedPayload {
   current_tokens: number;
   limit_micro_usd: number | null;
   limit_tokens: number | null;
+}
+
+// PR 1.3 — Workspace-pane Draft artifact.
+//
+// Drafts are the agent-produced (or user-edited) writable artifact rendered
+// in the Workspace-pane Draft tab. Versioned and append-only on the server;
+// the FE keeps a per-conversation Map<draft_id, Draft> in `eventReducer.ts`
+// keyed by the latest version it has seen on the SSE stream or via list/get.
+
+export type DraftStatus =
+  | "draft"
+  | "send_pending_approval"
+  | "sent"
+  | "discarded"
+  | "send_failed";
+
+export interface DraftSection {
+  heading: string;
+  body: string;
+}
+
+export interface Draft {
+  draft_id: string;
+  version: number;
+  conversation_id: string;
+  run_id: string | null;
+  user_id: string;
+  title: string;
+  content_text: string;
+  sections: DraftSection[];
+  target_connector: string | null;
+  target_metadata: Record<string, unknown> | null;
+  citation_ids: string[];
+  status: DraftStatus;
+  created_at: string;
+}
+
+export interface DraftListResponse {
+  drafts: Draft[];
+}
+
+export interface DraftPatchRequest {
+  expected_version: number;
+  content_text: string;
+  title?: string | null;
+}
+
+export interface DraftSendRequest {
+  expected_version: number;
+  target_connector: string;
+  target_metadata?: Record<string, unknown>;
+}
+
+export interface DraftSendResponse {
+  draft: Draft;
+  approval_id: string | null;
+  run_id: string | null;
+}
+
+export interface DraftDiscardRequest {
+  expected_version: number;
+}
+
+// `DRAFT_UPDATED` event payload — emitted by `DraftBackend` on every agent
+// `awrite` / `aedit`. The shape is the FE projection of one persisted draft
+// version plus presentation hints. The server projects `activity_kind="draft"`
+// onto the envelope.
+export interface DraftUpdatedPayload {
+  draft_id: string;
+  version: number;
+  status: DraftStatus;
+  title: string;
+  sections: DraftSection[];
+  target_connector: string | null;
+  target_metadata: Record<string, unknown> | null;
+  citation_ids: string[];
+  summary: string;
+  approval_id?: string;
 }
 
 export type StructuredRuntimeEventEnvelope<

@@ -322,6 +322,102 @@ def create_app(
             identity=identity,
         )
 
+    # PR 1.2 — per-chat connector scope override. RFC 7396 merge-patch body.
+    @app.patch("/v1/agent/conversations/{conversation_id}/connectors")
+    async def update_conversation_connectors(
+        request: Request,
+        conversation_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "PATCH",
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    # PR 1.3 — Workspace-pane drafts. Proxied 1:1 to ai-backend.
+    @app.get("/v1/agent/conversations/{conversation_id}/drafts")
+    async def list_drafts(
+        request: Request,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/drafts",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/drafts/{draft_id}")
+    async def get_draft(
+        request: Request,
+        draft_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params = dict(identity.scoped_params())
+        params.update({k: v for k, v in request.query_params.items()})
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/drafts/{draft_id}",
+            params=params,
+            identity=identity,
+        )
+
+    @app.patch("/v1/agent/drafts/{draft_id}")
+    async def patch_draft(
+        request: Request,
+        draft_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "PATCH",
+            f"/v1/agent/drafts/{draft_id}",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/drafts/{draft_id}/send")
+    async def send_draft(
+        request: Request,
+        draft_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            f"/v1/agent/drafts/{draft_id}/send",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/drafts/{draft_id}/discard")
+    async def discard_draft(
+        request: Request,
+        draft_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            f"/v1/agent/drafts/{draft_id}/discard",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
     @app.get("/v1/agent/models")
     async def list_models(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
