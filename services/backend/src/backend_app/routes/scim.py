@@ -16,9 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, status
+from enterprise_service_contracts.scopes import ADMIN_IDP
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.contracts import ScimTokenListResponse, ScimTokenSummary
 from backend_app.identity.scim import (
     ResolvedScimToken,
@@ -52,6 +54,7 @@ def register_scim_routes(
     @app.post(
         "/internal/v1/auth/scim/{provider_id}/tokens",
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(ADMIN_IDP))],
     )
     def mint_token(
         request: Request,
@@ -83,6 +86,7 @@ def register_scim_routes(
     @app.get(
         "/internal/v1/auth/scim/{provider_id}/tokens",
         response_model=ScimTokenListResponse,
+        dependencies=[Depends(RequireScopes(ADMIN_IDP))],
     )
     def list_tokens(
         request: Request,
@@ -110,6 +114,7 @@ def register_scim_routes(
     @app.delete(
         "/internal/v1/auth/scim/{provider_id}/tokens/{token_id}",
         status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(ADMIN_IDP))],
     )
     def revoke_token(
         request: Request,
@@ -143,7 +148,10 @@ def register_scim_routes(
         # Serializer needs an absolute base URL so SCIM ``$ref`` is browsable.
         return f"{request.url.scheme}://{request.url.netloc}/scim/v2"
 
-    @app.get("/internal/v1/auth/scim/resource/Users")
+    @app.get(
+        "/internal/v1/auth/scim/resource/Users",
+        dependencies=[Depends(public_route())],
+    )
     def scim_list_users(
         request: Request,
         filter: str | None = None,
@@ -182,6 +190,7 @@ def register_scim_routes(
     @app.post(
         "/internal/v1/auth/scim/resource/Users",
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(public_route())],
     )
     def scim_create_user(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         token = _resolve(request)
@@ -209,7 +218,10 @@ def register_scim_routes(
         external_id = service.get_user_external_id(token=token, user_id=user.user_id)
         return user_to_scim(user, base_url=base, external_id=external_id)
 
-    @app.get("/internal/v1/auth/scim/resource/Users/{user_id}")
+    @app.get(
+        "/internal/v1/auth/scim/resource/Users/{user_id}",
+        dependencies=[Depends(public_route())],
+    )
     def scim_get_user(request: Request, user_id: str) -> dict[str, Any]:
         token = _resolve(request)
         try:
@@ -221,7 +233,10 @@ def register_scim_routes(
         groups = service.list_user_groups(token=token, user_id=user_id)
         return user_to_scim(user, base_url=base, external_id=external_id, groups=groups)
 
-    @app.put("/internal/v1/auth/scim/resource/Users/{user_id}")
+    @app.put(
+        "/internal/v1/auth/scim/resource/Users/{user_id}",
+        dependencies=[Depends(public_route())],
+    )
     def scim_replace_user(
         request: Request, user_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -240,7 +255,10 @@ def register_scim_routes(
         external_id = service.get_user_external_id(token=token, user_id=user_id)
         return user_to_scim(user, base_url=base, external_id=external_id)
 
-    @app.patch("/internal/v1/auth/scim/resource/Users/{user_id}")
+    @app.patch(
+        "/internal/v1/auth/scim/resource/Users/{user_id}",
+        dependencies=[Depends(public_route())],
+    )
     def scim_patch_user(
         request: Request, user_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -261,6 +279,7 @@ def register_scim_routes(
     @app.delete(
         "/internal/v1/auth/scim/resource/Users/{user_id}",
         status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(public_route())],
     )
     def scim_delete_user(request: Request, user_id: str) -> None:
         token = _resolve(request)
@@ -269,7 +288,10 @@ def register_scim_routes(
         except ScimError as exc:
             raise _to_http(exc) from exc
 
-    @app.get("/internal/v1/auth/scim/resource/Groups")
+    @app.get(
+        "/internal/v1/auth/scim/resource/Groups",
+        dependencies=[Depends(public_route())],
+    )
     def scim_list_groups(
         request: Request,
         filter: str | None = None,
@@ -301,6 +323,7 @@ def register_scim_routes(
     @app.post(
         "/internal/v1/auth/scim/resource/Groups",
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(public_route())],
     )
     def scim_create_group(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         token = _resolve(request)
@@ -323,7 +346,10 @@ def register_scim_routes(
         members = service.list_group_members(token=token, group_id=group.group_id)
         return group_to_scim(group, base_url=base, members=members)
 
-    @app.get("/internal/v1/auth/scim/resource/Groups/{group_id}")
+    @app.get(
+        "/internal/v1/auth/scim/resource/Groups/{group_id}",
+        dependencies=[Depends(public_route())],
+    )
     def scim_get_group(request: Request, group_id: str) -> dict[str, Any]:
         token = _resolve(request)
         try:
@@ -334,7 +360,10 @@ def register_scim_routes(
         members = service.list_group_members(token=token, group_id=group_id)
         return group_to_scim(group, base_url=base, members=members)
 
-    @app.patch("/internal/v1/auth/scim/resource/Groups/{group_id}")
+    @app.patch(
+        "/internal/v1/auth/scim/resource/Groups/{group_id}",
+        dependencies=[Depends(public_route())],
+    )
     def scim_patch_group(
         request: Request, group_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -382,6 +411,7 @@ def register_scim_routes(
     @app.delete(
         "/internal/v1/auth/scim/resource/Groups/{group_id}",
         status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(public_route())],
     )
     def scim_delete_group(request: Request, group_id: str) -> None:
         token = _resolve(request)
@@ -391,7 +421,10 @@ def register_scim_routes(
             raise _to_http(exc) from exc
 
     # ----- Discovery endpoints ------------------------------------------
-    @app.get("/internal/v1/auth/scim/resource/ServiceProviderConfig")
+    @app.get(
+        "/internal/v1/auth/scim/resource/ServiceProviderConfig",
+        dependencies=[Depends(public_route())],
+    )
     def scim_service_provider_config(request: Request) -> dict[str, Any]:
         # Discovery endpoints don't strictly require a SCIM bearer (they
         # describe the SP's capabilities to the IdP) but we still gate on
@@ -401,14 +434,20 @@ def register_scim_routes(
         )
         return service_provider_config(base_url=_base_url(request))
 
-    @app.get("/internal/v1/auth/scim/resource/Schemas")
+    @app.get(
+        "/internal/v1/auth/scim/resource/Schemas",
+        dependencies=[Depends(public_route())],
+    )
     def scim_schemas(request: Request) -> dict[str, Any]:
         BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id="-", user_id="-"
         )
         return schemas_listing()
 
-    @app.get("/internal/v1/auth/scim/resource/ResourceTypes")
+    @app.get(
+        "/internal/v1/auth/scim/resource/ResourceTypes",
+        dependencies=[Depends(public_route())],
+    )
     def scim_resource_types(request: Request) -> dict[str, Any]:
         BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id="-", user_id="-"

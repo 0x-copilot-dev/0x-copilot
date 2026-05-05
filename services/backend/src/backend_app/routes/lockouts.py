@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes
 from backend_app.contracts import (
     AccountLockoutListResponse,
     AccountUnlockRequest,
@@ -33,6 +35,7 @@ def register_lockout_routes(
     @app.post(
         "/internal/v1/auth/lockouts/{user_id}/unlock",
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
     )
     def force_unlock(
         request: Request, user_id: str, payload: AccountUnlockRequest
@@ -54,6 +57,7 @@ def register_lockout_routes(
     @app.get(
         "/internal/v1/auth/lockouts",
         response_model=AccountLockoutListResponse,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
     )
     def list_lockouts(
         request: Request,
@@ -79,6 +83,7 @@ def register_lockout_routes(
     @app.get(
         "/internal/v1/auth/login-attempts",
         response_model=LoginAttemptListResponse,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
     )
     def list_login_attempts(
         request: Request,
@@ -106,6 +111,10 @@ def register_lockout_routes(
     @app.get(
         "/internal/v1/auth/me/login-attempts",
         response_model=LoginAttemptListResponse,
+        # Self-service: any authenticated session may read its own
+        # attempts. ``runtime:use`` is the bare-minimum scope every
+        # employee/admin/auditor session carries.
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def list_my_login_attempts(
         request: Request,
@@ -128,6 +137,7 @@ def register_lockout_routes(
     @app.get(
         "/internal/v1/auth/lockouts/{user_id}",
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
     )
     def get_user_lockout(
         request: Request,

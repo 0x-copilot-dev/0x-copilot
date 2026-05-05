@@ -10,9 +10,11 @@ Wire into the FastAPI app with ``register_session_routes(app, service)``.
 from __future__ import annotations
 
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from enterprise_service_contracts.scopes import RUNTIME_USE
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.contracts import (
     CreateSessionRequest,
     DevMintRequest,
@@ -38,6 +40,9 @@ def register_session_routes(app: FastAPI, service: SessionService) -> None:
         "/internal/v1/auth/sessions",
         response_model=SessionMintResult,
         status_code=status.HTTP_201_CREATED,
+        # Login mints sessions; the caller does not have one yet.
+        # ENTERPRISE_SERVICE_TOKEN is the trust anchor here.
+        dependencies=[Depends(public_route())],
     )
     def create_session(
         request: Request, payload: CreateSessionRequest
@@ -61,6 +66,9 @@ def register_session_routes(app: FastAPI, service: SessionService) -> None:
     @app.post(
         "/internal/v1/auth/sessions/touch",
         response_model=SessionTouchResult,
+        # Per-request hot path. The session may be mfa:pending — touch
+        # must succeed so the facade can read the live identity.
+        dependencies=[Depends(public_route())],
     )
     def touch_session(
         request: Request, payload: TouchSessionRequest
@@ -83,6 +91,8 @@ def register_session_routes(app: FastAPI, service: SessionService) -> None:
     @app.post(
         "/internal/v1/auth/sessions/{session_id}/revoke",
         status_code=status.HTTP_204_NO_CONTENT,
+        # Users revoke their own sessions; admins use admin:users.
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def revoke_session(
         request: Request, session_id: str, payload: RevokeSessionRequest
@@ -102,6 +112,8 @@ def register_session_routes(app: FastAPI, service: SessionService) -> None:
     @app.get(
         "/internal/v1/auth/sessions",
         response_model=SessionListResponse,
+        # Users see their own active sessions.
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def list_sessions(
         request: Request,
@@ -120,6 +132,9 @@ def register_session_routes(app: FastAPI, service: SessionService) -> None:
         "/internal/v1/auth/sessions/dev-mint",
         response_model=SessionMintResult,
         status_code=status.HTTP_201_CREATED,
+        # Dev/test only — already gated by deployment-profile toggle at
+        # SessionService construction time.
+        dependencies=[Depends(public_route())],
     )
     def dev_mint_session(
         request: Request, payload: DevMintRequest

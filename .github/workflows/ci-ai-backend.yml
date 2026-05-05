@@ -52,6 +52,13 @@ jobs:
         run: |
           cd services/ai-backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests
 
+      - name: A10 RBAC scope coverage check
+        # Default-deny: every route must declare its RBAC policy via
+        # RequireScopes / RequireRoles / RequireAnyScope / public_route.
+        # Adding a new route without an annotation fails this step.
+        run: |
+          cd services/ai-backend && PYTHONPATH="../../packages/service-contracts/src:src" python ../../tools/check_route_scopes.py --service ai-backend
+
       - name: Generate SBOM (ai-backend)
         run: |
           mkdir -p artifacts/sbom

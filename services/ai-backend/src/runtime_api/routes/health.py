@@ -6,7 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Response, status
+from fastapi import Depends, FastAPI, Response, status
+
+from runtime_api.rbac import public_route
 
 
 @dataclass(frozen=True)
@@ -34,11 +36,19 @@ def register_health_routes(
 
     checkers: list[Checker] = list(readiness_checkers or [])
 
-    @app.get("/healthz", include_in_schema=False)
+    @app.get(
+        "/healthz",
+        include_in_schema=False,
+        dependencies=[Depends(public_route())],
+    )
     def healthz() -> dict[str, Any]:
         return {"status": "alive"}
 
-    @app.get("/readyz", include_in_schema=False)
+    @app.get(
+        "/readyz",
+        include_in_schema=False,
+        dependencies=[Depends(public_route())],
+    )
     def readyz(response: Response) -> dict[str, Any]:
         results = [checker() for checker in checkers]
         ok = all(result.ok for result in results)

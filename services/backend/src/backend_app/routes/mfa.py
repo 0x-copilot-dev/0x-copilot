@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from enterprise_service_contracts.scopes import RUNTIME_USE
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.contracts import (
     MfaChallengeKind,
     MfaChallengeRequest,
@@ -49,6 +51,7 @@ def register_mfa_routes(
     @app.get(
         "/internal/v1/auth/mfa/factors",
         response_model=MfaFactorListResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def list_factors(
         request: Request,
@@ -76,6 +79,7 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/factors/totp/enroll",
         response_model=TotpEnrollResult,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def enroll_totp(request: Request, payload: TotpEnrollRequest) -> TotpEnrollResult:
         identity = BackendServiceAuthenticator.internal_scoped_identity(
@@ -90,6 +94,7 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/factors/totp/confirm",
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def confirm_totp(
         request: Request, payload: TotpConfirmRequest
@@ -113,6 +118,7 @@ def register_mfa_routes(
     @app.delete(
         "/internal/v1/auth/mfa/factors/{factor_id}",
         status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def disable_factor(
         request: Request,
@@ -135,6 +141,7 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/factors/webauthn/register/start",
         response_model=WebAuthnRegisterStartResult,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def webauthn_register_start(
         request: Request, payload: WebAuthnRegisterStartRequest
@@ -160,6 +167,7 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/factors/webauthn/register/finish",
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def webauthn_register_finish(
         request: Request, payload: WebAuthnRegisterFinishRequest
@@ -188,6 +196,10 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/challenge",
         response_model=MfaChallengeResult,
+        # Allow mfa:pending sessions: this route is part of the verify
+        # dance. The session token still identifies the user; we just
+        # exempt it from the RBAC scope gate.
+        dependencies=[Depends(public_route())],
     )
     def issue_challenge(
         request: Request, payload: MfaChallengeRequest
@@ -216,6 +228,9 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/verify",
         response_model=MfaVerifyResult,
+        # The whole point of this route is to upgrade an mfa:pending
+        # session into an MFA-clean one. RBAC must NOT gate it.
+        dependencies=[Depends(public_route())],
     )
     def verify(
         request: Request,
@@ -262,6 +277,8 @@ def register_mfa_routes(
     @app.post(
         "/internal/v1/auth/mfa/recovery/consume",
         status_code=status.HTTP_200_OK,
+        # Same as verify: alternate path to clear mfa:pending.
+        dependencies=[Depends(public_route())],
     )
     def consume_recovery(
         request: Request,

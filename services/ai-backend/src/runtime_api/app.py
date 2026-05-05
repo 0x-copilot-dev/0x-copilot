@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
@@ -30,6 +30,7 @@ from runtime_api.http.routes import (
     RuntimeApiRouter,
     UsageApiRouter,
 )
+from runtime_api.rbac import public_route
 from runtime_api.routes.health import register_health_routes
 from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
@@ -76,7 +77,7 @@ class RuntimeApiAppFactory:
         app.state.runtime_api_service = configured_service
         app.state.deployment = resolved_deployment
 
-        @app.get("/v1/health")
+        @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
             return {
                 "service": "ai-backend",

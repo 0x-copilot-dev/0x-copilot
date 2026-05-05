@@ -21,11 +21,13 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from enterprise_service_contracts.scopes import ADMIN_AUDIT_EXPORT
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes
 from backend_app.contracts import (
     AuditEventRecord,
     DeployAuditEventRecord,
@@ -61,7 +63,10 @@ class _ExportRow:
 def register_audit_export_routes(app: FastAPI) -> None:
     """Attach the SIEM export endpoint to a backend FastAPI app."""
 
-    @app.post("/internal/v1/audit/export")
+    @app.post(
+        "/internal/v1/audit/export",
+        dependencies=[Depends(RequireScopes(ADMIN_AUDIT_EXPORT))],
+    )
     def audit_export(
         request: Request,
         org_id: str = Query(..., min_length=1),

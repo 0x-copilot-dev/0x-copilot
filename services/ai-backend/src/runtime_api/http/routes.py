@@ -6,13 +6,20 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from enterprise_service_contracts.scopes import (
+    ADMIN_AUDIT_EXPORT,
+    ADMIN_BUDGETS,
+    AUDIT_READ,
+    RUNTIME_USE,
+)
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.api.usage_service import UsageQueryService
 from runtime_api.auth import RuntimeServiceAuthenticator
+from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -317,7 +324,15 @@ class RuntimeApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
-        router = APIRouter(prefix="/v1/agent", tags=["agent-runtime"])
+        # A10: every /v1/agent/* route requires the runtime:use scope.
+        # Router-level dependency applies to every route registered
+        # below — admins, employees, and service accounts all carry
+        # runtime:use per the seeded role catalog (0004b).
+        router = APIRouter(
+            prefix="/v1/agent",
+            tags=["agent-runtime"],
+            dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+        )
         router.add_api_route(
             "/conversations",
             RuntimeApiRoutes.create_conversation,
@@ -769,7 +784,14 @@ class UsageApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
-        router = APIRouter(prefix="/v1/usage", tags=["usage"])
+        # A10: most /v1/usage/* routes only require runtime:use; the
+        # ``/org`` route adds an additional admin-or-auditor check
+        # below via per-route ``dependencies=``.
+        router = APIRouter(
+            prefix="/v1/usage",
+            tags=["usage"],
+            dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+        )
         router.add_api_route(
             "/me",
             UsageApiRoutes.usage_me,
@@ -804,6 +826,10 @@ class UsageApiRouter:
             methods=["GET"],
             response_model=UsageOrgResponse,
             name=Keys.RouteName.USAGE_ORG,
+            # Org-wide usage = audit:read OR admin:users (auditors and
+            # admins both legitimately query this; employees never do).
+            # The router-level RUNTIME_USE check above also applies.
+            dependencies=[Depends(RequireAnyScope(AUDIT_READ, "admin:users"))],
         )
         return router
 
@@ -983,13 +1009,20 @@ class BudgetApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
-        router = APIRouter(prefix="/v1/budgets", tags=["budgets"])
+        # A10: ``runtime:use`` covers the /me self-service route. Admin
+        # CRUD adds ``admin:budgets`` per-route.
+        router = APIRouter(
+            prefix="/v1/budgets",
+            tags=["budgets"],
+            dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+        )
         router.add_api_route(
             "",
             BudgetApiRoutes.list_budgets,
             methods=["GET"],
             response_model=BudgetListResponse,
             name=Keys.RouteName.BUDGETS_LIST,
+            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
         )
         router.add_api_route(
             "",
@@ -997,6 +1030,7 @@ class BudgetApiRouter:
             methods=["POST"],
             response_model=BudgetView,
             name=Keys.RouteName.BUDGETS_CREATE,
+            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
         )
         router.add_api_route(
             "/me",
@@ -1004,6 +1038,7 @@ class BudgetApiRouter:
             methods=["GET"],
             response_model=BudgetMeResponse,
             name=Keys.RouteName.BUDGETS_ME,
+            # /me only needs the router-level runtime:use; no admin scope.
         )
         router.add_api_route(
             "/{budget_id}",
@@ -1011,12 +1046,14 @@ class BudgetApiRouter:
             methods=["PATCH"],
             response_model=BudgetView,
             name=Keys.RouteName.BUDGETS_UPDATE,
+            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
         )
         router.add_api_route(
             "/{budget_id}",
             BudgetApiRoutes.delete_budget,
             methods=["DELETE"],
             name=Keys.RouteName.BUDGETS_DELETE,
+            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
         )
         return router
 
@@ -1089,11 +1126,16 @@ class InternalRuntimeApiRouter:
             methods=["GET"],
             response_model=SystemSkillListResponse,
             name="internal_list_system_skills",
+            # Service-to-service: ai-backend's runtime worker reads
+            # the system-skills catalog. runtime:use is the bare-min.
+            dependencies=[Depends(RequireScopes(RUNTIME_USE))],
         )
         router.add_api_route(
             "/audit/cursor",
             InternalRuntimeApiRoutes.audit_cursor,
             methods=["GET"],
             name="internal_audit_cursor",
+            # SIEM pump only.
+            dependencies=[Depends(RequireScopes(ADMIN_AUDIT_EXPORT))],
         )
         return router

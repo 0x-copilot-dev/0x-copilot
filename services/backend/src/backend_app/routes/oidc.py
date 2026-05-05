@@ -6,9 +6,10 @@ token. Public ``/v1/auth/oidc/*`` lives on the facade.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import public_route
 from backend_app.contracts import (
     AuthProviderKind,
     OidcAuthorizeRequest,
@@ -40,6 +41,8 @@ def register_oidc_routes(
     @app.post(
         "/internal/v1/auth/oidc/{provider_id}/authorize",
         response_model=OidcAuthorizeResult,
+        # SSO entry ramp: caller has no session yet.
+        dependencies=[Depends(public_route())],
     )
     def authorize(
         request: Request, provider_id: str, payload: OidcAuthorizeRequest
@@ -64,6 +67,8 @@ def register_oidc_routes(
     @app.post(
         "/internal/v1/auth/oidc/callback",
         response_model=OidcCallbackResult,
+        # SSO exit ramp: callback mints the session itself.
+        dependencies=[Depends(public_route())],
     )
     def callback(request: Request, payload: OidcCallbackRequest) -> OidcCallbackResult:
         BackendServiceAuthenticator.internal_scoped_identity(
@@ -99,6 +104,8 @@ def register_oidc_routes(
     @app.get(
         "/internal/v1/auth/oidc/providers",
         response_model=OidcProvidersResponse,
+        # The login page lists IdP buttons before the user has a session.
+        dependencies=[Depends(public_route())],
     )
     def list_providers(
         request: Request,

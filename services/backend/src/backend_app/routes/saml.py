@@ -6,9 +6,10 @@ token. Public ``/v1/auth/saml/*`` lives on the facade.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import public_route
 from backend_app.contracts import (
     SamlAuthorizeRequest,
     SamlAuthorizeResult,
@@ -42,6 +43,8 @@ def register_saml_routes(
     @app.post(
         "/internal/v1/auth/saml/{provider_id}/authorize",
         response_model=SamlAuthorizeResult,
+        # SSO entry ramp.
+        dependencies=[Depends(public_route())],
     )
     def authorize(
         request: Request, provider_id: str, payload: SamlAuthorizeRequest
@@ -67,6 +70,8 @@ def register_saml_routes(
     @app.post(
         "/internal/v1/auth/saml/consume",
         response_model=SamlConsumeResult,
+        # SSO exit ramp; the assertion itself is the trust anchor.
+        dependencies=[Depends(public_route())],
     )
     def consume(request: Request, payload: SamlConsumeRequest) -> SamlConsumeResult:
         BackendServiceAuthenticator.internal_scoped_identity(
@@ -113,6 +118,8 @@ def register_saml_routes(
     @app.get(
         "/internal/v1/auth/saml/{provider_id}/metadata",
         response_class=Response,
+        # SP metadata XML is meant for IdP admin consumption (no session).
+        dependencies=[Depends(public_route())],
     )
     def metadata(request: Request, provider_id: str) -> Response:
         # SP metadata is technically public information (the IdP admin needs

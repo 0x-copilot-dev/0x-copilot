@@ -7,6 +7,8 @@ import os
 
 from enterprise_service_contracts.headers import (
     ORG_HEADER,
+    PERMISSION_SCOPES_HEADER,
+    ROLES_HEADER,
     SERVICE_TOKEN_HEADER,
     USER_HEADER,
 )
@@ -17,6 +19,13 @@ from fastapi import HTTPException, Request, status
 class ScopedIdentity:
     org_id: str
     user_id: str
+    # A10: roles + permission_scopes from the trusted upstream envelope.
+    # Empty tuples in the dev-query branch (BackendServiceAuthenticator
+    # only forwards what the facade already verified). Routes that gate
+    # on RBAC use ``RequireScopes(...)`` / ``RequireRoles(...)`` from
+    # backend_app.identity.rbac which consults these fields.
+    roles: tuple[str, ...] = ()
+    permission_scopes: tuple[str, ...] = ()
 
 
 class BackendServiceAuthenticator:
@@ -32,6 +41,10 @@ class BackendServiceAuthenticator:
             return ScopedIdentity(
                 org_id=cls._required_header(request, ORG_HEADER),
                 user_id=cls._required_header(request, USER_HEADER),
+                roles=cls._optional_csv_header(request, ROLES_HEADER),
+                permission_scopes=cls._optional_csv_header(
+                    request, PERMISSION_SCOPES_HEADER
+                ),
             )
         return ScopedIdentity(org_id=org_id, user_id=user_id)
 
@@ -45,6 +58,10 @@ class BackendServiceAuthenticator:
             return ScopedIdentity(
                 org_id=cls._required_header(request, ORG_HEADER),
                 user_id=cls._required_header(request, USER_HEADER),
+                roles=cls._optional_csv_header(request, ROLES_HEADER),
+                permission_scopes=cls._optional_csv_header(
+                    request, PERMISSION_SCOPES_HEADER
+                ),
             )
         return ScopedIdentity(org_id=org_id, user_id=user_id)
 
@@ -87,3 +104,13 @@ class BackendServiceAuthenticator:
         if not value:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Missing {header}")
         return value
+
+    @staticmethod
+    def _optional_csv_header(request: Request, header: str) -> tuple[str, ...]:
+        # Roles + permission scopes ride as comma-separated CSV in the
+        # facade -> backend service-headers. Absent header -> empty
+        # tuple (no permissions). Whitespace-only entries are dropped.
+        raw = request.headers.get(header, "")
+        if not raw:
+            return ()
+        return tuple(item.strip() for item in raw.split(",") if item.strip())

@@ -4,9 +4,19 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from enterprise_service_contracts.scopes import (
+    ADMIN_AUDIT_EXPORT,
+    CONNECTORS_AUTH,
+    MCP_READ,
+    MCP_WRITE,
+    RUNTIME_USE,
+    SKILLS_READ,
+    SKILLS_WRITE,
+)
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.deployment_profile import (
     DeploymentProfile,
     log_profile,
@@ -349,7 +359,7 @@ def create_app(
             bootstrap=bootstrap_service,
         )
 
-    @app.get("/v1/health")
+    @app.get("/v1/health", dependencies=[Depends(public_route())])
     def health() -> dict[str, object]:
         return {
             "service": "backend",
@@ -357,7 +367,11 @@ def create_app(
             "feature_toggles_hash": resolved_deployment.toggles_hash(),
         }
 
-    @app.post("/v1/mcp/servers", response_model=McpServerResponse)
+    @app.post(
+        "/v1/mcp/servers",
+        response_model=McpServerResponse,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
+    )
     def create_server(
         request: Request, payload: CreateMcpServerRequest
     ) -> McpServerResponse:
@@ -369,7 +383,11 @@ def create_app(
         )
         return _AppServices.mcp(app).create_server(payload)
 
-    @app.get("/v1/mcp/servers", response_model=McpServerListResponse)
+    @app.get(
+        "/v1/mcp/servers",
+        response_model=McpServerListResponse,
+        dependencies=[Depends(RequireScopes(MCP_READ))],
+    )
     def list_servers(
         request: Request,
         org_id: str = Query(..., min_length=1),
@@ -382,7 +400,11 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
-    @app.delete("/v1/mcp/servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @app.delete(
+        "/v1/mcp/servers/{server_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
+    )
     def delete_server(
         request: Request,
         server_id: str,
@@ -399,7 +421,11 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.patch("/v1/mcp/servers/{server_id}", response_model=McpServerResponse)
+    @app.patch(
+        "/v1/mcp/servers/{server_id}",
+        response_model=McpServerResponse,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
+    )
     def update_server(
         request: Request,
         server_id: str,
@@ -421,7 +447,9 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     @app.post(
-        "/v1/mcp/servers/{server_id}/auth/start", response_model=McpAuthStartResponse
+        "/v1/mcp/servers/{server_id}/auth/start",
+        response_model=McpAuthStartResponse,
+        dependencies=[Depends(RequireScopes(CONNECTORS_AUTH))],
     )
     def start_auth(
         request: Request, server_id: str, payload: McpAuthStartRequest
@@ -439,7 +467,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    @app.post("/v1/mcp/servers/{server_id}/auth/skip", response_model=McpServerResponse)
+    @app.post(
+        "/v1/mcp/servers/{server_id}/auth/skip",
+        response_model=McpServerResponse,
+        dependencies=[Depends(RequireScopes(CONNECTORS_AUTH))],
+    )
     def skip_auth(
         request: Request,
         server_id: str,
@@ -456,7 +488,13 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
-    @app.get("/v1/mcp/oauth/callback", response_model=McpServerResponse)
+    @app.get(
+        "/v1/mcp/oauth/callback",
+        response_model=McpServerResponse,
+        # Public: the OAuth provider redirects here without our session
+        # bearer; the ``state`` token in the URL is the trust anchor.
+        dependencies=[Depends(public_route())],
+    )
     def oauth_callback(
         state: str,
         code: str | None = None,
@@ -475,7 +513,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    @app.get("/internal/v1/mcp/cards", response_model=InternalMcpServerListResponse)
+    @app.get(
+        "/internal/v1/mcp/cards",
+        response_model=InternalMcpServerListResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def internal_cards(
         request: Request,
         org_id: str = Query(..., min_length=1),
@@ -491,6 +533,7 @@ def create_app(
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/auth/start",
         response_model=McpAuthStartResponse,
+        dependencies=[Depends(RequireScopes(CONNECTORS_AUTH))],
     )
     def internal_start_auth(
         request: Request, server_id: str, payload: InternalMcpAuthRequest
@@ -513,6 +556,7 @@ def create_app(
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/client-session",
         response_model=InternalMcpClientSession,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def internal_client_session(
         request: Request,
@@ -535,6 +579,7 @@ def create_app(
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/rpc",
         response_model=InternalMcpRpcResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def internal_mcp_rpc(
         request: Request,
@@ -566,6 +611,7 @@ def create_app(
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/test-token",
         response_model=McpServerResponse,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
     )
     def internal_test_token(
         request: Request,
@@ -587,7 +633,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
-    @app.post("/v1/skills", response_model=SkillResponse)
+    @app.post(
+        "/v1/skills",
+        response_model=SkillResponse,
+        dependencies=[Depends(RequireScopes(SKILLS_WRITE))],
+    )
     def create_skill(request: Request, payload: CreateSkillRequest) -> SkillResponse:
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=payload.org_id, user_id=payload.user_id
@@ -600,7 +650,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    @app.get("/v1/skills", response_model=SkillListResponse)
+    @app.get(
+        "/v1/skills",
+        response_model=SkillListResponse,
+        dependencies=[Depends(RequireScopes(SKILLS_READ))],
+    )
     def list_skills(
         request: Request,
         org_id: str = Query(..., min_length=1),
@@ -613,7 +667,11 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
-    @app.get("/v1/skills/{skill_id}", response_model=SkillResponse)
+    @app.get(
+        "/v1/skills/{skill_id}",
+        response_model=SkillResponse,
+        dependencies=[Depends(RequireScopes(SKILLS_READ))],
+    )
     def get_skill(
         request: Request,
         skill_id: str,
@@ -630,7 +688,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
-    @app.put("/v1/skills/{skill_id}", response_model=SkillResponse)
+    @app.put(
+        "/v1/skills/{skill_id}",
+        response_model=SkillResponse,
+        dependencies=[Depends(RequireScopes(SKILLS_WRITE))],
+    )
     def update_skill(
         request: Request,
         skill_id: str,
@@ -651,7 +713,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    @app.delete("/v1/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @app.delete(
+        "/v1/skills/{skill_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(SKILLS_WRITE))],
+    )
     def delete_skill(
         request: Request,
         skill_id: str,
@@ -673,7 +739,11 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.get("/internal/v1/skills/cards", response_model=InternalSkillListResponse)
+    @app.get(
+        "/internal/v1/skills/cards",
+        response_model=InternalSkillListResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def internal_skill_cards(
         request: Request,
         org_id: str = Query(..., min_length=1),
@@ -686,7 +756,11 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
-    @app.get("/internal/v1/skills/{skill_id}", response_model=InternalSkillBundle)
+    @app.get(
+        "/internal/v1/skills/{skill_id}",
+        response_model=InternalSkillBundle,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def internal_skill_bundle(
         request: Request,
         skill_id: str,
@@ -705,7 +779,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
-    @app.get("/internal/v1/skills/by-name/{name}", response_model=InternalSkillBundle)
+    @app.get(
+        "/internal/v1/skills/by-name/{name}",
+        response_model=InternalSkillBundle,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def internal_skill_bundle_by_name(
         request: Request,
         name: str,
@@ -728,6 +806,7 @@ def create_app(
         "/internal/v1/audit/deploy",
         response_model=DeployAuditEventResponse,
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(ADMIN_AUDIT_EXPORT))],
     )
     def internal_audit_deploy(
         request: Request,

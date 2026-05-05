@@ -12,9 +12,11 @@ event the service emits.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from enterprise_service_contracts.scopes import RUNTIME_USE
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.contracts import (
     BootstrapAdminRequest,
     LocalLoginRequest,
@@ -46,6 +48,8 @@ def register_password_routes(
     @app.post(
         "/internal/v1/auth/local/verify",
         response_model=LocalLoginResult,
+        # Login: caller has no session yet.
+        dependencies=[Depends(public_route())],
     )
     def verify_local(request: Request, payload: LocalLoginRequest) -> LocalLoginResult:
         BackendServiceAuthenticator.internal_scoped_identity(
@@ -83,6 +87,8 @@ def register_password_routes(
     @app.post(
         "/internal/v1/auth/password/change",
         status_code=status.HTTP_204_NO_CONTENT,
+        # Authenticated user changing their own password.
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def change_password(request: Request, payload: PasswordChangeRequest) -> Response:
         BackendServiceAuthenticator.internal_scoped_identity(
@@ -104,6 +110,8 @@ def register_password_routes(
     @app.post(
         "/internal/v1/auth/password/reset/request",
         response_model=PasswordResetRequestResult,
+        # Forgot-password flow: caller has no session.
+        dependencies=[Depends(public_route())],
     )
     def request_reset(
         request: Request,
@@ -124,6 +132,8 @@ def register_password_routes(
     @app.post(
         "/internal/v1/auth/password/reset/confirm",
         status_code=status.HTTP_204_NO_CONTENT,
+        # Forgot-password flow: caller has the reset token, not a session.
+        dependencies=[Depends(public_route())],
     )
     def confirm_reset(
         request: Request, payload: PasswordResetConfirmRequest
@@ -144,6 +154,9 @@ def register_password_routes(
     @app.post(
         "/internal/v1/auth/local/bootstrap-admin",
         status_code=status.HTTP_201_CREATED,
+        # First-run admin creation: trust comes from the BOOTSTRAP_ADMIN_TOKEN
+        # the operator carries in payload.setup_token, NOT from a session.
+        dependencies=[Depends(public_route())],
     )
     def bootstrap_admin(
         request: Request,
