@@ -418,6 +418,45 @@ def create_app(
             identity=identity,
         )
 
+    # PR 1.5 — Workspace pane data feeds (subagents + sources). Read-only.
+    @app.get("/v1/agent/conversations/{conversation_id}/subagents")
+    async def list_subagents(
+        request: Request,
+        conversation_id: str,
+        status: str | None = Query(None, min_length=1, max_length=32),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/subagents",
+            params=identity.scoped_params(params),
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/conversations/{conversation_id}/sources")
+    async def list_sources(
+        request: Request,
+        conversation_id: str,
+        run_id: str | None = Query(None, min_length=1, max_length=128),
+        limit: int = Query(200, ge=1, le=500),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {"limit": limit}
+        if run_id is not None:
+            params["run_id"] = run_id
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/sources",
+            params=identity.scoped_params(params),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/models")
     async def list_models(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)

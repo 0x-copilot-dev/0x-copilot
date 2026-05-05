@@ -78,6 +78,7 @@ class RuntimeApiAppFactory:
         app.state.runtime_api_service = configured_service
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
+        app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
@@ -154,6 +155,35 @@ class RuntimeApiAppFactory:
                 (async_ports or ports).persistence if (async_ports or ports) else None
             )
         return DraftService(store=store, persistence=persistence)
+
+    @classmethod
+    def default_workspace_feed_service(cls, app: FastAPI):
+        """Wire the Workspace pane data feeds for the configured backend (PR 1.5)."""
+
+        from agent_runtime.api.workspace_feed_service import WorkspaceFeedService
+        from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
+        from runtime_adapters.in_memory.source_store import InMemorySourceStore
+        from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
+        from runtime_adapters.postgres.source_store import PostgresSourceStore
+        from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        if async_ports is not None and async_ports.backend == "postgres":
+            parent = async_ports.store
+            return WorkspaceFeedService(
+                subagent_store=PostgresSubagentStore(parent),
+                source_store=PostgresSourceStore(parent),
+            )
+        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        underlying = (
+            ports.store.underlying  # type: ignore[union-attr]
+            if hasattr(getattr(ports, "store", None), "underlying")
+            else getattr(ports, "store", None)
+        )
+        return WorkspaceFeedService(
+            subagent_store=InMemorySubagentStore(underlying),
+            source_store=InMemorySourceStore(InMemoryCitationStore()),
+        )
 
     @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:

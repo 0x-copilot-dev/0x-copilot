@@ -63,6 +63,7 @@ from runtime_api.schemas.usage import (
 )
 from agent_runtime.budgets.period import BudgetPeriodCalculator
 from agent_runtime.persistence.records import BudgetRecord, BudgetStatus
+from runtime_api.http.workspace import register_workspace_feed_routes
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_api.system_skills import (
@@ -453,6 +454,8 @@ class RuntimeApiRouter:
         from runtime_api.http.drafts import register_draft_routes
 
         register_draft_routes(router)
+        # PR 1.5 — Workspace-pane data feeds (subagents + sources).
+        register_workspace_feed_routes(router)
         return router
 
 
