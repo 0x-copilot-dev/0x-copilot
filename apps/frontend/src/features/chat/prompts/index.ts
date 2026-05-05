@@ -1,27 +1,54 @@
+export type ChatPromptCategory = "draft" | "summarize" | "find" | "compare";
+
+/**
+ * The shape consumed by both the welcome state and the assistant-ui runtime
+ * (`Suggestions(CHAT_PROMPT_SUGGESTIONS)`). The runtime's `SuggestionConfig`
+ * accepts `{title, label, prompt}`; the `category` field is an extra used
+ * only by the welcome-state UI to render an intent eyebrow. Width subtyping
+ * keeps `ChatPromptSuggestion[]` assignable to `SuggestionConfig[]`.
+ */
 export type ChatPromptSuggestion = {
+  category: ChatPromptCategory;
   title: string;
   label: string;
   prompt: string;
 };
 
+export const CATEGORY_LABEL: Record<ChatPromptCategory, string> = {
+  draft: "DRAFT",
+  summarize: "SUMMARIZE",
+  find: "FIND",
+  compare: "COMPARE",
+};
+
 export const CHAT_PROMPT_SUGGESTIONS: ChatPromptSuggestion[] = [
   {
-    title: "Search connectors",
-    label: "Find context across connected apps",
+    category: "draft",
+    title: "Draft the FY26 Q1 launch announcement",
+    label: "Using the approved positioning + GTM plan",
     prompt:
-      "Search connected apps for relevant context and summarize the findings.",
+      "Draft the FY26 Q1 launch announcement using the approved positioning + GTM plan. Pull citations and propose a Slack post for review.",
   },
   {
-    title: "Think through risks",
-    label: "Show reasoning and tool usage",
+    category: "summarize",
+    title: "Summarize last week in #launch-aurora",
+    label: "Decisions, blockers, and who owns what",
     prompt:
-      "Think through the main risks, use available tools, and explain the recommendation.",
+      "Summarize last week in #launch-aurora. Group by Decisions, Blockers, and Owners.",
   },
   {
-    title: "Call a subagent",
-    label: "Delegate research",
+    category: "find",
+    title: "Find the latest brand voice guidelines",
+    label: "And tell me what changed since Q3",
     prompt:
-      "Call a research subagent to investigate this and report back with sources.",
+      "Find the latest brand voice guidelines and tell me what changed since Q3.",
+  },
+  {
+    category: "compare",
+    title: "Compare our positioning vs Glean",
+    label: "From the competitive frame doc",
+    prompt:
+      "Compare our positioning vs Glean using the competitive frame doc. Cite sources.",
   },
 ];
 

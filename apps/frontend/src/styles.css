@@ -820,49 +820,100 @@ p {
 }
 
 .aui-welcome {
-  align-items: center;
-  display: grid;
-  gap: var(--space-sm);
-  margin: 16vh auto 0;
-  max-width: 32rem;
-  text-align: center;
-}
-
-.aui-welcome h2 {
-  font-size: clamp(1.75rem, 4vw, 2.25rem);
-  font-weight: 650;
-  letter-spacing: -0.04em;
-  margin: 0;
-}
-
-.aui-welcome p {
-  color: var(--color-text-muted);
-  font-size: 1.05rem;
-  margin: 0;
-}
-
-.aui-suggestions {
-  display: grid;
-  gap: var(--space-sm);
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  margin: 12vh auto 0;
+  max-width: 48rem;
+  padding: 0 var(--space-md);
   width: 100%;
 }
 
-.aui-suggestion {
-  background: transparent;
+.aui-welcome__greeting {
+  font-size: clamp(1.75rem, 3.6vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.aui-welcome__suggestions {
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .aui-welcome__suggestions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.aui-welcome-card {
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   color: var(--color-text);
   cursor: pointer;
-  display: grid;
-  gap: var(--space-xs);
-  padding: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  gap: 0.25rem;
+  padding: 0.875rem 1rem;
   text-align: left;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+  width: 100%;
 }
 
-.aui-suggestion span {
+.aui-welcome-card:hover,
+.aui-welcome-card:focus-visible {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border-strong, var(--color-border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aui-welcome-card {
+    transition: none;
+  }
+}
+
+.aui-welcome-card__eyebrow {
+  color: var(--color-text-subtle);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.aui-welcome-card__eyebrow[data-category="draft"] {
+  color: var(--color-accent);
+}
+.aui-welcome-card__eyebrow[data-category="summarize"] {
+  color: var(--color-success, var(--color-accent));
+}
+.aui-welcome-card__eyebrow[data-category="find"] {
+  color: var(--color-warning, var(--color-accent));
+}
+.aui-welcome-card__eyebrow[data-category="compare"] {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+}
+
+.aui-welcome-card__title {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.aui-welcome-card__sub {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
 }
 
 .aui-message {
@@ -883,6 +934,16 @@ p {
   border: 1px solid transparent;
   border-radius: 1.125rem;
   padding: 0.625rem 0.875rem;
+}
+
+.aui-message--assistant {
+  max-width: min(70ch, 48rem);
+}
+
+.aui-message--assistant .aui-message__body {
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 .aui-message__body {
