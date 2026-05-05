@@ -31,24 +31,67 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg: #171715;
-  --color-bg-elevated: #1f1f1c;
-  --color-surface: #242420;
-  --color-surface-muted: #2c2c27;
-  --color-border: #3a3932;
-  --color-border-strong: #525044;
-  --color-text: #f3efe6;
-  --color-text-muted: #aaa397;
-  --color-text-subtle: #7f796f;
+  --color-bg: #0f0f10;
+  --color-bg-elevated: #161617;
+  --color-surface: #1a1a1c;
+  --color-surface-muted: #222224;
+  --color-border: #232325;
+  --color-border-strong: #2a2a2c;
+  --color-text: #ededee;
+  --color-text-muted: #b4b4b8;
+  --color-text-subtle: #7e7e84;
+  --color-accent: #d97757;
+  --color-accent-strong: #e2876a;
+  --color-accent-contrast: #1a0f0a;
+  --color-danger: #d97777;
+  --color-danger-bg: #321a1a;
+  --color-success: #6ec48c;
+  --color-success-bg: #1a2f23;
+  --color-warning: #d9a857;
+  --color-warning-bg: #322615;
+}
+
+/* Accent swatches — picked in Settings → Appearance.
+   Layered on top of the scheme so a swatch override wins regardless of theme. */
+:root[data-accent="atlas-orange"] {
+  --color-accent: #d97757;
+  --color-accent-strong: #e2876a;
+  --color-accent-contrast: #1a0f0a;
+}
+:root[data-accent="gold"] {
   --color-accent: #d8b46a;
   --color-accent-strong: #f0ca7a;
   --color-accent-contrast: #1c160a;
-  --color-danger: #ff756c;
-  --color-danger-bg: #3a1817;
-  --color-success: #77d08a;
-  --color-success-bg: #16311f;
-  --color-warning: #f0bf62;
-  --color-warning-bg: #3a2a12;
+}
+:root[data-accent="amber"] {
+  --color-accent: #f0b450;
+  --color-accent-strong: #f7c66f;
+  --color-accent-contrast: #1f1408;
+}
+:root[data-accent="red"] {
+  --color-accent: #e26a6a;
+  --color-accent-strong: #ec8585;
+  --color-accent-contrast: #1d0a0a;
+}
+:root[data-accent="lime"] {
+  --color-accent: #a4c878;
+  --color-accent-strong: #b9d791;
+  --color-accent-contrast: #0f1607;
+}
+:root[data-accent="teal"] {
+  --color-accent: #6cc5b3;
+  --color-accent-strong: #8ad5c5;
+  --color-accent-contrast: #07171a;
+}
+:root[data-accent="blue"] {
+  --color-accent: #7bb7ff;
+  --color-accent-strong: #9ecaff;
+  --color-accent-contrast: #08111c;
+}
+:root[data-accent="violet"] {
+  --color-accent: #a78bd6;
+  --color-accent-strong: #bda4e3;
+  --color-accent-contrast: #110a1c;
 }
 
 :root[data-theme="light"] {
@@ -194,6 +237,25 @@ textarea {
   height: 2.25rem;
   padding: 0;
   width: 2.25rem;
+}
+
+.ui-icon-button--sm {
+  height: 1.75rem;
+  width: 1.75rem;
+}
+
+.ui-icon-button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted);
+}
+.ui-icon-button--ghost:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+.ui-icon-button--ghost[data-pressed="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
 }
 
 .ui-card {
@@ -412,18 +474,127 @@ textarea {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  bottom: calc(100% + var(--space-sm));
   box-shadow: var(--shadow-soft);
   display: grid;
   gap: var(--space-xs);
-  left: 0;
   min-width: 15rem;
   padding: var(--space-sm);
   position: absolute;
   z-index: 20;
 }
 
+.ui-dropdown__menu--up {
+  bottom: calc(100% + var(--space-sm));
+  top: auto;
+}
+.ui-dropdown__menu--down {
+  top: calc(100% + var(--space-sm));
+  bottom: auto;
+}
+.ui-dropdown__menu--align-left {
+  left: 0;
+  right: auto;
+}
+.ui-dropdown__menu--align-right {
+  right: 0;
+  left: auto;
+}
+
 .ui-sidebar {
   background: var(--color-bg);
   border-right: 1px solid var(--color-border);
+}
+
+.ui-status-pill {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  display: inline-flex;
+  font-size: 0.78rem;
+  gap: 0.4rem;
+  line-height: 1;
+  padding: 0.25rem 0.65rem;
+  white-space: nowrap;
+}
+.ui-status-pill__dot {
+  background: currentColor;
+  border-radius: 50%;
+  height: 0.45rem;
+  width: 0.45rem;
+}
+.ui-status-pill--ready {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success), transparent 65%);
+  background: var(--color-success-bg);
+}
+.ui-status-pill--running {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent), transparent 65%);
+  background: color-mix(in srgb, var(--color-accent), transparent 84%);
+}
+.ui-status-pill--running .ui-status-pill__dot {
+  animation: ui-pulse 1.4s ease-in-out infinite;
+}
+.ui-status-pill--idle {
+  color: var(--color-text-subtle);
+}
+
+@keyframes ui-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ui-app-icon {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border-radius: 50%;
+  color: var(--color-text);
+  display: inline-flex;
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  height: 1.25rem;
+  justify-content: center;
+  line-height: 1;
+  text-transform: uppercase;
+  width: 1.25rem;
+}
+.ui-app-icon--lg {
+  height: 1.5rem;
+  width: 1.5rem;
+  font-size: 0.78rem;
+}
+
+.ui-connector-chip {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text);
+  display: inline-flex;
+  font-size: 0.78rem;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem 0.2rem 0.25rem;
+  white-space: nowrap;
+}
+.ui-connector-chip[data-state="paused"] {
+  color: var(--color-text-subtle);
+}
+.ui-connector-chip[data-state="paused"] .ui-app-icon {
+  filter: grayscale(1);
+  opacity: 0.65;
+}
+.ui-connector-chip[data-state="disconnected"] {
+  border-style: dashed;
+  color: var(--color-text-muted);
+}
+.ui-connector-chip[data-state="workspace-off"] {
+  border-style: dashed;
+  color: var(--color-text-subtle);
 }
