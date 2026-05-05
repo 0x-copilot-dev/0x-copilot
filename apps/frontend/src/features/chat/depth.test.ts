@@ -2,6 +2,8 @@ import type { ModelCatalogModel } from "@enterprise-search/api-types";
 import { describe, expect, it } from "vitest";
 import {
   applyDepth,
+  depthLabel,
+  depthLabelForModel,
   isThinkingDepth,
   modelSupportsDepth,
   THINKING_DEPTHS,
@@ -104,5 +106,36 @@ describe("applyDepth", () => {
     const next = applyDepth(sel, "fast");
     expect(next.provider).toBe("openai");
     expect(next.model_name).toBe("gpt-5.4");
+  });
+});
+
+describe("depthLabelForModel (PR 3.5 / G3)", () => {
+  it("falls back to the default label when the model has no reasoning hint", () => {
+    expect(depthLabelForModel("fast", noReasoningModel)).toBe(
+      depthLabel("fast"),
+    );
+    expect(depthLabelForModel("balanced", null)).toBe(depthLabel("balanced"));
+    expect(depthLabelForModel("deep", undefined)).toBe(depthLabel("deep"));
+  });
+
+  it("falls back when depth_label is absent or empty", () => {
+    const noLabel: ModelCatalogModel = {
+      ...reasoningModel,
+      reasoning: { enabled: true, effort: "medium" },
+    };
+    const emptyLabel: ModelCatalogModel = {
+      ...reasoningModel,
+      reasoning: { enabled: true, depth_label: "   " },
+    };
+    expect(depthLabelForModel("balanced", noLabel)).toBe("Balanced");
+    expect(depthLabelForModel("balanced", emptyLabel)).toBe("Balanced");
+  });
+
+  it("uses the model catalog override when present", () => {
+    const research: ModelCatalogModel = {
+      ...reasoningModel,
+      reasoning: { enabled: true, depth_label: "Thorough" },
+    };
+    expect(depthLabelForModel("deep", research)).toBe("Thorough");
   });
 });

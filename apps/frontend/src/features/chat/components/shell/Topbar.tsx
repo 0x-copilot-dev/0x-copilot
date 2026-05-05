@@ -13,7 +13,7 @@ import {
   type Ref,
 } from "react";
 import type { RunUiState, RunUiPhase } from "../../chatRunState";
-import { depthLabel, type ThinkingDepth } from "../../depth";
+import { depthLabelForModel, type ThinkingDepth } from "../../depth";
 import { LogoMark } from "../thread/LogoMark";
 import { Crumb } from "./Crumb";
 import { ConversationTitle } from "./ConversationTitle";
@@ -135,9 +135,14 @@ export function Topbar(props: TopbarProps): ReactElement {
   // Announce depth changes to assistive tech without stealing visible
   // chrome. Polite live region so it never interrupts a stream. Skips
   // the initial mount (we don't want to announce the persisted default
-  // on every reload).
+  // on every reload). Reads the *latest* selected model at announcement
+  // time via a ref so changing models alone doesn't fire an extra
+  // announcement, but the model-catalog `depth_label` (PR 3.5 / G3)
+  // override still wins when present.
   const [depthAnnouncement, setDepthAnnouncement] = useState("");
   const lastDepthRef = useRef<ThinkingDepth | null>(null);
+  const activeModelRef = useRef<ModelCatalogModel | null>(null);
+  activeModelRef.current = models.find((m) => m.id === selectedModel) ?? null;
   useEffect(() => {
     const previous = lastDepthRef.current;
     lastDepthRef.current = depth;
@@ -145,7 +150,7 @@ export function Topbar(props: TopbarProps): ReactElement {
       return;
     }
     setDepthAnnouncement(
-      `Depth: ${depthLabel(depth)} — applies to your next message.`,
+      `Depth: ${depthLabelForModel(depth, activeModelRef.current)} — applies to your next message.`,
     );
     const id = window.setTimeout(() => setDepthAnnouncement(""), 2000);
     return () => window.clearTimeout(id);

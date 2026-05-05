@@ -1,6 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import type { ComponentType, ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Render the assistant-ui suggestion primitives as transparent pass-throughs
 // so the welcome can render without a full AssistantRuntimeProvider in the
@@ -85,5 +85,37 @@ describe("ThreadWelcome", () => {
     expect(screen.getByTestId("welcome-greeting")).toHaveTextContent(
       "Working late, Sarah.",
     );
+  });
+
+  // PR 3.5 / G7 — minute-tick transition. The internal `setInterval` polls
+  // wall-clock time once a minute so an idle empty thread crosses bucket
+  // boundaries (e.g. evening → late) without a refresh. We freeze the clock
+  // at 22:59 and advance it past the boundary; the greeting must follow.
+  describe("minute-tick transition", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("re-evaluates the greeting once a minute as wall-clock advances", async () => {
+      // 22:59 today — initial render renders "Good evening".
+      const start = new Date(2026, 4, 5, 22, 59, 0, 0);
+      vi.setSystemTime(start);
+      render(<ThreadWelcome firstName="Sarah" now={start} />);
+      expect(screen.getByTestId("welcome-greeting")).toHaveTextContent(
+        "Good evening, Sarah.",
+      );
+
+      // Advance the system clock past 23:00 and let the interval fire.
+      vi.setSystemTime(new Date(2026, 4, 5, 23, 0, 30, 0));
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByTestId("welcome-greeting")).toHaveTextContent(
+        "Working late, Sarah.",
+      );
+    });
   });
 });

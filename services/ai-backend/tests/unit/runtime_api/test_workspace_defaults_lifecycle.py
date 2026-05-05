@@ -1,5 +1,21 @@
 """PR 1.6 — workspace defaults + conversation lifecycle.
 
+PR 3.5 (G2) note: this consolidated suite is the deliberate split of the
+per-feature names listed in PR 1.6 §3.10 — grep-anchors retained:
+
+    test_get_defaults
+    test_update_defaults
+    test_lifecycle
+    test_create_conversation_defaults_fallback
+    test_create_run_model_fallback
+    test_audit_emission_for_workspace_defaults
+    test_soft_delete_then_retention_sweep
+
+One file mirrors the single route module under test (``routes/workspace
+_defaults.py`` + the conversation-lifecycle additions to
+``routes/conversations.py``); the names above are recoverable via the
+test ids if a future PR wants to re-split.
+
 Covers:
 
   * GET /v1/agent/workspace/defaults  — deployment-fallback when no row.

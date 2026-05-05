@@ -32,6 +32,7 @@ export function ThreadBody({
   onOpenSkillsSettings,
   onShowConnectors,
   onOpenDetailsPanel,
+  onOpenSources,
   connectorsTrigger,
 }: {
   connectors: {
@@ -56,6 +57,13 @@ export function ThreadBody({
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
   onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+  /**
+   * PR 3.5 / G9 — opens the workspace pane on the Sources tab and scrolls
+   * to the chosen citation row. Fired from MessageSourcesStrip clicks
+   * inside the assistant message. Optional so non-pane mounts (storybook
+   * / shared-thread preview) silently degrade.
+   */
+  onOpenSources?: (citationId: string) => void;
   /** PR 3.4 — slot through to the AssistantComposer's connectors trigger. */
   connectorsTrigger?: ReactNode;
 }): ReactElement {
@@ -104,6 +112,7 @@ export function ThreadBody({
                 message={message}
                 onMcpAuthConnect={onMcpAuthConnect}
                 onMcpAuthSkip={onMcpAuthSkip}
+                onOpenSources={onOpenSources}
               />
             );
           }}

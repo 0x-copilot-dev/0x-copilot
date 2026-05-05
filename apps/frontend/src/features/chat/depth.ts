@@ -45,6 +45,23 @@ export function depthLabel(depth: ThinkingDepth): string {
   return DEPTH_LABEL[depth];
 }
 
+/**
+ * PR 3.5 / G3 — depth label that prefers the model catalog's
+ * `reasoning.depth_label` when present (e.g. a "Research" model can
+ * advertise "Light" / "Standard" / "Thorough" instead of the global
+ * Fast / Balanced / Deep wording). Falls back to the FE's default
+ * label when the field is absent or empty.
+ */
+export function depthLabelForModel(
+  depth: ThinkingDepth,
+  model: ModelCatalogModel | null | undefined,
+): string {
+  const override = model?.reasoning?.depth_label;
+  return typeof override === "string" && override.trim().length > 0
+    ? override
+    : DEPTH_LABEL[depth];
+}
+
 export function depthDescription(depth: ThinkingDepth): string {
   return DEPTH_DESCRIPTION[depth];
 }

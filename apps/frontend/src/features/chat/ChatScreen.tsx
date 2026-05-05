@@ -1272,6 +1272,9 @@ export function ChatScreen({
                 onOpenSkillsSettings={() => onOpenSettings("skills")}
                 onShowConnectors={() => setShowConnectorSuggestions(true)}
                 onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+                onOpenSources={(citationId) =>
+                  paneState.openOn("sources", { focusCitationId: citationId })
+                }
                 runIndicator={runIndicator}
                 connectorsTrigger={
                   <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
