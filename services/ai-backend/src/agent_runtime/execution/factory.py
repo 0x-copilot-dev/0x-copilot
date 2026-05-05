@@ -92,6 +92,11 @@ def create_agent_runtime(
     subagents = tuple(
         runtime_dependencies.subagent_catalog.list_available_subagents(runtime_context)
     )
+    # PR 1.3.5 — translate SubagentDefinition.fs_permissions to deepagents'
+    # FilesystemPermission rules so subagents only get write access to
+    # ``/drafts/`` (and other privileged prefixes) when their definition
+    # explicitly grants it.
+    deepagents_subagents = _subagents_with_fs_permissions(subagents)
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
@@ -125,7 +130,7 @@ def create_agent_runtime(
                 tools=model_tools,
                 model_config=runtime_context.model_profile,
                 system_prompt=model_instructions,
-                subagents=subagents,
+                subagents=deepagents_subagents,
                 memory_backend=deep_backend
                 if deep_backend is not None
                 else (
@@ -433,3 +438,57 @@ def _parse_dependencies(
             retryable=False,
             correlation_id=correlation_id,
         ) from exc
+
+
+def _subagents_with_fs_permissions(
+    subagents: tuple[object, ...],
+) -> tuple[object, ...]:
+    """Attach deepagents ``FilesystemPermission`` rules to subagents that need them.
+
+    For each :class:`SubagentDefinition` whose ``fs_permissions`` is non-empty,
+    we attach the translated rules onto the object. Subagents whose
+    definition has no ``fs_permissions`` are passed through unchanged so the
+    deepagents middleware applies the parent agent's permissions to them
+    (the existing default).
+
+    The translation is best-effort: if deepagents is unavailable at import
+    time, or if the subagent isn't a SubagentDefinition, we pass through
+    unchanged. Tests assert the rule list shape, not deepagents internals.
+    """
+
+    if not subagents:
+        return subagents
+    try:
+        from deepagents.middleware.filesystem import (  # noqa: PLC0415
+            FilesystemPermission,
+        )
+    except ImportError:  # pragma: no cover — deepagents always present in prod
+        return subagents
+    from agent_runtime.delegation.subagents.contracts import (  # noqa: PLC0415
+        SubagentDefinition,
+    )
+
+    translated: list[object] = []
+    for subagent in subagents:
+        specs = getattr(subagent, "fs_permissions", None) or ()
+        if not isinstance(subagent, SubagentDefinition) or not specs:
+            translated.append(subagent)
+            continue
+        rules = [
+            FilesystemPermission(
+                operations=list(spec.operations),
+                paths=list(spec.paths),
+                mode=spec.mode,
+            )
+            for spec in specs
+        ]
+        # The deepagents subagent contract reads ``permissions`` off the
+        # subagent object. We attach the rules as a non-Pydantic attribute
+        # using the model's underlying ``__dict__`` so Pydantic's frozen-
+        # validation doesn't reject the assignment.
+        try:
+            object.__setattr__(subagent, "permissions", rules)
+        except (AttributeError, TypeError):  # pragma: no cover — defensive
+            pass
+        translated.append(subagent)
+    return tuple(translated)

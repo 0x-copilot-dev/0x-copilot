@@ -56,6 +56,7 @@ class RuntimeWorkerEntrypoint:
                     queue=async_ports.queue,
                     settings=settings,
                     lock_seconds=settings.execution.worker_lock_seconds,
+                    draft_store=async_ports.draft_store,
                 )
                 logger.info(
                     "worker_started",
@@ -136,6 +137,7 @@ class RuntimeWorkerEntrypoint:
             queue=ports.queue,
             settings=settings,
             lock_seconds=settings.execution.worker_lock_seconds,
+            draft_store=ports.draft_store,
         )
         logger.info(
             "worker_started",

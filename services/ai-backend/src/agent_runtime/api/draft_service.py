@@ -1,33 +1,57 @@
-"""Application service for the Workspace-pane draft artifact (PR 1.3).
+"""Application service for the Workspace-pane draft artifact (PR 1.3 + 1.3.5).
 
 Reads / writes / sends / discards drafts on top of :class:`DraftStorePort`.
 
-Live ``DRAFT_UPDATED`` events come from the agent path
-(:class:`DraftBackend` → :class:`RuntimeEventProducer`) because the SSE stream
-is run-scoped and only run-driven writes have a stable ``run_id``. User-
-driven PATCH / send / discard return the persisted draft synchronously and
-write to the audit chain; other connected clients pick up the change on the
-next ``list`` request — same model the conversations endpoint uses.
+Live ``DRAFT_UPDATED`` events come from two paths:
 
-The send flow does *not* dispatch the connector tool. It transitions the
-draft to ``send_pending_approval`` and writes ``draft.send.proposed`` to the
-audit chain. The actual approval card + connector-tool call lives in the
-worker (PR 1.4 — explicitly out-of-scope for PR 1.3).
+- the agent harness (:class:`DraftBackend` → :class:`RuntimeEventProducer`)
+  for ``write_file`` / ``edit_file`` calls, tied to the agent's run;
+- the API itself for user-driven ``send`` (PR 1.3.5): the send writes the
+  status transition to a host run, persists the approval, and emits an
+  ``APPROVAL_REQUESTED`` event the FE picks up by opening the host run's
+  stream.
+
+User-driven PATCH and DISCARD return the persisted draft synchronously; live
+event emission for those paths stays out of scope (other clients pick up the
+change on the next ``list``).
+
+Send flow (PR 1.3.5):
+
+1. Validate ``expected_version`` (optimistic conflict).
+2. ``CapabilityAuthGate.check`` — reject 409 ``connector_auth_required`` /
+   400 ``invalid_target_connector`` BEFORE any DB write.
+3. Resolve the host run: prefer the draft's own ``run_id`` (the run that
+   produced it); else fall back to the latest run on the conversation;
+   else 409 ``no_host_run`` (rare PATCH-only edge case).
+4. Insert ``runtime_drafts`` v+1 status=send_pending_approval.
+5. Insert ``runtime_approval_requests`` row keyed to host run with
+   ``approval_kind="action"`` and ``metadata.kind="draft_send"`` carrying
+   draft id, version, target, summary, body preview.
+6. Emit ``APPROVAL_REQUESTED`` on host run's stream.
+7. Audit ``draft.send.proposed``.
+8. Return ``{draft, run_id, approval_id}`` — both ids are real.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from uuid import uuid4
+from typing import Any
 
 from starlette import status
 
-from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.api.constants import Keys, Values as ApiValues
+from agent_runtime.capabilities.auth_gate import (
+    CapabilityAuthCheck,
+    CapabilityAuthGate,
+    CapabilityAuthOutcome,
+)
+from agent_runtime.execution.contracts import RuntimeErrorCode, StreamEventSource
 from agent_runtime.persistence.ports import DraftStorePort, OptimisticConflict
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    ApprovalRequestRecord,
     Draft,
     DraftDiscardRequest,
     DraftListResponse,
@@ -35,6 +59,7 @@ from runtime_api.schemas import (
     DraftSection,
     DraftSendRequest,
     DraftSendResponse,
+    RuntimeApiEventType,
 )
 
 
@@ -45,10 +70,23 @@ _AUDIT_DRAFT_EDIT_USER = "draft.edit.user"
 _DRAFT_NOT_FOUND = "Draft was not found for this scope."
 _DRAFT_VERSION_CONFLICT = "Draft version conflict; refresh and retry."
 _DRAFT_STATUS_IMMUTABLE = "Draft is in a final state and cannot change."
+_NO_HOST_RUN = (
+    "Cannot send a draft from a chat with no run history; start a chat first."
+)
+_INVALID_TARGET_CONNECTOR = "Unknown connector for this workspace."
+_CONNECTOR_AUTH_REQUIRED = "Connector requires authentication for this user."
+_CONNECTOR_WORKSPACE_DISABLED = "Connector is disabled for this workspace."
 
 # Sentinel for "argument not supplied" — must precede the class body
 # because it's used as a default value in DraftService._next_version.
 _UNSET = object()
+
+# Stable string used as ``approval.metadata['kind']`` so the worker-side
+# resolution branch can disambiguate draft-send approvals from generic
+# action approvals without sniffing other fields.
+_APPROVAL_KIND_DRAFT_SEND = "draft_send"
+
+_BODY_PREVIEW_MAX_CHARS = 400
 
 
 class DraftService:
@@ -59,9 +97,13 @@ class DraftService:
         *,
         store: DraftStorePort,
         persistence: object | None = None,
+        auth_gate: CapabilityAuthGate | None = None,
+        event_producer: object | None = None,
     ) -> None:
         self._store = store
         self._persistence = persistence
+        self._auth_gate = auth_gate
+        self._event_producer = event_producer
 
     # -- read paths ----------------------------------------------------------
 
@@ -134,12 +176,24 @@ class DraftService:
         )
         if latest.status in {DraftStatus.SENT, DraftStatus.DISCARDED}:
             raise self._immutable_status_error(latest.status)
-        approval_id = (
-            f"draft_send:{latest.draft_id}:{latest.version + 1}:{uuid4().hex[:8]}"
+
+        # 1. Auth pre-check — fail fast BEFORE any DB write.
+        self._enforce_auth_gate(
+            target_connector=request.target_connector,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=latest.conversation_id,
         )
+
+        # 2. Resolve a host run for the approval card.
+        host_run_id = await self._resolve_host_run_id(
+            org_id=org_id, conversation_id=latest.conversation_id, draft=latest
+        )
+
+        # 3. Insert the next draft version (status=send_pending_approval).
         next_record = self._next_version(
             previous=latest,
-            run_id=None,
+            run_id=host_run_id,
             user_id=user_id,
             content_text=latest.content_text,
             target_connector=request.target_connector,
@@ -147,17 +201,42 @@ class DraftService:
             status=DraftStatus.SEND_PENDING_APPROVAL,
         )
         persisted = await _maybe_await(self._store.insert_version(next_record))
+
+        # 4. Persist the approval row keyed to the host run.
+        approval = await self._create_approval(
+            org_id=org_id,
+            user_id=user_id,
+            host_run_id=host_run_id,
+            draft=persisted,
+            request=request,
+        )
+
+        # 5. Emit APPROVAL_REQUESTED on host run's stream so the FE renders
+        #    the inline ApprovalTool card without an extra fetch.
+        await self._emit_approval_requested(
+            org_id=org_id,
+            host_run_id=host_run_id,
+            approval=approval,
+            draft=persisted,
+        )
+
+        # 6. Audit chain.
         await self._audit(
             org_id=org_id,
             user_id=user_id,
             event_type=_AUDIT_DRAFT_SEND_PROPOSED,
             record=persisted,
-            extra_metadata={"approval_id": approval_id},
+            extra_metadata={
+                "approval_id": approval.approval_id,
+                "host_run_id": host_run_id,
+                "target_connector": request.target_connector,
+            },
         )
+
         return DraftSendResponse(
             draft=_to_draft(persisted),
-            approval_id=approval_id,
-            run_id=None,
+            approval_id=approval.approval_id,
+            run_id=host_run_id,
         )
 
     async def discard(
@@ -192,6 +271,163 @@ class DraftService:
         return _to_draft(persisted)
 
     # -- internal helpers ----------------------------------------------------
+
+    def _enforce_auth_gate(
+        self,
+        *,
+        target_connector: str,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> None:
+        if self._auth_gate is None:
+            # Legacy / unconfigured deployments — degrade open. The PR 1.3.5
+            # PRD calls for fail-closed; configure the gate at app boot.
+            return
+        runtime_context = _RuntimeContextStub(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        check: CapabilityAuthCheck = self._auth_gate.check(
+            target_connector=target_connector,
+            runtime_context=runtime_context,
+        )
+        if check.outcome is CapabilityAuthOutcome.AUTHENTICATED:
+            return
+        details: dict[str, Any] = {"target_connector": target_connector}
+        if check.mcp_server_id is not None:
+            details["mcp_server_id"] = check.mcp_server_id
+        if check.outcome is CapabilityAuthOutcome.NOT_AUTHENTICATED:
+            details["error_code"] = "connector_auth_required"
+            raise RuntimeApiError(
+                code=RuntimeErrorCode.PERMISSION_DENIED,
+                safe_message=check.safe_message or _CONNECTOR_AUTH_REQUIRED,
+                http_status=status.HTTP_409_CONFLICT,
+                details=details,
+            )
+        if check.outcome is CapabilityAuthOutcome.WORKSPACE_DISABLED:
+            details["error_code"] = "connector_workspace_disabled"
+            raise RuntimeApiError(
+                code=RuntimeErrorCode.PERMISSION_DENIED,
+                safe_message=check.safe_message or _CONNECTOR_WORKSPACE_DISABLED,
+                http_status=status.HTTP_403_FORBIDDEN,
+                details=details,
+            )
+        details["error_code"] = "invalid_target_connector"
+        raise RuntimeApiError(
+            code=RuntimeErrorCode.VALIDATION_ERROR,
+            safe_message=check.safe_message or _INVALID_TARGET_CONNECTOR,
+            http_status=status.HTTP_400_BAD_REQUEST,
+            details=details,
+        )
+
+    async def _resolve_host_run_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        draft: DraftRecord,
+    ) -> str:
+        # 1. Prefer the run that produced this draft (when present).
+        if draft.run_id:
+            return draft.run_id
+        # 2. Fall back to the latest run on the conversation.
+        list_messages = getattr(self._persistence, "list_messages", None)
+        if list_messages is not None:
+            try:
+                messages = await _maybe_await(
+                    list_messages(
+                        org_id=org_id,
+                        conversation_id=conversation_id,
+                        limit=50,
+                    )
+                )
+            except Exception:
+                messages = ()
+            for msg in reversed(tuple(messages)):
+                run_id = getattr(msg, "run_id", None)
+                if run_id:
+                    return run_id
+        # 3. No host run available — surface a clean 409.
+        raise RuntimeApiError(
+            code=RuntimeErrorCode.VALIDATION_ERROR,
+            safe_message=_NO_HOST_RUN,
+            http_status=status.HTTP_409_CONFLICT,
+            details={"error_code": "no_host_run"},
+        )
+
+    async def _create_approval(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        host_run_id: str,
+        draft: DraftRecord,
+        request: DraftSendRequest,
+    ) -> ApprovalRequestRecord:
+        record = ApprovalRequestRecord(
+            run_id=host_run_id,
+            conversation_id=draft.conversation_id,
+            org_id=org_id,
+            user_id=user_id,
+            metadata={
+                "kind": _APPROVAL_KIND_DRAFT_SEND,
+                Keys.Field.APPROVAL_KIND: ApiValues.ApprovalKind.ACTION,
+                "draft_id": draft.draft_id,
+                "draft_version": draft.version,
+                "target_connector": request.target_connector,
+                "target_metadata": dict(request.target_metadata or {}),
+                "summary": _approval_summary(draft, request),
+                "body_preview": draft.content_text[:_BODY_PREVIEW_MAX_CHARS],
+            },
+        )
+        if self._persistence is None:
+            return record
+        create = getattr(self._persistence, "create_approval_request", None)
+        if create is None:
+            return record
+        return await _maybe_await(create(record=record))
+
+    async def _emit_approval_requested(
+        self,
+        *,
+        org_id: str,
+        host_run_id: str,
+        approval: ApprovalRequestRecord,
+        draft: DraftRecord,
+    ) -> None:
+        if self._event_producer is None or self._persistence is None:
+            return
+        get_run = getattr(self._persistence, "get_run", None)
+        if get_run is None:
+            return
+        run = await _maybe_await(get_run(org_id=org_id, run_id=host_run_id))
+        if run is None:
+            return
+        append = getattr(self._event_producer, "append_api_event", None)
+        if append is None:
+            return
+        payload: dict[str, object] = {
+            Keys.Field.APPROVAL_ID: approval.approval_id,
+            Keys.Field.APPROVAL_KIND: ApiValues.ApprovalKind.ACTION,
+            "kind": _APPROVAL_KIND_DRAFT_SEND,
+            "draft_id": draft.draft_id,
+            "draft_version": draft.version,
+            "target_connector": draft.target_connector,
+            "target_metadata": draft.target_metadata or None,
+            Keys.Field.SUMMARY: approval.metadata.get("summary"),
+            "body_preview": approval.metadata.get("body_preview"),
+            Keys.Field.STATUS: ApiValues.Status.WAITING,
+        }
+        await _maybe_await(
+            append(
+                run=run,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+                payload=payload,
+                summary=str(payload.get(Keys.Field.SUMMARY) or "Send draft"),
+                status=ApiValues.Status.WAITING,
+            )
+        )
 
     async def _load(
         self,
@@ -329,6 +565,23 @@ class DraftService:
 # -- module-level helpers -----------------------------------------------------
 
 
+class _RuntimeContextStub:
+    """Minimal duck-typed stand-in for :class:`AgentRuntimeContext`.
+
+    The auth gate's registries only read identity fields; we don't pay the
+    cost of constructing a fully-validated AgentRuntimeContext for every
+    POST /send.
+    """
+
+    __slots__ = ("org_id", "user_id", "conversation_id", "permission_scopes")
+
+    def __init__(self, *, org_id: str, user_id: str, conversation_id: str) -> None:
+        self.org_id = org_id
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.permission_scopes = frozenset()
+
+
 async def _maybe_await(value: object) -> object:
     if asyncio.iscoroutine(value):
         return await value
@@ -372,6 +625,12 @@ def _sections_for(content: str) -> list[DraftSection]:
             )
         )
     return sections
+
+
+def _approval_summary(draft: DraftRecord, request: DraftSendRequest) -> str:
+    title = (draft.title or "").strip() or "Untitled draft"
+    target = (request.target_connector or "").strip() or "connector"
+    return f"Send {title} to {target}"
 
 
 def _to_draft(record: DraftRecord) -> Draft:

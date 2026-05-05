@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime, timezone
 
@@ -45,6 +46,14 @@ RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies
 AgentFactory = Callable[..., RuntimeHarness]
 RuntimeResumer = Callable[[RuntimeHarness, object], AsyncIterator[object]]
 
+# PR 1.3.5 — discriminator written into ``approval.metadata['kind']`` by
+# DraftService.send so this handler can route draft-send approvals through
+# their own resolution path instead of the LangGraph resume path.
+_APPROVAL_KIND_DRAFT_SEND = "draft_send"
+
+_AUDIT_DRAFT_SEND_COMPLETED = "draft.send.completed"
+_AUDIT_DRAFT_SEND_REJECTED = "draft.send.rejected"
+
 
 class RuntimeApprovalHandler:
     """Consume durable approval-resolution commands after the API records the decision."""
@@ -70,6 +79,7 @@ class RuntimeApprovalHandler:
         agent_factory: AgentFactory = create_agent_runtime,
         runtime_resumer: RuntimeResumer = astream_runtime_resume,
         on_event_appended: Callable[[str], None] | None = None,
+        draft_store: object | None = None,
     ) -> None:
         self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
         self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
@@ -86,6 +96,13 @@ class RuntimeApprovalHandler:
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
+        # PR 1.3.5 — when a draft-send approval lands the handler routes
+        # through ``_resolve_draft_send_approval`` instead of the LangGraph
+        # resume path. The draft store must be provided for that path to
+        # function; absent it, draft-send approvals fall through to the
+        # default early-return (status transitions skipped) — surfaced as
+        # an audit gap rather than a crash.
+        self._draft_store = draft_store
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
         # PR 1.4 — two-stage approval forwarding. The API service has already
@@ -129,6 +146,19 @@ class RuntimeApprovalHandler:
             decided_by_user_id=getattr(command, "decided_by_user_id", None),
         )
         metadata = approval.metadata
+        # PR 1.3.5 — Workspace-pane draft-send approvals are conversation-
+        # scoped events that don't suspend a LangGraph runtime. We detect
+        # them here (after recording the decision through the existing
+        # audit emitter) and handle the state transitions inline before
+        # the LangGraph-resume path would have run.
+        if metadata.get("kind") == _APPROVAL_KIND_DRAFT_SEND:
+            await self._resolve_draft_send_approval(
+                run=run,
+                approval=approval,
+                decision=command.decision,
+                decided_by_user_id=getattr(command, "decided_by_user_id", None),
+            )
+            return
         approval_kind = StreamTextHelper.extract(
             metadata.get(self._Fields.APPROVAL_KIND)
         )
@@ -294,3 +324,163 @@ class RuntimeApprovalHandler:
                 }
             ]
         }
+
+    async def _resolve_draft_send_approval(
+        self,
+        *,
+        run: RunRecord,
+        approval: object,
+        decision: ApprovalDecision,
+        decided_by_user_id: str | None,
+    ) -> None:
+        """Apply a draft-send approval decision: persist v+2 + audit + emit.
+
+        Approve → ``status=sent`` + audit ``draft.send.completed``.
+        Reject  → ``status=draft`` + audit ``draft.send.rejected``.
+
+        The actual connector tool dispatch is owned by a dedicated send-
+        effect outbox worker (out-of-scope for PR 1.3.5 phase 2 — see
+        ``docs/new-design/pr-1.3.5-draft-completion.md`` §3.5). This
+        handler is responsible only for the draft-state transition + the
+        audit chain entry. Once the dispatch worker lands it will read
+        ``status=send_pending_approval`` rows and post to the connector;
+        the post-dispatch transition to ``status=sent`` (or
+        ``send_failed``) will replace the inline transition we do here.
+        """
+
+        from agent_runtime.persistence.records import DraftStatus  # noqa: PLC0415
+
+        if self._draft_store is None:
+            return
+        metadata = approval.metadata if hasattr(approval, "metadata") else {}
+        draft_id = str(metadata.get("draft_id", ""))
+        if not draft_id:
+            return
+        latest = await self._maybe_await(
+            self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
+        )
+        if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
+            # State changed since the approval was posted (e.g. a
+            # concurrent discard); skip the transition.
+            return
+
+        if decision is ApprovalDecision.APPROVED:
+            terminal_status = DraftStatus.SENT
+            audit_action = _AUDIT_DRAFT_SEND_COMPLETED
+        elif decision is ApprovalDecision.REJECTED:
+            terminal_status = DraftStatus.DRAFT
+            audit_action = _AUDIT_DRAFT_SEND_REJECTED
+        else:
+            return
+
+        next_record = self._next_draft_version(
+            previous=latest,
+            decided_by_user_id=decided_by_user_id or run.user_id,
+            status=terminal_status,
+        )
+        persisted = await self._maybe_await(
+            self._draft_store.insert_version(next_record)
+        )
+        await self._emit_draft_updated(run=run, record=persisted)
+        await self._write_draft_audit(
+            run=run,
+            record=persisted,
+            action=audit_action,
+            extra_metadata={
+                "approval_id": getattr(approval, "approval_id", None),
+                "decided_by_user_id": decided_by_user_id,
+            },
+        )
+        # Mark the host run completed when the approval was the only
+        # outstanding action. We do not fail the run on reject — rejection
+        # is a normal outcome.
+        completed = await with_optimistic_retry(
+            lambda: self.persistence.update_run_status(
+                run_id=run.run_id,
+                status=AgentRunStatus.COMPLETED,
+            )
+        )
+        await self.event_producer.append_api_event(
+            run=completed,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_COMPLETED,
+            payload={"status": RuntimeApiEventType.RUN_COMPLETED.value},
+            summary="Run completed",
+        )
+
+    @staticmethod
+    async def _maybe_await(value: object) -> object:
+        if asyncio.iscoroutine(value):
+            return await value
+        return value
+
+    @staticmethod
+    def _next_draft_version(
+        *,
+        previous: object,
+        decided_by_user_id: str,
+        status: object,
+    ) -> object:
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from agent_runtime.persistence.records import DraftRecord  # noqa: PLC0415
+
+        return DraftRecord(
+            draft_id=previous.draft_id,
+            version=previous.version + 1,
+            org_id=previous.org_id,
+            conversation_id=previous.conversation_id,
+            run_id=previous.run_id,
+            user_id=decided_by_user_id,
+            title=previous.title,
+            content_text=previous.content_text,
+            target_connector=previous.target_connector,
+            target_metadata=dict(previous.target_metadata or {}),
+            citation_ids=previous.citation_ids,
+            status=status,
+            encryption_version=previous.encryption_version,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    async def _emit_draft_updated(self, *, run: RunRecord, record: object) -> None:
+        payload: dict[str, object] = {
+            "draft_id": record.draft_id,
+            "version": record.version,
+            "status": record.status.value,
+            "title": record.title,
+            "target_connector": record.target_connector,
+            "target_metadata": record.target_metadata or None,
+            "citation_ids": list(record.citation_ids),
+            "summary": f"Draft v{record.version}: {record.title or 'Untitled'}",
+        }
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.DRAFT_UPDATED,
+            payload=payload,
+            summary=str(payload["summary"]),
+            status=ApiValues.Status.COMPLETED,
+        )
+
+    async def _write_draft_audit(
+        self,
+        *,
+        run: RunRecord,
+        record: object,
+        action: str,
+        extra_metadata: dict[str, object] | None = None,
+    ) -> None:
+        write_audit = getattr(self.persistence, "write_audit_log", None)
+        if write_audit is None:
+            return
+        metadata: dict[str, object] = {
+            "org_id": run.org_id,
+            "user_id": run.user_id,
+            "draft_id": record.draft_id,
+            "version": record.version,
+            "status": record.status.value,
+            "target_connector": record.target_connector,
+            "run_id": run.run_id,
+        }
+        if extra_metadata:
+            metadata.update({k: v for k, v in extra_metadata.items() if v is not None})
+        await self._maybe_await(write_audit(event_type=action, record=metadata))

@@ -138,9 +138,18 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def default_draft_service(cls, app):
-        """Wire the Workspace-pane draft service for the configured backend."""
+        """Wire the Workspace-pane draft service for the configured backend.
+
+        PR 1.3.5 wires:
+        - DraftStore (in-memory or Postgres-backed)
+        - PersistencePort (for approval-row insert + audit chain)
+        - CapabilityAuthGate (pre-check on POST /send)
+        - RuntimeEventProducer (emits APPROVAL_REQUESTED on the host run's
+          stream so the FE renders the inline approval card)
+        """
 
         from agent_runtime.api.draft_service import DraftService
+        from agent_runtime.api.events import RuntimeEventProducer
         from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
         from runtime_adapters.postgres.draft_store import PostgresDraftStore
 
@@ -149,12 +158,56 @@ class RuntimeApiAppFactory:
         if async_ports is not None and async_ports.backend == "postgres":
             store = PostgresDraftStore(async_ports.store)
             persistence = async_ports.persistence
-        else:
-            store = InMemoryDraftStore()
-            persistence = (
-                (async_ports or ports).persistence if (async_ports or ports) else None
+            event_store = async_ports.event_store
+        elif async_ports is not None:
+            store = (
+                async_ports.draft_store
+                if async_ports.draft_store is not None
+                else InMemoryDraftStore()
             )
-        return DraftService(store=store, persistence=persistence)
+            persistence = async_ports.persistence
+            event_store = async_ports.event_store
+        elif ports is not None:
+            store = (
+                ports.draft_store
+                if ports.draft_store is not None
+                else InMemoryDraftStore()
+            )
+            persistence = ports.persistence
+            event_store = ports.event_store
+        else:  # pragma: no cover — only hit when the app boots without ports
+            return DraftService(store=InMemoryDraftStore())
+
+        event_producer = RuntimeEventProducer(
+            persistence=persistence,
+            event_store=event_store,
+        )
+        auth_gate = cls._draft_auth_gate(app)
+        return DraftService(
+            store=store,
+            persistence=persistence,
+            auth_gate=auth_gate,
+            event_producer=event_producer,
+        )
+
+    @classmethod
+    def _draft_auth_gate(cls, app):  # type: ignore[no-untyped-def]
+        """Build a CapabilityAuthGate from the configured runtime registries.
+
+        Falls back to ``None`` when registries are not exposed on the app
+        state (e.g. minimal test apps); DraftService degrades open in that
+        case rather than rejecting every send.
+        """
+
+        from agent_runtime.capabilities.auth_gate import CapabilityAuthGate
+
+        tool_registry = getattr(app.state, "runtime_tool_registry", None)
+        mcp_registry = getattr(app.state, "runtime_mcp_registry", None)
+        if tool_registry is None or mcp_registry is None:
+            return None
+        return CapabilityAuthGate(
+            tool_registry=tool_registry, mcp_registry=mcp_registry
+        )
 
     @classmethod
     def default_workspace_feed_service(cls, app: FastAPI):
@@ -228,6 +281,7 @@ class RuntimeApiAppFactory:
             settings=settings,
             lock_seconds=settings.execution.worker_lock_seconds,
             on_event_appended=event_bus.notify_sync if event_bus else None,
+            draft_store=getattr(ports, "draft_store", None),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(

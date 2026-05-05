@@ -90,6 +90,7 @@ class RuntimeWorker:
             event_store=self.event_store,
             settings=self.settings,
             on_event_appended=on_event_appended,
+            draft_store=draft_store,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

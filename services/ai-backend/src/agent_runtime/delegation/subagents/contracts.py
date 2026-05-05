@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
 from pydantic import (
@@ -98,6 +98,39 @@ class RuntimeContextReference(RuntimeContract):
         )
 
 
+class FilesystemPermissionSpec(RuntimeContract):
+    """Domain-side mirror of deepagents' ``FilesystemPermission`` dataclass.
+
+    PR 1.3.5 adds this so :class:`SubagentDefinition` can grant or deny
+    write access to specific path prefixes (notably ``/drafts/``) without
+    importing the deepagents middleware into our domain models. The
+    factory translates these specs to deepagents' real
+    ``FilesystemPermission`` rules at agent-build time.
+
+    ``operations`` are the deepagents operation names (``read`` / ``write`` /
+    ``execute``); ``paths`` must start with ``/`` per deepagents'
+    ``FilesystemPermission.__post_init__`` validator.
+    """
+
+    operations: tuple[Literal["read", "write", "execute"], ...] = ()
+    paths: tuple[str, ...] = ()
+    mode: Literal["allow", "deny"] = "allow"
+
+    @field_validator("paths")
+    @classmethod
+    def _validate_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for path in value:
+            if not path.startswith("/"):
+                raise ValueError(
+                    f"FilesystemPermissionSpec.paths must start with '/': {path!r}"
+                )
+            if ".." in path or "~" in path:
+                raise ValueError(
+                    f"FilesystemPermissionSpec.paths must not contain '..' or '~': {path!r}"
+                )
+        return value
+
+
 class SubagentDefinition(RuntimeContract):
     """Model-visible subagent metadata used for supervisor selection."""
 
@@ -120,6 +153,12 @@ class SubagentDefinition(RuntimeContract):
         le=Limits.CONCURRENCY_LIMIT_MAX,
     )
     enabled: bool = True
+    # PR 1.3.5 — explicit per-subagent filesystem permission rules.
+    # Default ``()`` means the subagent inherits the parent agent's
+    # permissions (deepagents semantics). To grant ``/drafts/`` write
+    # access to a specific subagent, populate this tuple with one or
+    # more allow rules.
+    fs_permissions: tuple[FilesystemPermissionSpec, ...] = ()
 
     @field_validator(_Fields.NAME)
     @classmethod
