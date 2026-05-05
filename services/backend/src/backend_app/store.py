@@ -165,6 +165,8 @@ class PostgresConnectionPool:
                 _BackendPoolEnv.DEFAULT_POOL_ACQUIRE_TIMEOUT_SECONDS,
             )
         )
+        from backend_app.db.pool_metrics import PoolMetrics
+
         self._role = role
         self._pool = ConnectionPool(
             conninfo=database_url,
@@ -176,6 +178,12 @@ class PostgresConnectionPool:
                 "options": _BackendPoolEnv.build_options(role=role),
             },
         )
+        self._metrics = PoolMetrics(service=_BackendPoolEnv.SERVICE_NAME, role=role)
+        self._metrics.bind_pool(self._pool)
+
+    @property
+    def metrics(self) -> Any:
+        return self._metrics
 
     def connection(self) -> Any:
         return self._pool.connection()

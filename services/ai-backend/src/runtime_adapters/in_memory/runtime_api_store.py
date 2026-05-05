@@ -104,6 +104,9 @@ class InMemoryRuntimeApiStore:
         # blow up old periods on a roll-over.
         self.budget_states: dict[tuple[str, str], BudgetStateRecord] = {}
         self.budget_reservations: dict[str, BudgetReservationRecord] = {}
+        # Retention policies (C8). Keyed by org_id; the per-(scope,
+        # resource_id, kind) uniqueness is enforced at upsert time.
+        self.retention_policies: dict[str, tuple] = {}
 
     def create_conversation(
         self, request: CreateConversationRequest
@@ -1005,6 +1008,29 @@ class InMemoryRuntimeApiStore:
         }
         # Suppress unused import warnings if BudgetStatus isn't used here yet.
         _ = BudgetStatus
+
+    # Retention (C8) ----------------------------------------------------
+
+    def list_retention_policies(self, *, org_id: str) -> Sequence:
+        return tuple(self.retention_policies.get(org_id, ()))
+
+    def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+        bucket = list(self.retention_policies.get(record.org_id, ()))
+        bucket = [
+            row
+            for row in bucket
+            if (row.scope, row.resource_id, row.kind)
+            != (record.scope, record.resource_id, record.kind)
+        ]
+        bucket.append(record)
+        self.retention_policies[record.org_id] = tuple(bucket)
+        return record
+
+    def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        bucket = self.retention_policies.get(org_id, ())
+        self.retention_policies[org_id] = tuple(
+            row for row in bucket if row.id != policy_id
+        )
 
     def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with a monotonically increasing run sequence number."""

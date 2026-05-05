@@ -307,6 +307,17 @@ class SyncToAsyncPersistence:
     async def delete_budget(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.delete_budget, **kwargs)
 
+    # Retention (C8) -------------------------------------------------------
+
+    async def list_retention_policies(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.list_retention_policies, **kwargs)
+
+    async def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.upsert_retention_policy, record)
+
+    async def delete_retention_policy(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.delete_retention_policy, **kwargs)
+
 
 class SyncToAsyncEventStore:
     """Wrap a sync :class:`EventStorePort` in async signatures."""

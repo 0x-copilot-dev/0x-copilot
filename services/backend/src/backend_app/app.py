@@ -89,6 +89,7 @@ from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.saml import register_saml_routes
 from backend_app.routes.scim import register_scim_routes
 from backend_app.routes.sessions import register_session_routes
+from backend_app.routes.siem import register_siem_admin_routes
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     DeployAuditService,
@@ -828,6 +829,7 @@ def create_app(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     register_audit_export_routes(app)
+    register_siem_admin_routes(app)
     register_health_routes(app)
 
     return app

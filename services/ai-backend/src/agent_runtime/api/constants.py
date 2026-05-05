@@ -104,6 +104,10 @@ class Keys:
         BUDGETS_UPDATE = "budgets_update"
         BUDGETS_DELETE = "budgets_delete"
         BUDGETS_ME = "budgets_me"
+        # Retention admin (C8)
+        RETENTION_LIST = "retention_list"
+        RETENTION_UPSERT = "retention_upsert"
+        RETENTION_DELETE = "retention_delete"
 
 
 class Values:
