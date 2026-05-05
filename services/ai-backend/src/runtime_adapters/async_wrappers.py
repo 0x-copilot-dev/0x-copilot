@@ -71,6 +71,18 @@ class SyncToAsyncPersistence:
             conversation_id=conversation_id,
         )
 
+    async def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        return await asyncio.to_thread(
+            self._port.get_conversation_for_org,
+            org_id=org_id,
+            conversation_id=conversation_id,
+        )
+
     async def list_conversations(
         self,
         *,

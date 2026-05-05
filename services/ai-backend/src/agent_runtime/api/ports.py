@@ -43,6 +43,20 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant/user scope."""
 
+    def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        """Return a conversation for the tenant scope, ignoring user ownership.
+
+        Used by admin-override paths (PR 1.2.1) where the caller holds an
+        admin scope and acts on a member's data. Authorization layering
+        is the caller's responsibility — this port only enforces tenant
+        isolation. Returns ``None`` for cross-tenant access.
+        """
+
     def list_conversations(
         self,
         *,

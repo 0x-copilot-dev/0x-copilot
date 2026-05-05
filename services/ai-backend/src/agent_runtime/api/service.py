@@ -317,8 +317,16 @@ class RuntimeApiService:
         user_id: str,
         conversation_id: str,
         request: UpdateConversationConnectorsRequest,
+        allow_admin_override: bool = False,
     ) -> ConversationConnectorScopesResponse:
         """Merge-patch the chat's connector scope override + emit an audit row.
+
+        ``allow_admin_override`` is set by the route handler when the
+        caller's permission_scopes contain :data:`ADMIN_USERS` (PR 1.2.1
+        admin-override path). When True, a non-owner caller in the same
+        tenant is permitted to PATCH; the audit row records
+        ``override_by_admin=True`` plus the owner's user_id so SIEM can
+        reconstruct who acted on whose data.
 
         404s for foreign-tenant conversations (does not leak existence).
         Audit metadata captures ``before`` / ``after`` / ``diff_keys`` for
@@ -326,15 +334,19 @@ class RuntimeApiService:
         existing ``runtime_audit_log`` HMAC chain.
         """
 
-        before = await self._conversation_for_scope(
+        before, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
-            user_id=user_id,
+            actor_user_id=user_id,
             conversation_id=conversation_id,
+            allow_admin_override=allow_admin_override,
         )
         now = datetime.now(timezone.utc)
+        # The persistence UPDATE filters by owner user_id — for admin
+        # overrides we use the owner's id (from the loaded record), not
+        # the actor's. The actor is recorded separately in the audit row.
         updated = await self.persistence.update_conversation_connectors(
             org_id=org_id,
-            user_id=user_id,
+            user_id=before.user_id,
             conversation_id=conversation_id,
             scopes_patch=request.scopes,
             now=now,
@@ -347,6 +359,14 @@ class RuntimeApiService:
                 http_status=status.HTTP_404_NOT_FOUND,
                 retryable=False,
             )
+        audit_metadata = _connector_scope_audit_metadata(
+            before=before.enabled_connectors,
+            patch=request.scopes,
+            after=updated.enabled_connectors,
+        )
+        if is_admin_override:
+            audit_metadata["override_by_admin"] = True
+            audit_metadata["conversation_owner_user_id"] = before.user_id
         await self.persistence.write_audit_log(
             event_type=Messages.Audit.CONVERSATION_CONNECTORS_UPDATE,
             record={
@@ -355,11 +375,7 @@ class RuntimeApiService:
                 "resource_type": "conversation",
                 "resource_id": conversation_id,
                 "outcome": "success",
-                "metadata": _connector_scope_audit_metadata(
-                    before=before.enabled_connectors,
-                    patch=request.scopes,
-                    after=updated.enabled_connectors,
-                ),
+                "metadata": audit_metadata,
             },
         )
         return ConversationConnectorScopesResponse(
@@ -1115,6 +1131,52 @@ class RuntimeApiService:
                 retryable=False,
             )
         return conversation
+
+    async def _conversation_for_owner_or_admin(
+        self,
+        *,
+        org_id: str,
+        actor_user_id: str,
+        conversation_id: str,
+        allow_admin_override: bool,
+    ) -> tuple[ConversationRecord, bool]:
+        """Owner-first lookup with optional admin-override fallback (PR 1.2.1).
+
+        Returns ``(record, is_admin_override)``. Owner self-access wins
+        (no override), avoiding an extra query in the common case.
+        Non-owner callers without ``allow_admin_override=True`` get 404 —
+        same opacity as the strict ``_conversation_for_scope`` path so
+        existence is never leaked. Admin path returns ``(record, True)``
+        only when the caller is provably acting on someone else's data.
+        """
+
+        conversation = await self.persistence.get_conversation(
+            org_id=org_id,
+            user_id=actor_user_id,
+            conversation_id=conversation_id,
+        )
+        if conversation is not None:
+            return conversation, False
+        if not allow_admin_override:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        admin_view = await self.persistence.get_conversation_for_org(
+            org_id=org_id,
+            conversation_id=conversation_id,
+        )
+        if admin_view is None:
+            # Foreign tenant — same 404 opacity as the owner path.
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        return admin_view, True
 
     async def _conversation_for_scope_when_known(
         self, *, request: CreateRunRequest

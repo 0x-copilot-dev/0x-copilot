@@ -69,6 +69,16 @@ class AsyncInMemoryRuntimeApiStore:
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
 
+    async def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        return self._store.get_conversation_for_org(
+            org_id=org_id, conversation_id=conversation_id
+        )
+
     async def list_conversations(
         self,
         *,

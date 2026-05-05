@@ -67,6 +67,19 @@ class AsyncPersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant/user scope."""
 
+    async def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        """Return a conversation for the tenant scope, ignoring user ownership.
+
+        Admin-override path (PR 1.2.1). Authorization is enforced by the
+        service layer; this port only enforces tenant isolation. Returns
+        ``None`` for cross-tenant access.
+        """
+
     async def list_conversations(
         self,
         *,

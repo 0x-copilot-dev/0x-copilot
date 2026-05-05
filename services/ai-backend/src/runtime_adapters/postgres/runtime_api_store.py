@@ -625,6 +625,30 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
 
+    async def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        """Return a conversation by org only — admin-override path (PR 1.2.1).
+
+        Admin authorization is enforced by the service layer; this method
+        only enforces tenant isolation. Cross-tenant rows are filtered by
+        the org_id predicate AND by RLS at the connection level.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_conversations
+                WHERE id = %s AND org_id = %s
+                """,
+                (conversation_id, org_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
     async def list_conversations(
         self,
         *,

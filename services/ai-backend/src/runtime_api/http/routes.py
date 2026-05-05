@@ -9,6 +9,7 @@ from typing import Literal
 from enterprise_service_contracts.scopes import (
     ADMIN_AUDIT_EXPORT,
     ADMIN_BUDGETS,
+    ADMIN_USERS,
     AUDIT_READ,
     RUNTIME_USE,
 )
@@ -164,11 +165,20 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationConnectorScopesResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        # PR 1.2.1 — workspace admin can override on a member's chat. The
+        # ``ADMIN_USERS`` scope is the existing user-admin role; the audit
+        # row distinguishes admin overrides from owner self-PATCHes via
+        # the ``override_by_admin`` metadata flag.
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        allow_admin_override = (
+            identity is not None and ADMIN_USERS in identity.permission_scopes
+        )
         return await cls.service(request).update_conversation_connectors(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
             request=payload,
+            allow_admin_override=allow_admin_override,
         )
 
     @classmethod

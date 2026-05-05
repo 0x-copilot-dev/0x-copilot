@@ -150,6 +150,19 @@ class InMemoryRuntimeApiStore:
             return None
         return conversation
 
+    def get_conversation_for_org(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> ConversationRecord | None:
+        """Return a conversation by org only — admin-override path (PR 1.2.1)."""
+
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None or conversation.org_id != org_id:
+            return None
+        return conversation
+
     def list_conversations(
         self,
         *,
