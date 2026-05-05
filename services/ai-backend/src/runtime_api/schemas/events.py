@@ -445,6 +445,10 @@ class RuntimeEventPresentationProjector:
     @classmethod
     def _mcp_auth_required_payload(cls, payload: JsonObject) -> JsonObject:
         safe_payload: JsonObject = {}
+        # PR 3.3 — ``DISCOVERY_REASON`` and ``EXPECTED_VALUE`` are optional
+        # additions that flip the FE card variant from blocking auth-gate
+        # to non-blocking Connect/Skip suggestion. Both pass through the
+        # same allow-list — emitters never set them on a blocking call.
         for key in (
             Keys.Field.APPROVAL_ID,
             "action_id",
@@ -457,6 +461,8 @@ class RuntimeEventPresentationProjector:
             Keys.Payload.MESSAGE,
             Keys.Field.STATUS,
             Keys.Field.SOURCE_TOOL_CALL_ID,
+            Keys.Field.DISCOVERY_REASON,
+            Keys.Field.EXPECTED_VALUE,
         ):
             value = cls._text(payload.get(key))
             if value is not None:

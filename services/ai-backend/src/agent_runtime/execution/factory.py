@@ -37,6 +37,10 @@ from agent_runtime.capabilities.tools.builtin.ask_a_question import (
     AskAQuestionInput,
     AskAQuestionTool,
 )
+from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
+    SuggestMcpConnectorInput,
+    SuggestMcpConnectorTool,
+)
 from agent_runtime.capabilities.tools.prior_results import (
     LoadPriorToolResultInput,
     LoadPriorToolResultTool,
@@ -117,6 +121,7 @@ def create_agent_runtime(
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
             runtime_context=runtime_context,
+            mcp_discovery_enabled=runtime_dependencies.mcp_discovery_enabled,
         )
         model_instructions = _instructions_with_skill_cards(
             instructions=_instructions_with_mcp_cards(
@@ -174,6 +179,7 @@ def _model_visible_tools(
     skill_registry: object | None,
     prior_tool_result_loader: object | None,
     runtime_context: AgentRuntimeContext,
+    mcp_discovery_enabled: bool = False,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
     auth_session_creator = _auth_session_creator(mcp_registry)
@@ -183,6 +189,7 @@ def _model_visible_tools(
         include_auth_mcp=auth_session_creator is not None,
         include_skill_loader=skill_registry is not None
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
+        include_mcp_discovery=mcp_discovery_enabled,
     )
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
@@ -238,6 +245,18 @@ def _model_visible_tools(
             AskAQuestionInput,
         )
     )
+    # PR 3.3 — non-blocking MCP discovery. Registered only when the
+    # feature flag is on so the agent never sees the tool in a
+    # deployment that hasn't opted in. The tool itself short-circuits
+    # to ``discovery_disabled`` when no service is bound on the worker
+    # side — defence in depth, never an authoritative gate.
+    if mcp_discovery_enabled:
+        model_tools.append(
+            _structured_tool(
+                SuggestMcpConnectorTool(),
+                SuggestMcpConnectorInput,
+            )
+        )
     return tuple(model_tools)
 
 
@@ -262,6 +281,7 @@ def _local_tool_names(
     include_mcp_tools: bool,
     include_auth_mcp: bool,
     include_skill_loader: bool,
+    include_mcp_discovery: bool = False,
 ) -> frozenset[str]:
     """Return trusted names already exposed to the model for collision checks."""
 
@@ -278,6 +298,8 @@ def _local_tool_names(
     if include_skill_loader:
         names.add("load_skill")
     names.add(Values.Tool.ASK_A_QUESTION)
+    if include_mcp_discovery:
+        names.add(Values.Tool.SUGGEST_MCP_CONNECTOR)
     return frozenset(names)
 
 

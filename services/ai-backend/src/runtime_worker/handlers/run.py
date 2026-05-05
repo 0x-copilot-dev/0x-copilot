@@ -17,6 +17,7 @@ from agent_runtime.budgets import (
     BudgetPreflightDeny,
     BudgetPreflightWarn,
 )
+from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
 from agent_runtime.capabilities.citations import CitationLedger
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -215,14 +216,31 @@ class RuntimeRunHandler:
         ledger_token = (
             CitationLedger.bind_for_run(ledger) if ledger is not None else None
         )
+        # PR 3.3 — non-blocking MCP discovery service. Built per-run so
+        # idempotency / audit / event emission share the same RunRecord
+        # the ledger uses. Returns ``None`` when the feature is off; the
+        # tool short-circuits to ``discovery_disabled`` in that case.
+        discovery_service: McpDiscoveryService | None = None
+        discovery_token: object | None = None
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
+            dependencies = self._dependencies_for_run(
+                command,
+                tool_observation_index,
+            )
+            discovery_service = self._bind_mcp_discovery_service(
+                run=run,
+                runtime_context=command.runtime_context,
+                dependencies=dependencies,
+            )
+            discovery_token = (
+                McpDiscoveryService.bind_for_run(discovery_service)
+                if discovery_service is not None
+                else None
+            )
             harness = self.agent_factory(
                 context=command.runtime_context,
-                dependencies=self._dependencies_for_run(
-                    command,
-                    tool_observation_index,
-                ),
+                dependencies=dependencies,
             )
             messages = await self._messages_for_run(
                 command,
@@ -368,6 +386,8 @@ class RuntimeRunHandler:
         finally:
             if ledger_token is not None:
                 CitationLedger.unbind(ledger_token)
+            if discovery_token is not None:
+                McpDiscoveryService.unbind(discovery_token)
 
         completed = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
@@ -721,6 +741,10 @@ class RuntimeRunHandler:
                 conversation_id=command.conversation_id,
                 current_run_id=command.run_id,
             ),
+            # PR 3.3 — flip the factory's tool-registration switch from
+            # the worker's loaded settings. Defaults to ``False`` so a
+            # deployment that hasn't opted in never sees the tool.
+            "mcp_discovery_enabled": self.settings.mcp.discovery_enabled,
         }
         if self.draft_store is not None:
             # PR 1.3.5 — construct a DraftBackend per run so the agent's
@@ -1171,6 +1195,42 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
+        )
+
+    def _bind_mcp_discovery_service(
+        self,
+        *,
+        run: RunRecord,
+        runtime_context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> McpDiscoveryService | None:
+        """Build a per-run :class:`McpDiscoveryService`, or ``None`` when off.
+
+        The service mirrors the citation ledger: bound to the worker run
+        once, exposed through a class-method (``offer``) so the
+        ``suggest_mcp_connector`` tool reaches it without a runtime context
+        in its signature. The auth-session creator (when registered with
+        the MCP registry) is reused so the discovery card carries the same
+        ``auth_url`` / ``expires_at`` fields the blocking gate emits.
+        """
+
+        if not dependencies.mcp_discovery_enabled:
+            return None
+        # The auth session creator is a per-provider capability on the
+        # MCP registry (same lookup as the blocking ``auth_mcp`` tool
+        # uses in :func:`agent_runtime.execution.factory._auth_session_creator`).
+        auth_session_creator = None
+        for provider in getattr(dependencies.mcp_registry, "providers", ()):
+            if callable(getattr(provider, "create_auth_session", None)):
+                auth_session_creator = provider
+                break
+        return McpDiscoveryService(
+            run=run,
+            runtime_context=runtime_context,
+            producer=self.event_producer,
+            audit_emitter=self.audit_emitter,
+            registry=dependencies.mcp_registry,
+            auth_session_creator=auth_session_creator,
         )
 
     async def _append_lifecycle(

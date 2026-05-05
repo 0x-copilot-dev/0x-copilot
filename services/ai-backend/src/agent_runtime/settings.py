@@ -45,6 +45,10 @@ class _EnvFields:
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
+    # PR 3.3 — non-blocking MCP discovery feature flag. Default off;
+    # when on, the ``suggest_mcp_connector`` tool is registered in the
+    # toolkit and the worker binds the discovery service per run.
+    MCP_DISCOVERY_ENABLED = "RUNTIME_MCP_DISCOVERY_ENABLED"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
     SKILLS_CACHE_TTL_SECONDS = "SKILLS_CACHE_TTL_SECONDS"
     OPENAI_API_KEY = "OPENAI_API_KEY"
@@ -112,6 +116,10 @@ class RuntimeMcpSettings(RuntimeContract):
 
     backend_registry_url: str | None = None
     auth_redirect_uri: str = "http://127.0.0.1:5173/mcp/oauth/callback"
+    # PR 3.3 — non-blocking discovery (``suggest_mcp_connector`` tool +
+    # per-run McpDiscoveryService). Off by default; flip on per env so a
+    # bad rollout never paints a card without an audit trail.
+    discovery_enabled: bool = False
 
 
 class RuntimeSkillSettings(RuntimeContract):
@@ -298,6 +306,8 @@ class RuntimeSettings(BaseSettings):
                     E.MCP_AUTH_REDIRECT_URI,
                     "http://127.0.0.1:5173/mcp/oauth/callback",
                 ),
+                discovery_enabled=_s(v, E.MCP_DISCOVERY_ENABLED, "false").lower()
+                in _truthy,
             ),
             skills=RuntimeSkillSettings(
                 backend_registry_url=_o(v, E.SKILLS_BACKEND_REGISTRY_URL),

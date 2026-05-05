@@ -20,6 +20,11 @@ class Keys:
         FORWARDED_AT = "forwarded_at"
         FORWARDED_BY_USER_ID = "forwarded_by_user_id"
         FORWARDED_TO_USER_ID = "forwarded_to_user_id"
+        # PR 3.3 — non-blocking MCP discovery payload fields. The card
+        # variant is keyed off ``DISCOVERY_REASON`` (presence flips it
+        # from a blocking auth gate to a Connect/Skip suggestion).
+        DISCOVERY_REASON = "discovery_reason"
+        EXPECTED_VALUE = "expected_value"
         ARGS = "args"
         ASSISTANT_ID = "assistant_id"
         AUTH_URL = "auth_url"
@@ -178,6 +183,11 @@ class Values:
         READ_FILE = "read_file"
         RG = "rg"
         SEARCH_FILES = "search_files"
+        # PR 3.3 — non-blocking MCP discovery tool. Agent calls this when
+        # an *unauthenticated* MCP server would improve the answer; the
+        # tool emits an ``mcp_auth_required`` event with ``discovery_reason``
+        # set so the FE renders a Connect/Skip card without pausing the run.
+        SUGGEST_MCP_CONNECTOR = "suggest_mcp_connector"
         TASK = "task"
         UNKNOWN_TOOL = "unknown_tool"
         WRITE_TODOS = "write_todos"
@@ -235,6 +245,13 @@ class Messages:
         # forwarding with chain_parent_approval_id metadata so SIEM
         # exports can reconstruct chains end-to-end.
         APPROVAL_FORWARD = "approval.forward"
+        # PR 3.3 — non-blocking MCP discovery suggestion. Recorded when
+        # the agent surfaces a Connect/Skip card via
+        # ``suggest_mcp_connector``. Keeps the audit chain consistent
+        # with PR 1.4 forwarded events; SIEM exports can correlate
+        # discovery suggestions with subsequent ``mcp.auth.granted`` /
+        # ``approval_decision_recorded`` rows when the user resolves.
+        MCP_DISCOVERY_SUGGESTED = "mcp.discovery.suggested"
         # PR 1.4.1 — reasons recorded in audit metadata when a system
         # actor (the expiry sweeper) auto-rejects a pending approval.
         # Distinct values feed SIEM dashboards and operational queries.

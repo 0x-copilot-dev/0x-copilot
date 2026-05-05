@@ -367,6 +367,12 @@ class RuntimeDependencies(RuntimeContract):
     # the `/drafts/` prefix to it so the agent's existing `write_file` /
     # `edit_file` tools produce Workspace-pane drafts without a new tool.
     drafts_backend: object | None = None
+    # PR 3.3 — feature flag for the non-blocking ``suggest_mcp_connector``
+    # tool. The factory only registers the tool when this is True; the
+    # worker only binds the per-run ``McpDiscoveryService`` when this is
+    # True. Off by default so a bad rollout never paints a card without
+    # an audit trail.
+    mcp_discovery_enabled: bool = False
 
     @field_validator(
         "tool_registry",

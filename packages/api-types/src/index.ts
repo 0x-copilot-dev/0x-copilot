@@ -74,6 +74,14 @@ export interface McpAuthRequiredEventPayload {
   expires_at: string;
   message: string;
   source_tool_call_id?: string;
+  // PR 3.3 — non-blocking MCP discovery. When set, the agent surfaced
+  // the connector as a *suggestion* (Connect / Skip card) rather than
+  // a blocking auth gate. The run is NOT paused; subsequent events
+  // continue to stream while the user decides.
+  discovery_reason?: string | null;
+  // PR 3.3 — agent's one-line statement of why the user might benefit
+  // from connecting (e.g. "could ground claims about ticket progress").
+  expected_value?: string | null;
 }
 
 export type ConversationStatus = "active" | "archived";
@@ -340,7 +348,7 @@ export interface UpdateWorkspaceDefaultsRequest {
 export interface WorkspaceDefaultModel {
   provider: string;
   model_name: string;
-  reasoning?: Record<string, unknown> | null;
+  reasoning?: ModelReasoningHints | null;
 }
 
 export interface WorkspaceDefaultsResponse {
@@ -614,6 +622,25 @@ export interface MessageListResponse {
   has_more: boolean;
 }
 
+/**
+ * Model reasoning hints. Mirrors the shape ai-backend's `ModelConfig.reasoning`
+ * accepts (`agent_runtime/execution/models.py`). The runtime tolerates extra
+ * keys, so the type stays open via the `[key: string]` index signature; the
+ * named fields are the ones the UI reads.
+ *
+ * `depth_label` (PR 3.5 / G3): an optional human-friendly label for the
+ * Topbar's `ThinkingDepthControl` announcement when a catalog row wants to
+ * override the default Fast/Balanced/Deep wording. Falls back to the FE's
+ * built-in label table when absent.
+ */
+export interface ModelReasoningHints {
+  enabled?: boolean;
+  effort?: "low" | "medium" | "high";
+  summary?: "auto" | "off";
+  depth_label?: string;
+  [key: string]: unknown;
+}
+
 export interface ModelSelectionRequest {
   provider?: string | null;
   model_name?: string | null;
@@ -621,7 +648,7 @@ export interface ModelSelectionRequest {
   timeout_seconds?: number | null;
   max_input_tokens?: number | null;
   supports_streaming?: boolean | null;
-  reasoning?: Record<string, unknown> | null;
+  reasoning?: ModelReasoningHints | null;
 }
 
 export interface ModelCatalogModel {
@@ -634,7 +661,7 @@ export interface ModelCatalogModel {
   supports_streaming?: boolean;
   supports_attachments?: boolean;
   supports_reasoning?: boolean;
-  reasoning?: Record<string, unknown> | null;
+  reasoning?: ModelReasoningHints | null;
 }
 
 export interface ModelCatalogResponse {
