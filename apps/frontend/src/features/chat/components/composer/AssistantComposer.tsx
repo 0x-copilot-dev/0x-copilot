@@ -8,7 +8,14 @@ import {
   type Unstable_SlashCommand,
 } from "@assistant-ui/react";
 import type { McpServer, Skill } from "@enterprise-search/api-types";
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
@@ -27,6 +34,7 @@ export function AssistantComposer({
   onOpenSkillsSettings,
   onShowConnectors,
   onOpenDetailsPanel,
+  connectorsTrigger,
 }: {
   connectors: {
     servers: McpServer[];
@@ -40,6 +48,13 @@ export function AssistantComposer({
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
   onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+  /**
+   * PR 3.4 — slot for the per-chat connectors trigger + its popover.
+   * The composer is presentational and doesn't own the popover state;
+   * the parent (ChatScreen) renders this slot so the same popover is
+   * shared with the topbar `<ConnectorsPill>` trigger.
+   */
+  connectorsTrigger?: ReactNode;
 }): ReactElement {
   const aui = useAui();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -236,6 +251,7 @@ export function AssistantComposer({
                 />
               ) : null}
             </div>
+            {connectorsTrigger ?? null}
             <AuiIf condition={(state) => !state.thread.isRunning}>
               <ComposerPrimitive.Send
                 className="aui-send-button aui-composer-send"

@@ -1,6 +1,6 @@
 import { AppIcon, classNames } from "@enterprise-search/design-system";
 import type { McpServer } from "@enterprise-search/api-types";
-import type { ReactElement } from "react";
+import { forwardRef, type ReactElement } from "react";
 
 export interface ActiveConnectorGlyph {
   id: string;
@@ -20,15 +20,20 @@ const MAX_GLYPHS = 4;
 /**
  * Topbar connectors pill — shows up to 4 app glyphs in a stack, with
  * "+N" when more are active. Clicking opens the per-chat ConnectorPopover
- * (PR 3.4 ships the popover body). The pill itself is a presentational
- * component — the parent owns the open/close state and the popover host.
+ * (PR 3.4). The pill itself is a presentational component — the parent
+ * owns the open/close state and the popover host.
+ *
+ * `forwardRef` lets the parent pass an `anchorRef` to design-system
+ * `Menu` so pointerdown-outside dismissal correctly excludes clicks on
+ * the trigger. PR 3.4 wires this.
  */
-export function ConnectorsPill({
-  active,
-  onOpen,
-  open,
-  disabled,
-}: ConnectorsPillProps): ReactElement {
+export const ConnectorsPill = forwardRef<
+  HTMLButtonElement,
+  ConnectorsPillProps
+>(function ConnectorsPill(
+  { active, onOpen, open, disabled }: ConnectorsPillProps,
+  ref,
+): ReactElement {
   const visible = active.slice(0, MAX_GLYPHS);
   const overflow = Math.max(0, active.length - MAX_GLYPHS);
   const label =
@@ -37,6 +42,7 @@ export function ConnectorsPill({
       : `Connectors — ${active.length} active for this chat`;
   return (
     <button
+      ref={ref}
       type="button"
       className={classNames(
         "ui-icon-button",
@@ -74,7 +80,7 @@ export function ConnectorsPill({
       </span>
     </button>
   );
-}
+});
 
 /**
  * Project a list of MCP servers + per-chat scopes into the small

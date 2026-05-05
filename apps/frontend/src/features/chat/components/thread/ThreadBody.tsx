@@ -32,6 +32,7 @@ export function ThreadBody({
   onOpenSkillsSettings,
   onShowConnectors,
   onOpenDetailsPanel,
+  connectorsTrigger,
 }: {
   connectors: {
     servers: McpServer[];
@@ -55,6 +56,8 @@ export function ThreadBody({
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
   onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+  /** PR 3.4 — slot through to the AssistantComposer's connectors trigger. */
+  connectorsTrigger?: ReactNode;
 }): ReactElement {
   // Pull the first-token of the signed-in user's display_name for the
   // welcome greeting. SessionIdentity.display_name is optional today
@@ -127,6 +130,7 @@ export function ThreadBody({
           onOpenSkillsSettings={onOpenSkillsSettings}
           onShowConnectors={onShowConnectors}
           onOpenDetailsPanel={onOpenDetailsPanel}
+          connectorsTrigger={connectorsTrigger}
         />
       </div>
     </ThreadPrimitive.Root>
