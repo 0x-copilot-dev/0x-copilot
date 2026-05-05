@@ -474,6 +474,11 @@ class InMemoryRuntimeApiStore:
             update={
                 "metadata": normalized_metadata,
                 "chain_parent_approval_id": parent_approval_id,
+                # PR 1.4.1 Gap #7 — depth is set by the service from the
+                # parent's persisted column; the adapter trusts the
+                # passed value and never recomputes (single-source-of-
+                # truth: the service wraps the cap check around this).
+                "chain_depth": child.chain_depth or (parent.chain_depth + 1),
             }
         )
         self.approval_requests[normalized_child.approval_id] = normalized_child

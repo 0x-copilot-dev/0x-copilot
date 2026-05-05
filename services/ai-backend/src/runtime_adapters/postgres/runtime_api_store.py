@@ -127,6 +127,8 @@ class _Columns:
     # PR 1.4 — two-stage approval forwarding bookkeeping columns on
     # runtime_approval_requests (migration 0017).
     CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
+    # PR 1.4.1 Gap #7 — chain depth column (migration 0018).
+    CHAIN_DEPTH = "chain_depth"
     FORWARDED_AT = "forwarded_at"
     FORWARDED_DECIDED_AT = "forwarded_decided_at"
     FORWARDED_TO_USER_ID = "forwarded_to_user_id"
@@ -1145,9 +1147,10 @@ class PostgresRuntimeApiStore:
                         request_payload_json_redacted,
                         expires_at,
                         created_at,
-                        chain_parent_approval_id
+                        chain_parent_approval_id,
+                        chain_depth
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     (
@@ -1162,6 +1165,10 @@ class PostgresRuntimeApiStore:
                         child.expires_at,
                         child.created_at,
                         parent_approval_id,
+                        # PR 1.4.1 Gap #7 — service caps the value via
+                        # APPROVAL_FORWARD_MAX_CHAIN_DEPTH; the table CHECK
+                        # is the belt-and-braces guard.
+                        child.chain_depth or 1,
                     ),
                 )
                 # 3. Re-read both rows so the service has authoritative state
@@ -1255,6 +1262,12 @@ class PostgresRuntimeApiStore:
                 if _Columns.FORWARDED_DECIDED_AT in row
                 else None
             ),
+            chain_depth=(
+                row.get(_Columns.CHAIN_DEPTH, 0)
+                if hasattr(row, "get")
+                else (row[_Columns.CHAIN_DEPTH] if _Columns.CHAIN_DEPTH in row else 0)
+            )
+            or 0,
         )
 
     async def write_audit_log(

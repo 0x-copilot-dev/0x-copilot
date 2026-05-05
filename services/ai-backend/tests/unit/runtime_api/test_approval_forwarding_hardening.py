@@ -793,3 +793,117 @@ class TestInMemoryForwardRaceGuard:
         # in logs; the substring guard is what the service contract
         # depends on.
         assert "no_longer_pending" in str(exc.value) or "not_pending" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Gap #7 — Chain depth column (PR 1.4.1 Phase B)
+# ---------------------------------------------------------------------------
+
+
+class TestChainDepthColumn:
+    """The persisted chain_depth column makes the cap honour exactly 3."""
+
+    def test_root_approval_has_depth_zero(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        parent = _seed_run_and_pending_approval(store)
+        assert parent.chain_depth == 0
+
+    def test_first_forward_child_has_depth_one(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        _seed_run_and_pending_approval(store)
+        service = _make_service(store)
+        request = ApprovalDecisionRequest(
+            decision=ApprovalDecision.FORWARDED,
+            decided_by_user_id=_Values.REQUESTER_USER_ID,
+            forward_to=ApprovalForwardTarget(
+                kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
+            ),
+        )
+        response = asyncio.run(
+            service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
+            )
+        )
+        assert response.child_approval_id is not None
+        child = store.approval_requests[response.child_approval_id]
+        assert child.chain_depth == 1
+
+    def test_chain_depth_increments_with_each_hop(self) -> None:
+        """Walk the chain manually past depth 1 — each hop's child must be +1."""
+
+        store = InMemoryRuntimeApiStore()
+        _seed_run_and_pending_approval(store)
+        # Pre-seed a wider membership so successive hops don't fail at #1.
+        membership = {
+            (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
+            (_Values.ORG_ID, _Values.FORWARD_TARGET_USER_ID): True,
+            (_Values.ORG_ID, _Values.OTHER_USER_ID): True,
+        }
+        service = _make_service(store, membership=membership)
+        # Hop 1: requester -> target (depth 1)
+        first = asyncio.run(
+            service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=ApprovalDecisionRequest(
+                    decision=ApprovalDecision.FORWARDED,
+                    decided_by_user_id=_Values.REQUESTER_USER_ID,
+                    forward_to=ApprovalForwardTarget(
+                        kind="workspace_user",
+                        user_id=_Values.FORWARD_TARGET_USER_ID,
+                    ),
+                ),
+            )
+        )
+        assert first.child_approval_id is not None
+        # Hop 2: target -> other (depth 2)
+        second = asyncio.run(
+            service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=first.child_approval_id,
+                request=ApprovalDecisionRequest(
+                    decision=ApprovalDecision.FORWARDED,
+                    decided_by_user_id=_Values.FORWARD_TARGET_USER_ID,
+                    forward_to=ApprovalForwardTarget(
+                        kind="workspace_user", user_id=_Values.OTHER_USER_ID
+                    ),
+                ),
+            )
+        )
+        assert second.child_approval_id is not None
+        depth_2_child = store.approval_requests[second.child_approval_id]
+        assert depth_2_child.chain_depth == 2
+
+    def test_cap_rejects_at_max_chain_depth(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        # Seed a child row already at depth = MAX so the next forward
+        # crosses the cap. The cap value lives on the service constant
+        # so changing it forces this test (intentional coupling).
+        cap = RuntimeApiService.APPROVAL_FORWARD_MAX_CHAIN_DEPTH
+        parent = _seed_run_and_pending_approval(store)
+        store.approval_requests[parent.approval_id] = parent.model_copy(
+            update={"chain_depth": cap}
+        )
+        membership = {
+            (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
+            (_Values.ORG_ID, _Values.FORWARD_TARGET_USER_ID): True,
+        }
+        service = _make_service(store, membership=membership)
+        request = ApprovalDecisionRequest(
+            decision=ApprovalDecision.FORWARDED,
+            decided_by_user_id=_Values.REQUESTER_USER_ID,
+            forward_to=ApprovalForwardTarget(
+                kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
+            ),
+        )
+        with pytest.raises(RuntimeApiError) as exc:
+            asyncio.run(
+                service.record_approval_decision(
+                    org_id=_Values.ORG_ID,
+                    approval_id=_Values.PARENT_APPROVAL_ID,
+                    request=request,
+                )
+            )
+        assert exc.value.http_status == 422

@@ -57,6 +57,10 @@ class _ResourceTypes:
 class _ActorTypes:
     WORKER = "worker"
     USER = "user"
+    # PR 1.4.1 — system-driven rejections (expiry sweeper, membership
+    # cascade) flag actor_type=system so SIEM dashboards can split
+    # operator-driven from background-driven decisions cleanly.
+    SYSTEM = "system"
 
 
 class WorkerAuditEmitter:
@@ -149,6 +153,7 @@ class WorkerAuditEmitter:
         *,
         decision: ApprovalDecision,
         decided_by_user_id: str | None,
+        reason: str | None = None,
     ) -> None:
         outcome = (
             _Outcomes.SUCCESS
@@ -162,12 +167,27 @@ class WorkerAuditEmitter:
         }
         if decided_by_user_id:
             metadata["decided_by_user_id"] = decided_by_user_id
+        # PR 1.4.1 — sweeper-driven rejections carry a short reason code
+        # so SIEM dashboards can split "expired" from
+        # "recipient_membership_revoked" without parsing free text.
+        if reason:
+            metadata["reason"] = reason
+        # PR 1.4.1 — promote actor_type to system when the decider is
+        # the runtime sentinel; lets the SIEM exporter distinguish
+        # background-driven decisions from operator-driven ones.
+        from agent_runtime.api.constants import Values  # local: avoid cycle
+
+        actor_type = (
+            _ActorTypes.SYSTEM
+            if decided_by_user_id == Values.SYSTEM_USER_ID
+            else _ActorTypes.USER
+        )
         await self._emit(
             event_type=_Actions.APPROVAL_DECISION,
             org_id=approval.org_id,
             user_id=approval.user_id,
             run_id=approval.run_id,
-            actor_type=_ActorTypes.USER,
+            actor_type=actor_type,
             resource_type=_ResourceTypes.APPROVAL,
             resource_id=approval.approval_id,
             outcome=outcome,

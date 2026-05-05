@@ -144,6 +144,7 @@ class RuntimeApprovalHandler:
             approval,
             decision=command.decision,
             decided_by_user_id=getattr(command, "decided_by_user_id", None),
+            reason=getattr(command, "reason", None),
         )
         metadata = approval.metadata
         # PR 1.3.5 — Workspace-pane draft-send approvals are conversation-

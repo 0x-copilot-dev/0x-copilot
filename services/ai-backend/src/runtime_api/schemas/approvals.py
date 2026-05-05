@@ -122,6 +122,10 @@ class ApprovalRequestRecord(RuntimeContract):
     forwarded_to_user_id: str | None = None
     forwarded_at: datetime | None = None
     forwarded_decided_at: datetime | None = None
+    # PR 1.4.1 Gap #7 — chain depth, set on insert (parent.chain_depth + 1).
+    # Reading the column makes the depth guard O(1); the column's CHECK
+    # constraint mirrors APPROVAL_FORWARD_MAX_CHAIN_DEPTH.
+    chain_depth: int = 0
 
 
 class ApprovalDecisionResponse(RuntimeContract):

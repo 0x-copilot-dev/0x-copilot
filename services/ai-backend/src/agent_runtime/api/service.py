@@ -25,6 +25,10 @@ from agent_runtime.api.notifications import (
     NotificationDispatcher,
 )
 from agent_runtime.api.usage_service import ConversationContextBuilder
+from agent_runtime.observability.approval_metrics import (
+    ApprovalMetrics,
+    ForwardInvalidReason,
+)
 from agent_runtime.pricing import ModelPricingCatalog
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -136,6 +140,10 @@ class RuntimeApiService:
         self._notifications: NotificationDispatcher = (
             notification_dispatcher or LoggingNotificationDispatcher()
         )
+        # PR 1.4.1 Gap #9 — three OTel signals (forward_total,
+        # forward_invalid_total, chain_resolution_seconds). Best-effort:
+        # the meter facade no-ops if OTel isn't importable.
+        self._approval_metrics = ApprovalMetrics()
 
     def list_models(self) -> ModelCatalogResponse:
         """Return selectable chat models and credential availability."""
@@ -876,11 +884,22 @@ class RuntimeApiService:
                 retryable=False,
             )
         await self._guard_forwardable(approval=approval, target=target)
-        run = await self._run_for_scope(
+        # PR 1.4.1 — at depth ≥ 2 the approval owner is the previous
+        # forwarder, not the run's original requester. Look up the run
+        # by id alone here (org-scoped via the persistence port's RLS);
+        # the legitimacy gate is already enforced by the
+        # approval.user_id == decided_by_user_id check upstream.
+        run = await self.persistence.get_run(
             org_id=approval.org_id,
-            user_id=approval.user_id,
             run_id=approval.run_id,
         )
+        if run is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.RUN_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
         now = datetime.now(timezone.utc)
         # Build the child row. Inherit metadata byte-for-byte so the LangGraph
         # native_interrupt_id, tool_invocation_id, and approval_kind survive
@@ -899,6 +918,7 @@ class RuntimeApiService:
             expires_at=approval.expires_at,
             metadata=child_metadata,
             chain_parent_approval_id=approval.approval_id,
+            chain_depth=approval.chain_depth + 1,
         )
         try:
             updated_parent, child = await self.persistence.forward_approval_request(
@@ -1017,6 +1037,13 @@ class RuntimeApiService:
                 forwarded_by_user_id=request.decided_by_user_id,
             )
         )
+        # PR 1.4.1 Gap #9 — emit the success counter. Labels are
+        # constrained (depth is a small int, decision_kind is enumerated)
+        # so cardinality is bounded.
+        self._approval_metrics.record_forward_success(
+            approval_kind=approval_kind if isinstance(approval_kind, str) else None,
+            depth=child.chain_depth,
+        )
         return ApprovalDecisionResponse(
             approval_id=approval.approval_id,
             run_id=approval.run_id,
@@ -1044,6 +1071,9 @@ class RuntimeApiService:
         """
 
         if approval.status is not ApprovalStatus.PENDING:
+            self._approval_metrics.record_forward_invalid(
+                reason=ForwardInvalidReason.NOT_PENDING
+            )
             raise RuntimeApiError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 Messages.Error.APPROVAL_FORWARD_NOT_PENDING,
@@ -1052,6 +1082,9 @@ class RuntimeApiService:
             )
         approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
         if approval_kind not in self.APPROVAL_FORWARDABLE_KINDS:
+            self._approval_metrics.record_forward_invalid(
+                reason=ForwardInvalidReason.KIND_NOT_SUPPORTED
+            )
             raise RuntimeApiError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 Messages.Error.APPROVAL_FORWARD_KIND_NOT_SUPPORTED,
@@ -1061,6 +1094,9 @@ class RuntimeApiService:
         # Walk the chain depth via the persisted column (set on insert).
         depth = self._chain_depth(approval=approval)
         if depth >= self.APPROVAL_FORWARD_MAX_CHAIN_DEPTH:
+            self._approval_metrics.record_forward_invalid(
+                reason=ForwardInvalidReason.CHAIN_TOO_DEEP
+            )
             raise RuntimeApiError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 Messages.Error.APPROVAL_FORWARD_CHAIN_TOO_DEEP,
@@ -1076,6 +1112,9 @@ class RuntimeApiService:
                 org_id=approval.org_id, user_id=target.user_id
             )
         except MembershipResolverUnavailable as exc:
+            self._approval_metrics.record_forward_invalid(
+                reason=ForwardInvalidReason.RESOLVER_UNAVAILABLE
+            )
             raise RuntimeApiError(
                 RuntimeErrorCode.DEPENDENCY_ERROR,
                 Messages.Error.SAFE_FALLBACK,
@@ -1083,6 +1122,9 @@ class RuntimeApiService:
                 retryable=True,
             ) from exc
         if not is_active:
+            self._approval_metrics.record_forward_invalid(
+                reason=ForwardInvalidReason.TARGET_INVALID
+            )
             raise RuntimeApiError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 Messages.Error.APPROVAL_FORWARD_INVALID_TARGET,
@@ -1092,22 +1134,16 @@ class RuntimeApiService:
 
     @classmethod
     def _chain_depth(cls, *, approval: ApprovalRequestRecord) -> int:
-        """Approximate chain depth from a single record's chain_parent.
+        """Return the row's persisted chain depth (PR 1.4.1 Gap #7).
 
-        Each forward inscribes ``chain_parent_approval_id`` on the child's
-        ``metadata`` (and on the row column) so we can read the depth
-        without a recursive CTE — the parent's child carries its own
-        chain_parent which carries the prior, etc. v1 caps at 3 hops, so
-        a length walk through ``metadata.chain_parent_approval_id`` ids
-        we keep on the row gives an honest count without crawling.
+        Migration 0018 adds the column with a CHECK that mirrors
+        APPROVAL_FORWARD_MAX_CHAIN_DEPTH; the value is set on every
+        insert (root rows = 0, forward children = parent.chain_depth + 1).
+        Reading the column makes the cap honour exactly 3 hops without a
+        recursive CTE on the hot path.
         """
 
-        if approval.chain_parent_approval_id is None:
-            return 0
-        # Conservative lower bound — we count ourselves plus our parent.
-        # The cap is small (3) so this is fine for v1; we revisit if
-        # depth ever rises (PR notes already hint at that).
-        return 1
+        return approval.chain_depth
 
     @classmethod
     def _wire_status_for(

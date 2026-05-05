@@ -44,4 +44,13 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     org_id: str
     decision: ApprovalDecision
     answer: str | None = None
+    # PR 1.4.1 — populated by the API service from the request, or by
+    # the expiry sweeper as ``Values.SYSTEM_USER_ID`` when the rejection
+    # is system-driven (timeout / membership cascade). The audit emitter
+    # promotes ``actor_type=system`` for sentinel values.
+    decided_by_user_id: str | None = None
+    # PR 1.4.1 — short reason code recorded in audit metadata; lets
+    # operational dashboards distinguish "expired" from
+    # "recipient_membership_revoked" without parsing free text.
+    reason: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
