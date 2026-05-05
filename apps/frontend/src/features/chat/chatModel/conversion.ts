@@ -108,7 +108,11 @@ export function chatItemsToThreadMessages(
         content: item.content,
         parentId: item.parentId ?? undefined,
         attachments: item.attachments,
-        metadata: item.metadata,
+        // PR 3.5 / G9 — surface run_id into metadata.custom so the
+        // assistant-ui MessagePrimitive renderer (`AssistantMessage.tsx`)
+        // can look up its run's citations for the post-prose strip.
+        // We never overwrite a custom.run_id the caller already set.
+        metadata: withRunIdMetadata(item.metadata, item.runId),
         status: statusForMessage(item, activeRunId),
       };
     }
@@ -226,6 +230,31 @@ function replayedAssistantItem(
         item.kind === "message" && item.id === assistantMessageId(runId),
     ) ?? null
   );
+}
+
+/**
+ * PR 3.5 / G9 — fold the chat-item's `runId` into `metadata.custom.run_id`
+ * so the assistant-ui MessagePrimitive renderer can look it up. We do not
+ * overwrite a `custom.run_id` the upstream metadata already carried (e.g.
+ * messages constructed from server payloads where the field is set
+ * explicitly), and we leave the metadata untouched when the item has no
+ * `runId` to avoid mutating the optimistic-message shape.
+ */
+function withRunIdMetadata(
+  metadata: ThreadMessageLike["metadata"] | undefined,
+  runId: string | undefined,
+): ThreadMessageLike["metadata"] | undefined {
+  if (!runId) {
+    return metadata;
+  }
+  const existingCustom = metadata?.custom ?? {};
+  if (existingCustom.run_id === runId) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    custom: { ...existingCustom, run_id: runId },
+  };
 }
 
 function contentFromMessage(message: Message): ThreadMessageContent {

@@ -28,9 +28,11 @@ import type {
   SubagentStatusFilter,
   UpdateConversationConnectorScopesRequest,
   UpdateConversationRequest,
+  UpdateWorkspaceDefaultsRequest,
   UsageConversationRow,
   UsageMeResponse,
   UsagePeriod,
+  WorkspaceDefaultsResponse,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
@@ -41,6 +43,7 @@ import {
   httpPatchQuery,
   httpPost,
   httpPostQuery,
+  httpPutQuery,
 } from "./http";
 
 const SSE_EVENT_NAME = "runtime_event";
@@ -205,6 +208,33 @@ export function updateConversation(
 ): Promise<Conversation> {
   return httpPatchQuery<Conversation>(
     `/v1/agent/conversations/${conversationId}`,
+    request,
+    identity,
+  );
+}
+
+/**
+ * PR 1.6 / 3.5 — workspace-level defaults (model + connectors + retention).
+ * `GET` returns the effective view (deployment fallback when no row exists);
+ * `PUT` is admin-only and writes the defaults row + 3 retention policies + 1
+ * audit row in a single ai-backend transaction. Full-document replace, not
+ * merge-patch — the Settings panel sends the resolved shape it just rendered.
+ */
+export function getWorkspaceDefaults(
+  identity: RequestIdentity,
+): Promise<WorkspaceDefaultsResponse> {
+  return httpGet<WorkspaceDefaultsResponse>(
+    "/v1/agent/workspace/defaults",
+    identity,
+  );
+}
+
+export function putWorkspaceDefaults(
+  request: UpdateWorkspaceDefaultsRequest,
+  identity: RequestIdentity,
+): Promise<WorkspaceDefaultsResponse> {
+  return httpPutQuery<WorkspaceDefaultsResponse>(
+    "/v1/agent/workspace/defaults",
     request,
     identity,
   );

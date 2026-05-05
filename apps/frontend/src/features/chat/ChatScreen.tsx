@@ -118,6 +118,7 @@ import {
 } from "./mcpAuthAction";
 import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
 import { useAuth } from "../auth/AuthContext";
+import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -887,6 +888,25 @@ export function ChatScreen({
     return citationsForRun(citations, fallbackRunId);
   }, [activeRunId, citations, items]);
 
+  // PR 3.5 / G9 — set of runIds whose assistant message has reached a
+  // terminal status (complete/incomplete). Used by `useRunCitations` so
+  // `MessageSourcesStrip` only renders once the run is sealed; the inline
+  // chips already cover the live case via the active-run registry above.
+  const terminalRuns = useMemo<ReadonlySet<string>>(() => {
+    const set = new Set<string>();
+    for (const item of items) {
+      if (
+        item.kind === "message" &&
+        item.role === "assistant" &&
+        item.runId &&
+        isTerminalAssistantStatus(item.status)
+      ) {
+        set.add(item.runId);
+      }
+    }
+    return set;
+  }, [items]);
+
   // PR 3.2 — pure projection over `items` for the Approvals tab.
   const approvalsQueue = useApprovalsQueue(items);
 
@@ -1238,7 +1258,11 @@ export function ChatScreen({
               />
             }
           >
-            <CitationsProvider citations={activeCitations}>
+            <CitationsProvider
+              citations={activeCitations}
+              byRun={citations}
+              terminalRuns={terminalRuns}
+            >
               <ThreadBody
                 connectors={connectors}
                 skills={skills}

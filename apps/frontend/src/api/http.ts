@@ -129,6 +129,20 @@ export async function httpPatchQuery<T>(
   return assertOkJson<T>(response);
 }
 
+export async function httpPutQuery<T>(
+  path: string,
+  body: unknown,
+  identity: RequestIdentity,
+  extra?: Record<string, string | undefined>,
+): Promise<T> {
+  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return assertOkJson<T>(response);
+}
+
 export async function httpDelete(
   path: string,
   identity: RequestIdentity,
