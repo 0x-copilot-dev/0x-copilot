@@ -35,6 +35,7 @@ ALTER TABLE runtime_run_usage            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_model_call_usage     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_user     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_org      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_citations            ENABLE ROW LEVEL SECURITY;
 
 -- ``FORCE`` makes RLS apply to the table owner as well, closing the
 -- escape hatch where a misconfigured deploy connects as the table owner
@@ -61,3 +62,4 @@ ALTER TABLE runtime_run_usage            FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_model_call_usage     FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_user     FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_org      FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_citations            FORCE ROW LEVEL SECURITY;

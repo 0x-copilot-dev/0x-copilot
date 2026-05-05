@@ -9,6 +9,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
+    CitationProjectingMcpMiddleware,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
@@ -103,6 +106,16 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
+
+        # Citations live registry (PR 1.1 follow-up C). Best-effort source
+        # detection from the structured tool output; never raises into the
+        # tool path. Result is returned to the model unchanged so JSON
+        # consumers see the original shape.
+        await CitationProjectingMcpMiddleware.project(
+            connector=parsed_input.server_name,
+            tool_call_id=self.runtime_context.trace_id,
+            result=output,
+        )
 
         return McpToolCallResult.ok(
             server_name=parsed_input.server_name,

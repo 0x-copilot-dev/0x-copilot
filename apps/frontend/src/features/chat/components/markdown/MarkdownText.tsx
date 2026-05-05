@@ -3,10 +3,13 @@ import { classNames } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { Streamdown } from "streamdown";
 import { MarkdownLink } from "./MarkdownLink";
+import { remarkCitations } from "./citationRemarkPlugin";
 
 const markdownComponents = {
   a: MarkdownLink,
 };
+
+const remarkPlugins = [remarkCitations];
 
 export function MarkdownText({
   text,
@@ -32,6 +35,7 @@ export function MarkdownText({
       components={markdownComponents}
       isAnimating={streaming}
       mode={streaming ? "streaming" : "static"}
+      remarkPlugins={remarkPlugins}
     >
       {text}
     </Streamdown>

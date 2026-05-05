@@ -8,11 +8,14 @@ from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
     CheckpointRecord,
+    CitationRecord,
     ContextPayloadRecord,
     DraftRecord,
     DraftStatus,
     MemoryItemRecord,
     MemoryScopeRecord,
+    SourceAggregate,
+    SubagentSnapshot,
 )
 
 
@@ -156,4 +159,84 @@ class DraftStorePort(Protocol):
 
         Raises :class:`OptimisticConflict` on version mismatch. Raises
         :class:`KeyError` if the draft is unknown.
+        """
+
+
+@runtime_checkable
+class SubagentStorePort(Protocol):
+    """Read-only projection of SUBAGENT_* events into one row per ``task_id``.
+
+    The store does not persist anything new — every snapshot is computed from
+    the existing ``runtime_events`` rows the worker already writes. This is
+    deliberate: events are the single source of truth for subagent lifecycle,
+    and the dormant ``runtime_async_tasks`` table can be wired later without
+    breaking this read path.
+    """
+
+    def list_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        running_only: bool,
+        limit: int,
+    ) -> Sequence[SubagentSnapshot]:
+        """Return one snapshot per ``task_id`` ordered most-recent-first.
+
+        ``running_only=True`` returns only ``queued`` / ``running`` snapshots.
+        """
+
+
+@runtime_checkable
+class SourceStorePort(Protocol):
+    """Read-only aggregate of ``runtime_citations`` rows by unique source doc."""
+
+    def aggregate_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str | None,
+        limit: int,
+    ) -> Sequence[SourceAggregate]:
+        """Return one aggregate per ``(source_connector, source_doc_id)``.
+
+        Ordering is ``citation_count`` descending, then ``last_cited_at``
+        descending. ``run_id`` scopes to a single run when supplied.
+        """
+
+
+@runtime_checkable
+class CitationStorePort(Protocol):
+    """Idempotent citation persistence boundary (PR 1.1).
+
+    The :class:`agent_runtime.capabilities.citations.CitationLedger` is the
+    only intended caller. Tools, provider adapters, and replay paths all
+    funnel through the ledger so the (run, connector, doc_id) idempotency
+    key is enforced in one place.
+    """
+
+    def insert_or_get(self, record: CitationRecord) -> CitationRecord:
+        """Insert one row and return it; on idempotency conflict return existing.
+
+        Conflict key is ``(run_id, source_connector, source_doc_id)`` —
+        matching the unique index installed by migration 0015.
+        """
+
+    def list_for_run(self, *, org_id: str, run_id: str) -> Sequence[CitationRecord]:
+        """Return citations for one run in ``ordinal`` order.
+
+        Used to seal ``final_response.citations`` and to rebuild the
+        registry on resume after a worker crash.
+        """
+
+    def list_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> Sequence[CitationRecord]:
+        """Return citations for a whole conversation in ``created_at`` order.
+
+        Powers the Workspace pane Sources tab when reading archived runs.
         """

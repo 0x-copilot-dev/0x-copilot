@@ -67,6 +67,11 @@ from agent_runtime.persistence.records.tool_budgets import (
     ToolBudgetRecord,
 )
 from agent_runtime.persistence.records.tools import ToolInvocationRecord
+from agent_runtime.persistence.records.workspace_feeds import (
+    SourceAggregate,
+    SubagentLifecycleStatus,
+    SubagentSnapshot,
+)
 
 PERSISTENCE_TABLE_RECORDS = (
     OutboxEventRecord,
@@ -139,5 +144,8 @@ __all__ = [
     "RetentionPolicyRecord",
     "RetentionScope",
     "RetentionSweepOutcome",
+    "SourceAggregate",
+    "SubagentLifecycleStatus",
+    "SubagentSnapshot",
     "PERSISTENCE_TABLE_RECORDS",
 ]
