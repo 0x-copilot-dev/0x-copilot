@@ -2138,11 +2138,17 @@ class PostgresRuntimeApiStore:
         *,
         org_id: str,
         user_id: str,
+        now: datetime | None = None,
     ) -> Sequence[BudgetWithState]:
         # ``LEFT JOIN LATERAL`` collapses three queries (budget, state for
         # the current period, sum of unconsumed reservations for the
         # current period) into one round-trip. Period start is computed
         # in SQL so the API doesn't have to know UTC midnight semantics.
+        # The ``now`` parameter is honored by the in-memory store for
+        # test determinism; here SQL ``now()`` (server-clock) is the
+        # authoritative source — the round-trip latency in production
+        # is well under a second.
+        del now
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """

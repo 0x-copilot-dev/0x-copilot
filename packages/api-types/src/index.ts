@@ -110,7 +110,8 @@ export type RuntimeActivityKind =
   | "mcp_auth"
   | "approval"
   | "heartbeat"
-  | "event";
+  | "event"
+  | "draft";
 export type RuntimeEventSource =
   | "main_agent"
   | "runtime"
@@ -153,7 +154,8 @@ export type RuntimeApiEventType =
   | "presentation_updated"
   | "budget_warning"
   | "run_rejected"
-  | "source_ingested";
+  | "source_ingested"
+  | "draft_updated";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -200,6 +202,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "budget_warning",
   "run_rejected",
   "source_ingested",
+  "draft_updated",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -212,6 +215,7 @@ export const RUNTIME_ACTIVITY_KINDS = [
   "approval",
   "heartbeat",
   "event",
+  "draft",
 ] as const satisfies readonly RuntimeActivityKind[];
 
 // PR 1.4 — two-stage approval forwarding. The "forwarded" decision is an
@@ -996,6 +1000,87 @@ export interface RuntimeEventPayloadByType {
   budget_warning: BudgetWarningPayload;
   run_rejected: RunRejectedPayload;
   source_ingested: SourceIngestedPayload;
+  draft_updated: DraftUpdatedPayload;
+}
+
+// PR 1.3 — Workspace-pane Draft artifact contracts. Mirrors
+// services/ai-backend/src/runtime_api/schemas/drafts.py (DraftStatus
+// enum + Draft / DraftSection / list / patch / send / discard requests).
+export type DraftStatus =
+  | "draft"
+  | "send_pending_approval"
+  | "sent"
+  | "discarded";
+
+export interface DraftSection {
+  heading: string;
+  body: string;
+}
+
+export interface Draft {
+  draft_id: string;
+  version: number;
+  conversation_id: string;
+  run_id: string | null;
+  user_id: string;
+  title: string;
+  content_text: string;
+  sections: readonly DraftSection[];
+  target_connector: string | null;
+  target_metadata: Record<string, unknown> | null;
+  citation_ids: readonly string[];
+  status: DraftStatus;
+  created_at: string;
+}
+
+export interface DraftListResponse {
+  drafts: readonly Draft[];
+}
+
+export interface DraftPatchRequest {
+  expected_version: number;
+  content_text: string;
+  title?: string | null;
+}
+
+export interface DraftSendRequest {
+  expected_version: number;
+  target_connector: string;
+  target_metadata?: Record<string, unknown>;
+}
+
+export interface DraftSendResponse {
+  draft: Draft;
+  approval_id: string | null;
+  run_id: string | null;
+}
+
+export interface DraftDiscardRequest {
+  expected_version: number;
+}
+
+// Runtime stream payload for the DRAFT_UPDATED event — the runtime
+// emits one per draft version created. The FE routes the payload into
+// its drafts registry and renders the latest version in the Workspace
+// pane Draft tab. Carries the same fields as ``Draft`` plus an
+// optional ``summary`` string the projection layer adds for activity
+// rows. Required fields mirror what every emit guarantees; the rest
+// are optional because some emits (compact updates) omit them.
+export interface DraftUpdatedPayload {
+  draft_id: string;
+  version: number;
+  status: DraftStatus;
+  title: string;
+  sections: readonly DraftSection[];
+  target_connector: string | null;
+  target_metadata: Record<string, unknown> | null;
+  citation_ids: readonly string[];
+  summary?: string;
+  conversation_id?: string;
+  run_id?: string | null;
+  user_id?: string;
+  content_text?: string;
+  created_at?: string;
 }
 
 // B7 — budget enforcement event payloads.

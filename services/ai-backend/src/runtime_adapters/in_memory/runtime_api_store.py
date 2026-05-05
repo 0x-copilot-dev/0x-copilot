@@ -895,12 +895,14 @@ class InMemoryRuntimeApiStore:
         *,
         org_id: str,
         user_id: str,
+        now: datetime | None = None,
     ) -> Sequence[BudgetWithState]:
-        from datetime import date, datetime, timezone
+        from datetime import date, datetime as _datetime, timezone
 
         from agent_runtime.budgets.period import BudgetPeriodCalculator
 
-        now = datetime.now(timezone.utc)
+        if now is None:
+            now = _datetime.now(timezone.utc)
         results: list[BudgetWithState] = []
         for budget in self.budgets.values():
             if budget.org_id != org_id:

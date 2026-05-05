@@ -1,15 +1,20 @@
 /**
- * PR 1.2 — useConversationConnectors hook.
+ * PR 1.2 + PR 1.2.1 — useConversationConnectors hook.
  *
- * Covers seed + re-seed semantics. The optimistic-update + rollback
- * branches are validated end-to-end by the Wave 3.4 ConnectorPopover
- * tests (next PR), and by the ai-backend route test
- * (services/ai-backend/tests/unit/runtime_api/test_conversation_connector_scope_route.py).
+ * Covers seed + re-seed (PR 1.2) and the visibilitychange refetch path
+ * with the in-flight-PATCH guard (PR 1.2.1). The optimistic-update +
+ * rollback branches stay validated end-to-end by the ai-backend route
+ * test (services/ai-backend/tests/unit/runtime_api/test_conversation_connector_scope_route.py)
+ * and the Wave 3.4 ConnectorPopover tests.
+ *
+ * Refetch tests stub ``window.fetch`` directly (mirrors agentApi.test.ts)
+ * to avoid the vi.mock-hoisting hang we hit when mocking the module
+ * surface.
  */
 
 import type { Conversation } from "@enterprise-search/api-types";
-import { renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useConversationConnectors } from "./useConversationConnectors";
 
@@ -17,6 +22,7 @@ const IDENTITY = { orgId: "org_pr12", userId: "user_pr12" } as const;
 
 function conversation(
   enabled: Conversation["enabled_connectors"] = {},
+  connectorsUpdatedAt: string | null = null,
 ): Conversation {
   return {
     conversation_id: "conv_pr12",
@@ -31,8 +37,32 @@ function conversation(
     metadata: {},
     schema_version: 1,
     enabled_connectors: enabled,
-    connectors_updated_at: null,
+    connectors_updated_at: connectorsUpdatedAt,
   };
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function setVisibility(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", {
+    value: state,
+    configurable: true,
+  });
+}
+
+async function flushVisibility(): Promise<void> {
+  await act(async () => {
+    setVisibility("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    // Drain the .then chain inside the listener.
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe("useConversationConnectors", () => {
@@ -64,13 +94,87 @@ describe("useConversationConnectors", () => {
   });
 
   it("clears state when switching to a null conversation", () => {
+    const initialProps: { conv: Conversation | null } = {
+      conv: conversation({ slack: ["read"] }),
+    };
     const { result, rerender } = renderHook(
       ({ conv }: { conv: Conversation | null }) =>
         useConversationConnectors(conv, IDENTITY),
-      { initialProps: { conv: conversation({ slack: ["read"] }) } },
+      { initialProps },
     );
     expect(result.current.scopes).toEqual({ slack: ["read"] });
     rerender({ conv: null });
     expect(result.current.scopes).toEqual({});
+  });
+});
+
+describe("useConversationConnectors · visibilitychange refetch (PR 1.2.1)", () => {
+  beforeEach(() => {
+    setVisibility("visible");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reconciles to server scopes when the server is strictly newer", async () => {
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockResolvedValue(
+        jsonResponse(
+          conversation(
+            { slack: null, drive: ["read"] },
+            "2026-05-05T00:01:00Z",
+          ),
+        ),
+      );
+    const seed = conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z");
+    const { result } = renderHook(() =>
+      useConversationConnectors(seed, IDENTITY),
+    );
+
+    setVisibility("hidden");
+    await flushVisibility();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(
+      "/v1/agent/conversations/conv_pr12",
+    );
+    await waitFor(() => {
+      expect(result.current.scopes).toEqual({ slack: null, drive: ["read"] });
+    });
+  });
+
+  it("does not overwrite local state when the server timestamp is not newer", async () => {
+    const stamp = "2026-05-05T00:00:00Z";
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      jsonResponse(conversation({ drive: ["read"] }, stamp)),
+    );
+    const seed = conversation({ slack: ["read"] }, stamp);
+    const { result } = renderHook(() =>
+      useConversationConnectors(seed, IDENTITY),
+    );
+
+    await flushVisibility();
+
+    // Server's connectors_updated_at equals the local one — no overwrite.
+    expect(result.current.scopes).toEqual({ slack: ["read"] });
+  });
+
+  it("removes its visibilitychange listener on unmount", async () => {
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockResolvedValue(
+        jsonResponse(conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z")),
+      );
+    const { unmount } = renderHook(() =>
+      useConversationConnectors(
+        conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z"),
+        IDENTITY,
+      ),
+    );
+    unmount();
+    await flushVisibility();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -387,9 +387,22 @@ class AsyncPersistencePort(Protocol):
     # ------------------------------------------------------------------
 
     async def lookup_budgets_for_run(
-        self, *, org_id: str, user_id: str
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        now: datetime | None = None,
     ) -> Sequence[BudgetWithState]:
-        """Active budgets matching ``(org_id, user_id)`` plus their state."""
+        """Active budgets matching ``(org_id, user_id)`` plus their state.
+
+        When ``now`` is provided, implementations MUST use it for period
+        window computation instead of wall-clock ``datetime.now()`` —
+        this is what lets the enforcer keep one consistent clock across
+        the preflight + reserve sequence and lets unit tests freeze
+        time. Postgres adapters use server-clock SQL and may ignore
+        ``now`` in production deployments where the round-trip latency
+        is negligible.
+        """
 
     async def charge_budget(
         self,

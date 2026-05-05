@@ -270,6 +270,7 @@ export function decideApproval(
   identity: RequestIdentity,
   reason?: string,
   answer?: string,
+  forwardTo?: ApprovalDecisionRequest["forward_to"],
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
@@ -280,6 +281,11 @@ export function decideApproval(
   }
   if (answer !== undefined) {
     payload.answer = answer;
+  }
+  // PR 1.4 — two-stage approval forwarding. Optional; omitted means a
+  // direct approve/reject decision against the run.
+  if (forwardTo !== undefined && forwardTo !== null) {
+    payload.forward_to = forwardTo;
   }
   const params = new URLSearchParams({ org_id: identity.orgId });
   return fetch(

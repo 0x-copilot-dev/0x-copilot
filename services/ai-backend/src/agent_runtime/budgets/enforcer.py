@@ -91,7 +91,7 @@ class BudgetEnforcer:
         if now is None:
             now = datetime.now(timezone.utc)
         budgets = await self._persistence.lookup_budgets_for_run(
-            org_id=org_id, user_id=user_id
+            org_id=org_id, user_id=user_id, now=now
         )
         active = tuple(
             entry for entry in budgets if entry.budget.status is BudgetStatus.ACTIVE
