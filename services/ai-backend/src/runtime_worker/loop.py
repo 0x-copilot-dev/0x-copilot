@@ -31,6 +31,8 @@ from runtime_api.schemas import (
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
+from agent_runtime.persistence.ports import CitationStorePort, DraftStorePort
+from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
 from runtime_worker.handlers.run import RuntimeRunHandler
 
 
@@ -51,6 +53,7 @@ class RuntimeWorker:
         cancel_handler: RuntimeCancelHandler | None = None,
         approval_handler: RuntimeApprovalHandler | None = None,
         on_event_appended: Callable[[str], None] | None = None,
+        draft_store: "DraftStorePort | None" = None,
     ) -> None:
         # Worker is fully async on the inside. Sync ports get wrapped
         # via to_thread; async ports pass through unchanged.
@@ -61,11 +64,22 @@ class RuntimeWorker:
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds
+        # Citations live registry (PR 1.1). When the persistence adapter
+        # itself satisfies CitationStorePort (Postgres path), reuse the
+        # same connection-pooled instance. In-memory dev wires a sibling
+        # InMemoryCitationStore so unit tests don't need Postgres.
+        citation_store: CitationStorePort = (
+            self.persistence
+            if isinstance(self.persistence, CitationStorePort)
+            else InMemoryCitationStore()
+        )
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
             settings=self.settings,
             on_event_appended=on_event_appended,
+            citation_store=citation_store,
+            draft_store=draft_store,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,

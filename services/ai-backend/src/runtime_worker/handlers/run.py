@@ -17,6 +17,7 @@ from agent_runtime.budgets import (
     BudgetPreflightDeny,
     BudgetPreflightWarn,
 )
+from agent_runtime.capabilities.citations import CitationLedger
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -27,6 +28,7 @@ from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.persistence.ports import CitationStorePort, DraftStorePort
 from runtime_adapters.async_wrappers import (
     adapt_event_store_to_async,
     adapt_persistence_to_async,
@@ -117,6 +119,8 @@ class RuntimeRunHandler:
         runtime_invoker: RuntimeInvoker = ainvoke_runtime,
         runtime_streamer: RuntimeStreamer = astream_runtime,
         on_event_appended: Callable[[str], None] | None = None,
+        citation_store: CitationStorePort | None = None,
+        draft_store: DraftStorePort | None = None,
     ) -> None:
         self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
         self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
@@ -127,6 +131,16 @@ class RuntimeRunHandler:
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
         self.runtime_streamer = runtime_streamer
+        # Citations live registry (PR 1.1). When ``citation_store`` is None
+        # the ledger never binds and ``CitationLedger.cite`` returns the
+        # empty string — citations degrade to absent without breaking runs.
+        self.citation_store = citation_store
+        # Workspace-pane drafts (PR 1.3 + 1.3.5). When ``draft_store`` is
+        # None the run handler does not construct a DraftBackend; the
+        # agent's `/drafts/` writes fall through to deepagents'
+        # ``StateBackend`` default and become non-persistent in-state files
+        # for that run only. This is the legacy / unconfigured fallback.
+        self.draft_store = draft_store
         self.event_producer = RuntimeEventProducer(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -197,6 +211,10 @@ class RuntimeRunHandler:
             else ()
         )
 
+        ledger = self._bind_citation_ledger(run)
+        ledger_token = (
+            CitationLedger.bind_for_run(ledger) if ledger is not None else None
+        )
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
             harness = self.agent_factory(
@@ -270,14 +288,19 @@ class RuntimeRunHandler:
                         trace_id=command.trace_id,
                     )
                 )
+                final_payload: dict[str, object] = AssistantRunMetrics.with_payload(
+                    {self._Fields.MESSAGE: final_text},
+                    metrics_payload,
+                )
+                if ledger is not None:
+                    sealed = ledger.sealed_payloads()
+                    if sealed:
+                        final_payload["citations"] = sealed
                 await self._append_lifecycle(
                     run,
                     RuntimeApiEventType.FINAL_RESPONSE,
                     final_text,
-                    payload=AssistantRunMetrics.with_payload(
-                        {self._Fields.MESSAGE: final_text},
-                        metrics_payload,
-                    ),
+                    payload=final_payload,
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
@@ -342,6 +365,9 @@ class RuntimeRunHandler:
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
+        finally:
+            if ledger_token is not None:
+                CitationLedger.unbind(ledger_token)
 
         completed = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
@@ -696,11 +722,74 @@ class RuntimeRunHandler:
                 current_run_id=command.run_id,
             ),
         }
+        if self.draft_store is not None:
+            # PR 1.3.5 — construct a DraftBackend per run so the agent's
+            # write_file/edit_file calls to `/drafts/<uuid>.md` route
+            # through to the runtime_drafts table. Tenant identity is bound
+            # at construction (org_id, conversation_id, run_id, user_id);
+            # the model can never inject org_id via path strings.
+            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
+                DraftBackend,
+            )
+
+            update["drafts_backend"] = DraftBackend(
+                store=self.draft_store,
+                org_id=command.org_id,
+                conversation_id=command.conversation_id,
+                run_id=command.run_id,
+                user_id=command.runtime_context.user_id,
+                emit_event=self._draft_event_emitter(command),
+            )
         if tool_observation_index.has_observations:
             update["prior_tool_result_loader"] = PriorToolResultLoader(
                 tool_observation_index
             )
         return dependencies.model_copy(update=update)
+
+    def _draft_event_emitter(
+        self, command: RuntimeRunCommand
+    ) -> "Callable[[object], object]":
+        """Build the ``emit_event`` closure DraftBackend uses to emit DRAFT_UPDATED.
+
+        We reuse the existing :class:`RuntimeEventProducer` so every emission
+        flows through redaction + presentation projection + the run sequence
+        cursor — same path as every other API-authored event.
+        """
+
+        from agent_runtime.api.constants import Keys, Values  # noqa: PLC0415
+        from agent_runtime.execution.contracts import StreamEventSource  # noqa: PLC0415
+        from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
+
+        async def _emit(record: object) -> None:
+            # Lazy-attribute access keeps this file decoupled from DraftRecord.
+            payload = {
+                Keys.Field.RUN_ID: command.run_id,
+                Keys.Field.CONVERSATION_ID: command.conversation_id,
+                "draft_id": getattr(record, "draft_id"),
+                "version": getattr(record, "version"),
+                "status": getattr(record, "status").value,
+                Keys.Field.TITLE: getattr(record, "title"),
+                "target_connector": getattr(record, "target_connector", None),
+                "target_metadata": getattr(record, "target_metadata", None) or None,
+                "citation_ids": list(getattr(record, "citation_ids", ()) or ()),
+                Keys.Field.SUMMARY: f"Draft v{getattr(record, 'version')}: "
+                f"{getattr(record, 'title') or 'Untitled'}",
+            }
+            run = await self.persistence.get_run(
+                org_id=command.org_id, run_id=command.run_id
+            )
+            if run is None:  # pragma: no cover — terminal-race fallback
+                return
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.DRAFT_UPDATED,
+                payload=payload,
+                summary=str(payload[Keys.Field.SUMMARY]),
+                status=Values.Status.COMPLETED,
+            )
+
+        return _emit
 
     async def _tool_observation_index(
         self,
@@ -1064,6 +1153,25 @@ class RuntimeRunHandler:
                     outcome.value,
                     exc_info=True,
                 )
+
+    def _bind_citation_ledger(self, run: RunRecord) -> CitationLedger | None:
+        """Build a per-run :class:`CitationLedger`, or ``None`` when disabled.
+
+        The ledger is the single seam for tools, provider adapters, and replay
+        paths. We tag emitted events with ``StreamEventSource.TOOL`` because
+        the typical producer is a tool result; provider-native passthroughs
+        (Anthropic, OpenAI) reuse the same source — citations are activity
+        on the tool/source axis regardless of who surfaced the document.
+        """
+
+        if self.citation_store is None:
+            return None
+        return CitationLedger(
+            run=run,
+            store=self.citation_store,
+            producer=self.event_producer,
+            source=StreamEventSource.TOOL,
+        )
 
     async def _append_lifecycle(
         self,

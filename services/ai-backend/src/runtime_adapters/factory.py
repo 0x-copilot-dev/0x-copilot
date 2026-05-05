@@ -12,12 +12,15 @@ from agent_runtime.api.async_ports import (
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.persistence.ports import DraftStorePort
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import (
     AsyncInMemoryRuntimeApiStore,
     InMemoryRuntimeApiStore,
 )
+from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.postgres import PostgresRuntimeApiStore
+from runtime_adapters.postgres.draft_store import PostgresDraftStore
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,9 @@ class RuntimePorts:
     event_store: EventStorePort
     queue: RuntimeQueuePort
     backend: str
+    # PR 1.3.5 — Workspace-pane Draft store, shared by the API (DraftService)
+    # and the worker (DraftBackend constructed per run).
+    draft_store: DraftStorePort | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,10 @@ class AsyncRuntimePorts:
     # Concrete store reference so the lifespan owner can call open()/close()
     # without re-introspecting the trio of ports.
     store: PostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore
+    # PR 1.3.5 — Workspace-pane Draft store. Postgres backend wraps the
+    # parent store's pool + FieldCodec; in_memory backends use the
+    # process-local InMemoryDraftStore.
+    draft_store: DraftStorePort | None = None
 
 
 class RuntimeAdapterFactory:
@@ -65,6 +75,7 @@ class RuntimeAdapterFactory:
                 event_store=store,
                 queue=store,
                 backend=backend,
+                draft_store=InMemoryDraftStore(),
             )
         if backend == "postgres":
             raise AgentRuntimeError(
@@ -111,6 +122,7 @@ class RuntimeAdapterFactory:
                 queue=store,
                 backend=backend,
                 store=store,
+                draft_store=InMemoryDraftStore(),
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -126,6 +138,7 @@ class RuntimeAdapterFactory:
                 queue=store,
                 backend=backend,
                 store=store,
+                draft_store=PostgresDraftStore(store),
             )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,
