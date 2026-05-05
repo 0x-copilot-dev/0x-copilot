@@ -13,6 +13,13 @@ class Keys:
         API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
         APPROVAL_KIND = "approval_kind"
+        # PR 1.4 — two-stage approval forwarding bookkeeping.
+        ACTION_SUMMARY = "action_summary"
+        CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
+        FORWARD_TO = "forward_to"
+        FORWARDED_AT = "forwarded_at"
+        FORWARDED_BY_USER_ID = "forwarded_by_user_id"
+        FORWARDED_TO_USER_ID = "forwarded_to_user_id"
         ARGS = "args"
         ASSISTANT_ID = "assistant_id"
         AUTH_URL = "auth_url"
@@ -92,6 +99,7 @@ class Keys:
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
+        UPDATE_CONVERSATION_CONNECTORS = "update_conversation_connectors"
         # Usage endpoints (B4)
         USAGE_ME = "usage_me"
         USAGE_ME_CONVERSATIONS = "usage_me_conversations"
@@ -104,16 +112,19 @@ class Keys:
         BUDGETS_UPDATE = "budgets_update"
         BUDGETS_DELETE = "budgets_delete"
         BUDGETS_ME = "budgets_me"
-        # Retention admin (C8)
-        RETENTION_LIST = "retention_list"
-        RETENTION_UPSERT = "retention_upsert"
-        RETENTION_DELETE = "retention_delete"
         # Drafts (PR 1.3)
         LIST_DRAFTS = "list_drafts"
         GET_DRAFT = "get_draft"
         PATCH_DRAFT = "patch_draft"
         SEND_DRAFT = "send_draft"
         DISCARD_DRAFT = "discard_draft"
+        # Workspace pane feeds (PR 1.5)
+        LIST_SUBAGENTS = "list_subagents"
+        LIST_SOURCES = "list_sources"
+        # Retention admin (C8)
+        RETENTION_LIST = "retention_list"
+        RETENTION_UPSERT = "retention_upsert"
+        RETENTION_DELETE = "retention_delete"
 
 
 class Values:
@@ -133,6 +144,11 @@ class Values:
         CANCELLED = "cancelled"
         COMPLETED = "completed"
         FAILED = "failed"
+        # PR 1.4 — wire-level status emitted on APPROVAL_RESOLVED for the
+        # parent row of a forwarded chain. Distinguishes the "the user
+        # forwarded it on" outcome from approve / reject so the FE renders
+        # a "Waiting on @marcus" pill instead of a resolved record.
+        FORWARDED = "forwarded"
         QUEUED = "queued"
         RUNNING = "running"
         SKIPPED = "skipped"
@@ -171,14 +187,39 @@ class Messages:
 
     class Error:
         APPROVAL_NOT_FOUND = "Approval request was not found for this scope."
+        # PR 1.4 — forwarding-target validation. Messages are deliberately
+        # generic and do not reveal whether the target user exists in
+        # another tenant.
+        APPROVAL_FORWARD_INVALID_TARGET = (
+            "Forward target user is not an active member of this workspace."
+        )
+        APPROVAL_FORWARD_KIND_NOT_SUPPORTED = "This approval kind cannot be forwarded."
+        APPROVAL_FORWARD_SELF = "Cannot forward an approval to yourself."
+        APPROVAL_FORWARD_NOT_PENDING = "Only pending approvals can be forwarded."
+        APPROVAL_FORWARD_CHAIN_TOO_DEEP = (
+            "Forwarding chain is too deep; resolve the existing chain first."
+        )
         CONVERSATION_NOT_FOUND = "Conversation was not found for this scope."
         IDEMPOTENCY_CONFLICT = "Idempotency key conflicts with a different request."
+        INVALID_CONNECTOR_SCOPES = "Connector scope payload is invalid."
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
         SAFE_FALLBACK = "The runtime API could not complete the request safely."
 
+    class Audit:
+        # PR 1.4 — append-only audit action for the forward link. The
+        # parent's final outcome is still ``approval_decision_recorded``
+        # (the existing action). ``approval.forward`` records the act of
+        # forwarding with chain_parent_approval_id metadata so SIEM
+        # exports can reconstruct chains end-to-end.
+        APPROVAL_FORWARD = "approval.forward"
+        # PR 1.2 — per-chat connector scope mutation; metadata captures
+        # ``before`` / ``after`` / ``diff_keys`` for forensic replay.
+        CONVERSATION_CONNECTORS_UPDATE = "conversation.connectors.update"
+
     class Event:
         APPROVAL_RESOLVED = "Approval decision was recorded."
+        APPROVAL_FORWARDED = "Approval forwarded for sign-off."
         FINAL_RESPONSE = "Final response"
         HEARTBEAT = "Runtime stream heartbeat."
         INTERNAL_TODO_PROGRESS_PREFIX = "Updated todo list"
@@ -210,6 +251,12 @@ class Messages:
         @classmethod
         def tool_started_title(cls, tool_name: str) -> str:
             return f"Calling {tool_name}"
+
+        @classmethod
+        def source_cited_title(cls, title: str) -> str:
+            return f"Cited {title}"
+
+        SOURCE_INGESTED = "Cited a source"
 
     class Validation:
         @classmethod

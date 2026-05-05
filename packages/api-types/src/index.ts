@@ -110,8 +110,7 @@ export type RuntimeActivityKind =
   | "mcp_auth"
   | "approval"
   | "heartbeat"
-  | "event"
-  | "draft";
+  | "event";
 export type RuntimeEventSource =
   | "main_agent"
   | "runtime"
@@ -143,6 +142,7 @@ export type RuntimeApiEventType =
   | "subagent_completed"
   | "approval_requested"
   | "approval_resolved"
+  | "approval_forwarded"
   | "observation"
   | "error"
   | "model_call_started"
@@ -153,7 +153,7 @@ export type RuntimeApiEventType =
   | "presentation_updated"
   | "budget_warning"
   | "run_rejected"
-  | "draft_updated";
+  | "source_ingested";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -188,6 +188,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_completed",
   "approval_requested",
   "approval_resolved",
+  "approval_forwarded",
   "observation",
   "error",
   "model_call_started",
@@ -198,7 +199,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "presentation_updated",
   "budget_warning",
   "run_rejected",
-  "draft_updated",
+  "source_ingested",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -211,11 +212,20 @@ export const RUNTIME_ACTIVITY_KINDS = [
   "approval",
   "heartbeat",
   "event",
-  "draft",
 ] as const satisfies readonly RuntimeActivityKind[];
 
-export type ApprovalDecision = "approved" | "rejected";
-export type ApprovalStatus = "pending" | "approved" | "rejected";
+// PR 1.4 — two-stage approval forwarding. The "forwarded" decision is an
+// API-edge variant: it routes the pending approval to a second workspace
+// user and never reaches the LangGraph harness. Status "forwarded" is a
+// terminal state for the parent row in a chain; resume hangs off the
+// child's eventual approve/reject.
+export type ApprovalDecision = "approved" | "rejected" | "forwarded";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "forwarded";
+
+export interface ApprovalForwardTarget {
+  kind: "workspace_user";
+  user_id: string;
+}
 
 export interface SessionIdentity {
   org_id: string;
@@ -249,6 +259,35 @@ export interface Conversation {
   archived_at: string | null;
   metadata: Record<string, unknown>;
   schema_version: number;
+  /**
+   * PR 1.2 — per-chat connector scope override. Map of connector id ->
+   * array of scope strings (active for this chat) or null (paused for
+   * this chat). Empty object means "no override; defer to inbound
+   * header or workspace defaults". Optional for backwards compat with
+   * older server payloads.
+   */
+  enabled_connectors?: ConversationConnectorScopes;
+  connectors_updated_at?: string | null;
+}
+
+/**
+ * PR 1.2 — per-chat connector scope shape, mirrored from the runtime API.
+ * `null` value pauses the connector for this chat; an array activates it
+ * with the given scope strings. RFC 7396 merge-patch semantics on writes.
+ */
+export type ConversationConnectorScopes = Record<
+  string,
+  readonly string[] | null
+>;
+
+export interface UpdateConversationConnectorScopesRequest {
+  scopes: ConversationConnectorScopes;
+}
+
+export interface ConversationConnectorScopesResponse {
+  conversation_id: string;
+  scopes: ConversationConnectorScopes;
+  updated_at: string | null;
 }
 
 export interface ConversationListResponse {
@@ -710,6 +749,9 @@ export interface ApprovalDecisionRequest {
   decided_by_user_id: string;
   reason?: string | null;
   answer?: string | null;
+  // PR 1.4 — required when `decision === "forwarded"`; rejected by the
+  // server otherwise. Self-forward is rejected via 422.
+  forward_to?: ApprovalForwardTarget | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -717,6 +759,10 @@ export interface ApprovalDecisionResponse {
   run_id: string;
   status: ApprovalStatus;
   decided_at: string;
+  // PR 1.4 — populated only for "forwarded" responses so the FE can
+  // render "Waiting on @marcus" without an extra fetch.
+  forwarded_to_user_id?: string | null;
+  child_approval_id?: string | null;
 }
 
 export interface QuestionOption {
@@ -759,6 +805,34 @@ export interface RuntimeTextPayload {
   display_title?: string;
   performance_metrics?: AssistantPerformanceMetrics;
   [key: string]: unknown;
+}
+
+// Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
+// ordinal) and is the token the assistant text embeds inline as
+// `[c<id>]`. The frontend's markdown plugin resolves these tokens by
+// looking up the registry built from `source_ingested` events.
+export interface CitationSourceRef {
+  citation_id: string;
+  source_connector: string;
+  source_doc_id: string;
+  source_url: string | null;
+  title: string;
+  snippet: string | null;
+  freshness_at: string | null;
+  source_tool_call_id: string | null;
+  ordinal: number;
+}
+
+export interface SourceIngestedPayload {
+  citation: CitationSourceRef;
+  [key: string]: unknown;
+}
+
+// `final_response` is `RuntimeTextPayload` + the sealed citation list, so
+// archived reads and the share-recipient view can rebuild chips without
+// replaying every `source_ingested` event for the run.
+export interface RuntimeFinalResponsePayload extends RuntimeTextPayload {
+  citations?: CitationSourceRef[];
 }
 
 export interface ReasoningSummaryPayload {
@@ -856,8 +930,34 @@ export interface ApprovalResolvedPayload {
   // Wire-level status. For approval_kind=ask_a_question this is "answered" or
   // "skipped" (not "approved"/"rejected") so the UI does not have to render a
   // permission-flavored badge for a question card.
-  status?: "approved" | "rejected" | "answered" | "skipped" | string;
+  // PR 1.4 — "forwarded" is the parent's terminal status when it gets
+  // forwarded to a second workspace user; the FE pairs this with a
+  // following `approval_forwarded` event to render the inline pill.
+  status?:
+    | "approved"
+    | "rejected"
+    | "answered"
+    | "skipped"
+    | "forwarded"
+    | string;
   decision?: ApprovalDecision;
+  message?: string;
+  [key: string]: unknown;
+}
+
+// PR 1.4 — emitted between APPROVAL_RESOLVED (status=forwarded) on the
+// parent and APPROVAL_REQUESTED on the child so the reducer can transform
+// the original in-thread approval card into a "Waiting on @marcus" pill
+// in one step.
+export interface ApprovalForwardedPayload {
+  approval_id: string; // child approval (the new pending row)
+  chain_parent_approval_id: string; // original (now resolved with status=forwarded)
+  approval_kind?: "mcp_tool" | "ask_a_question" | string;
+  forwarded_by_user_id: string;
+  forwarded_to_user_id: string;
+  forwarded_at: string;
+  action_summary?: string;
+  status?: "waiting" | string;
   message?: string;
   [key: string]: unknown;
 }
@@ -884,17 +984,18 @@ export interface RuntimeEventPayloadByType {
   subagent_completed: SubagentActivityPayload;
   approval_requested: ApprovalRequestedPayload;
   approval_resolved: ApprovalResolvedPayload;
+  approval_forwarded: ApprovalForwardedPayload;
   observation: RuntimeTextPayload;
   error: RuntimeTextPayload;
   model_call_started: RuntimeLifecyclePayload;
   model_call_completed: ModelCallCompletedPayload;
   model_delta: RuntimeTextPayload;
-  final_response: RuntimeTextPayload;
+  final_response: RuntimeFinalResponsePayload;
   heartbeat: RuntimeLifecyclePayload;
   presentation_updated: PresentationUpdatedPayload;
   budget_warning: BudgetWarningPayload;
   run_rejected: RunRejectedPayload;
-  draft_updated: DraftUpdatedPayload;
+  source_ingested: SourceIngestedPayload;
 }
 
 // B7 — budget enforcement event payloads.
@@ -928,84 +1029,6 @@ export interface RunRejectedPayload {
   current_tokens: number;
   limit_micro_usd: number | null;
   limit_tokens: number | null;
-}
-
-// PR 1.3 — Workspace-pane Draft artifact.
-//
-// Drafts are the agent-produced (or user-edited) writable artifact rendered
-// in the Workspace-pane Draft tab. Versioned and append-only on the server;
-// the FE keeps a per-conversation Map<draft_id, Draft> in `eventReducer.ts`
-// keyed by the latest version it has seen on the SSE stream or via list/get.
-
-export type DraftStatus =
-  | "draft"
-  | "send_pending_approval"
-  | "sent"
-  | "discarded"
-  | "send_failed";
-
-export interface DraftSection {
-  heading: string;
-  body: string;
-}
-
-export interface Draft {
-  draft_id: string;
-  version: number;
-  conversation_id: string;
-  run_id: string | null;
-  user_id: string;
-  title: string;
-  content_text: string;
-  sections: DraftSection[];
-  target_connector: string | null;
-  target_metadata: Record<string, unknown> | null;
-  citation_ids: string[];
-  status: DraftStatus;
-  created_at: string;
-}
-
-export interface DraftListResponse {
-  drafts: Draft[];
-}
-
-export interface DraftPatchRequest {
-  expected_version: number;
-  content_text: string;
-  title?: string | null;
-}
-
-export interface DraftSendRequest {
-  expected_version: number;
-  target_connector: string;
-  target_metadata?: Record<string, unknown>;
-}
-
-export interface DraftSendResponse {
-  draft: Draft;
-  approval_id: string | null;
-  run_id: string | null;
-}
-
-export interface DraftDiscardRequest {
-  expected_version: number;
-}
-
-// `DRAFT_UPDATED` event payload — emitted by `DraftBackend` on every agent
-// `awrite` / `aedit`. The shape is the FE projection of one persisted draft
-// version plus presentation hints. The server projects `activity_kind="draft"`
-// onto the envelope.
-export interface DraftUpdatedPayload {
-  draft_id: string;
-  version: number;
-  status: DraftStatus;
-  title: string;
-  sections: DraftSection[];
-  target_connector: string | null;
-  target_metadata: Record<string, unknown> | null;
-  citation_ids: string[];
-  summary: string;
-  approval_id?: string;
 }
 
 export type StructuredRuntimeEventEnvelope<
@@ -1054,6 +1077,61 @@ export interface UpdateSkillRequest {
 
 export interface SkillListResponse {
   skills: Skill[];
+}
+
+// PR 1.5 — Workspace pane data feeds.
+// Read-only archive contracts that complement the live SUBAGENT_* and
+// `source_ingested` events on the SSE stream. The shape mirrors
+// `services/ai-backend/src/runtime_api/schemas/workspace.py`.
+
+export type SubagentLifecycleStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "timed_out";
+
+export type SubagentStatusFilter = "all" | "running" | "recent";
+
+export interface SubagentEntry {
+  task_id: string;
+  parent_run_id: string;
+  subagent_name: string;
+  status: SubagentLifecycleStatus;
+  display_title: string | null;
+  objective_summary: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  result_summary: string | null;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+}
+
+export interface SubagentListResponse {
+  conversation_id: string;
+  subagents: SubagentEntry[];
+  truncated: boolean;
+}
+
+export interface SourceEntry {
+  citation_id: string;
+  source_connector: string;
+  source_doc_id: string;
+  source_url: string | null;
+  title: string | null;
+  snippet: string | null;
+  freshness_at: string | null;
+  citation_count: number;
+  last_cited_at: string;
+}
+
+export interface SourceListResponse {
+  conversation_id: string;
+  run_id: string | null;
+  sources: SourceEntry[];
+  truncated: boolean;
 }
 
 export function isRuntimeEventEnvelope(
@@ -1221,6 +1299,20 @@ export function isApprovalRequestedPayload(
     return false;
   }
   return typeof payload.approval_id === "string";
+}
+
+// PR 1.4 — type guard for the two-stage approval forwarding payload.
+export function isApprovalForwardedPayload(
+  payload: unknown,
+): payload is ApprovalForwardedPayload {
+  if (!isPlainRecord(payload)) {
+    return false;
+  }
+  return (
+    typeof payload.approval_id === "string" &&
+    typeof payload.chain_parent_approval_id === "string" &&
+    typeof payload.forwarded_to_user_id === "string"
+  );
 }
 
 export function isMcpAuthRequiredPayload(
@@ -1421,4 +1513,36 @@ export interface LoginAttempt {
 
 export interface LoginAttemptListResponse {
   attempts: LoginAttempt[];
+}
+
+export function isCitationSourceRef(
+  value: unknown,
+): value is CitationSourceRef {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.citation_id === "string" &&
+    candidate.citation_id.length > 0 &&
+    typeof candidate.source_connector === "string" &&
+    typeof candidate.source_doc_id === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.ordinal === "number" &&
+    Number.isInteger(candidate.ordinal) &&
+    candidate.ordinal > 0
+  );
+}
+
+export function isSourceIngestedPayload(
+  payload: unknown,
+): payload is SourceIngestedPayload {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return false;
+  }
+  return isCitationSourceRef((payload as Record<string, unknown>).citation);
 }

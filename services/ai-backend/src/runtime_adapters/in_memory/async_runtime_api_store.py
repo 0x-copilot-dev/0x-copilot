@@ -102,6 +102,23 @@ class AsyncInMemoryRuntimeApiStore:
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         return self._store.append_message(message)
 
+    async def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        return self._store.update_conversation_connectors(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            scopes_patch=scopes_patch,
+            now=now,
+        )
+
     async def create_run_with_user_message(
         self,
         *,
@@ -144,6 +161,27 @@ class AsyncInMemoryRuntimeApiStore:
         record: ApprovalRequestRecord,
     ) -> ApprovalRequestRecord:
         return self._store.create_approval_request(record=record)
+
+    async def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        return self._store.forward_approval_request(
+            parent_approval_id=parent_approval_id,
+            org_id=org_id,
+            decided_by_user_id=decided_by_user_id,
+            forwarded_to_user_id=forwarded_to_user_id,
+            decision_reason=decision_reason,
+            child=child,
+            now=now,
+        )
 
     async def get_approval_request(
         self,

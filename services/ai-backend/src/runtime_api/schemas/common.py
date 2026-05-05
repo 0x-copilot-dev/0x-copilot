@@ -99,6 +99,11 @@ class RuntimeApiEventType(StrEnum):
     SUBAGENT_COMPLETED = "subagent_completed"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
+    # PR 1.4 — two-stage approval forwarding. Emitted between
+    # APPROVAL_RESOLVED (status=forwarded) on the parent and
+    # APPROVAL_REQUESTED on the child so the FE can transform the original
+    # in-thread card into a "Waiting on @marcus" pill in one reducer step.
+    APPROVAL_FORWARDED = "approval_forwarded"
     OBSERVATION = "observation"
     ERROR = "error"
     MODEL_CALL_STARTED = "model_call_started"
@@ -115,6 +120,10 @@ class RuntimeApiEventType(StrEnum):
     # successful awrite/aedit and by RuntimeApiService on user PATCH /
     # POST send / POST discard.
     DRAFT_UPDATED = "draft_updated"
+    # PR 1.1 — citations live registry. One event per (run, source) the
+    # CitationLedger registers; payload carries `CitationSourceRef` under
+    # `payload.citation` and projects to RuntimeActivityKind.TOOL.
+    SOURCE_INGESTED = "source_ingested"
 
     @classmethod
     def from_stream_event_type(
@@ -144,15 +153,28 @@ class RuntimeApiEventType(StrEnum):
 
 
 class ApprovalDecision(StrEnum):
-    """Allowed user decisions for side-effecting approval requests."""
+    """Allowed user decisions for side-effecting approval requests.
+
+    PR 1.4 — ``FORWARDED`` is an API-edge variant: it routes the pending
+    approval to a second workspace user and never reaches the LangGraph
+    harness. The worker discriminates on this enum and skips
+    ``Command(resume=...)`` for the forwarded case.
+    """
 
     APPROVED = "approved"
     REJECTED = "rejected"
+    FORWARDED = "forwarded"
 
 
 class ApprovalStatus(StrEnum):
-    """Approval request state after a decision is accepted."""
+    """Approval request state after a decision is accepted.
+
+    PR 1.4 — ``FORWARDED`` is a terminal state for the parent row in a
+    chain. Resume of the underlying run hangs off the child row's
+    eventual ``APPROVED`` / ``REJECTED`` instead.
+    """
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    FORWARDED = "forwarded"

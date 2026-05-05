@@ -1,10 +1,11 @@
 import {
+  isApprovalForwardedPayload,
   isApprovalRequestedPayload,
   isMcpAuthRequiredPayload,
   isRuntimeTextPayload,
   type RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
-import { resolveActionFromPayload } from "./approval";
+import { forwardActionFromPayload, resolveActionFromPayload } from "./approval";
 import {
   appendReasoning,
   appendTextDelta,
@@ -62,6 +63,20 @@ export function applyRuntimeEvent(
   }
   if (event.event_type === "approval_resolved") {
     return resolveActionFromPayload(items, event.payload);
+  }
+  // PR 1.4 — two-stage approval forwarding. The parent's
+  // `approval_resolved status=forwarded` event is what flips the original
+  // inline card into the "Waiting on @marcus" pill (via the
+  // resolveActionFromPayload branch above). The trailing
+  // `approval_forwarded` event annotates that pill with the recipient's
+  // user id + timestamp so the FE can render the caption without a fetch.
+  // The new pending child row arrives via the subsequent
+  // `approval_requested` event and renders as its own card.
+  if (
+    event.event_type === "approval_forwarded" &&
+    isApprovalForwardedPayload(event.payload)
+  ) {
+    return forwardActionFromPayload(items, event.payload);
   }
   if (isTerminalRunEvent(event)) {
     const withProgress = isVisibleProgressEvent(event)

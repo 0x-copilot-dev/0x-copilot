@@ -47,6 +47,8 @@ class _Fields:
     ACTION_LABEL = "action_label"
     DEBUG_LABEL = "debug_label"
     ACTIVITY_KIND = "activity_kind"
+    CITATION = "citation"
+    CITATIONS = "citations"
 
 
 class RuntimeEventPresentationProjector:
@@ -117,6 +119,10 @@ class RuntimeEventPresentationProjector:
             return cls._mcp_auth_required_payload(payload)
         if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:
             return cls._approval_requested_payload(payload)
+        if event_type is RuntimeApiEventType.APPROVAL_FORWARDED:
+            return cls._approval_forwarded_payload(payload)
+        if event_type is RuntimeApiEventType.SOURCE_INGESTED:
+            return cls._source_ingested_payload(payload)
         return payload
 
     @classmethod
@@ -215,6 +221,7 @@ class RuntimeEventPresentationProjector:
         if event_type in {
             RuntimeApiEventType.APPROVAL_REQUESTED,
             RuntimeApiEventType.APPROVAL_RESOLVED,
+            RuntimeApiEventType.APPROVAL_FORWARDED,
         }:
             return RuntimeActivityKind.APPROVAL
         if source is StreamEventSource.TOOL or event_type in {
@@ -223,6 +230,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.TOOL_CALL_DELTA,
             RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
+            RuntimeApiEventType.SOURCE_INGESTED,
         }:
             return RuntimeActivityKind.TOOL
         if source is StreamEventSource.SUBAGENT or event_type in {
@@ -366,6 +374,15 @@ class RuntimeEventPresentationProjector:
             return Messages.Event.FINAL_RESPONSE
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return Messages.Event.MCP_AUTH_REQUIRED
+        if event_type is RuntimeApiEventType.APPROVAL_FORWARDED:
+            return Messages.Event.APPROVAL_FORWARDED
+        if event_type is RuntimeApiEventType.SOURCE_INGESTED:
+            citation = payload.get(_Fields.CITATION)
+            if isinstance(citation, dict):
+                title = cls._text(citation.get(Keys.Field.TITLE))
+                if title is not None:
+                    return Messages.Event.source_cited_title(title)
+            return Messages.Event.SOURCE_INGESTED
         return None
 
     @classmethod
@@ -411,8 +428,14 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.SUBAGENT_COMPLETED,
             RuntimeApiEventType.FINAL_RESPONSE,
+            RuntimeApiEventType.SOURCE_INGESTED,
         }:
             return Values.Status.COMPLETED
+        # PR 1.4 — forwarded approvals project as a non-terminal "waiting"
+        # status so the FE renders the card as "Waiting on @marcus" (not
+        # "Done"). The actual terminal state is the child's APPROVAL_RESOLVED.
+        if event_type is RuntimeApiEventType.APPROVAL_FORWARDED:
+            return Values.Status.WAITING
         if event_type in {RuntimeApiEventType.RUN_FAILED, RuntimeApiEventType.ERROR}:
             return Values.Status.FAILED
         if event_type is RuntimeApiEventType.RUN_CANCELLED:
@@ -439,6 +462,44 @@ class RuntimeEventPresentationProjector:
             if value is not None:
                 safe_payload[key] = value
         return safe_payload
+
+    @classmethod
+    def _source_ingested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``source_ingested`` payloads through a strict allow-list.
+
+        The CitationLedger is the only intended emitter and always supplies
+        the full ``CitationSourceRef`` shape, but we whitelist defensively
+        in case a future caller (e.g. a provider adapter) over-shares.
+        """
+
+        citation = payload.get(_Fields.CITATION)
+        if not isinstance(citation, dict):
+            return {}
+        safe_citation: JsonObject = {}
+        for text_key in (
+            "citation_id",
+            "source_connector",
+            "source_doc_id",
+            "source_url",
+            "title",
+            "snippet",
+            "freshness_at",
+            "source_tool_call_id",
+        ):
+            value = citation.get(text_key)
+            if isinstance(value, str) and value.strip():
+                safe_citation[text_key] = value
+            elif value is None and text_key in {
+                "source_url",
+                "snippet",
+                "freshness_at",
+                "source_tool_call_id",
+            }:
+                safe_citation[text_key] = None
+        ordinal = citation.get("ordinal")
+        if isinstance(ordinal, int) and ordinal > 0:
+            safe_citation["ordinal"] = ordinal
+        return {_Fields.CITATION: safe_citation}
 
     @classmethod
     def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:
@@ -473,6 +534,33 @@ class RuntimeEventPresentationProjector:
             safe_payload["grant_options"] = [
                 option for option in grant_options if isinstance(option, str)
             ]
+        return safe_payload
+
+    @classmethod
+    def _approval_forwarded_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``approval_forwarded`` payloads through a strict allow-list.
+
+        PR 1.4 — emitted in the same transaction as ``APPROVAL_RESOLVED``
+        (status=forwarded) for the parent and ``APPROVAL_REQUESTED`` for the
+        child. The reducer keys on ``chain_parent_approval_id`` to transform
+        the original in-thread card into a "Waiting on @marcus" pill.
+        """
+
+        safe_payload: JsonObject = {}
+        for text_key in (
+            Keys.Field.APPROVAL_ID,
+            Keys.Field.CHAIN_PARENT_APPROVAL_ID,
+            Keys.Field.APPROVAL_KIND,
+            Keys.Field.FORWARDED_BY_USER_ID,
+            Keys.Field.FORWARDED_TO_USER_ID,
+            Keys.Field.FORWARDED_AT,
+            Keys.Field.ACTION_SUMMARY,
+            Keys.Payload.MESSAGE,
+            Keys.Field.STATUS,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
         return safe_payload
 
     @classmethod

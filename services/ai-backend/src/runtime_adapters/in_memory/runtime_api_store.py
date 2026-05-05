@@ -207,6 +207,36 @@ class InMemoryRuntimeApiStore:
             )
         return message
 
+    def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """RFC 7396 merge-patch enabled_connectors and stamp the timestamp."""
+
+        conversation = self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        merged: dict[str, tuple[str, ...] | None] = dict(
+            conversation.enabled_connectors
+        )
+        merged.update(scopes_patch)
+        updated = conversation.model_copy(
+            update={
+                "enabled_connectors": merged,
+                "connectors_updated_at": now,
+                "updated_at": now,
+            }
+        )
+        self.conversations[conversation_id] = updated
+        return updated
+
     def create_run_with_user_message(
         self,
         *,
@@ -365,6 +395,67 @@ class InMemoryRuntimeApiStore:
         record = record.model_copy(update={"metadata": normalized_metadata})
         self.approval_requests[record.approval_id] = record
         return record
+
+    def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        """In-memory atomic parent→FORWARDED + child INSERT (PR 1.4).
+
+        Mirrors the postgres txn semantics: parent transitions to
+        ``FORWARDED`` and the child row is inserted in one logical step.
+        Idempotent on the child's ``approval_id`` so a retry returns the
+        prior chain unchanged. Also records a decision row for the parent
+        so the existing read-back path observes the resolution.
+        """
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        parent = self.approval_requests.get(parent_approval_id)
+        if parent is None or parent.org_id != org_id:
+            raise KeyError(parent_approval_id)
+        existing_child = self.approval_requests.get(child.approval_id)
+        if existing_child is not None:
+            return parent, existing_child
+        updated_parent = parent.model_copy(
+            update={
+                "status": ApprovalStatus.FORWARDED,
+                "forwarded_to_user_id": forwarded_to_user_id,
+                "forwarded_at": now,
+            }
+        )
+        self.approval_requests[parent_approval_id] = updated_parent
+        normalized_metadata = dict(child.metadata)
+        normalized_metadata[_Fields.RISK_LEVEL] = (
+            RuntimeAdapterHelpers.normalize_risk_class(child.metadata)
+        )
+        normalized_child = child.model_copy(
+            update={
+                "metadata": normalized_metadata,
+                "chain_parent_approval_id": parent_approval_id,
+            }
+        )
+        self.approval_requests[normalized_child.approval_id] = normalized_child
+        self.approval_decisions[parent_approval_id] = ApprovalDecisionRecord(
+            approval_id=parent_approval_id,
+            run_id=updated_parent.run_id,
+            conversation_id=updated_parent.conversation_id,
+            org_id=updated_parent.org_id,
+            user_id=updated_parent.user_id,
+            status=ApprovalStatus.FORWARDED,
+            decided_by_user_id=decided_by_user_id,
+            reason=decision_reason,
+            decided_at=now,
+            forwarded_to_user_id=forwarded_to_user_id,
+        )
+        return updated_parent, normalized_child
 
     def get_approval_request(
         self,

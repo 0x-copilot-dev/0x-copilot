@@ -21,6 +21,9 @@ import type {
   ModelSelectionRequest,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
+  SourceListResponse,
+  SubagentListResponse,
+  SubagentStatusFilter,
   UpdateConversationConnectorScopesRequest,
   UsageConversationRow,
   UsageMeResponse,
@@ -127,6 +130,43 @@ export function getConversationContext(
   return httpGet<ConversationContextResponse>(
     `/v1/agent/conversations/${conversationId}/context`,
     identity,
+  );
+}
+
+/** PR 1.5: archive read of subagents dispatched in this conversation. */
+export function listSubagents(
+  conversationId: string,
+  identity: RequestIdentity,
+  options: { status?: SubagentStatusFilter; limit?: number } = {},
+): Promise<SubagentListResponse> {
+  return httpGet<SubagentListResponse>(
+    `/v1/agent/conversations/${conversationId}/subagents`,
+    identity,
+    {
+      limit: String(options.limit ?? 50),
+      status: options.status,
+    },
+  );
+}
+
+/**
+ * PR 1.5: archive read of unique sources cited in this conversation.
+ *
+ * Returns one row per ``(source_connector, source_doc_id)`` ranked by
+ * citation count then recency. ``run_id`` scopes to a single run.
+ */
+export function listSources(
+  conversationId: string,
+  identity: RequestIdentity,
+  options: { runId?: string | null; limit?: number } = {},
+): Promise<SourceListResponse> {
+  return httpGet<SourceListResponse>(
+    `/v1/agent/conversations/${conversationId}/sources`,
+    identity,
+    {
+      limit: String(options.limit ?? 200),
+      run_id: options.runId ?? undefined,
+    },
   );
 }
 

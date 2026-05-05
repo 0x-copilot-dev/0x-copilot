@@ -66,6 +66,24 @@ class PersistencePort(Protocol):
     def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""
 
+    def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """RFC 7396 merge-patch ``enabled_connectors`` for one conversation.
+
+        Returns ``None`` when no row matches the (org, user, conversation)
+        scope. The implementation merges ``scopes_patch`` into the stored
+        column: keys present in the patch overwrite the stored value
+        (including ``None`` to pause); keys absent in the patch are left
+        untouched. Caller computes the diff for audit before calling.
+        """
+
     def create_run_with_user_message(
         self,
         *,
@@ -98,6 +116,26 @@ class PersistencePort(Protocol):
         record: ApprovalRequestRecord,
     ) -> ApprovalRequestRecord:
         """Persist a pending approval request."""
+
+    def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        """Atomically transition a pending approval to ``FORWARDED`` and
+        insert the child row addressed to the next approver (PR 1.4).
+
+        The update + insert run in one transaction so a failure halfway
+        through never leaves a chain orphan. Returns ``(updated_parent,
+        inserted_child)``. The caller is responsible for emitting events
+        and audit rows after the transaction commits.
+        """
 
     def get_approval_request(
         self,

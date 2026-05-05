@@ -1,0 +1,217 @@
+"""PR 1.2 — PATCH /v1/agent/conversations/{id}/connectors + run-create fallback."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi.testclient import TestClient
+
+from runtime_api.app import RuntimeApiAppFactory
+from agent_runtime.api.constants import Messages
+from agent_runtime.api.service import RuntimeApiService
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
+from agent_runtime.settings import RuntimeSettings
+
+
+class ConnectorScopeRouteFixtureMixin:
+    class Values:
+        ORG_ID = "org_pr12"
+        USER_ID = "user_pr12"
+        ASSISTANT_ID = "assistant_pr12"
+
+    def create_client(self) -> tuple[TestClient, InMemoryRuntimeApiStore]:
+        store = InMemoryRuntimeApiStore()
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+        )
+        app = RuntimeApiAppFactory.create_app(service)
+        return TestClient(app), store
+
+    def conversation_payload(self) -> dict[str, Any]:
+        return {
+            "org_id": self.Values.ORG_ID,
+            "user_id": self.Values.USER_ID,
+            "assistant_id": self.Values.ASSISTANT_ID,
+            "title": "scope test",
+        }
+
+    def create_conversation(self, client: TestClient) -> str:
+        response = client.post(
+            "/v1/agent/conversations", json=self.conversation_payload()
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["conversation_id"]
+
+    def patch_scopes(
+        self,
+        client: TestClient,
+        conversation_id: str,
+        scopes: dict[str, list[str] | None],
+    ) -> Any:
+        return client.patch(
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+            json={"scopes": scopes},
+        )
+
+    def run_payload(
+        self,
+        conversation_id: str,
+        *,
+        connector_scopes: dict[str, list[str]] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "conversation_id": conversation_id,
+            "org_id": self.Values.ORG_ID,
+            "user_id": self.Values.USER_ID,
+            "user_input": "hello",
+            "content_format": "text",
+            "model": {"provider": "openai", "model_name": "gpt-5.4-mini"},
+            "request_context": {
+                "roles": ["employee"],
+                "permission_scopes": ["search:read"],
+                "connector_scopes": connector_scopes or {},
+            },
+        }
+
+
+class TestUpdateConversationConnectorsRoute(ConnectorScopeRouteFixtureMixin):
+    def test_merge_patch_round_trip(self) -> None:
+        client, _store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        first = self.patch_scopes(
+            client,
+            conversation_id,
+            {"slack": ["read"], "drive": ["read", "comment"]},
+        )
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["conversation_id"] == conversation_id
+        assert body["scopes"] == {
+            "slack": ["read"],
+            "drive": ["read", "comment"],
+        }
+        assert body["updated_at"] is not None
+
+        # Second patch only touches `slack` (pause it). `drive` survives.
+        second = self.patch_scopes(client, conversation_id, {"slack": None})
+        assert second.status_code == 200, second.text
+        assert second.json()["scopes"] == {
+            "slack": None,
+            "drive": ["read", "comment"],
+        }
+
+        # GET on the conversation surfaces the same snapshot inline.
+        snapshot = client.get(
+            f"/v1/agent/conversations/{conversation_id}",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+        assert snapshot.status_code == 200
+        assert snapshot.json()["enabled_connectors"] == {
+            "slack": None,
+            "drive": ["read", "comment"],
+        }
+
+    def test_foreign_org_404s(self) -> None:
+        client, _store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        response = client.patch(
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            params={"org_id": "other_org", "user_id": self.Values.USER_ID},
+            json={"scopes": {"slack": None}},
+        )
+        assert response.status_code == 404
+        assert Messages.Error.CONVERSATION_NOT_FOUND in response.text
+
+    def test_invalid_payload_rejected(self) -> None:
+        client, _store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        response = client.patch(
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+            json={"scopes": {"slack": "read"}},  # value must be list-or-null
+        )
+        # The app's exception handler maps Pydantic validation errors to
+        # 400 (not the FastAPI default 422); see runtime_api/http/errors.py.
+        assert response.status_code == 400
+
+    def test_audit_row_emitted_with_diff_metadata(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        self.patch_scopes(client, conversation_id, {"slack": ["read"]})
+        self.patch_scopes(client, conversation_id, {"slack": None})
+
+        action = Messages.Audit.CONVERSATION_CONNECTORS_UPDATE
+        rows = [record for kind, record in store.audit_log if kind == action]
+        assert len(rows) == 2
+        last = rows[-1]
+        assert last["resource_type"] == "conversation"
+        assert last["resource_id"] == conversation_id
+        meta = last["metadata"]
+        assert meta["diff_keys"] == ["slack"]
+        assert meta["before"] == {"slack": ["read"]}
+        assert meta["after"] == {"slack": None}
+
+
+class TestRunCreateConsumesConversationScope(ConnectorScopeRouteFixtureMixin):
+    def test_run_inherits_chat_scope_when_header_empty(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        # Pause Slack at the chat level; activate Drive.
+        self.patch_scopes(
+            client,
+            conversation_id,
+            {"slack": None, "drive": ["read"]},
+        )
+
+        # No connector_scopes on the request → fallback materialises the
+        # active subset (Drive only) into the runtime context.
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(conversation_id, connector_scopes={}),
+        )
+        assert run.status_code == 200, run.text
+        run_id = run.json()["run_id"]
+
+        # The frozen runtime context on the run row exposes only `drive`
+        # (paused connectors filtered out). AgentRuntimeContext normalizes
+        # scope tuples to frozenset for hashable lookup.
+        record = store.runs[run_id]
+        assert record.runtime_context.connector_scopes == {
+            "drive": frozenset({"read"}),
+        }
+
+    def test_explicit_header_overrides_chat_scope(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+        self.patch_scopes(client, conversation_id, {"drive": ["read"]})
+
+        # A non-empty header wins (mirrors a service-to-service caller
+        # that pre-computed scopes for, e.g., a share-link recipient).
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(
+                conversation_id,
+                connector_scopes={"notion": ["read"]},
+            ),
+        )
+        assert run.status_code == 200, run.text
+        record = store.runs[run.json()["run_id"]]
+        assert record.runtime_context.connector_scopes == {
+            "notion": frozenset({"read"}),
+        }

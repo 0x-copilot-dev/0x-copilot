@@ -60,6 +60,16 @@ import {
   type ChatThreadMessage,
 } from "./chatModel";
 import {
+  applyCitationEvent,
+  buildCitationRegistry,
+} from "./chatModel/citationReducer";
+import {
+  citationsForRun,
+  emptyCitationRegistry,
+  type CitationRegistryByRun,
+} from "./chatModel/citationsRegistry";
+import { CitationsProvider } from "./components/citations/citationsContext";
+import {
   AssistantThread,
   AssistantThreadList,
   ThreadBody,
@@ -119,6 +129,13 @@ export function ChatScreen({
   const latestReplaySequenceByRunRef = useRef<Map<string, number>>(new Map());
   const [latestRunEvent, setLatestRunEvent] =
     useState<RuntimeEventEnvelope | null>(null);
+  // PR 1.1 — per-run citation registry. Built from `source_ingested`
+  // events live during a run and from `final_response.citations` on
+  // archive reads. Lives alongside `items` so the existing reducer stays
+  // focused on chat content.
+  const [citations, setCitations] = useState<CitationRegistryByRun>(
+    emptyCitationRegistry,
+  );
 
   const suggestedServers = useMemo(
     () =>
@@ -140,13 +157,21 @@ export function ChatScreen({
       items: ChatItem[];
       replayFailed: boolean;
       latestSequenceByRunId: Map<string, number>;
+      citations: CitationRegistryByRun;
     }> => {
       const history = await listMessages(nextConversationId, identity);
       const replay = await replayEventsForMessages(history.messages, identity);
+      const allEvents: RuntimeEventEnvelope[] = [];
+      for (const events of replay.eventsByRunId.values()) {
+        for (const event of events) {
+          allEvents.push(event);
+        }
+      }
       return {
         items: messagesToChatItems(history.messages, replay.eventsByRunId),
         replayFailed: replay.replayFailed,
         latestSequenceByRunId: latestSequenceByRunId(replay.eventsByRunId),
+        citations: buildCitationRegistry(allEvents),
       };
     },
     [identity],
@@ -169,6 +194,7 @@ export function ChatScreen({
           setConversationId(null);
           latestReplaySequenceByRunRef.current = new Map();
           setItems([]);
+          setCitations(emptyCitationRegistry());
           setStatus("Ready");
           setHistoryError(null);
           setInitialHistoryLoaded(true);
@@ -179,6 +205,7 @@ export function ChatScreen({
         if (!cancelled) {
           latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
           setItems(history.items);
+          setCitations(history.citations);
           setStatus(history.replayFailed ? historyReplayWarning : "Ready");
           setHistoryError(null);
         }
@@ -226,6 +253,7 @@ export function ChatScreen({
           activeRunUserMessageIdsRef.current.get(event.run_id) ?? null,
         ),
       );
+      setCitations((current) => applyCitationEvent(current, event));
       if (isRunUiEvent(event)) {
         setLatestRunEvent(event);
       }
@@ -343,6 +371,12 @@ export function ChatScreen({
             );
           }, current);
         });
+        setCitations((current) =>
+          events.reduce(
+            (next, event) => applyCitationEvent(next, event),
+            current,
+          ),
+        );
         latestSequenceRef.current = latestSequence;
         if (latestEvent && isTerminalRunEvent(latestEvent)) {
           streamRef.current?.close();
@@ -394,6 +428,7 @@ export function ChatScreen({
         );
         latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
         setItems(history.items);
+        setCitations(history.citations);
         setLatestRunEvent(null);
         setShowConnectorSuggestions(false);
         setStatus(history.replayFailed ? historyReplayWarning : "Ready");
@@ -556,6 +591,7 @@ export function ChatScreen({
     setActiveRunId(null);
     setConversationId(null);
     setItems([]);
+    setCitations(emptyCitationRegistry());
     setLatestRunEvent(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
@@ -578,16 +614,32 @@ export function ChatScreen({
     approvalId: string,
     decision: ApprovalDecision,
     answer?: string,
+    // PR 1.4 — required iff `decision === "forwarded"`.
+    forwardTo?: { kind: "workspace_user"; user_id: string } | null,
   ): Promise<void> {
     if (pendingApprovalDecisionsRef.current.has(approvalId)) {
       return;
     }
     pendingApprovalDecisionsRef.current.add(approvalId);
     try {
-      await decideApproval(approvalId, decision, identity, undefined, answer);
-      setItems((current) =>
-        resolveApprovalDecision(current, approvalId, decision, answer),
+      await decideApproval(
+        approvalId,
+        decision,
+        identity,
+        undefined,
+        answer,
+        forwardTo ?? undefined,
       );
+      // Approve / reject path is locally optimistic (we know the final
+      // state). Forward leaves the run waiting on the recipient, so we
+      // skip the optimistic resolve and let the trailing SSE
+      // `approval_resolved` (status=forwarded) + `approval_forwarded`
+      // events flip the inline card to the "Waiting on @x" pill.
+      if (decision !== "forwarded") {
+        setItems((current) =>
+          resolveApprovalDecision(current, approvalId, decision, answer),
+        );
+      }
     } catch (err) {
       setItems((current) => [
         ...current,
@@ -708,6 +760,15 @@ export function ChatScreen({
     [activeRunId, runUiState],
   );
 
+  // Citation chips resolve against the active run's registry. When no
+  // run is active (history viewing) we fall back to the most recent
+  // assistant message's runId so chips on archived turns still resolve.
+  const activeCitations = useMemo(() => {
+    const fallbackRunId =
+      activeRunId ?? mostRecentAssistantRunId(items) ?? null;
+    return citationsForRun(citations, fallbackRunId);
+  }, [activeRunId, citations, items]);
+
   const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(() => {
     const threads: ExternalStoreThreadData<"regular">[] = [];
     const archivedThreads: ExternalStoreThreadData<"archived">[] = [];
@@ -820,6 +881,7 @@ export function ChatScreen({
           payload.approval_id,
           payload.decision,
           payload.answer,
+          payload.forward_to ?? undefined,
         );
       }
     },
@@ -862,35 +924,38 @@ export function ChatScreen({
           onShare={() => void onShare()}
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         >
-          <ThreadBody
-            connectors={connectors}
-            skills={skills}
-            onMcpAuthConnect={onMcpAuthConnect}
-            onMcpAuthSkip={onMcpAuthSkip}
-            onOpenMcpSettings={() => onOpenSettings("connectors")}
-            onOpenSkillsSettings={() => onOpenSettings("skills")}
-            onShowConnectors={() => setShowConnectorSuggestions(true)}
-            onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
-            runIndicator={runIndicator}
-            connectorSuggestions={
-              showConnectorSuggestions && suggestedServers.length > 0 ? (
-                <ConnectorSuggestionCard
-                  servers={suggestedServers}
-                  onConnect={(serverId) =>
-                    void connectors.authenticate(serverId)
-                  }
-                  onSkip={(serverId) => void connectors.skipAuth(serverId)}
-                  onNone={() => setShowConnectorSuggestions(false)}
-                />
-              ) : null
-            }
-          />
+          <CitationsProvider citations={activeCitations}>
+            <ThreadBody
+              connectors={connectors}
+              skills={skills}
+              onMcpAuthConnect={onMcpAuthConnect}
+              onMcpAuthSkip={onMcpAuthSkip}
+              onOpenMcpSettings={() => onOpenSettings("connectors")}
+              onOpenSkillsSettings={() => onOpenSettings("skills")}
+              onShowConnectors={() => setShowConnectorSuggestions(true)}
+              onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+              runIndicator={runIndicator}
+              connectorSuggestions={
+                showConnectorSuggestions && suggestedServers.length > 0 ? (
+                  <ConnectorSuggestionCard
+                    servers={suggestedServers}
+                    onConnect={(serverId) =>
+                      void connectors.authenticate(serverId)
+                    }
+                    onSkip={(serverId) => void connectors.skipAuth(serverId)}
+                    onNone={() => setShowConnectorSuggestions(false)}
+                  />
+                ) : null
+              }
+            />
+          </CitationsProvider>
         </AssistantThread>
         {detailsPanel !== null ? (
           <DetailsPanelHost
             kind={detailsPanel}
             conversationId={conversationId}
             identity={identity}
+            citations={activeCitations}
             onClose={() => setDetailsPanel(null)}
           />
         ) : null}
@@ -1154,6 +1219,16 @@ function pendingActionRunId(items: ChatItem[]): string | null {
   return null;
 }
 
+function mostRecentAssistantRunId(items: ChatItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "message" && item.role === "assistant" && item.runId) {
+      return item.runId;
+    }
+  }
+  return null;
+}
+
 function userMessageIdForRun(items: ChatItem[], runId: string): string | null {
   const item = items.find(
     (candidate) =>
@@ -1241,17 +1316,33 @@ function isApprovalResumePayload(payload: unknown): payload is {
   decision: ApprovalDecision;
   approval_id: string;
   answer?: string;
+  // PR 1.4 — present iff `decision === "forwarded"`. Server-side
+  // validators reject malformed combinations.
+  forward_to?: { kind: "workspace_user"; user_id: string } | null;
 } {
   if (!payload || typeof payload !== "object") {
     return false;
   }
   const record = payload as Record<string, unknown>;
-  return (
-    typeof record.approval_id === "string" &&
-    record.approval_kind !== "mcp_auth" &&
-    (record.decision === "approved" || record.decision === "rejected") &&
-    (record.answer === undefined || typeof record.answer === "string")
-  );
+  if (
+    typeof record.approval_id !== "string" ||
+    record.approval_kind === "mcp_auth"
+  ) {
+    return false;
+  }
+  if (record.decision === "approved" || record.decision === "rejected") {
+    return record.answer === undefined || typeof record.answer === "string";
+  }
+  if (record.decision === "forwarded") {
+    const forward = record.forward_to;
+    return (
+      forward !== null &&
+      typeof forward === "object" &&
+      (forward as Record<string, unknown>).kind === "workspace_user" &&
+      typeof (forward as Record<string, unknown>).user_id === "string"
+    );
+  }
+  return false;
 }
 
 function isMcpAuthResumePayload(

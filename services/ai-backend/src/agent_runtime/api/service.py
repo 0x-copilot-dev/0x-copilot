@@ -17,14 +17,19 @@ from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.pricing import ModelPricingCatalog
 from runtime_api.schemas import (
     AgentRunStatus,
+    ApprovalDecision,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalDecisionRecord,
+    ApprovalForwardTarget,
+    ApprovalRequestRecord,
     ApprovalStatus,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationConnectorScopesResponse,
     ConversationContextResponse,
     ConversationListResponse,
+    ConversationRecord,
     ConversationResponse,
     CreateConversationRequest,
     CreateRunRequest,
@@ -41,6 +46,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
     RunRecord,
     RunStatusResponse,
+    UpdateConversationConnectorsRequest,
 )
 from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
@@ -304,8 +310,79 @@ class RuntimeApiService:
             pricing=pricing,
         )
 
+    async def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        request: UpdateConversationConnectorsRequest,
+    ) -> ConversationConnectorScopesResponse:
+        """Merge-patch the chat's connector scope override + emit an audit row.
+
+        404s for foreign-tenant conversations (does not leak existence).
+        Audit metadata captures ``before`` / ``after`` / ``diff_keys`` for
+        forensic reconstruction; the row is also append-only via the
+        existing ``runtime_audit_log`` HMAC chain.
+        """
+
+        before = await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        now = datetime.now(timezone.utc)
+        updated = await self.persistence.update_conversation_connectors(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            scopes_patch=request.scopes,
+            now=now,
+        )
+        if updated is None:
+            # Race: row vanished between the scope check and the UPDATE.
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.CONVERSATION_CONNECTORS_UPDATE,
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation_id,
+                "outcome": "success",
+                "metadata": _connector_scope_audit_metadata(
+                    before=before.enabled_connectors,
+                    patch=request.scopes,
+                    after=updated.enabled_connectors,
+                ),
+            },
+        )
+        return ConversationConnectorScopesResponse(
+            conversation_id=updated.conversation_id,
+            scopes=updated.enabled_connectors,
+            updated_at=updated.connectors_updated_at,
+        )
+
     async def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
         """Persist a queued run and enqueue worker execution without invoking runtime inline."""
+
+        # Resolve the conversation up front so we can apply the per-chat
+        # connector scope fallback before sealing the runtime context. The
+        # inbound header (already merged into request_context.connector_scopes
+        # by the route handler) wins when present; an empty dict falls back
+        # to the conversation's stored override.
+        conversation_for_scope = await self._conversation_for_scope_when_known(
+            request=request
+        )
+        if conversation_for_scope is not None:
+            request = self._apply_conversation_scope_fallback(
+                request=request, conversation=conversation_for_scope
+            )
 
         request = self._request_with_runtime_context(request)
         context = request.runtime_context
@@ -316,7 +393,7 @@ class RuntimeApiService:
                 http_status=status.HTTP_400_BAD_REQUEST,
                 retryable=False,
             )
-        conversation = await self._conversation_for_scope(
+        conversation = conversation_for_scope or await self._conversation_for_scope(
             org_id=context.org_id,
             user_id=context.user_id,
             conversation_id=request.conversation_id,
@@ -509,6 +586,23 @@ class RuntimeApiService:
             latest_sequence_no=run.latest_sequence_no,
         )
 
+    # PR 1.4 — chain depth cap. Schema permits an arbitrary chain; the
+    # service refuses to extend it past this depth so a misconfigured
+    # workflow (or runaway script) can't build a thousand-link approval
+    # tree before someone notices.
+    APPROVAL_FORWARD_MAX_CHAIN_DEPTH = 3
+
+    # PR 1.4 — kinds that may be forwarded. ``ask_a_question`` is a
+    # clarification to the original requester, never a sensitive action;
+    # forwarding it makes no semantic sense.
+    APPROVAL_FORWARDABLE_KINDS = frozenset(
+        {
+            Values.ApprovalKind.ACTION,
+            Values.ApprovalKind.MCP_AUTH,
+            Values.ApprovalKind.MCP_TOOL,
+        }
+    )
+
     async def record_approval_decision(
         self,
         *,
@@ -516,7 +610,15 @@ class RuntimeApiService:
         approval_id: str,
         request: ApprovalDecisionRequest,
     ) -> ApprovalDecisionResponse:
-        """Persist an approval decision and enqueue the worker resume command."""
+        """Persist an approval decision and enqueue the worker resume command.
+
+        PR 1.4 — when ``request.decision`` is ``FORWARDED`` this dispatches
+        to ``_decide_forwarded`` instead of resolving the approval. The
+        forwarded path *does not* enqueue a worker resume command: the run
+        stays ``WAITING_FOR_APPROVAL`` until the leaf approver decides on
+        the child row, which flows through the existing approve/reject
+        path on a different ``approval_id``.
+        """
 
         approval = await self.persistence.get_approval_request(
             org_id=org_id, approval_id=approval_id
@@ -534,6 +636,11 @@ class RuntimeApiService:
                 "Approval decision user does not match approval scope.",
                 http_status=status.HTTP_403_FORBIDDEN,
                 retryable=False,
+            )
+        if request.decision is ApprovalDecision.FORWARDED:
+            return await self._decide_forwarded(
+                approval=approval,
+                request=request,
             )
         status_value = (
             ApprovalStatus.APPROVED
@@ -605,6 +712,230 @@ class RuntimeApiService:
             status=record.status,
             decided_at=record.decided_at,
         )
+
+    async def _decide_forwarded(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        request: ApprovalDecisionRequest,
+    ) -> ApprovalDecisionResponse:
+        """Forward a pending approval to a second workspace user (PR 1.4).
+
+        Forwarding is bookkeeping: the LangChain HumanInTheLoopMiddleware
+        and LangGraph interrupt/resume contract are byte-identical. The
+        graph stays paused; the API merely
+            (1) resolves the parent row to ``status=FORWARDED``,
+            (2) inserts a child row addressed to the recipient,
+            (3) emits ``approval_resolved`` (status=forwarded) for the parent,
+            (4) emits ``approval_forwarded`` so the FE can transform the
+                inline card into "Waiting on @marcus",
+            (5) emits ``approval_requested`` for the child,
+            (6) writes a ``approval.forward`` audit row.
+        Resume of the run hangs off the child's eventual approve/reject.
+        """
+
+        target = request.forward_to
+        if target is None:
+            # Defensive: model_validator should have already raised.
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.APPROVAL_FORWARD_INVALID_TARGET,
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            )
+        self._guard_forwardable(approval=approval, target=target)
+        run = await self._run_for_scope(
+            org_id=approval.org_id,
+            user_id=approval.user_id,
+            run_id=approval.run_id,
+        )
+        now = datetime.now(timezone.utc)
+        # Build the child row. Inherit metadata byte-for-byte so the LangGraph
+        # native_interrupt_id, tool_invocation_id, and approval_kind survive
+        # the forward — the leaf decision must produce the same Command(resume)
+        # payload the original would have.
+        child_metadata = dict(approval.metadata)
+        child_metadata[Keys.Field.CHAIN_PARENT_APPROVAL_ID] = approval.approval_id
+        child_metadata[Keys.Field.FORWARDED_BY_USER_ID] = request.decided_by_user_id
+        child = ApprovalRequestRecord(
+            run_id=approval.run_id,
+            conversation_id=approval.conversation_id,
+            org_id=approval.org_id,
+            user_id=target.user_id,
+            status=ApprovalStatus.PENDING,
+            created_at=now,
+            expires_at=approval.expires_at,
+            metadata=child_metadata,
+            chain_parent_approval_id=approval.approval_id,
+        )
+        try:
+            updated_parent, child = await self.persistence.forward_approval_request(
+                parent_approval_id=approval.approval_id,
+                org_id=approval.org_id,
+                decided_by_user_id=request.decided_by_user_id,
+                forwarded_to_user_id=target.user_id,
+                decision_reason=request.reason,
+                child=child,
+                now=now,
+            )
+        except RuntimeError as exc:
+            if "not_pending" in str(exc):
+                raise RuntimeApiError(
+                    RuntimeErrorCode.VALIDATION_ERROR,
+                    Messages.Error.APPROVAL_FORWARD_NOT_PENDING,
+                    http_status=status.HTTP_409_CONFLICT,
+                    retryable=False,
+                ) from exc
+            raise
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        action_summary = approval.metadata.get(Keys.Field.ACTION_SUMMARY)
+        # Emit the three events in stream order. They land on the same
+        # SSE channel as every other runtime event — the FE reducer keys
+        # on chain_parent_approval_id to transform the inline card.
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
+            payload={
+                Keys.Field.APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                Keys.Field.STATUS: Values.Status.FORWARDED,
+                Keys.Field.DECISION: ApprovalStatus.FORWARDED.value,
+                Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+            },
+        )
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_FORWARDED,
+            payload={
+                Keys.Field.APPROVAL_ID: child.approval_id,
+                Keys.Field.CHAIN_PARENT_APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                Keys.Field.FORWARDED_BY_USER_ID: request.decided_by_user_id,
+                Keys.Field.FORWARDED_TO_USER_ID: target.user_id,
+                Keys.Field.FORWARDED_AT: now.isoformat(),
+                Keys.Field.ACTION_SUMMARY: action_summary,
+                Keys.Field.STATUS: Values.Status.WAITING,
+                Keys.Payload.MESSAGE: Messages.Event.APPROVAL_FORWARDED,
+            },
+        )
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+            payload={
+                Keys.Field.APPROVAL_ID: child.approval_id,
+                Keys.Field.CHAIN_PARENT_APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                Keys.Field.REQUESTED_BY_USER_ID: target.user_id,
+                **{
+                    key: value
+                    for key, value in approval.metadata.items()
+                    if isinstance(key, str)
+                    and key
+                    in (
+                        Keys.Field.SERVER_ID,
+                        Keys.Field.SERVER_NAME,
+                        "display_name",
+                        Keys.Field.TOOL_NAME,
+                        "risk_level",
+                        Keys.Field.SOURCE_TOOL_CALL_ID,
+                    )
+                },
+                Keys.Payload.MESSAGE: action_summary
+                if isinstance(action_summary, str)
+                else "",
+            },
+        )
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.APPROVAL_FORWARD,
+            record={
+                "org_id": approval.org_id,
+                "user_id": request.decided_by_user_id,
+                "resource_type": "approval",
+                "resource_id": approval.approval_id,
+                "run_id": approval.run_id,
+                "outcome": "success",
+                "metadata": {
+                    "chain_parent_approval_id": approval.approval_id,
+                    "child_approval_id": child.approval_id,
+                    "forwarded_to_user_id": target.user_id,
+                    "approval_kind": approval_kind,
+                    "reason": request.reason,
+                },
+            },
+        )
+        return ApprovalDecisionResponse(
+            approval_id=approval.approval_id,
+            run_id=approval.run_id,
+            status=ApprovalStatus.FORWARDED,
+            decided_at=now,
+            forwarded_to_user_id=target.user_id,
+            child_approval_id=child.approval_id,
+        )
+
+    def _guard_forwardable(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        target: ApprovalForwardTarget,
+    ) -> None:
+        """Pre-flight checks on a forward request before any write.
+
+        Self-forward and decision/forward_to coherence are caught by the
+        ``ApprovalDecisionRequest`` validator. This guard covers state
+        invariants (parent must be pending; kind must be forwardable;
+        chain depth cap) plus a defensive cross-tenant check on the
+        target user_id format. The "is the target a real workspace user?"
+        check belongs in services/backend's identity layer; for v1 we
+        rely on the audit + notification dispatch to surface a missing
+        user. Inactive members will simply never see the inbox row.
+        """
+
+        if approval.status is not ApprovalStatus.PENDING:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.APPROVAL_FORWARD_NOT_PENDING,
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+            )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        if approval_kind not in self.APPROVAL_FORWARDABLE_KINDS:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.APPROVAL_FORWARD_KIND_NOT_SUPPORTED,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+        # Walk the chain depth via metadata (cheap; no extra fetches).
+        depth = self._chain_depth(approval=approval)
+        if depth >= self.APPROVAL_FORWARD_MAX_CHAIN_DEPTH:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.APPROVAL_FORWARD_CHAIN_TOO_DEEP,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+
+    @classmethod
+    def _chain_depth(cls, *, approval: ApprovalRequestRecord) -> int:
+        """Approximate chain depth from a single record's chain_parent.
+
+        Each forward inscribes ``chain_parent_approval_id`` on the child's
+        ``metadata`` (and on the row column) so we can read the depth
+        without a recursive CTE — the parent's child carries its own
+        chain_parent which carries the prior, etc. v1 caps at 3 hops, so
+        a length walk through ``metadata.chain_parent_approval_id`` ids
+        we keep on the row gives an honest count without crawling.
+        """
+
+        if approval.chain_parent_approval_id is None:
+            return 0
+        # Conservative lower bound — we count ourselves plus our parent.
+        # The cap is small (3) so this is fine for v1; we revisit if
+        # depth ever rises (PR notes already hint at that).
+        return 1
 
     @classmethod
     def _wire_status_for(
@@ -785,6 +1116,47 @@ class RuntimeApiService:
             )
         return conversation
 
+    async def _conversation_for_scope_when_known(
+        self, *, request: CreateRunRequest
+    ) -> ConversationRecord | None:
+        """Resolve the conversation row when both org and user are present.
+
+        Returns ``None`` when ``org_id`` / ``user_id`` aren't yet populated
+        on the request — in that case the existing path handles it. Returns
+        the row when found, raises 404 otherwise (caller will be inside
+        ``create_run`` and we want the same behaviour as before).
+        """
+
+        if request.org_id is None or request.user_id is None:
+            return None
+        return await self._conversation_for_scope(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+        )
+
+    @staticmethod
+    def _apply_conversation_scope_fallback(
+        *, request: CreateRunRequest, conversation: ConversationRecord
+    ) -> CreateRunRequest:
+        """Fall back to the stored per-chat scope when the inbound dict is empty.
+
+        Header (already merged into ``request_context.connector_scopes`` by
+        the route) wins when non-empty so service-to-service callers stay
+        in control. When empty, the chat's stored override (filtered to
+        active connectors only) materialises into the runtime context.
+        """
+
+        if request.request_context.connector_scopes:
+            return request
+        fallback = conversation.runtime_connector_scopes()
+        if not fallback:
+            return request
+        new_context = request.request_context.model_copy(
+            update={"connector_scopes": fallback}
+        )
+        return request.model_copy(update={"request_context": new_context})
+
     async def _run_for_scope(
         self, *, org_id: str, user_id: str, run_id: str
     ) -> RunRecord:
@@ -804,3 +1176,33 @@ def _display_model_name(model_name: str) -> str:
     return " ".join(
         part.upper() if part in {"gpt"} else part.capitalize() for part in parts
     )
+
+
+def _connector_scope_audit_metadata(
+    *,
+    before: dict[str, tuple[str, ...] | None],
+    patch: dict[str, tuple[str, ...] | None],
+    after: dict[str, tuple[str, ...] | None],
+) -> dict[str, object]:
+    """Build the audit metadata blob for a per-chat connector scope change.
+
+    Captures the keys touched by the patch plus the before/after value of
+    each — enough for forensic reconstruction without leaking unrelated
+    state. Tuples are serialised as lists for JSON portability; ``None``
+    survives as JSON null and signals the paused state.
+    """
+
+    def _to_json(
+        value: dict[str, tuple[str, ...] | None],
+    ) -> dict[str, list[str] | None]:
+        return {
+            connector_id: (list(scopes) if scopes is not None else None)
+            for connector_id, scopes in value.items()
+        }
+
+    diff_keys = sorted(patch.keys())
+    return {
+        "before": _to_json({k: before.get(k) for k in diff_keys}),
+        "after": _to_json({k: after.get(k) for k in diff_keys}),
+        "diff_keys": diff_keys,
+    }

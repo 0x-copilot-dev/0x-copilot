@@ -90,6 +90,24 @@ class AsyncPersistencePort(Protocol):
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""
 
+    async def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """RFC 7396 merge-patch ``enabled_connectors`` for one conversation.
+
+        Returns ``None`` when no row matches the (org, user, conversation)
+        scope. Implementations merge ``scopes_patch`` into the stored
+        column atomically (keys present overwrite — including ``None`` to
+        pause; keys absent are left untouched). Caller computes diff for
+        audit before invocation.
+        """
+
     async def create_run_with_user_message(
         self,
         *,
@@ -129,6 +147,24 @@ class AsyncPersistencePort(Protocol):
         record: ApprovalRequestRecord,
     ) -> ApprovalRequestRecord:
         """Persist a pending approval request, idempotent on ``approval_id``."""
+
+    async def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        """Atomic parent→FORWARDED + child INSERT for two-stage approvals.
+
+        See sync ``PersistencePort.forward_approval_request`` for the
+        contract. Implementations run both writes in a single transaction
+        so partial chains never persist on failure (PR 1.4).
+        """
 
     async def get_approval_request(
         self,

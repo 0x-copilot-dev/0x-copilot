@@ -4,6 +4,7 @@ from runtime_api.schemas.approvals import (
     ApprovalDecisionRecord,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
+    ApprovalForwardTarget,
     ApprovalRequestRecord,
 )
 from runtime_api.schemas.commands import (
@@ -25,11 +26,14 @@ from runtime_api.schemas.common import (
 )
 from runtime_api.schemas.conversations import (
     ContextBreakdown,
+    ConnectorScopeValidator,
     ContextCallRow,
     ContextCompressionRow,
     ContextCurrentSlice,
     ContextSubagentRow,
     ContextWindowSummary,
+    ConversationConnectorScopes,
+    ConversationConnectorScopesResponse,
     ConversationContextResponse,
     ConversationListResponse,
     ConversationRecord,
@@ -39,6 +43,7 @@ from runtime_api.schemas.conversations import (
     MessageListResponse,
     MessageRecord,
     MessageResponse,
+    UpdateConversationConnectorsRequest,
 )
 from runtime_api.schemas.drafts import (
     Draft,
@@ -78,6 +83,13 @@ from runtime_api.schemas.runs import (
     RunStatusResponse,
     RuntimeRequestContext,
 )
+from runtime_api.schemas.workspace import (
+    SourceEntry,
+    SourceListResponse,
+    SubagentEntry,
+    SubagentListResponse,
+    SubagentStatusFilter,
+)
 
 __all__ = [
     "ConversationStatus",
@@ -98,10 +110,14 @@ __all__ = [
     "RunQuoteRequest",
     "RunBranchMetadataRequest",
     "RuntimeRequestContext",
+    "ConnectorScopeValidator",
+    "ConversationConnectorScopes",
+    "ConversationConnectorScopesResponse",
     "CreateConversationRequest",
     "ConversationListResponse",
     "ConversationRecord",
     "ConversationResponse",
+    "UpdateConversationConnectorsRequest",
     "MessageRecord",
     "MessageResponse",
     "MessageListResponse",
@@ -130,6 +146,7 @@ __all__ = [
     "RuntimeEventDraft",
     "ApprovalDecisionRequest",
     "ApprovalDecisionRecord",
+    "ApprovalForwardTarget",
     "ApprovalRequestRecord",
     "ApprovalDecisionResponse",
     "ApiErrorResponse",
@@ -144,4 +161,9 @@ __all__ = [
     "DraftSendRequest",
     "DraftSendResponse",
     "DraftStatus",
+    "SourceEntry",
+    "SourceListResponse",
+    "SubagentEntry",
+    "SubagentListResponse",
+    "SubagentStatusFilter",
 ]

@@ -53,6 +53,7 @@ from agent_runtime.persistence.records import (
     BudgetStatus,
     BudgetWithState,
     ChargeOutcome,
+    CitationRecord,
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
@@ -101,6 +102,7 @@ class _Tables:
     AGENT_MESSAGES = "agent_messages"
     RUNTIME_AUDIT_LOG = "runtime_audit_log"
     RUNTIME_EVENTS = "runtime_events"
+    RUNTIME_CITATIONS = "runtime_citations"
 
 
 class _Columns:
@@ -118,9 +120,17 @@ class _Columns:
     CONTENT_FORMAT = "content_format"
     CONTENT_JSON = "content_json"
     CONTENT_TEXT = "content_text"
+    CONNECTORS_UPDATED_AT = "connectors_updated_at"
     CONVERSATION_ID = "conversation_id"
     COUNT = "count"
     CREATED_AT = "created_at"
+    # PR 1.4 — two-stage approval forwarding bookkeeping columns on
+    # runtime_approval_requests (migration 0017).
+    CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
+    FORWARDED_AT = "forwarded_at"
+    FORWARDED_DECIDED_AT = "forwarded_decided_at"
+    FORWARDED_TO_USER_ID = "forwarded_to_user_id"
+    ENABLED_CONNECTORS = "enabled_connectors"
     DELETED_AT = "deleted_at"
     DISPLAY_TITLE = "display_title"
     EDITED_AT = "edited_at"
@@ -157,6 +167,7 @@ class _Columns:
     SAFE_ERROR_MESSAGE = "safe_error_message"
     SCHEMA_VERSION = "schema_version"
     SEQUENCE_NO = "sequence_no"
+    SNIPPET = "snippet"
     SOURCE = "source"
     SOURCE_MESSAGE_ID = "source_message_id"
     SPAN_ID = "span_id"
@@ -638,6 +649,47 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._conversation_record(row) for row in rows)
 
+    async def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Merge ``scopes_patch`` into ``enabled_connectors`` atomically.
+
+        Uses jsonb concat (``||``) so keys present in the patch overwrite
+        the stored value (including JSON null = paused) while keys absent
+        in the patch survive untouched. Returns the post-update row, or
+        ``None`` when no row matches the (org, user, conversation) scope.
+        """
+
+        # Pre-encode the patch as JSONB so the merge happens entirely in
+        # Postgres: stored || %s::jsonb. JSON null in the patch survives
+        # the merge as a "paused" marker.
+        patch_jsonb: dict[str, list[str] | None] = {
+            connector_id: (list(scopes) if scopes is not None else None)
+            for connector_id, scopes in scopes_patch.items()
+        }
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_conversations
+                   SET enabled_connectors    = enabled_connectors || %s::jsonb,
+                       connectors_updated_at = %s,
+                       updated_at            = %s
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                (Jsonb(patch_jsonb), now, now, conversation_id, org_id, user_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
     async def list_messages(
         self,
         *,
@@ -1000,16 +1052,115 @@ class PostgresRuntimeApiStore:
                     (record.approval_id, record.org_id),
                 )
                 existing = await cur.fetchone()
-        return ApprovalRequestRecord(
-            approval_id=existing[_Columns.ID],
-            run_id=existing[_Columns.RUN_ID],
-            conversation_id=existing[_Columns.CONVERSATION_ID],
-            org_id=existing[_Columns.ORG_ID],
-            user_id=existing[_Columns.USER_ID],
-            status=existing[_Columns.STATUS],
-            created_at=existing[_Columns.CREATED_AT],
-            expires_at=existing[_Columns.EXPIRES_AT],
-            metadata=existing[_Columns.REQUEST_PAYLOAD_JSON_REDACTED] or {},
+        return self._approval_request_record_from_row(existing)
+
+    async def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        """Atomic parent→FORWARDED + child INSERT for two-stage approvals.
+
+        PR 1.4 — single transaction (single ``async with conn.transaction()``)
+        covers both writes so a partial chain never persists. Idempotent on
+        ``child.approval_id`` via the same ``ON CONFLICT (id) DO NOTHING``
+        guard the create_approval_request path uses.
+        """
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        risk_class = RuntimeAdapterHelpers.normalize_risk_class(child.metadata)
+        action_summary = RuntimeAdapterHelpers.derive_action_summary(child.metadata)
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.transaction():
+                # 1. Resolve parent → FORWARDED.
+                cur = await conn.execute(
+                    """
+                    UPDATE runtime_approval_requests
+                    SET status = %s,
+                        decided_by_user_id = %s,
+                        decision_reason = %s,
+                        decided_at = %s,
+                        forwarded_to_user_id = %s,
+                        forwarded_at = %s
+                    WHERE id = %s AND org_id = %s AND status = %s
+                    """,
+                    (
+                        ApprovalStatus.FORWARDED.value,
+                        decided_by_user_id,
+                        decision_reason,
+                        now,
+                        forwarded_to_user_id,
+                        now,
+                        parent_approval_id,
+                        org_id,
+                        ApprovalStatus.PENDING.value,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    # Lost race or status moved away from PENDING; surface
+                    # to the service so it can return the right HTTP code.
+                    raise RuntimeError("approval_forward_parent_no_longer_pending")
+                # 2. Insert the child row addressed to the forward target.
+                await conn.execute(
+                    """
+                    INSERT INTO runtime_approval_requests (
+                        id,
+                        run_id,
+                        org_id,
+                        requested_by_user_id,
+                        status,
+                        risk_class,
+                        action_summary,
+                        request_payload_json_redacted,
+                        expires_at,
+                        created_at,
+                        chain_parent_approval_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        child.approval_id,
+                        child.run_id,
+                        org_id,
+                        forwarded_to_user_id,
+                        ApprovalStatus.PENDING.value,
+                        risk_class,
+                        action_summary,
+                        Jsonb(child.metadata),
+                        child.expires_at,
+                        child.created_at,
+                        parent_approval_id,
+                    ),
+                )
+                # 3. Re-read both rows so the service has authoritative state
+                # (status, timestamps, joined conversation_id / user_id) for
+                # the events + audit emit it does after the txn commits.
+                cur = await conn.execute(
+                    """
+                    SELECT a.*, r.conversation_id, r.user_id
+                    FROM runtime_approval_requests a
+                    JOIN agent_runs r ON r.id = a.run_id
+                    WHERE a.id IN (%s, %s) AND a.org_id = %s
+                    """,
+                    (parent_approval_id, child.approval_id, org_id),
+                )
+                rows = await cur.fetchall()
+        rows_by_id = {row[_Columns.ID]: row for row in rows}
+        parent_row = rows_by_id.get(parent_approval_id)
+        child_row = rows_by_id.get(child.approval_id)
+        if parent_row is None or child_row is None:
+            raise RuntimeError("approval_forward_post_txn_read_missing_row")
+        return (
+            self._approval_request_record_from_row(parent_row),
+            self._approval_request_record_from_row(child_row),
         )
 
     async def get_approval_request(
@@ -1033,6 +1184,19 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         if row is None:
             return None
+        return self._approval_request_record_from_row(row)
+
+    @staticmethod
+    def _approval_request_record_from_row(row) -> ApprovalRequestRecord:  # type: ignore[no-untyped-def]
+        """Project a runtime_approval_requests row into the record shape.
+
+        Centralised so the create_approval_request / forward_approval_request
+        / get_approval_request paths all populate the new chain fields
+        consistently. ``row.get`` is used for the columns added in
+        migration 0017 so older rows (or older test fixtures) that don't
+        carry them still load.
+        """
+
         return ApprovalRequestRecord(
             approval_id=row[_Columns.ID],
             run_id=row[_Columns.RUN_ID],
@@ -1043,6 +1207,30 @@ class PostgresRuntimeApiStore:
             created_at=row[_Columns.CREATED_AT],
             expires_at=row[_Columns.EXPIRES_AT],
             metadata=row[_Columns.REQUEST_PAYLOAD_JSON_REDACTED] or {},
+            chain_parent_approval_id=row.get(_Columns.CHAIN_PARENT_APPROVAL_ID)
+            if hasattr(row, "get")
+            else (
+                row[_Columns.CHAIN_PARENT_APPROVAL_ID]
+                if _Columns.CHAIN_PARENT_APPROVAL_ID in row
+                else None
+            ),
+            forwarded_to_user_id=row.get(_Columns.FORWARDED_TO_USER_ID)
+            if hasattr(row, "get")
+            else (
+                row[_Columns.FORWARDED_TO_USER_ID]
+                if _Columns.FORWARDED_TO_USER_ID in row
+                else None
+            ),
+            forwarded_at=row.get(_Columns.FORWARDED_AT)
+            if hasattr(row, "get")
+            else (row[_Columns.FORWARDED_AT] if _Columns.FORWARDED_AT in row else None),
+            forwarded_decided_at=row.get(_Columns.FORWARDED_DECIDED_AT)
+            if hasattr(row, "get")
+            else (
+                row[_Columns.FORWARDED_DECIDED_AT]
+                if _Columns.FORWARDED_DECIDED_AT in row
+                else None
+            ),
         )
 
     async def write_audit_log(
@@ -3117,7 +3305,30 @@ class PostgresRuntimeApiStore:
             metadata=dict(row[_Columns.METADATA_JSON]),
             schema_version=row[_Columns.SCHEMA_VERSION],
             idempotency_key=row[_Columns.IDEMPOTENCY_KEY],
+            enabled_connectors=cls._coerce_enabled_connectors(
+                row.get(_Columns.ENABLED_CONNECTORS)
+            ),
+            connectors_updated_at=row.get(_Columns.CONNECTORS_UPDATED_AT),
         )
+
+    @staticmethod
+    def _coerce_enabled_connectors(
+        value: object,
+    ) -> dict[str, tuple[str, ...] | None]:
+        """Decode the JSONB column into the runtime shape (None = paused)."""
+
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        scopes: dict[str, tuple[str, ...] | None] = {}
+        for connector_id, raw in value.items():
+            if raw is None:
+                scopes[str(connector_id)] = None
+                continue
+            if isinstance(raw, list | tuple):
+                scopes[str(connector_id)] = tuple(str(scope) for scope in raw)
+        return scopes
 
     def _message_record(self, row: dict[str, object]) -> MessageRecord:
         # C7 phase 2: decrypt content_text / content_json / metadata_json
@@ -3368,4 +3579,163 @@ class PostgresRuntimeApiStore:
                 run.safe_error.code.value if run.safe_error else None,
                 run.safe_error.safe_message if run.safe_error else None,
             ),
+        )
+
+    # ----- CitationStorePort (PR 1.1 follow-up B) ---------------------------
+
+    async def insert_or_get(self, record: CitationRecord) -> CitationRecord:
+        """Insert one citation row. Returns the existing row on conflict.
+
+        Idempotency mirrors :class:`InMemoryCitationStore` and the unique
+        index ``runtime_citations_run_source_uk`` from migration 0015. The
+        ``ON CONFLICT … DO NOTHING RETURNING *`` returns zero rows on
+        conflict; the fallback ``SELECT`` then fetches the existing row so
+        the caller's cache stays consistent across racing producers.
+        """
+
+        title_encrypted = self._codec.encrypt_text(
+            record.title,
+            table=_Tables.RUNTIME_CITATIONS,
+            column=_Columns.TITLE,
+            org_id=record.org_id,
+        )
+        snippet_encrypted = self._codec.encrypt_text(
+            record.snippet,
+            table=_Tables.RUNTIME_CITATIONS,
+            column=_Columns.SNIPPET,
+            org_id=record.org_id,
+        )
+        write_version = self._codec.write_version
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(
+                        """
+                        INSERT INTO runtime_citations (
+                            citation_id, run_id, conversation_id, org_id, ordinal,
+                            source_connector, source_doc_id, source_url,
+                            title, snippet, freshness_at, source_tool_call_id,
+                            encryption_version, created_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (run_id, source_connector, source_doc_id)
+                        DO NOTHING
+                        RETURNING *
+                        """,
+                        (
+                            record.citation_id,
+                            record.run_id,
+                            record.conversation_id,
+                            record.org_id,
+                            record.ordinal,
+                            record.source_connector,
+                            record.source_doc_id,
+                            record.source_url,
+                            title_encrypted,
+                            snippet_encrypted,
+                            record.freshness_at,
+                            record.source_tool_call_id,
+                            write_version,
+                            record.created_at,
+                        ),
+                    )
+                    inserted = await cursor.fetchone()
+                    if inserted is not None:
+                        return self._row_to_citation(inserted)
+                    await cursor.execute(
+                        """
+                        SELECT *
+                        FROM runtime_citations
+                        WHERE run_id = %s
+                          AND source_connector = %s
+                          AND source_doc_id = %s
+                        """,
+                        (
+                            record.run_id,
+                            record.source_connector,
+                            record.source_doc_id,
+                        ),
+                    )
+                    existing = await cursor.fetchone()
+                    if existing is None:
+                        # Should be unreachable: ON CONFLICT returned zero rows
+                        # so a sibling row exists, but a concurrent transaction
+                        # could in theory hide it. Reraise as a typed error.
+                        raise RuntimeApiError(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            envelope=RuntimeErrorEnvelope(
+                                code=RuntimeErrorCode.PERSISTENCE_ERROR,
+                                safe_message=Messages.Error.SAFE_FALLBACK,
+                            ),
+                        )
+                    return self._row_to_citation(existing)
+
+    async def list_for_run(
+        self, *, org_id: str, run_id: str
+    ) -> Sequence[CitationRecord]:
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    """
+                    SELECT *
+                    FROM runtime_citations
+                    WHERE org_id = %s AND run_id = %s
+                    ORDER BY ordinal ASC
+                    """,
+                    (org_id, run_id),
+                )
+                rows = await cursor.fetchall()
+        return tuple(self._row_to_citation(row) for row in rows)
+
+    async def list_for_conversation(
+        self, *, org_id: str, conversation_id: str
+    ) -> Sequence[CitationRecord]:
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    """
+                    SELECT *
+                    FROM runtime_citations
+                    WHERE org_id = %s AND conversation_id = %s
+                    ORDER BY created_at ASC, ordinal ASC
+                    """,
+                    (org_id, conversation_id),
+                )
+                rows = await cursor.fetchall()
+        return tuple(self._row_to_citation(row) for row in rows)
+
+    def _row_to_citation(self, row: dict[str, object]) -> CitationRecord:
+        encryption_version = int(row[_Columns.ENCRYPTION_VERSION])
+        org_id = str(row[_Columns.ORG_ID])
+        title = self._codec.decrypt_text(
+            row.get(_Columns.TITLE),  # type: ignore[arg-type]
+            encryption_version=encryption_version,
+            table=_Tables.RUNTIME_CITATIONS,
+            column=_Columns.TITLE,
+            org_id=org_id,
+        )
+        snippet = self._codec.decrypt_text(
+            row.get(_Columns.SNIPPET),  # type: ignore[arg-type]
+            encryption_version=encryption_version,
+            table=_Tables.RUNTIME_CITATIONS,
+            column=_Columns.SNIPPET,
+            org_id=org_id,
+        )
+        return CitationRecord(
+            citation_id=str(row["citation_id"]),
+            run_id=str(row[_Columns.RUN_ID]),
+            conversation_id=str(row[_Columns.CONVERSATION_ID]),
+            org_id=org_id,
+            ordinal=int(row["ordinal"]),
+            source_connector=str(row["source_connector"]),
+            source_doc_id=str(row["source_doc_id"]),
+            source_url=row.get("source_url"),  # type: ignore[arg-type]
+            title=title or "",
+            snippet=snippet,
+            freshness_at=row.get("freshness_at"),  # type: ignore[arg-type]
+            source_tool_call_id=row.get("source_tool_call_id"),  # type: ignore[arg-type]
+            encryption_version=encryption_version,
+            created_at=row[_Columns.CREATED_AT],  # type: ignore[arg-type]
         )

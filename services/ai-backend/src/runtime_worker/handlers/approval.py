@@ -88,6 +88,16 @@ class RuntimeApprovalHandler:
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
+        # PR 1.4 — two-stage approval forwarding. The API service has already
+        # resolved the parent row to status=FORWARDED, inserted the child
+        # row addressed to the recipient, emitted approval_resolved/
+        # approval_forwarded/approval_requested events, and audited the
+        # forward. The graph stays paused (run.status remains
+        # WAITING_FOR_APPROVAL); resume hangs off the leaf child's
+        # approve/reject which flows through the existing single-actor
+        # path on a different approval_id. So: nothing to do here.
+        if command.decision is ApprovalDecision.FORWARDED:
+            return
         run = await self.persistence.get_run(
             org_id=command.org_id, run_id=command.run_id
         )
