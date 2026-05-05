@@ -16,6 +16,7 @@ from agent_runtime.api.constants import Values
 from agent_runtime.persistence.records import (
     SubagentLifecycleStatus,
     SubagentSnapshot,
+    SubagentTokenUsage,
 )
 from runtime_api.schemas import RuntimeApiEventType
 
@@ -196,12 +197,19 @@ class PostgresSubagentStore:
                 conversation_id=conversation_id,
                 task_ids=task_ids,
             )
-        return self._fold(
+            usage_by_task = await self._token_usage_for_tasks(
+                conn=conn, org_id=org_id, task_ids=task_ids
+            )
+        snapshots = self._fold(
             rows=event_rows,
             order=task_ids,
             org_id=org_id,
             conversation_id=conversation_id,
             running_only=running_only,
+        )
+        return tuple(
+            s.model_copy(update={"token_usage": usage_by_task.get(s.task_id)})
+            for s in snapshots
         )
 
     @staticmethod
@@ -246,6 +254,43 @@ class PostgresSubagentStore:
                 continue
             result.append(str(mapping["task_id"]))
         return tuple(result)
+
+    @staticmethod
+    async def _token_usage_for_tasks(
+        *,
+        conn: object,
+        org_id: str,
+        task_ids: tuple[str, ...],
+    ) -> dict[str, SubagentTokenUsage]:
+        # Per-task token rollup (PR 1.5 AC-2). The partial index
+        # ``idx_runtime_model_call_usage_org_task`` (migration 0005) covers
+        # this lookup without scanning main-graph rows.
+        sql = """
+            SELECT task_id,
+                   COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0)       AS output_tokens,
+                   COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+                   COALESCE(SUM(total_tokens), 0)        AS total_tokens
+            FROM runtime_model_call_usage
+            WHERE org_id = %s
+              AND task_id = ANY(%s)
+            GROUP BY task_id
+        """
+        cur = await conn.execute(  # type: ignore[attr-defined]
+            sql,
+            (org_id, list(task_ids)),
+        )
+        rows = await cur.fetchall()
+        result: dict[str, SubagentTokenUsage] = {}
+        for row in rows:
+            mapping = dict(row)
+            result[str(mapping["task_id"])] = SubagentTokenUsage(
+                input_tokens=int(mapping.get("input_tokens") or 0),
+                output_tokens=int(mapping.get("output_tokens") or 0),
+                cached_input_tokens=int(mapping.get("cached_input_tokens") or 0),
+                total_tokens=int(mapping.get("total_tokens") or 0),
+            )
+        return result
 
     @staticmethod
     async def _events_for_tasks(

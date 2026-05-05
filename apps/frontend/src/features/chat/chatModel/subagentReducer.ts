@@ -145,6 +145,10 @@ function seedFromEvent(event: RuntimeEventEnvelope): SubagentEntry {
     result_summary: null,
     safe_error_code: null,
     safe_error_message: null,
+    // Token usage is rolled up server-side from runtime_model_call_usage on
+    // the seed read; the live event projection has no access to per-call
+    // usage rows, so it stays null until the next conversation re-seed.
+    token_usage: null,
   };
 }
 

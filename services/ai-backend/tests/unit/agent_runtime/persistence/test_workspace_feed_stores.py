@@ -11,6 +11,7 @@ from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.schemas.common import RuntimeActivityKind
 from agent_runtime.persistence.records import (
     CitationRecord,
+    RuntimeModelCallUsageRecord,
     SubagentLifecycleStatus,
 )
 from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
@@ -43,6 +44,8 @@ class _StubStore:
 
     runs: dict[str, _StubRun] = field(default_factory=dict)
     events_by_run: dict[str, list[RuntimeEventEnvelope]] = field(default_factory=dict)
+    # PR 1.5 AC-2 — per-LLM-call rows the token rollup folds by task_id.
+    model_call_usage: list[RuntimeModelCallUsageRecord] = field(default_factory=list)
 
 
 class _RuntimeStubs:
@@ -255,6 +258,97 @@ class TestInMemorySubagentStore:
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert result == ()
+
+    def test_rolls_up_token_usage_per_task(self, store: _StubStore) -> None:
+        # PR 1.5 AC-2 — `runtime_model_call_usage` rows under one task fold
+        # into one SubagentTokenUsage on the snapshot.
+        store.events_by_run[_RUN].extend(
+            [
+                _RuntimeStubs.subagent_event(
+                    run_id=_RUN,
+                    task_id="task_with_tokens",
+                    event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+                    sequence_no=1,
+                    created_at=_at(0),
+                ),
+                _RuntimeStubs.subagent_event(
+                    run_id=_RUN,
+                    task_id="task_with_tokens",
+                    event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                    sequence_no=2,
+                    created_at=_at(5),
+                ),
+                _RuntimeStubs.subagent_event(
+                    run_id=_RUN,
+                    task_id="task_no_calls",
+                    event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+                    sequence_no=3,
+                    created_at=_at(10),
+                ),
+                _RuntimeStubs.subagent_event(
+                    run_id=_RUN,
+                    task_id="task_no_calls",
+                    event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                    sequence_no=4,
+                    created_at=_at(11),
+                ),
+            ]
+        )
+        store.model_call_usage.extend(
+            [
+                RuntimeModelCallUsageRecord(
+                    org_id=_ORG,
+                    run_id=_RUN,
+                    conversation_id=_CONV,
+                    trace_id="trace_a",
+                    task_id="task_with_tokens",
+                    model_provider="anthropic",
+                    model_name="claude-sonnet-4-5",
+                    input_tokens=400,
+                    output_tokens=80,
+                    cached_input_tokens=120,
+                    total_tokens=480,
+                ),
+                RuntimeModelCallUsageRecord(
+                    org_id=_ORG,
+                    run_id=_RUN,
+                    conversation_id=_CONV,
+                    trace_id="trace_b",
+                    task_id="task_with_tokens",
+                    model_provider="anthropic",
+                    model_name="claude-sonnet-4-5",
+                    input_tokens=100,
+                    output_tokens=20,
+                    cached_input_tokens=0,
+                    total_tokens=120,
+                ),
+                # Different org — must not bleed into our rollup.
+                RuntimeModelCallUsageRecord(
+                    org_id="org_other",
+                    run_id=_RUN,
+                    conversation_id=_CONV,
+                    trace_id="trace_c",
+                    task_id="task_with_tokens",
+                    model_provider="anthropic",
+                    model_name="claude-sonnet-4-5",
+                    input_tokens=9_999,
+                    output_tokens=9_999,
+                    total_tokens=9_999,
+                ),
+            ]
+        )
+        adapter = InMemorySubagentStore(store)
+        result = adapter.list_for_conversation(
+            org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
+        )
+        by_task = {s.task_id: s for s in result}
+        rolled = by_task["task_with_tokens"].token_usage
+        assert rolled is not None
+        assert rolled.input_tokens == 500
+        assert rolled.output_tokens == 100
+        assert rolled.cached_input_tokens == 120
+        assert rolled.total_tokens == 600
+        assert by_task["task_no_calls"].token_usage is None
 
     def test_status_cancelled_propagates(self, store: _StubStore) -> None:
         store.events_by_run[_RUN].extend(

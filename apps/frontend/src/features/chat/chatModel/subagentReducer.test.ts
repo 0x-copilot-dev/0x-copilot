@@ -50,6 +50,7 @@ function entry(overrides: Partial<SubagentEntry> = {}): SubagentEntry {
     result_summary: null,
     safe_error_code: null,
     safe_error_message: null,
+    token_usage: null,
     ...overrides,
   };
 }

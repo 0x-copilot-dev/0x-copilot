@@ -23,6 +23,15 @@ class SubagentStatusFilter(str, Enum):
     RECENT = "recent"
 
 
+class SubagentTokenUsage(BaseModel):
+    """Per-subagent token rollup (PR 1.5 AC-2)."""
+
+    input_tokens: NonNegativeInt = 0
+    output_tokens: NonNegativeInt = 0
+    cached_input_tokens: NonNegativeInt = 0
+    total_tokens: NonNegativeInt = 0
+
+
 class SubagentEntry(BaseModel):
     """Single subagent card the Agents tab renders."""
 
@@ -38,6 +47,7 @@ class SubagentEntry(BaseModel):
     result_summary: str | None = Field(default=None, max_length=2048)
     safe_error_code: str | None = Field(default=None, max_length=128)
     safe_error_message: str | None = Field(default=None, max_length=2048)
+    token_usage: SubagentTokenUsage | None = None
 
 
 class SubagentListResponse(BaseModel):
@@ -77,4 +87,5 @@ __all__ = (
     "SubagentEntry",
     "SubagentListResponse",
     "SubagentStatusFilter",
+    "SubagentTokenUsage",
 )

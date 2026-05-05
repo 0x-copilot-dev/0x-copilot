@@ -38,6 +38,19 @@ class SubagentLifecycleStatus(str, Enum):
     TIMED_OUT = "timed_out"
 
 
+class SubagentTokenUsage(RuntimeContract):
+    """Per-subagent token rollup over ``runtime_model_call_usage`` (PR 1.5 AC-2).
+
+    Computed by SUM-GROUP-BY on ``task_id``; absent when a subagent has not
+    yet logged any model call (rare but possible for sub-second cancellations).
+    """
+
+    input_tokens: NonNegativeInt = 0
+    output_tokens: NonNegativeInt = 0
+    cached_input_tokens: NonNegativeInt = 0
+    total_tokens: NonNegativeInt = 0
+
+
 class SubagentSnapshot(RuntimeContract):
     """One subagent task projected from its SUBAGENT_* event timeline."""
 
@@ -55,6 +68,7 @@ class SubagentSnapshot(RuntimeContract):
     result_summary: str | None = Field(default=None, max_length=2048)
     safe_error_code: str | None = Field(default=None, max_length=128)
     safe_error_message: str | None = Field(default=None, max_length=2048)
+    token_usage: SubagentTokenUsage | None = None
 
 
 class SourceAggregate(RuntimeContract):

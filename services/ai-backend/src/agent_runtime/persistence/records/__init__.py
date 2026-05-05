@@ -71,6 +71,7 @@ from agent_runtime.persistence.records.workspace_feeds import (
     SourceAggregate,
     SubagentLifecycleStatus,
     SubagentSnapshot,
+    SubagentTokenUsage,
 )
 
 PERSISTENCE_TABLE_RECORDS = (
@@ -147,5 +148,6 @@ __all__ = [
     "SourceAggregate",
     "SubagentLifecycleStatus",
     "SubagentSnapshot",
+    "SubagentTokenUsage",
     "PERSISTENCE_TABLE_RECORDS",
 ]

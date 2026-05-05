@@ -32,6 +32,7 @@ from runtime_api.schemas import (
     SubagentEntry,
     SubagentListResponse,
     SubagentStatusFilter,
+    SubagentTokenUsage,
 )
 
 
@@ -143,6 +144,11 @@ class WorkspaceFeedService:
             ),
             safe_error_code=snapshot.safe_error_code,
             safe_error_message=snapshot.safe_error_message,
+            token_usage=(
+                SubagentTokenUsage.model_validate(snapshot.token_usage.model_dump())
+                if snapshot.token_usage is not None
+                else None
+            ),
         )
 
     @staticmethod

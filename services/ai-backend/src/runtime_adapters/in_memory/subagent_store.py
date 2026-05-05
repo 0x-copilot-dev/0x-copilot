@@ -20,6 +20,7 @@ from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.persistence.records import (
     SubagentLifecycleStatus,
     SubagentSnapshot,
+    SubagentTokenUsage,
 )
 from runtime_api.schemas import RuntimeApiEventType, RuntimeEventEnvelope
 
@@ -228,7 +229,13 @@ class InMemorySubagentStore:
                 s for s in snapshots if _SubagentProjector.is_running(s.status)
             ]
         snapshots.sort(key=_SubagentProjector.recency_key, reverse=True)
-        return tuple(snapshots[:limit])
+        capped = snapshots[:limit]
+        usage = self._token_usage_for(
+            org_id=org_id, task_ids=tuple(s.task_id for s in capped)
+        )
+        return tuple(
+            s.model_copy(update={"token_usage": usage.get(s.task_id)}) for s in capped
+        )
 
     def _run_ids_for(self, *, org_id: str, conversation_id: str) -> tuple[str, ...]:
         runs = getattr(self._store, "runs", {})
@@ -237,6 +244,39 @@ class InMemorySubagentStore:
             for run in runs.values()
             if run.org_id == org_id and run.conversation_id == conversation_id
         )
+
+    def _token_usage_for(
+        self, *, org_id: str, task_ids: tuple[str, ...]
+    ) -> dict[str, SubagentTokenUsage]:
+        if not task_ids:
+            return {}
+        rows = getattr(self._store, "model_call_usage", ())
+        wanted = set(task_ids)
+        totals: dict[str, dict[str, int]] = {}
+        for row in rows:
+            row_org = getattr(row, "org_id", None)
+            row_task = getattr(row, "task_id", None)
+            if row_org != org_id or row_task is None or row_task not in wanted:
+                continue
+            bucket = totals.setdefault(
+                row_task,
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            bucket["input_tokens"] += int(getattr(row, "input_tokens", 0) or 0)
+            bucket["output_tokens"] += int(getattr(row, "output_tokens", 0) or 0)
+            bucket["cached_input_tokens"] += int(
+                getattr(row, "cached_input_tokens", 0) or 0
+            )
+            bucket["total_tokens"] += int(getattr(row, "total_tokens", 0) or 0)
+        return {
+            task_id: SubagentTokenUsage(**totals_for_task)
+            for task_id, totals_for_task in totals.items()
+        }
 
     def _fold_subagent_events(
         self,
