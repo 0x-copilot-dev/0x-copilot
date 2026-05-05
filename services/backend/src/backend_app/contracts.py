@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 import re
@@ -865,6 +866,7 @@ class OrganizationMemberSource(StrEnum):
     SAML = "saml"
     SCIM = "scim"
     BOOTSTRAP = "bootstrap"
+    INVITE = "invite"
 
 
 class AuthProviderKind(StrEnum):
@@ -1102,6 +1104,61 @@ class LoginAttemptRecord(BackendContract):
     @classmethod
     def _normalize_email(cls, value: object) -> str | None:
         return _IdentityValidators.normalize_optional_email(value)
+
+
+# -----------------------------------------------------------------------------
+# Invitations (PR 4.2)
+# -----------------------------------------------------------------------------
+
+
+class InvitationRecord(BackendContract):
+    """Pending workspace invitation. Token mint mirrors the SCIM-token shape
+    (``0015_scim.sql``): ``token_hash = sha256(plaintext)``; the plaintext is
+    surfaced exactly once at create time and never persisted. The 8-char
+    ``token_prefix`` lets the admin pending-list UI identify a row without
+    re-revealing the secret.
+
+    Soft revoke + soft accept via timestamps. Re-issue after revoke or accept
+    is fine because the partial unique-active index in
+    ``0019_invitations.sql`` is scoped to
+    ``WHERE accepted_at IS NULL AND revoked_at IS NULL``.
+    """
+
+    invite_id: str = Field(default_factory=lambda: f"inv_{uuid4().hex}")
+    org_id: str
+    email: str
+    role_id: str
+    token_hash: str
+    token_prefix: str
+    created_by_user_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    accepted_user_id: str | None = None
+    revoked_at: datetime | None = None
+    revoked_by_user_id: str | None = None
+
+    @field_validator(_IdentityFields.ORG_ID, _IdentityFields.ROLE_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_invite_email(cls, value: object) -> str:
+        return _IdentityValidators.normalize_email(value)
+
+
+@dataclass(frozen=True)
+class InvitationMintResult:
+    """Returned by ``InvitationsService.create``. ``token_plaintext`` MUST be
+    surfaced to the caller exactly once; the row only persists ``token_hash``."""
+
+    invite_id: str
+    token_plaintext: str
+    token_prefix: str
+    expires_at: datetime
+    created_at: datetime
 
 
 # -----------------------------------------------------------------------------

@@ -22,6 +22,10 @@ import {
   SettingsScreen,
   type SettingsSection,
 } from "../features/settings/SettingsScreen";
+import {
+  DEFAULT_SETTINGS_SECTION,
+  migrateLegacySettingsPath,
+} from "../features/settings/useSettingsSection";
 import { useSkills } from "../features/skills/useSkills";
 
 /**
@@ -39,11 +43,26 @@ type AppRoute =
   | { screen: "settings"; section: SettingsSection };
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
+// Superset of every Settings section slug in the design. Each wave 4 PR
+// contributes its own slugs additively; the array drives the
+// `isSettingsSection` narrowing only. The canonical set the hash
+// router uses lives in ``useSettingsSection``'s ``SETTINGS_SECTIONS``
+// — both stay in sync because both unions are derived from the same
+// ``SettingsSection`` type.
 const settingsSections = [
+  // PR 4.1 — "You" group.
   "profile",
   "appearance",
   "shortcuts",
   "notifications",
+  // PR 4.2 — Workspace group.
+  "workspace",
+  "members",
+  "billing",
+  // PR 4.3 — "AI & data" group.
+  "model-and-behavior",
+  "privacy-data",
+  // Legacy / misc.
   "general",
   "account",
   "capabilities",
@@ -152,28 +171,40 @@ function completeMcpOAuthOnce(
   return completion;
 }
 
+// PR 4.3 — Settings is path + hash: ``/settings#<section>``. The legacy
+// ``/settings/<section>`` form is migrated once on mount via
+// ``migrateLegacySettingsPath``; old bookmarks survive without a 404.
 function routeFromLocation(): AppRoute {
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
   if (path === "/settings") {
-    return { screen: "settings", section: "general" };
+    const hash = window.location.hash.replace(/^#/, "");
+    if (hash && isSettingsSection(hash)) {
+      return { screen: "settings", section: hash };
+    }
+    return { screen: "settings", section: DEFAULT_SETTINGS_SECTION };
   }
+  // Legacy `/settings/<section>` falls through here only briefly between
+  // the migrator's ``replaceState`` call and React's first paint. Treat
+  // it the same as the modern hash form so the first paint is correct
+  // even if the migrator hasn't run yet (e.g. SSR-style hydration).
   if (path.startsWith("/settings/")) {
     const section = decodeURIComponent(path.slice("/settings/".length));
     return {
       screen: "settings",
-      section: isSettingsSection(section) ? section : "general",
+      section: isSettingsSection(section) ? section : DEFAULT_SETTINGS_SECTION,
     };
   }
   return { screen: "chat" };
 }
 
-function pathForRoute(route: AppRoute): string {
+function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "chat") {
-    return "/";
+    return { path: "/", hash: "" };
   }
-  return route.section === "general"
-    ? "/settings"
-    : `/settings/${route.section}`;
+  return {
+    path: "/settings",
+    hash: route.section === DEFAULT_SETTINGS_SECTION ? "" : `#${route.section}`,
+  };
 }
 
 function applyAppRoute(
@@ -181,10 +212,12 @@ function applyAppRoute(
   setRoute: (route: AppRoute) => void,
   mode: "push" | "replace" = "push",
 ): void {
-  const path = pathForRoute(route);
-  if (window.location.pathname !== path || window.location.search) {
+  const { path, hash } = pathForRoute(route);
+  const target = `${path}${hash}`;
+  const current = `${window.location.pathname}${window.location.hash}`;
+  if (current !== target || window.location.search) {
     const method = mode === "replace" ? "replaceState" : "pushState";
-    window.history[method]({}, "", path);
+    window.history[method]({}, "", target);
   }
   setRoute(route);
 }
@@ -200,19 +233,32 @@ function EnterpriseSearchApp({
 }): ReactElement {
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
-  const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
+  const [route, setRoute] = useState<AppRoute>(() => {
+    // PR 4.3 — One-shot migration of legacy ``/settings/<section>`` URLs
+    // into the hashed form. Runs at most once per session because the
+    // migrator's own ``replaceState`` removes the legacy path. We do
+    // it inside the lazy initialiser so the first paint already shows
+    // the right section.
+    migrateLegacySettingsPath();
+    return routeFromLocation();
+  });
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
   const [completedMcpAuthAction, setCompletedMcpAuthAction] =
     useState<CompletedMcpAuthAction | null>(null);
 
   useEffect(() => {
-    function onPopState(): void {
+    // PR 4.3 — listen to both popstate (back/forward) and hashchange
+    // (URL paste / "Manage" deep-links) so the section state is always
+    // a function of the URL.
+    function sync(): void {
       setRoute(routeFromLocation());
     }
 
-    window.addEventListener("popstate", onPopState);
+    window.addEventListener("popstate", sync);
+    window.addEventListener("hashchange", sync);
     return () => {
-      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("hashchange", sync);
     };
   }, []);
 
@@ -305,6 +351,7 @@ function EnterpriseSearchApp({
       <SettingsScreen
         connectors={connectors}
         skills={skills}
+        identity={identity}
         initialSection={route.section}
         onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
         onSectionChange={(section) =>

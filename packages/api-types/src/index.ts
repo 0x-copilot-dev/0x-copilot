@@ -343,6 +343,13 @@ export interface UpdateWorkspaceDefaultsRequest {
   default_model: WorkspaceDefaultModel;
   default_connectors: ConversationConnectorScopes;
   retention_days: number;
+  /**
+   * PR 4.3 — workspace-policy knobs that flow into RunService's
+   * resolution chain. All fields optional; absent fields fall through
+   * to deployment defaults. Adding this field is **non-breaking**: the
+   * server tolerates omission via a default-factory.
+   */
+  behavior_overrides?: WorkspaceBehaviorOverrides;
 }
 
 export interface WorkspaceDefaultModel {
@@ -355,8 +362,91 @@ export interface WorkspaceDefaultsResponse {
   default_model: WorkspaceDefaultModel;
   default_connectors: ConversationConnectorScopes;
   retention_days: number;
+  /**
+   * PR 4.3 — server always populates this field (defaults to all-None
+   * + ``training_data_opt_out=false`` when no row exists).
+   */
+  behavior_overrides: WorkspaceBehaviorOverrides;
   updated_at: string | null;
   updated_by_user_id: string | null;
+}
+
+/** PR 4.3 — closed enum for the citation-density preset. */
+export type CitationDensity = "minimal" | "standard" | "thorough";
+
+/** PR 4.3 — closed enum for the refusal-behavior preset. */
+export type RefusalBehavior = "standard" | "strict" | "permissive";
+
+/** PR 4.3 — closed enum for the default reasoning effort preset. */
+export type ReasoningEffort = "low" | "medium" | "high";
+
+/**
+ * PR 4.3 — workspace-policy knobs persisted in
+ * ``workspace_defaults.behavior_overrides`` (JSONB).
+ *
+ * Every field is optional; absent fields fall through to deployment
+ * defaults at run-create. ``training_data_opt_out`` defaults to
+ * ``false``; the FE always sends an explicit boolean for clarity.
+ */
+export interface WorkspaceBehaviorOverrides {
+  system_prompt_override?: string | null;
+  /** Clamped to [0, 1] server-side. */
+  temperature?: number | null;
+  citation_density?: CitationDensity | null;
+  refusal_behavior?: RefusalBehavior | null;
+  default_reasoning_effort?: ReasoningEffort | null;
+  training_data_opt_out?: boolean;
+}
+
+/** PR 4.3 — kind of retention TTL (mirrors `RetentionKind` server-side). */
+export type RetentionKind =
+  | "messages"
+  | "events"
+  | "context_payloads"
+  | "checkpoints"
+  | "memory_items";
+
+/** PR 4.3 — provenance scope for an effective TTL. `null` ⇒ deployment default. */
+export type RetentionSourceScope =
+  | "org"
+  | "user"
+  | "conversation"
+  | "assistant"
+  | null;
+
+/** PR 4.3 — one row in the effective-TTL response. */
+export interface RetentionEffectivePolicyEntry {
+  kind: RetentionKind;
+  ttl_seconds: number | null;
+  source_scope: RetentionSourceScope;
+  source_policy_id: string | null;
+}
+
+/** PR 4.3 — response for ``GET /v1/retention/effective``. */
+export interface RetentionEffectiveResponse {
+  effective: Record<RetentionKind, RetentionEffectivePolicyEntry>;
+}
+
+/** PR 4.3 — request body for ``POST /v1/agent/workspace/export``. */
+export interface WorkspaceExportRequest {
+  /** Only "workspace" is accepted in v1. */
+  scope?: "workspace";
+}
+
+/** PR 4.3 — response from the export-queue stub. */
+export interface WorkspaceExportResponse {
+  export_id: string;
+  status: "queued";
+}
+
+/**
+ * PR 4.3 — query parameter shape for ``DELETE /v1/agent/workspace/data``.
+ * Sent as a query param (not a body) — DELETE-with-body is not
+ * idiomatic and intermediaries occasionally strip the body.
+ */
+export interface WorkspaceDeleteAllParams {
+  /** Caller types the org slug here; correctness is recorded in audit. */
+  confirm_slug: string;
 }
 
 /**
@@ -377,6 +467,147 @@ export interface ConversationConnectorScopesResponse {
   conversation_id: string;
   scopes: ConversationConnectorScopes;
   updated_at: string | null;
+}
+
+// PR 4.2 — Settings → "Workspace" group --------------------------------
+
+/** Full workspace branding shape (admin Settings → Workspace). The
+ *  per-user-switcher view is `Workspace` (above) with role / member_count
+ *  / is_current fields; this is the global record. */
+export interface WorkspaceSettings {
+  org_id: string;
+  display_name: string;
+  slug: string;
+  deployment_kind: string;
+  status: string;
+  metadata: { logo_url?: string } & Record<string, unknown>;
+  created_at: string;
+}
+
+export interface UpdateWorkspaceSettingsRequest {
+  display_name?: string | null;
+  slug?: string | null;
+  metadata?: { logo_url?: string | null } & Record<string, unknown>;
+}
+
+export type WorkspaceRoleName = "admin" | "member" | "viewer";
+
+export type WorkspaceMemberSource =
+  | "local"
+  | "oidc"
+  | "saml"
+  | "scim"
+  | "bootstrap"
+  | "invite";
+
+export interface MemberRoleSummary {
+  id: string;
+  name: WorkspaceRoleName;
+  display_name: string;
+}
+
+export interface Member {
+  user_id: string;
+  email: string;
+  email_verified_at: string | null;
+  display_name: string | null;
+  title: string | null;
+  role: MemberRoleSummary | null;
+  joined_at: string;
+  last_seen_at: string | null;
+  removed_at: string | null;
+  source: WorkspaceMemberSource;
+}
+
+export interface MemberListResponse {
+  members: Member[];
+  next_cursor: string | null;
+}
+
+export interface UpdateMemberRequest {
+  role: WorkspaceRoleName;
+}
+
+export interface InvitationCreator {
+  user_id: string;
+  display_name: string | null;
+}
+
+export interface Invitation {
+  invite_id: string;
+  email: string;
+  role: WorkspaceRoleName;
+  token_prefix: string;
+  created_by: InvitationCreator;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CreateInvitationRequest {
+  email: string;
+  role: WorkspaceRoleName;
+  ttl_seconds?: number;
+}
+
+export interface CreateInvitationResponse extends Invitation {
+  /** Plaintext bearer; surfaced exactly once. */
+  token: string;
+  /** Built by the facade so the FE doesn't need to know the host. */
+  accept_url: string | null;
+}
+
+export interface InvitationListResponse {
+  invitations: Invitation[];
+}
+
+export interface AcceptInvitationResponse {
+  invite_id: string;
+  org_id: string;
+  org_display_name: string;
+  user_id: string;
+  role: WorkspaceRoleName;
+  accept_redirect: string;
+}
+
+export interface BillingPlan {
+  tier: string;
+  display_name: string;
+  managed_externally: boolean;
+  billing_contact: string | null;
+}
+
+export interface BillingSeats {
+  used: number;
+  limit: number;
+  removed_in_period: number;
+}
+
+export interface BillingPeriod {
+  start: string;
+  end: string;
+}
+
+export interface BillingBudgetSummary {
+  scope: string;
+  period: string;
+  limit_micro_usd: number | null;
+  current_spend_micro_usd: number | null;
+}
+
+export interface BillingInvoiceStub {
+  invoice_id: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  amount_micro_usd: number | null;
+  status: string | null;
+}
+
+export interface BillingDigest {
+  plan: BillingPlan;
+  seats: BillingSeats;
+  current_period: BillingPeriod;
+  budgets: BillingBudgetSummary[];
+  invoices: BillingInvoiceStub[];
 }
 
 export interface ConversationListResponse {
@@ -1785,6 +2016,7 @@ export function isSourceIngestedPayload(
   }
   return isCitationSourceRef((payload as Record<string, unknown>).citation);
 }
+
 // -----------------------------------------------------------------------------
 // PR 4.1 — Settings → "You" group: profile + preferences sidecars.
 // -----------------------------------------------------------------------------

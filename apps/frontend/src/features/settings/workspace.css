@@ -1,0 +1,327 @@
+/* PR 4.2 — Settings → Workspace group styles.
+ *
+ * Local to the feature so the design-system CSS layer doesn't carry section-
+ * specific rules. Imported once from `SettingsScreen.tsx`.
+ */
+
+.settings-section__hint {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.settings-nav-group {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin-top: var(--space-md);
+  padding: 0 var(--space-md);
+  text-transform: uppercase;
+}
+
+.workspace-settings-form {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.workspace-settings-form__actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+}
+
+.workspace-settings-danger {
+  border-color: var(--color-border);
+}
+
+.workspace-settings-danger h3 {
+  margin: 0 0 var(--space-xs);
+}
+
+/* Members table */
+
+.settings-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.settings-table th,
+.settings-table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+  vertical-align: top;
+}
+
+.settings-table th {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.member-row__identity {
+  display: grid;
+  gap: 2px;
+}
+
+.member-row__email,
+.member-row__title,
+.member-row__source {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+}
+
+.member-row__no-role {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.member-row__actions {
+  position: relative;
+  text-align: right;
+}
+
+.member-row__menu {
+  display: grid;
+  gap: 2px;
+  min-width: 12rem;
+  padding: var(--space-xs);
+}
+
+.member-row__menu-label {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 0 var(--space-xs);
+  text-transform: uppercase;
+}
+
+.member-row__menu-item {
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: var(--space-xs) var(--space-sm);
+  text-align: left;
+}
+
+.member-row__menu-item:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.member-row__menu-item[data-active="true"] {
+  color: var(--color-accent);
+}
+
+.member-row__menu-item--danger {
+  color: var(--color-danger);
+}
+
+.member-row__menu-error {
+  color: var(--color-danger);
+  font-size: 0.78rem;
+  padding: 0 var(--space-xs);
+}
+
+/* Invitations */
+
+.invitations-list {
+  display: grid;
+  gap: var(--space-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.invitations-list__row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+}
+
+.invitations-list__email {
+  font-weight: 600;
+}
+
+.invitations-list__meta {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: flex;
+  font-size: 0.78rem;
+  gap: var(--space-sm);
+}
+
+.invite-form {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.invite-form__actions {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+}
+
+.invite-form__success {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.invite-form__token {
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-sm);
+  display: block;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  padding: var(--space-sm);
+  white-space: nowrap;
+  word-break: break-all;
+}
+
+.invite-form__hint {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+/* Billing */
+
+.billing-card {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.billing-card__header {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+}
+
+.billing-card__eyebrow {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.billing-card__contact {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+}
+
+.billing-seats {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.billing-seats__numbers {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.billing-seats__used {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.billing-seats__limit {
+  color: var(--color-text-subtle);
+}
+
+.billing-seats__bar {
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-full);
+  height: 6px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.billing-seats__bar > span {
+  background: var(--color-accent);
+  display: block;
+  height: 100%;
+}
+
+.billing-seats__removed {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.billing-invoices {
+  display: grid;
+  gap: var(--space-xs);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.billing-invoices li {
+  align-items: center;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+/* Modal */
+
+.settings-modal-overlay {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 50;
+}
+
+.settings-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-md);
+  max-height: 90vh;
+  max-width: 32rem;
+  overflow-y: auto;
+  padding: var(--space-lg);
+  width: calc(100vw - 4rem);
+}
+
+.settings-modal__head {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+}
+
+.settings-modal__head h3 {
+  margin: 0 0 4px;
+}
+
+.settings-modal__description {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.settings-modal__body {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.settings-modal__foot {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+}

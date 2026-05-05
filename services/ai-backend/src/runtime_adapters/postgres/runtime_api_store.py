@@ -83,6 +83,7 @@ from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
     DefaultModelSelection,
+    WorkspaceBehaviorOverrides,
     HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
@@ -139,6 +140,8 @@ class _Columns:
     # PR 1.6 — workspace defaults + conversation lifecycle columns.
     DEFAULT_MODEL = "default_model"
     DEFAULT_CONNECTORS = "default_connectors"
+    # PR 4.3 — workspace-policy knobs JSONB column on workspace_defaults.
+    BEHAVIOR_OVERRIDES = "behavior_overrides"
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
@@ -742,6 +745,7 @@ class PostgresRuntimeApiStore:
             cur = await conn.execute(
                 """
                 SELECT org_id, default_model, default_connectors,
+                       behavior_overrides,
                        updated_at, updated_by_user_id
                   FROM workspace_defaults
                  WHERE org_id = %s
@@ -768,26 +772,39 @@ class PostgresRuntimeApiStore:
             connector_id: (list(scopes) if scopes is not None else None)
             for connector_id, scopes in record.default_connectors.items()
         }
+        # PR 4.3 — serialise the behavior_overrides Pydantic model into
+        # the JSONB blob. ``exclude_none=True`` keeps absent fields out
+        # of the row so we never persist a noisy ``{"temperature": null,
+        # ...}`` shape; consumers always read via the typed Pydantic
+        # model on the way back.
+        behavior_overrides_json = record.behavior_overrides.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
         now = record.updated_at or datetime.now(timezone.utc)
         async with self._tenant_connection(org_id=record.org_id) as conn:
             cur = await conn.execute(
                 """
                 INSERT INTO workspace_defaults
                        (org_id, default_model, default_connectors,
+                        behavior_overrides,
                         updated_at, updated_by_user_id)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id) DO UPDATE
                    SET default_model       = EXCLUDED.default_model,
                        default_connectors  = EXCLUDED.default_connectors,
+                       behavior_overrides  = EXCLUDED.behavior_overrides,
                        updated_at          = EXCLUDED.updated_at,
                        updated_by_user_id  = EXCLUDED.updated_by_user_id
                  RETURNING org_id, default_model, default_connectors,
+                           behavior_overrides,
                            updated_at, updated_by_user_id
                 """,
                 (
                     record.org_id,
                     Jsonb(default_model_json),
                     Jsonb(default_connectors_json),
+                    Jsonb(behavior_overrides_json),
                     now,
                     record.updated_by_user_id,
                 ),
@@ -804,6 +821,10 @@ class PostgresRuntimeApiStore:
         ``retention_days`` is intentionally None — composed by the
         service from ``retention_policies`` (we never persist it on
         this row).
+
+        ``behavior_overrides`` (PR 4.3) is hydrated from JSONB; an
+        absent / empty / forward-incompatible blob falls back to the
+        Pydantic default (all-None / opt-out=False).
         """
 
         default_model_json = row.get(_Columns.DEFAULT_MODEL) or {}
@@ -818,6 +839,20 @@ class PostgresRuntimeApiStore:
                 # what this binary understands. Treat as no default
                 # rather than crashing the read path.
                 default_model = None
+        behavior_overrides_json = row.get(_Columns.BEHAVIOR_OVERRIDES) or {}
+        behavior_overrides = WorkspaceBehaviorOverrides()
+        if isinstance(behavior_overrides_json, dict) and behavior_overrides_json:
+            try:
+                behavior_overrides = WorkspaceBehaviorOverrides.model_validate(
+                    dict(behavior_overrides_json)
+                )
+            except Exception:
+                # Forward-compat: same rationale as default_model. A
+                # row written by a future binary with new keys (or a
+                # broken admin write) becomes "no overrides" here
+                # rather than crashing the read path. Old runs keep
+                # streaming.
+                behavior_overrides = WorkspaceBehaviorOverrides()
         return WorkspaceDefaultsRecord(
             org_id=str(row[_Columns.ORG_ID]),
             default_model=default_model,
@@ -825,6 +860,7 @@ class PostgresRuntimeApiStore:
                 row.get(_Columns.DEFAULT_CONNECTORS)
             ),
             retention_days=None,
+            behavior_overrides=behavior_overrides,
             updated_at=row.get(_Columns.UPDATED_AT),
             updated_by_user_id=row.get(_Columns.UPDATED_BY_USER_ID),
         )

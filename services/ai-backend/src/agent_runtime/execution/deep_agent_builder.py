@@ -145,6 +145,13 @@ class DeepAgentBuildRequest:
     skill_directories: tuple[str, ...] = ()
     interrupt_on: Mapping[str, object] | None = None
     checkpointer: object | None = None
+    # PR 4.3 — extra ``init_chat_model`` kwargs derived from workspace
+    # policy (today: ``training_data_opt_out`` per-provider headers).
+    # Derived in ``factory.py`` from
+    # ``runtime_context.workspace_behavior_overrides``; threaded here
+    # so every chat-model construction site honours workspace policy
+    # uniformly (subagents inherit the same kwargs).
+    extra_model_kwargs: Mapping[str, object] | None = None
 
     @property
     def model_name(self) -> str:
@@ -158,7 +165,10 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
 
     _ensure_web_harness_profiles_registered()
     kwargs: dict[str, object] = {
-        "model": build_chat_model(request.model_config),
+        "model": build_chat_model(
+            request.model_config,
+            extra_kwargs=request.extra_model_kwargs,
+        ),
         "tools": list(request.tools),
         "system_prompt": request.system_prompt,
         "subagents": list(request.subagents) or None,
@@ -189,8 +199,19 @@ def runtime_checkpointer(checkpointer: object | None = None) -> object:
     return _runtime_checkpointer
 
 
-def build_chat_model(model_config: ModelConfig) -> BaseChatModel:
-    """Create the LangChain chat model for a runtime model profile."""
+def build_chat_model(
+    model_config: ModelConfig,
+    *,
+    extra_kwargs: Mapping[str, object] | None = None,
+) -> BaseChatModel:
+    """Create the LangChain chat model for a runtime model profile.
+
+    ``extra_kwargs`` (PR 4.3) is merged AFTER the provider-specific
+    kwargs so workspace policy (training opt-out headers) wins on
+    conflict. Pass ``None`` (the default) for callers that don't have
+    a workspace context — chiefly the presentation layer's projection
+    factory.
+    """
 
     kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
     if model_config.reasoning is None or not model_config.reasoning.enabled:
@@ -199,6 +220,21 @@ def build_chat_model(model_config: ModelConfig) -> BaseChatModel:
         kwargs.update(_openai_model_kwargs(model_config))
     elif model_config.provider == "anthropic":
         kwargs.update(_anthropic_model_kwargs(model_config))
+    if extra_kwargs:
+        # Deep-merge known nested kwarg keys (``model_kwargs``,
+        # ``extra_headers``) so workspace policy adds fields rather
+        # than wiping the provider-specific ones we set above.
+        for key, value in extra_kwargs.items():
+            if (
+                isinstance(value, dict)
+                and key in kwargs
+                and isinstance(kwargs[key], dict)
+            ):
+                merged = dict(kwargs[key])  # type: ignore[arg-type]
+                merged.update(value)
+                kwargs[key] = merged
+            else:
+                kwargs[key] = value
 
     return init_chat_model(
         model_config.model_name,

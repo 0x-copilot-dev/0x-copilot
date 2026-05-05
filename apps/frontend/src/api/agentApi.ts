@@ -21,6 +21,7 @@ import type {
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
+  RetentionEffectiveResponse,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
   SourceListResponse,
@@ -33,12 +34,14 @@ import type {
   UsageMeResponse,
   UsagePeriod,
   WorkspaceDefaultsResponse,
+  WorkspaceExportResponse,
 } from "@enterprise-search/api-types";
 import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
 import {
   correlationHeaders,
+  httpDelete,
   httpGet,
   httpPatchQuery,
   httpPost,
@@ -238,6 +241,50 @@ export function putWorkspaceDefaults(
     request,
     identity,
   );
+}
+
+/**
+ * PR 4.3 — read-only effective retention TTL view for the
+ * Privacy & data Settings panel. Re-uses the same resolver the
+ * sweeper does so the displayed numbers are the applied numbers.
+ */
+export function getRetentionEffective(
+  identity: RequestIdentity,
+): Promise<RetentionEffectiveResponse> {
+  return httpGet<RetentionEffectiveResponse>(
+    "/v1/retention/effective",
+    identity,
+  );
+}
+
+/**
+ * PR 4.3 — queue a workspace export. v1 is a stub that returns 202 +
+ * ``{export_id, status: "queued"}`` and writes one audit row; the
+ * actual NDJSON dump pipeline lives in a follow-up PR.
+ */
+export function requestWorkspaceExport(
+  identity: RequestIdentity,
+): Promise<WorkspaceExportResponse> {
+  return httpPostQuery<WorkspaceExportResponse>(
+    "/v1/agent/workspace/export",
+    { scope: "workspace" },
+    identity,
+  );
+}
+
+/**
+ * PR 4.3 — request a workspace-wide data delete. v1 always 501s and
+ * audits the typed-confirmation correctness; the cascade-delete job
+ * is a separate, gated follow-up PR. The FE renders the 501 message
+ * verbatim (``Workspace deletion is gated. Contact support.``).
+ */
+export function deleteWorkspaceData(
+  confirmSlug: string,
+  identity: RequestIdentity,
+): Promise<void> {
+  return httpDelete("/v1/agent/workspace/data", identity, {
+    confirm_slug: confirmSlug,
+  });
 }
 
 /** B6: caller's own usage rollup for the period (`today` / `7d` / `30d` / `month`). */

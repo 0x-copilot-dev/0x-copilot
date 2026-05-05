@@ -20,15 +20,18 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { authTone } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
-import { useThemeSync } from "../me/useThemeSync";
-import { useUserPreferences } from "../me/useUserPreferences";
-import { useUserProfile } from "../me/useUserProfile";
 import type { SkillState } from "../skills/useSkills";
+import type { RequestIdentity } from "../../api/config";
 import { AccountSessionsPanel } from "./AccountSessionsPanel";
-import { Appearance } from "./sections/Appearance";
-import { Notifications } from "./sections/Notifications";
-import { Profile } from "./sections/Profile";
-import { Shortcuts } from "./sections/Shortcuts";
+// PR 4.3 — "AI & data" group sections.
+import { ModelAndBehavior } from "./sections/ModelAndBehavior";
+import { PrivacyAndData } from "./sections/PrivacyAndData";
+import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
+// PR 4.2 — "Workspace" group sections.
+import { BillingSettings } from "./BillingSettings";
+import { MembersSettings } from "./MembersSettings";
+import { WorkspaceSettings } from "./WorkspaceSettings";
+import "./workspace.css";
 
 const DEFAULT_SKILL_MARKDOWN = `---
 name: custom-workflow
@@ -49,12 +52,20 @@ Use this skill when...
 `;
 
 export type SettingsSection =
-  // PR 4.1 — "You" group: per-user, persisted server-side, follow you
-  // across devices via /v1/me/profile + /v1/me/preferences.
+  // PR 4.1 — "You" group (Profile / Appearance / Shortcuts / Notifications).
   | "profile"
   | "appearance"
   | "shortcuts"
   | "notifications"
+  // PR 4.2 — "Workspace" group (Workspace branding / Members / Billing).
+  | "workspace"
+  | "members"
+  | "billing"
+  // PR 4.3 — "AI & data" group (Model & behavior / Privacy & data; the
+  // existing "connectors" slug also belongs to this group visually).
+  | "model-and-behavior"
+  | "privacy-data"
+  // Legacy / misc (predate the design's grouping).
   | "general"
   | "account"
   | "capabilities"
@@ -62,21 +73,28 @@ export type SettingsSection =
   | "skills"
   | "claude-code";
 
-const sections: Array<
+// PR 4.3 — sections array supports a "group" entry alongside section
+// rows so the rail can render Atlas's design grouping. Other PRs
+// extend this list additively under their group.
+type RailEntry =
   | { kind: "group"; label: string }
-  | { kind: "section"; id: SettingsSection; label: string }
-> = [
-  // PR 4.1 — "You" group at the top, matching the Atlas design doc.
-  { kind: "group", label: "You" },
-  { kind: "section", id: "profile", label: "Profile" },
-  { kind: "section", id: "appearance", label: "Appearance" },
-  { kind: "section", id: "shortcuts", label: "Shortcuts" },
-  { kind: "section", id: "notifications", label: "Notifications" },
+  | { kind: "section"; id: SettingsSection; label: string };
+
+const sections: Array<RailEntry> = [
+  // PR 4.2 — "Workspace" group: workspace branding, members, billing.
+  // Sits at the top so admins land on Workspace by default once PR 4.1's
+  // "You" group merges and shifts these below it.
   { kind: "group", label: "Workspace" },
+  { kind: "section", id: "workspace", label: "Workspace" },
+  { kind: "section", id: "members", label: "Members" },
+  { kind: "section", id: "billing", label: "Billing" },
   { kind: "section", id: "general", label: "General" },
   { kind: "section", id: "account", label: "Account" },
   { kind: "section", id: "capabilities", label: "Capabilities" },
+  { kind: "group", label: "AI & data" },
+  { kind: "section", id: "model-and-behavior", label: "Model & behavior" },
   { kind: "section", id: "connectors", label: "Connectors" },
+  { kind: "section", id: "privacy-data", label: "Privacy & data" },
   { kind: "section", id: "skills", label: "Skills" },
   { kind: "section", id: "claude-code", label: "Claude Code" },
 ];
@@ -84,13 +102,28 @@ const sections: Array<
 export function SettingsScreen({
   connectors,
   skills,
+  identity,
   initialSection = "general",
+  dataResidency,
   onBackToChat,
   onSectionChange,
 }: {
   connectors: ConnectorState;
   skills: SkillState;
+  /**
+   * PR 4.3 — caller's identity for the "AI & data" sections that read
+   * directly from agentApi (workspace defaults, retention/effective,
+   * export, delete-all). Optional so existing callers that don't need
+   * those sections continue to compile.
+   */
+  identity?: RequestIdentity;
   initialSection?: SettingsSection;
+  /**
+   * PR 4.3 — read-only deployment region label rendered in the
+   * Privacy & data panel. Sourced from deploy config; ``null`` ⇒
+   * "Not configured".
+   */
+  dataResidency?: string | null;
   onBackToChat: () => void;
   onSectionChange?: (section: SettingsSection) => void;
 }): ReactElement {
@@ -101,14 +134,18 @@ export function SettingsScreen({
     setActiveSection(initialSection);
   }, [initialSection]);
 
-  // PR 4.1 — per-user profile + preferences. Hydrated once on Settings
-  // open (parallel to each other); the "You" sections render against
-  // the shared state without per-section refetches. ``useThemeSync``
-  // mirrors appearance into ThemeProvider + html-attrs so the page
-  // recolors / densifies / motion-reduces immediately on local edit.
-  const profile = useUserProfile();
-  const preferences = useUserPreferences();
-  useThemeSync(preferences.data);
+  // PR 4.3 — single hydration of workspace defaults for both Model &
+  // behavior and Privacy & data. The hook tolerates being called
+  // without an identity (returns nulls) so legacy callers without
+  // identity threading don't break.
+  const workspaceDefaults = useWorkspaceDefaults(identity ?? FALLBACK_IDENTITY);
+
+  // PR 4.2 — admin gating for the Workspace group. Backend enforces via
+  // ``ADMIN_USERS`` permission scope; this client check hides controls
+  // ahead of the round-trip. Members see the panels in read-only mode.
+  const auth = useAuth();
+  const isAdmin =
+    auth.identity?.permission_scopes?.includes("admin:users") ?? false;
 
   return (
     <main className="settings-shell">
@@ -156,15 +193,16 @@ export function SettingsScreen({
         </nav>
       </aside>
       <section className="settings-content">
-        {activeSection === "profile" ? <Profile profile={profile} /> : null}
-        {activeSection === "appearance" ? (
-          <Appearance preferences={preferences} />
+        {/* PR 4.2 — Workspace group. Render only when identity is plumbed
+            (legacy callers that don't pass identity see the legacy rail). */}
+        {activeSection === "workspace" && identity ? (
+          <WorkspaceSettings identity={identity} isAdmin={isAdmin} />
         ) : null}
-        {activeSection === "shortcuts" ? (
-          <Shortcuts preferences={preferences} />
+        {activeSection === "members" && identity ? (
+          <MembersSettings identity={identity} isAdmin={isAdmin} />
         ) : null}
-        {activeSection === "notifications" ? (
-          <Notifications preferences={preferences} />
+        {activeSection === "billing" && identity ? (
+          <BillingSettings identity={identity} />
         ) : null}
         {activeSection === "general" ? <GeneralSettings /> : null}
         {activeSection === "account" ? <AccountSettings /> : null}
@@ -184,10 +222,29 @@ export function SettingsScreen({
             body="Claude Code style settings can live here later without changing connector management."
           />
         ) : null}
+        {activeSection === "model-and-behavior" ? (
+          <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
+        ) : null}
+        {activeSection === "privacy-data" && identity !== undefined ? (
+          <PrivacyAndData
+            identity={identity}
+            workspaceDefaults={workspaceDefaults}
+            dataResidency={dataResidency}
+          />
+        ) : null}
       </section>
     </main>
   );
 }
+
+// PR 4.3 — fallback identity used only by legacy callers that mount
+// SettingsScreen without threading identity. The "AI & data" sections
+// that need real network calls render an error/loading state when
+// the org/user are blank, so this is safe.
+const FALLBACK_IDENTITY: RequestIdentity = {
+  orgId: "",
+  userId: "",
+};
 
 function GeneralSettings(): ReactElement {
   const { scheme, setScheme } = useTheme();

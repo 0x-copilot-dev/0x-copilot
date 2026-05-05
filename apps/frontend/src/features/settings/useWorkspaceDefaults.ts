@@ -76,10 +76,19 @@ export function useWorkspaceDefaults(
       // admin sees the new state immediately. Rollback on 4xx/5xx restores
       // the prior view; the error is propagated through `error` AND thrown
       // so callers can also chain (`save(...).catch(...)`).
+      //
+      // PR 4.3 — ``behavior_overrides`` is optional on the request but
+      // always populated on the response. Carry the request's value when
+      // present (the panel saved a new shape) and fall back to the prior
+      // view otherwise so partial saves don't lose the field.
       setDefaults({
         default_model: next.default_model,
         default_connectors: next.default_connectors,
         retention_days: next.retention_days,
+        behavior_overrides: next.behavior_overrides ??
+          previous?.behavior_overrides ?? {
+            training_data_opt_out: false,
+          },
         updated_at: new Date().toISOString(),
         updated_by_user_id: previous?.updated_by_user_id ?? null,
       });

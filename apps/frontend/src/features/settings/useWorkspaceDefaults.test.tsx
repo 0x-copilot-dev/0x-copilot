@@ -47,6 +47,8 @@ const SEED: WorkspaceDefaultsResponse = {
   },
   default_connectors: { notion: ["read"], drive: ["read"] },
   retention_days: 365,
+  // PR 4.3 made behavior_overrides required on the response shape.
+  behavior_overrides: {},
   updated_at: "2026-04-29T10:00:00Z",
   updated_by_user_id: "marcus@acme.com",
 };
@@ -77,6 +79,7 @@ describe("useWorkspaceDefaults", () => {
     };
     const persisted: WorkspaceDefaultsResponse = {
       ...next,
+      behavior_overrides: {},
       updated_at: "2026-05-05T13:00:00Z",
       updated_by_user_id: "sarah@acme.com",
     };

@@ -49,6 +49,7 @@ from backend_app.identity import (
     BootstrapAdminService,
     IdentityStore,
     InMemoryIdentityStore,
+    InMemoryInvitationStore,
     InMemoryLockoutStore,
     InMemoryMeStore,
     InMemoryMfaStore,
@@ -57,6 +58,8 @@ from backend_app.identity import (
     InMemorySamlStore,
     InMemoryScimStore,
     InMemorySessionStore,
+    InvitationStore,
+    InvitationsService,
     LockoutService,
     LockoutStore,
     MeStore,
@@ -83,11 +86,14 @@ from backend_app.observability import (
     emit_access_log,
 )
 from backend_app.routes.audit_export import register_audit_export_routes
+from backend_app.routes.billing import register_billing_routes
 from backend_app.routes.health import register_health_routes
+from backend_app.routes.invitations import register_invitation_routes
 from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.me import register_me_routes
 from backend_app.routes.me_preferences import register_me_preferences_routes
 from backend_app.routes.me_profile import register_me_profile_routes
+from backend_app.routes.members import register_members_routes
 from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
@@ -95,6 +101,7 @@ from backend_app.routes.saml import register_saml_routes
 from backend_app.routes.scim import register_scim_routes
 from backend_app.routes.sessions import register_session_routes
 from backend_app.routes.siem import register_siem_admin_routes
+from backend_app.routes.workspace import register_workspace_routes
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     DeployAuditService,
@@ -218,6 +225,8 @@ def create_app(
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
     me_store: MeStore | None = None,
+    invitation_store: InvitationStore | None = None,
+    invitations_service: InvitationsService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -850,6 +859,26 @@ def create_app(
         me_store=resolved_me_store,
         identity_store=resolved_identity_store,
     )
+
+    # PR 4.2 — Settings → "Workspace" group: workspace branding, members,
+    # invitations, billing. The invitations service composes the existing
+    # IdentityStore with an InvitationStore (in-memory in dev; the postgres
+    # adapter ships alongside this PR). Routes mount unconditionally
+    # because they have no secret deps; admin gating is RBAC at the
+    # dependency level.
+    resolved_invitation_store: InvitationStore = (
+        invitation_store or InMemoryInvitationStore()
+    )
+    app.state.invitation_store = resolved_invitation_store
+    resolved_invitations_service = invitations_service or InvitationsService(
+        identity_store=resolved_identity_store,
+        invitation_store=resolved_invitation_store,
+    )
+    app.state.invitations_service = resolved_invitations_service
+    register_workspace_routes(app)
+    register_members_routes(app)
+    register_invitation_routes(app)
+    register_billing_routes(app)
 
     register_audit_export_routes(app)
     register_me_routes(app)

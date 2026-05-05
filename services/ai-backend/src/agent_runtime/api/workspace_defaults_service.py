@@ -28,6 +28,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     DefaultModelSelection,
     UpdateWorkspaceDefaultsRequest,
+    WorkspaceBehaviorOverrides,
     WorkspaceDefaultsRecord,
     WorkspaceDefaultsResponse,
     update_workspace_defaults_request_to_record,
@@ -80,10 +81,19 @@ class WorkspaceDefaultsService:
             else self._deployment_default_model()
         )
         default_connectors = record.default_connectors if record is not None else {}
+        # PR 4.3 — surface behavior_overrides as part of the public read.
+        # Absent row materialises to the default WorkspaceBehaviorOverrides
+        # (all-None / opt-out=False) so the FE always sees a complete shape.
+        behavior_overrides = (
+            record.behavior_overrides
+            if record is not None
+            else WorkspaceBehaviorOverrides()
+        )
         return WorkspaceDefaultsResponse(
             default_model=default_model,
             default_connectors=default_connectors,
             retention_days=retention_days,
+            behavior_overrides=behavior_overrides,
             updated_at=record.updated_at if record is not None else None,
             updated_by_user_id=(
                 record.updated_by_user_id if record is not None else None
@@ -140,6 +150,7 @@ class WorkspaceDefaultsService:
             default_model=request.default_model,
             default_connectors=persisted.default_connectors,
             retention_days=request.retention_days,
+            behavior_overrides=persisted.behavior_overrides,
             updated_at=persisted.updated_at,
             updated_by_user_id=persisted.updated_by_user_id,
         )
@@ -151,6 +162,34 @@ class WorkspaceDefaultsService:
             retention_policy_ids=tuple(retention_policy_ids),
         )
         return response, audit_metadata
+
+    # ------------------------------------------------------------------
+    # Internal helper — derives the ``training_data_opt_out`` change for
+    # the dedicated ``workspace.training_opt_out.update`` audit row when
+    # the caller wants to emit it alongside the broader
+    # ``workspace.behavior_overrides.update`` row. Centralised here so
+    # the route handler doesn't need to re-read the before/after.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def training_opt_out_diff(
+        *,
+        before: WorkspaceBehaviorOverrides | None,
+        after: WorkspaceBehaviorOverrides,
+    ) -> tuple[bool, bool] | None:
+        """Return ``(before, after)`` iff the flag changed; else ``None``.
+
+        The "compliance" audit row (``workspace.training_opt_out.update``)
+        is fired only when the boolean transitions, so a search like
+        ``action='workspace.training_opt_out.update'`` returns exactly
+        the audit-relevant transitions and nothing else.
+        """
+
+        previous = before.training_data_opt_out if before is not None else False
+        current = after.training_data_opt_out
+        if previous == current:
+            return None
+        return previous, current
 
     # ------------------------------------------------------------------
     # Internals
@@ -232,6 +271,11 @@ class WorkspaceDefaultsService:
         after_retention_days: int,
         retention_policy_ids: tuple[str, ...],
     ) -> dict[str, object]:
+        before_overrides = (
+            before_record.behavior_overrides
+            if before_record is not None
+            else WorkspaceBehaviorOverrides()
+        )
         before_blob = {
             "default_model": (
                 before_record.default_model.model_dump(mode="json", exclude_none=True)
@@ -247,6 +291,12 @@ class WorkspaceDefaultsService:
                 else {}
             ),
             "retention_days": before_retention_days,
+            # PR 4.3 — record the full overrides shape (post-redaction
+            # by Pydantic; system_prompt_override is in cleartext but
+            # auditing the change is the explicit intent).
+            "behavior_overrides": before_overrides.model_dump(
+                mode="json", exclude_none=True
+            ),
         }
         after_blob = {
             "default_model": (
@@ -259,10 +309,18 @@ class WorkspaceDefaultsService:
                 for k, v in after_record.default_connectors.items()
             },
             "retention_days": after_retention_days,
+            "behavior_overrides": after_record.behavior_overrides.model_dump(
+                mode="json", exclude_none=True
+            ),
         }
         diff_keys = sorted(
             key
-            for key in ("default_model", "default_connectors", "retention_days")
+            for key in (
+                "default_model",
+                "default_connectors",
+                "retention_days",
+                "behavior_overrides",
+            )
             if before_blob[key] != after_blob[key]
         )
         return {

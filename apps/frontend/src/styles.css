@@ -4339,3 +4339,121 @@ p {
   display: flex;
   justify-content: flex-start;
 }
+
+/* PR 4.3 — Settings → AI & data → Model & behavior + Privacy & data.
+   Pill groups, sliders, textareas, retention summary list, danger zone. */
+
+.settings-textarea {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  min-height: 4.5rem;
+  outline: none;
+  padding: 0.55rem 0.65rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.settings-textarea:focus {
+  border-color: var(--color-accent);
+}
+
+.settings-slider-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.settings-slider-row input[type="range"] {
+  flex: 1;
+}
+
+.settings-slider-row input[type="number"] {
+  width: 4.5rem;
+}
+
+.settings-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.settings-pill {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.32rem 0.7rem;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.settings-pill:hover {
+  border-color: var(--color-border-strong, var(--color-border));
+}
+
+.settings-pill--active {
+  background: var(--color-accent-soft, rgba(217, 119, 87, 0.18));
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.settings-toggle-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.settings-action-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.settings-readonly-value {
+  color: var(--color-text-muted, var(--color-text));
+  font-size: 0.92rem;
+}
+
+.settings-retention-list {
+  display: grid;
+  gap: 0.32rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-retention-list li {
+  align-items: center;
+  display: flex;
+  font-size: 0.88rem;
+  justify-content: space-between;
+}
+
+.settings-retention-list__value {
+  align-items: center;
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.settings-danger-zone {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.settings-danger-message {
+  color: var(--color-warn, var(--color-text));
+  font-size: 0.85rem;
+  margin-top: var(--space-xs);
+}

@@ -548,7 +548,19 @@ class RuntimeApiService:
         #                                    → settings.default_model
         request = await self._apply_workspace_default_model(request=request)
 
-        request = self._request_with_runtime_context(request)
+        # PR 4.3: resolve workspace-policy knobs (system prompt override,
+        # temperature default, citation density, refusal behavior,
+        # reasoning effort, training opt-out) once before the runtime
+        # context is built. The resolved blob is frozen onto the run's
+        # runtime_context for the lifetime of the run; mid-run admin
+        # toggles do not affect in-flight runs (their context is already
+        # snapshotted in ``agent_runs.runtime_context_json``).
+        workspace_overrides = await self._resolve_workspace_behavior_overrides(
+            org_id=request.org_id
+        )
+        request = self._request_with_runtime_context(
+            request, workspace_behavior_overrides=workspace_overrides
+        )
         context = request.runtime_context
         if context is None:
             raise RuntimeApiError(
@@ -1338,8 +1350,35 @@ class RuntimeApiService:
             cursor = record.parent_message_id
         return tuple(reversed(ordered))
 
+    async def _resolve_workspace_behavior_overrides(
+        self, *, org_id: str
+    ) -> dict[str, object]:
+        """Return the workspace-policy knobs as a JSON-serialisable dict.
+
+        Returns ``{}`` when no row exists or the overrides are at their
+        defaults — keeps ``runtime_context_json`` compact for the most
+        common case (org has not customised anything yet).
+        """
+
+        record = await self._workspace_defaults().get_record(org_id=org_id)
+        if record is None:
+            return {}
+        # ``model_dump(exclude_none=True)`` strips absent overrides so
+        # consumers can safely ``.get(key)`` and treat ``None`` as
+        # "fall through to deployment default".
+        blob = record.behavior_overrides.model_dump(mode="json", exclude_none=True)
+        # ``training_data_opt_out=False`` is the default; only carry it
+        # forward when explicitly opted out (keeps the blob empty for
+        # the common case).
+        if blob.get("training_data_opt_out") is False:
+            blob.pop("training_data_opt_out", None)
+        return blob
+
     def _request_with_runtime_context(
-        self, request: CreateRunRequest
+        self,
+        request: CreateRunRequest,
+        *,
+        workspace_behavior_overrides: dict[str, object] | None = None,
     ) -> CreateRunRequest:
         try:
             model = request.model
@@ -1416,6 +1455,7 @@ class RuntimeApiService:
             max_parallel_tasks=self.settings.execution.max_parallel_tasks,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
+            workspace_behavior_overrides=workspace_behavior_overrides or {},
         )
         return request.model_copy(update={"runtime_context": runtime_context})
 
@@ -1574,16 +1614,30 @@ class RuntimeApiService:
         actor_user_id: str,
         request: UpdateWorkspaceDefaultsRequest,
     ) -> WorkspaceDefaultsResponse:
-        """Public ``PUT /v1/agent/workspace/defaults`` (PR 1.6).
+        """Public ``PUT /v1/agent/workspace/defaults`` (PR 1.6 + PR 4.3).
 
         Composes the workspace_defaults upsert + retention policy
-        upserts and writes one audit row. Validates the requested
-        default model against the same catalog ``list_models`` exposes
-        — bouncing typos as 422 instead of letting them silently
+        upserts and writes one or more audit rows. Validates the
+        requested default model against the same catalog ``list_models``
+        exposes — bouncing typos as 422 instead of letting them silently
         corrupt every future ``create_run`` for the org.
+
+        Audit emission (PR 4.3):
+          * Always: ``workspace.defaults.update`` (PR 1.6 row, carries
+            the full diff including ``behavior_overrides``).
+          * Always: ``workspace.behavior_overrides.update`` when the
+            ``behavior_overrides`` block changed (the diff is part of
+            ``audit_metadata['diff_keys']``).
+          * Always: ``workspace.training_opt_out.update`` when the
+            boolean flag transitioned (compliance auditors search by
+            this dedicated action).
         """
 
         self._validate_workspace_default_model(request)
+        # Snapshot the prior overrides BEFORE the upsert so the
+        # dedicated training-opt-out diff row reflects the actual
+        # transition (and not the post-write state).
+        before_record = await self._workspace_defaults().get_record(org_id=org_id)
         response, audit_metadata = await self._workspace_defaults().update(
             org_id=org_id,
             actor_user_id=actor_user_id,
@@ -1600,7 +1654,117 @@ class RuntimeApiService:
                 "metadata": audit_metadata,
             },
         )
+        # PR 4.3 — when the behavior_overrides block changed, emit a
+        # dedicated audit row so SIEM searches by action name find them
+        # without parsing the broader defaults diff.
+        if "behavior_overrides" in audit_metadata.get("diff_keys", []):
+            await self.persistence.write_audit_log(
+                event_type=Messages.Audit.WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE,
+                record={
+                    "org_id": org_id,
+                    "user_id": actor_user_id,
+                    "resource_type": "workspace_defaults",
+                    "resource_id": org_id,
+                    "outcome": "success",
+                    "metadata": {
+                        "before": audit_metadata["before"]["behavior_overrides"],
+                        "after": audit_metadata["after"]["behavior_overrides"],
+                    },
+                },
+            )
+        # PR 4.3 — dedicated row for the training opt-out boolean
+        # transition (compliance / DPA audit signal). Fires only when
+        # the value flipped.
+        from agent_runtime.api.workspace_defaults_service import (
+            WorkspaceDefaultsService,
+        )
+
+        before_overrides = (
+            before_record.behavior_overrides if before_record is not None else None
+        )
+        opt_out_diff = WorkspaceDefaultsService.training_opt_out_diff(
+            before=before_overrides,
+            after=request.behavior_overrides,
+        )
+        if opt_out_diff is not None:
+            previous, current = opt_out_diff
+            await self.persistence.write_audit_log(
+                event_type=Messages.Audit.WORKSPACE_TRAINING_OPT_OUT_UPDATE,
+                record={
+                    "org_id": org_id,
+                    "user_id": actor_user_id,
+                    "resource_type": "workspace_defaults",
+                    "resource_id": org_id,
+                    "outcome": "success",
+                    "metadata": {"before": previous, "after": current},
+                },
+            )
         return response
+
+    # ==================================================================
+    # PR 4.3 — workspace data export + delete-all stubs
+    # ==================================================================
+
+    async def request_workspace_export(
+        self,
+        *,
+        org_id: str,
+        actor_user_id: str,
+    ) -> dict[str, str]:
+        """Audit a queued workspace export (v1 stub).
+
+        Real export pipeline lives in a follow-up PR. The stub returns
+        ``{export_id, status}`` and emits one audit row so a forensic
+        reader knows when a member asked, which org, by whom.
+        """
+
+        from uuid import uuid4
+
+        export_id = f"exp_{uuid4().hex[:24]}"
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.WORKSPACE_EXPORT_REQUEST,
+            record={
+                "org_id": org_id,
+                "user_id": actor_user_id,
+                "resource_type": "workspace_export",
+                "resource_id": export_id,
+                "outcome": "queued",
+                "metadata": {
+                    "export_id": export_id,
+                    "scope": "workspace",
+                    "status": "queued",
+                },
+            },
+        )
+        return {"export_id": export_id, "status": "queued"}
+
+    async def record_workspace_delete_attempt(
+        self,
+        *,
+        org_id: str,
+        actor_user_id: str,
+        typed_confirmation_correct: bool,
+    ) -> None:
+        """Audit a delete-all-data attempt (v1 stub; route returns 501).
+
+        We record both correct and incorrect typed-confirmation answers
+        so an attacker can't accidentally fly under audit by giving a
+        wrong slug — every attempt leaves a row.
+        """
+
+        await self.persistence.write_audit_log(
+            event_type=Messages.Audit.WORKSPACE_DELETE_ATTEMPT,
+            record={
+                "org_id": org_id,
+                "user_id": actor_user_id,
+                "resource_type": "workspace_data",
+                "resource_id": org_id,
+                "outcome": "blocked",
+                "metadata": {
+                    "typed_confirmation_correct": typed_confirmation_correct,
+                },
+            },
+        )
 
     async def update_conversation(
         self,

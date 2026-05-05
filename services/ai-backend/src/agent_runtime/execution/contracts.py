@@ -265,6 +265,15 @@ class AgentRuntimeContext(RuntimeContract):
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
+    # PR 4.3 — workspace-policy knobs resolved at run-create. Persisted
+    # in ``agent_runs.runtime_context_json`` like every other field on
+    # this context. Stored as a generic ``JsonObject`` here (rather than
+    # a typed ``WorkspaceBehaviorOverrides``) because ``contracts`` lives
+    # in ``agent_runtime/execution`` and importing the runtime_api
+    # schema would invert the layering. Consumers (citation middleware,
+    # safety middleware, model-call middleware) downcast to the typed
+    # model via ``WorkspaceBehaviorOverrides.model_validate``.
+    workspace_behavior_overrides: JsonObject = Field(default_factory=dict)
 
     @field_validator("user_id", "org_id")
     @classmethod

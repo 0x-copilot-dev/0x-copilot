@@ -561,6 +561,13 @@ class RuntimeApiRouter:
         )
 
         register_workspace_defaults_routes(router)
+        # PR 4.3 — Workspace data lifecycle stubs (export queue +
+        # delete-all-attempt audit). Same router, separate module.
+        from runtime_api.http.workspace_data_routes import (
+            register_workspace_data_routes,
+        )
+
+        register_workspace_data_routes(router)
         return router
 
 

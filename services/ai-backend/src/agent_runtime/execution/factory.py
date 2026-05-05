@@ -15,6 +15,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.provider_kwargs import workspace_model_kwargs
 from agent_runtime.execution.deep_agent_builder import (
     DeepAgentBuildRequest,
     DeepAgentsBackend,
@@ -130,6 +131,16 @@ def create_agent_runtime(
             ),
             skill_cards=skill_cards,
         )
+        # PR 4.3 — compute workspace-policy kwargs (e.g. training opt-out
+        # provider headers) once per build and thread them through every
+        # chat-model construction in the graph. Subagents inherit the
+        # same kwargs because they share the runtime context.
+        extra_model_kwargs = workspace_model_kwargs(
+            provider=runtime_context.model_profile.provider,
+            workspace_behavior_overrides=(
+                runtime_context.workspace_behavior_overrides or None
+            ),
+        )
         agent = builder(
             DeepAgentBuildRequest(
                 tools=model_tools,
@@ -147,6 +158,7 @@ def create_agent_runtime(
                 skill_directories=skill_directories,
                 interrupt_on=_native_interrupt_config(model_tools),
                 checkpointer=runtime_checkpointer(),
+                extra_model_kwargs=extra_model_kwargs or None,
             )
         )
     except AgentRuntimeError:

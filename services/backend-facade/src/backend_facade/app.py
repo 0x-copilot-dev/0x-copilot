@@ -14,6 +14,7 @@ from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
 from backend_facade.auth_routes import register_auth_routes
 from backend_facade.me_routes import register_me_routes
 from backend_facade.scim_routes import register_scim_routes
+from backend_facade.workspace_routes import register_workspace_routes
 from backend_facade.deployment_profile import (
     DeploymentProfile,
     log_profile,
@@ -90,6 +91,7 @@ def create_app(
     register_auth_routes(app)
     register_me_routes(app)
     register_scim_routes(app)
+    register_workspace_routes(app)
 
     @app.post("/v1/telemetry/otlp/v1/traces")
     async def telemetry_otlp_traces(request: Request) -> Response:
@@ -418,6 +420,58 @@ def create_app(
             "/v1/agent/workspace/defaults",
             params=identity.scoped_params(),
             json=payload,
+            identity=identity,
+        )
+
+    # PR 4.3 — read-only effective retention TTL (Privacy & data panel).
+    # Open to any tenant member; the ai-backend route shares the same
+    # ``runtime:use`` gate.
+    @app.get("/v1/retention/effective")
+    async def get_retention_effective(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "GET",
+            "/v1/retention/effective",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    # PR 4.3 — workspace data lifecycle stubs. Both routes proxy 1:1.
+    # The export endpoint queues + audits (returns 202); the delete-all
+    # endpoint always returns 501 and audits the typed-confirmation
+    # correctness (admin-gate enforced by ai-backend).
+    @app.post("/v1/agent/workspace/export")
+    async def request_workspace_export(
+        request: Request,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json_to_ai(
+            app,
+            "POST",
+            "/v1/agent/workspace/export",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/agent/workspace/data")
+    async def delete_workspace_data(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        # ``confirm_slug`` rides as a query parameter (DELETE-with-body
+        # is not idiomatic). Forward the caller's query string verbatim
+        # onto the ai-backend call so the typed-confirmation reaches
+        # the audit row.
+        params = dict(identity.scoped_params())
+        confirm_slug = request.query_params.get("confirm_slug")
+        if confirm_slug is not None:
+            params["confirm_slug"] = confirm_slug
+        return await forward_json_to_ai(
+            app,
+            "DELETE",
+            "/v1/agent/workspace/data",
+            params=params,
             identity=identity,
         )
 

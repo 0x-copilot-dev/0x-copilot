@@ -87,6 +87,20 @@ from backend_app.identity.saml_store import (
     SamlReplayDetected,
     SamlStore,
 )
+from backend_app.identity.invitation_store import (
+    InMemoryInvitationStore,
+    InvitationStore,
+    PostgresInvitationStore,
+)
+from backend_app.identity.invitations import (
+    InvitationAcceptResult,
+    InvitationBadRequest,
+    InvitationConflict,
+    InvitationError,
+    InvitationGone,
+    InvitationNotFound,
+    InvitationsService,
+)
 from backend_app.identity.scim import (
     ResolvedScimToken,
     ScimAuthError,
@@ -213,7 +227,17 @@ __all__ = [
     "SamlUserNotProvisioned",
     "SamlVerifier",
     "SamlVerifierError",
+    "InMemoryInvitationStore",
     "InMemoryScimStore",
+    "InvitationAcceptResult",
+    "InvitationBadRequest",
+    "InvitationConflict",
+    "InvitationError",
+    "InvitationGone",
+    "InvitationNotFound",
+    "InvitationStore",
+    "InvitationsService",
+    "PostgresInvitationStore",
     "PostgresScimStore",
     "ResolvedScimToken",
     "ScimAuthError",

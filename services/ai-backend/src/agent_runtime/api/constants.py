@@ -133,12 +133,20 @@ class Keys:
         RETENTION_LIST = "retention_list"
         RETENTION_UPSERT = "retention_upsert"
         RETENTION_DELETE = "retention_delete"
+        # PR 4.3 — read-only effective TTL view exposed to any tenant
+        # member (the Privacy & data Settings panel renders against it).
+        RETENTION_EFFECTIVE = "retention_effective"
         # PR 1.6 — workspace defaults + conversation lifecycle.
         GET_WORKSPACE_DEFAULTS = "get_workspace_defaults"
         UPDATE_WORKSPACE_DEFAULTS = "update_workspace_defaults"
         UPDATE_CONVERSATION = "update_conversation"
         DELETE_CONVERSATION = "delete_conversation"
         RESTORE_CONVERSATION = "restore_conversation"
+        # PR 4.3 — workspace data lifecycle stubs (export queues + audited
+        # delete-all attempt). The actual export pipeline + cascade-delete
+        # job land in dedicated follow-ups.
+        REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
+        DELETE_WORKSPACE_DATA = "delete_workspace_data"
 
 
 class Values:
@@ -269,6 +277,23 @@ class Messages:
         CONVERSATION_UPDATE = "conversation.update"
         CONVERSATION_DELETE = "conversation.delete"
         CONVERSATION_RESTORE = "conversation.restore"
+        # PR 4.3 — workspace behavior overrides + privacy / export.
+        # ``WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE`` carries the full
+        # before/after blob (system_prompt_override, temperature, citation
+        # density, refusal behavior, default_reasoning_effort,
+        # training_data_opt_out). The dedicated ``training_opt_out`` row
+        # is split out because compliance auditors search for the boolean
+        # transition by action name without parsing JSONB diffs.
+        WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE = "workspace.behavior_overrides.update"
+        WORKSPACE_TRAINING_OPT_OUT_UPDATE = "workspace.training_opt_out.update"
+        # ``WORKSPACE_EXPORT_REQUEST`` audits a queued export — v1 ships
+        # the audit row + 202; the actual export pipeline lands later.
+        WORKSPACE_EXPORT_REQUEST = "workspace.export.request"
+        # ``WORKSPACE_DELETE_ATTEMPT`` audits a delete-all-data attempt
+        # even though v1 returns 501; we record the typed-confirmation
+        # correctness so a forensic reader sees who is asking and how
+        # they answered the confirm gate.
+        WORKSPACE_DELETE_ATTEMPT = "workspace.delete_attempt"
 
     class Event:
         APPROVAL_RESOLVED = "Approval decision was recorded."

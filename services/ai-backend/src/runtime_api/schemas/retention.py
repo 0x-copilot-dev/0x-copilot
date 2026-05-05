@@ -46,3 +46,38 @@ class RetentionPolicyListResponse(RuntimeContract):
     """Response for ``GET /v1/retention/policies``."""
 
     policies: tuple[RetentionPolicyView, ...] = ()
+
+
+# PR 4.3 — read-only effective-TTL view for the Privacy & data panel.
+# Re-uses the same ``RetentionPolicyResolver`` the sweeper uses, so the
+# UI never displays a number different from what gets applied.
+
+
+class RetentionEffectivePolicyEntry(RuntimeContract):
+    """Per-kind effective TTL with provenance.
+
+    ``source_scope`` is the scope of the policy that won the resolver's
+    specificity walk; ``None`` means the value came from the
+    deployment default (``DEPLOYMENT_DEFAULT_TTL_SECONDS``) — which the
+    UI renders as "deployment_default" so admins see they haven't set
+    a per-tenant policy yet.
+
+    ``source_policy_id`` is populated when ``source_scope`` is non-None
+    so a forensic reader can chase the displayed number back to a
+    single ``retention_policies`` row.
+    """
+
+    kind: RetentionKind
+    ttl_seconds: int | None
+    source_scope: RetentionScope | None
+    source_policy_id: str | None = None
+
+
+class RetentionEffectiveResponse(RuntimeContract):
+    """Response for ``GET /v1/retention/effective``.
+
+    The map is keyed by ``RetentionKind`` so the FE can render a
+    deterministic table without string-matching on ``kind``.
+    """
+
+    effective: dict[RetentionKind, RetentionEffectivePolicyEntry]
