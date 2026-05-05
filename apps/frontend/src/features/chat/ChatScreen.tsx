@@ -40,11 +40,21 @@ import {
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
+import { useConversationConnectors } from "../connectors/useConversationConnectors";
 import type { SkillState } from "../skills/useSkills";
 import {
   DetailsPanelHost,
   type DetailsPanelKind,
 } from "./components/details/DetailsPanelHost";
+import { Topbar, activeConnectorsFromScopes } from "./components/shell";
+import {
+  DEFAULT_THINKING_DEPTH,
+  applyDepth,
+  isThinkingDepth,
+  modelSupportsDepth,
+  type ThinkingDepth,
+} from "./depth";
+import { useLocalStorageState } from "../../utils/useLocalStorageState";
 
 type ChatSettingsTarget = "general" | "connectors" | "skills";
 import {
@@ -121,6 +131,17 @@ export function ChatScreen({
   const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState(demoModels[0].id);
+  // PR 2.1 — thinking depth maps onto reasoning.effort via applyDepth.
+  // Persisted across reloads; ignored when the active model doesn't
+  // support reasoning. Mid-run depth changes never affect the active
+  // run — the worker reads the frozen ModelConfig from runtime_context.
+  const [depth, setDepth] = useLocalStorageState<ThinkingDepth>(
+    "atlas:thinking-depth",
+    DEFAULT_THINKING_DEPTH,
+    isThinkingDepth,
+  );
+  // PR 2.1 — workspace pane open/closed; PR 3.2 ships the pane body.
+  const [panelOpen, setPanelOpen] = useState(true);
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -494,7 +515,10 @@ export function ChatScreen({
           runtimeUserInput,
           identity,
           {
-            model: modelSelectionForId(demoModels, selectedModelId),
+            model: applyDepth(
+              modelSelectionForId(demoModels, selectedModelId),
+              depth,
+            ),
             attachments,
             content,
             quote,
@@ -538,6 +562,7 @@ export function ChatScreen({
     [
       activeRunId,
       conversationId,
+      depth,
       identity,
       items,
       refreshConversations,
@@ -835,6 +860,33 @@ export function ChatScreen({
     suggestions: Suggestions(CHAT_PROMPT_SUGGESTIONS),
   });
 
+  // PR 2.1 — current conversation row + per-chat connector glyphs feed
+  // for the topbar pills. Read-only here; ConnectorPopover (PR 3.4)
+  // owns the write paths into useConversationConnectors.patch.
+  const currentConversation = useMemo(
+    () =>
+      conversationId === null
+        ? null
+        : (conversations.find(
+            (entry) => entry.conversation_id === conversationId,
+          ) ?? null),
+    [conversationId, conversations],
+  );
+  const conversationScopes = useConversationConnectors(
+    currentConversation,
+    identity,
+  );
+  const activeConnectorGlyphs = useMemo(
+    () =>
+      activeConnectorsFromScopes(connectors.servers, conversationScopes.scopes),
+    [connectors.servers, conversationScopes.scopes],
+  );
+  const selectedModel = useMemo(
+    () => demoModels.find((model) => model.id === selectedModelId) ?? null,
+    [selectedModelId],
+  );
+  const depthVisible = modelSupportsDepth(selectedModel);
+
   const runtime = useExternalStoreRuntime<ChatThreadMessage>({
     messages: threadMessages,
     convertMessage: (message) => message,
@@ -857,7 +909,10 @@ export function ChatScreen({
           REGENERATE_PREVIOUS_RESPONSE_PROMPT,
         identity,
         {
-          model: modelSelectionForId(demoModels, selectedModelId),
+          model: applyDepth(
+            modelSelectionForId(demoModels, selectedModelId),
+            depth,
+          ),
           parentMessageId,
           sourceMessageId,
           regenerateFromMessageId: sourceMessageId ?? parentMessageId,
@@ -911,18 +966,39 @@ export function ChatScreen({
           onRefresh={() => void refreshConversations()}
         />
         <AssistantThread
-          sidebarCollapsed={sidebarCollapsed}
-          status={
-            historyError ??
-            oauthStatus ??
-            (activeRunId === null ? status : runUiState.headerStatus)
+          topbar={
+            <Topbar
+              workspace={null}
+              folder={currentConversation?.folder ?? null}
+              title={currentConversation?.title ?? null}
+              runUiState={
+                historyError !== null
+                  ? { ...runUiState, headerStatus: historyError }
+                  : oauthStatus !== null
+                    ? { ...runUiState, headerStatus: oauthStatus }
+                    : activeRunId === null
+                      ? { ...runUiState, headerStatus: status }
+                      : runUiState
+              }
+              sidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+              panelOpen={panelOpen}
+              onTogglePanel={() => setPanelOpen((current) => !current)}
+              connectors={activeConnectorGlyphs}
+              connectorsOpen={false}
+              onOpenConnectors={() => onOpenSettings("connectors")}
+              usagePct={null}
+              onOpenUsage={() => setDetailsPanel("usage")}
+              models={demoModels}
+              selectedModel={selectedModelId}
+              onModelChange={setSelectedModelId}
+              depth={depth}
+              onDepthChange={setDepth}
+              depthVisible={depthVisible}
+              onShare={() => void onShare()}
+              onOpenSettings={() => onOpenSettings("general")}
+            />
           }
-          models={demoModels}
-          selectedModel={selectedModelId}
-          onModelChange={setSelectedModelId}
-          modelDisabled={activeRunId !== null}
-          onShare={() => void onShare()}
-          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         >
           <CitationsProvider citations={activeCitations}>
             <ThreadBody
