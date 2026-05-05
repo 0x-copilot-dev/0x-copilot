@@ -27,6 +27,7 @@ import type {
   SubagentListResponse,
   SubagentStatusFilter,
   UpdateConversationConnectorScopesRequest,
+  UpdateConversationRequest,
   UsageConversationRow,
   UsageMeResponse,
   UsagePeriod,
@@ -187,6 +188,23 @@ export function updateConversationConnectorScopes(
 ): Promise<ConversationConnectorScopesResponse> {
   return httpPatchQuery<ConversationConnectorScopesResponse>(
     `/v1/agent/conversations/${conversationId}/connectors`,
+    request,
+    identity,
+  );
+}
+
+/**
+ * PR 1.6: merge-patch the conversation row — title, folder, archived.
+ * RFC 7396 merge-patch semantics: omit a field to leave it untouched,
+ * send `null` to clear (folder/title) or un-archive (`archived: false`).
+ */
+export function updateConversation(
+  conversationId: string,
+  request: UpdateConversationRequest,
+  identity: RequestIdentity,
+): Promise<Conversation> {
+  return httpPatchQuery<Conversation>(
+    `/v1/agent/conversations/${conversationId}`,
     request,
     identity,
   );

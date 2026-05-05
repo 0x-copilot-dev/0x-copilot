@@ -36,6 +36,7 @@ import {
   listMessages,
   replayRunEvents,
   streamRunEvents,
+  updateConversation,
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
@@ -977,6 +978,24 @@ export function ChatScreen({
                 workspace={null}
                 folder={currentConversation?.folder ?? null}
                 title={currentConversation?.title ?? null}
+                onRenameTitle={
+                  currentConversation === null
+                    ? undefined
+                    : async (next: string) => {
+                        const renamed = await updateConversation(
+                          currentConversation.conversation_id,
+                          { title: next.trim() === "" ? null : next },
+                          identity,
+                        );
+                        setConversations((current) =>
+                          current.map((entry) =>
+                            entry.conversation_id === renamed.conversation_id
+                              ? renamed
+                              : entry,
+                          ),
+                        );
+                      }
+                }
                 runUiState={
                   historyError !== null
                     ? { ...runUiState, headerStatus: historyError }

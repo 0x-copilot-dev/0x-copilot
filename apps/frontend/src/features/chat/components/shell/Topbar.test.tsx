@@ -1,6 +1,12 @@
 import type { ModelCatalogModel } from "@enterprise-search/api-types";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunUiState } from "../../chatRunState";
 import { Topbar } from "./Topbar";
 
@@ -54,7 +60,11 @@ describe("Topbar", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Q1 launch",
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Ready");
+    expect(
+      screen
+        .getAllByRole("status")
+        .find((node) => node.classList.contains("ui-status-pill")),
+    ).toHaveTextContent("Ready");
     expect(screen.getByRole("radiogroup")).toBeInTheDocument();
   });
 
@@ -85,5 +95,45 @@ describe("Topbar", () => {
     expect(
       screen.getByRole("button", { name: /Model: GPT-5\.4/ }),
     ).toBeDisabled();
+  });
+
+  describe("depth announcement", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    it("announces a polite message when depth changes", async () => {
+      const { rerender } = render(<Topbar {...baseProps} depth="balanced" />);
+      // Mount renders an empty live region — no announcement on first paint.
+      expect(
+        screen
+          .getAllByRole("status")
+          .map((node) => node.textContent ?? "")
+          .filter((text) => text.includes("Depth:")),
+      ).toHaveLength(0);
+      rerender(<Topbar {...baseProps} depth="deep" />);
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((node) => node.textContent?.includes("Depth: Deep")),
+        ).toBe(true);
+      });
+      // Region clears after ~2s so screen readers don't replay stale text.
+      act(() => {
+        vi.advanceTimersByTime(2100);
+      });
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((node) => (node.textContent ?? "").includes("Depth:")),
+        ).toBe(false);
+      });
+    });
   });
 });

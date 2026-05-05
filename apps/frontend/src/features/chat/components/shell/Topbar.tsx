@@ -4,9 +4,9 @@ import {
   type StatusTone,
 } from "@enterprise-search/design-system";
 import type { ModelCatalogModel } from "@enterprise-search/api-types";
-import type { ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { RunUiState, RunUiPhase } from "../../chatRunState";
-import type { ThinkingDepth } from "../../depth";
+import { depthLabel, type ThinkingDepth } from "../../depth";
 import { LogoMark } from "../thread/LogoMark";
 import { Crumb } from "./Crumb";
 import { ConversationTitle } from "./ConversationTitle";
@@ -109,11 +109,33 @@ export function Topbar(props: TopbarProps): ReactElement {
 
   const tone = TONE_BY_PHASE[runUiState.phase];
 
+  // Announce depth changes to assistive tech without stealing visible
+  // chrome. Polite live region so it never interrupts a stream. Skips
+  // the initial mount (we don't want to announce the persisted default
+  // on every reload).
+  const [depthAnnouncement, setDepthAnnouncement] = useState("");
+  const lastDepthRef = useRef<ThinkingDepth | null>(null);
+  useEffect(() => {
+    const previous = lastDepthRef.current;
+    lastDepthRef.current = depth;
+    if (previous === null || previous === depth) {
+      return;
+    }
+    setDepthAnnouncement(
+      `Depth: ${depthLabel(depth)} — applies to your next message.`,
+    );
+    const id = window.setTimeout(() => setDepthAnnouncement(""), 2000);
+    return () => window.clearTimeout(id);
+  }, [depth]);
+
   return (
     <header
       className="atlas-topbar"
       data-chrome-disabled={chromeDisabled || undefined}
     >
+      <span className="sr-only" role="status" aria-live="polite">
+        {depthAnnouncement}
+      </span>
       <div className="atlas-topbar__row atlas-topbar__row--identity">
         <div className="atlas-topbar__left">
           <IconButton
