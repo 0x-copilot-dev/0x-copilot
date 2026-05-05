@@ -18,12 +18,21 @@ from runtime_api.schemas.common import (
 )
 
 
+# PR 1.2: per-chat connector scope override. Map of connector_id ->
+# tuple of scope strings (active for this chat) or None (paused for this
+# chat). Default empty dict means "no override; defer to inbound header
+# or workspace defaults". See docs/new-design/pr-1-2-per-chat-connector-scope.md.
+ConversationConnectorScopes = dict[str, tuple[str, ...] | None]
+
+
 class _Fields:
     CONTENT_TEXT = "content_text"
     CONTENT_FORMAT = "content_format"
     PARENT_MESSAGE_ID = "parent_message_id"
     SOURCE_MESSAGE_ID = "source_message_id"
     BRANCH_ID = "branch_id"
+    ENABLED_CONNECTORS = "enabled_connectors"
+    SCOPES = "scopes"
 
 
 class CreateConversationRequest(RuntimeContract):
@@ -72,6 +81,8 @@ class ConversationRecord(RuntimeContract):
     metadata: JsonObject = Field(default_factory=dict)
     schema_version: PositiveInt = Values.SCHEMA_VERSION
     idempotency_key: str | None = None
+    enabled_connectors: ConversationConnectorScopes = Field(default_factory=dict)
+    connectors_updated_at: datetime | None = None
 
     @field_validator(
         Keys.Field.CONVERSATION_ID,
@@ -88,6 +99,27 @@ class ConversationRecord(RuntimeContract):
     def _normalize_idempotency_key(cls, value: object) -> str | None:
         return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
+    @field_validator(_Fields.ENABLED_CONNECTORS, mode="before")
+    @classmethod
+    def _normalize_enabled_connectors(
+        cls, value: object
+    ) -> ConversationConnectorScopes:
+        return ConnectorScopeValidator.coerce(value)
+
+    def runtime_connector_scopes(self) -> dict[str, tuple[str, ...]]:
+        """Materialise the column into the shape ``AgentRuntimeContext`` expects.
+
+        Drops paused connectors (``null`` value) so they're invisible to
+        ``ToolPermissionChecker`` at run-start. Active connectors flow
+        through verbatim.
+        """
+
+        return {
+            connector: scopes
+            for connector, scopes in self.enabled_connectors.items()
+            if scopes is not None
+        }
+
     def to_response(self) -> "ConversationResponse":
         """Return the stable public conversation shape."""
 
@@ -103,6 +135,8 @@ class ConversationRecord(RuntimeContract):
             archived_at=self.archived_at,
             metadata=self.metadata,
             schema_version=self.schema_version,
+            enabled_connectors=self.enabled_connectors,
+            connectors_updated_at=self.connectors_updated_at,
         )
 
 
@@ -120,6 +154,8 @@ class ConversationResponse(RuntimeContract):
     archived_at: datetime | None = None
     metadata: JsonObject = Field(default_factory=dict)
     schema_version: PositiveInt
+    enabled_connectors: ConversationConnectorScopes = Field(default_factory=dict)
+    connectors_updated_at: datetime | None = None
 
 
 class ConversationListResponse(RuntimeContract):
@@ -128,6 +164,76 @@ class ConversationListResponse(RuntimeContract):
     conversations: tuple[ConversationResponse, ...]
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class ConnectorScopeValidator:
+    """Shape-only validation + normalization for connector scope payloads.
+
+    We deliberately do NOT validate connector ids or scope strings against
+    the live tool registry: registries are loaded per-run on the worker,
+    not on the API service, and a connector that was valid at PATCH time
+    may be removed before the next run executes. ``ToolPermissionChecker``
+    enforces semantics at run-start; this layer enforces shape only.
+    """
+
+    @classmethod
+    def coerce(cls, value: object) -> ConversationConnectorScopes:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("scopes must be an object")
+        normalized: ConversationConnectorScopes = {}
+        for raw_key, raw_value in value.items():
+            connector_id = cls._coerce_connector_id(raw_key)
+            normalized[connector_id] = cls._coerce_scopes(connector_id, raw_value)
+        return normalized
+
+    @staticmethod
+    def _coerce_connector_id(value: object) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("connector id must be a non-empty string")
+        return value.strip()
+
+    @staticmethod
+    def _coerce_scopes(connector_id: str, value: object) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if isinstance(value, list | tuple):
+            scopes: list[str] = []
+            for scope in value:
+                if not isinstance(scope, str) or not scope.strip():
+                    raise ValueError(
+                        f"scopes for {connector_id} must be non-empty strings"
+                    )
+                scopes.append(scope.strip())
+            return tuple(scopes)
+        raise ValueError(f"scopes for {connector_id} must be a list or null")
+
+
+class UpdateConversationConnectorsRequest(RuntimeContract):
+    """RFC 7396 merge-patch body for per-chat connector scope toggles.
+
+    Send only the connectors you are changing:
+      - ``[scope, ...]`` activates the connector for this chat with these scopes,
+      - ``null`` pauses the connector for this chat (still installed/connected,
+        just inert here),
+      - omitting a key leaves it untouched.
+    """
+
+    scopes: ConversationConnectorScopes = Field(default_factory=dict)
+
+    @field_validator(_Fields.SCOPES, mode="before")
+    @classmethod
+    def _coerce_scopes(cls, value: object) -> ConversationConnectorScopes:
+        return ConnectorScopeValidator.coerce(value)
+
+
+class ConversationConnectorScopesResponse(RuntimeContract):
+    """Effective per-chat connector scope map after an update or read."""
+
+    conversation_id: str
+    scopes: ConversationConnectorScopes = Field(default_factory=dict)
+    updated_at: datetime | None = None
 
 
 class MessageRecord(RuntimeContract):
