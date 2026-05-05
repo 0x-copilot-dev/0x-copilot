@@ -434,6 +434,27 @@ class InMemoryRuntimeApiStore:
         parent = self.approval_requests.get(parent_approval_id)
         if parent is None or parent.org_id != org_id:
             raise KeyError(parent_approval_id)
+        # PR 1.4.1 — mirror postgres' WHERE status='pending' guard so a
+        # concurrent forward (or stale retry) deterministically loses the
+        # race. The service maps RuntimeError("…not_pending") to 409 with
+        # APPROVAL_FORWARD_NOT_PENDING. Without this, the in-memory path
+        # would silently overwrite — tests pass because they're serial,
+        # but production fan-out across two browser tabs would
+        # double-fork.
+        if parent.status is not ApprovalStatus.PENDING:
+            # Idempotent re-post of the SAME forward (parent already
+            # forwarded to the SAME target with the SAME child id) is a
+            # safe no-op — return the prior chain unchanged. Anything
+            # else is a real race; raise.
+            existing_child = self.approval_requests.get(child.approval_id)
+            if (
+                parent.status is ApprovalStatus.FORWARDED
+                and parent.forwarded_to_user_id == forwarded_to_user_id
+                and existing_child is not None
+                and existing_child.chain_parent_approval_id == parent_approval_id
+            ):
+                return parent, existing_child
+            raise RuntimeError("approval_forward_parent_no_longer_pending")
         existing_child = self.approval_requests.get(child.approval_id)
         if existing_child is not None:
             return parent, existing_child
@@ -482,6 +503,88 @@ class InMemoryRuntimeApiStore:
         if approval is None or approval.org_id != org_id:
             return None
         return approval
+
+    def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        requested_by_user_id: str,
+        status: str,
+        limit: int,
+        cursor: tuple[datetime, str] | None,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """In-memory recipient inbox query (PR 1.4.1).
+
+        Newest-first ordering on ``(created_at DESC, approval_id DESC)``.
+        Cursor is exclusive — returns rows strictly older than it. RLS
+        is approximated by the ``org_id`` filter (the in-memory store has
+        no row-level enforcement; cross-tenant tests rely on the filter).
+        """
+
+        rows: list[ApprovalRequestRecord] = []
+        for approval in self.approval_requests.values():
+            if approval.org_id != org_id:
+                continue
+            if approval.user_id != requested_by_user_id:
+                continue
+            if approval.status.value != status:
+                continue
+            if cursor is not None:
+                cursor_at, cursor_id = cursor
+                if (approval.created_at, approval.approval_id) >= (
+                    cursor_at,
+                    cursor_id,
+                ):
+                    continue
+            rows.append(approval)
+        rows.sort(
+            key=lambda record: (record.created_at, record.approval_id),
+            reverse=True,
+        )
+        return tuple(rows[:limit])
+
+    def list_pending_expired_approvals(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Cross-org sweeper query — system actor only (PR 1.4.1).
+
+        The expiry sweeper runs as the runtime worker, which has the
+        cross-tenant read scope already used by the C8 retention sweeper
+        and the SIEM exporter. Returns the oldest expired rows first so
+        backlogs drain fairly.
+        """
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        rows = [
+            approval
+            for approval in self.approval_requests.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+            and approval.expires_at <= now
+        ]
+        rows.sort(key=lambda record: (record.expires_at or now, record.approval_id))
+        return tuple(rows[:limit])
+
+    def list_pending_approvals_for_membership_audit(
+        self,
+        *,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Cross-org sweeper query for the membership-cascade pass."""
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        rows = [
+            approval
+            for approval in self.approval_requests.values()
+            if approval.status is ApprovalStatus.PENDING
+        ]
+        rows.sort(key=lambda record: (record.created_at, record.approval_id))
+        return tuple(rows[:limit])
 
     def write_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
         """Append an audit record with HMAC hash-chain fields attached.

@@ -114,6 +114,45 @@ class RuntimeApiAppFactory:
         settings = RuntimeSettings.load()
         RuntimeSettings.configure_sdk_environment(settings)
         event_bus = RuntimeEventBus.get_default()
+        # PR 1.4.1 — production wiring for the inbox bus + the
+        # composite notification dispatcher. Tests use the
+        # ``RuntimeApiService(notification_dispatcher=...)`` constructor
+        # arg directly so this app-factory wire is the only place
+        # production composes them.
+        from runtime_api.sse.inbox_bus import InboxEventBus
+        from agent_runtime.api.notifications import (
+            InboxAndEmailNotificationDispatcher,
+            LoggingNotificationDispatcher,
+        )
+
+        inbox_bus = InboxEventBus.get_default()
+        app.state.runtime_inbox_bus = inbox_bus
+
+        async def _inbox_publish(approval, event_type, actor_user_id):
+            await inbox_bus.publish(
+                user_id=approval.user_id,
+                event_type=event_type,
+                approval_id=approval.approval_id,
+                status=approval.status.value,
+                org_id=approval.org_id,
+                conversation_id=approval.conversation_id,
+                actor_user_id=actor_user_id,
+            )
+
+        # Production dispatcher fans out to the inbox bus + (when wired
+        # by env flag) the email channel. Email + the HTTP poster are
+        # plumbed in W4.1 alongside the notification matrix; until then
+        # we ship inbox-only and log emails via the logging fallback.
+        notification_dispatcher = InboxAndEmailNotificationDispatcher(
+            publish_inbox=_inbox_publish,
+            post=None,
+        )
+        # The membership resolver default is also the in-memory impl
+        # (reject everything) — production wires the HTTP impl in a
+        # follow-up that depends on the backend's identity client; the
+        # Phase A landing of this PR keeps the wire surface but leaves
+        # the production HTTP injection to the deployment harness.
+        # Tests wire ``InMemoryWorkspaceMembershipResolver`` directly.
         app.state.runtime_settings = settings
         app.state.runtime_event_bus = event_bus
         if settings.store.backend in _ASYNC_BACKENDS:
@@ -125,6 +164,11 @@ class RuntimeApiAppFactory:
                 queue=async_ports.queue,
                 settings=settings,
                 on_event_appended=event_bus.notify_sync,
+                notification_dispatcher=notification_dispatcher
+                if isinstance(
+                    notification_dispatcher, InboxAndEmailNotificationDispatcher
+                )
+                else LoggingNotificationDispatcher(),
             )
         ports = RuntimeAdapterFactory.from_settings(settings)
         app.state.runtime_ports = ports
@@ -134,6 +178,7 @@ class RuntimeApiAppFactory:
             queue=ports.queue,
             settings=settings,
             on_event_appended=event_bus.notify_sync,
+            notification_dispatcher=notification_dispatcher,
         )
 
     @classmethod

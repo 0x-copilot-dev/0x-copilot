@@ -219,6 +219,46 @@ class SyncToAsyncPersistence:
             approval_id=approval_id,
         )
 
+    async def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        requested_by_user_id: str,
+        status: str,
+        limit: int,
+        cursor: tuple[datetime, str] | None,
+    ) -> Sequence[ApprovalRequestRecord]:
+        return await asyncio.to_thread(
+            self._port.list_assigned_approvals,
+            org_id=org_id,
+            requested_by_user_id=requested_by_user_id,
+            status=status,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    async def list_pending_expired_approvals(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        return await asyncio.to_thread(
+            self._port.list_pending_expired_approvals,
+            now=now,
+            limit=limit,
+        )
+
+    async def list_pending_approvals_for_membership_audit(
+        self,
+        *,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        return await asyncio.to_thread(
+            self._port.list_pending_approvals_for_membership_audit,
+            limit=limit,
+        )
+
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]
     ) -> None:

@@ -102,7 +102,28 @@ def _seed_run_and_pending_approval(
     return record
 
 
-def _make_service(store: InMemoryRuntimeApiStore) -> RuntimeApiService:
+def _make_service(
+    store: InMemoryRuntimeApiStore,
+    *,
+    membership: dict[tuple[str, str], bool] | None = None,
+) -> RuntimeApiService:
+    """Build a service wired to the in-memory store.
+
+    PR 1.4.1 — by default we seed the canonical Sarah → Marcus
+    forwarding scenario as active members so the existing tests don't
+    have to know about the resolver. Tests that exercise the resolver
+    edge cases pass an explicit ``membership`` dict.
+    """
+
+    from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
+
+    default_membership = {
+        (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
+        (_Values.ORG_ID, _Values.FORWARD_TARGET_USER_ID): True,
+    }
+    resolver = InMemoryWorkspaceMembershipResolver(
+        membership if membership is not None else default_membership
+    )
     settings = RuntimeSettings.load(
         environ={
             "OPENAI_API_KEY": "sk-test",
@@ -116,6 +137,7 @@ def _make_service(store: InMemoryRuntimeApiStore) -> RuntimeApiService:
         event_store=store,
         queue=store,
         settings=settings,
+        membership_resolver=resolver,
     )
 
 

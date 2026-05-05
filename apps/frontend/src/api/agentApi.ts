@@ -1,6 +1,7 @@
 import type {
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  AssignedApprovalsResponse,
   CancelRunRequest,
   CancelRunResponse,
   Conversation,
@@ -16,6 +17,7 @@ import type {
   DraftPatchRequest,
   DraftSendRequest,
   DraftSendResponse,
+  InboxEventEnvelope,
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
@@ -415,6 +417,70 @@ export function streamRunEvents({
       return;
     }
     onProtocolError?.(new RuntimeStreamProtocolError("invalid_envelope", data));
+  });
+  eventSource.addEventListener("error", onError);
+  return eventSource;
+}
+
+// PR 1.4.1 Gap #6 — recipient inbox endpoint. Filters approvals where the
+// caller is the requested_by user (i.e. assignments forwarded to them).
+export function listAssignedApprovals(
+  identity: RequestIdentity,
+  options: {
+    status?: "pending" | "approved" | "rejected" | "forwarded";
+    limit?: number;
+    cursor?: string | null;
+  } = {},
+): Promise<AssignedApprovalsResponse> {
+  const params: Record<string, string> = {
+    assigned_to_me: "true",
+    status: options.status ?? "pending",
+    limit: String(options.limit ?? 50),
+  };
+  if (options.cursor) {
+    params.cursor = options.cursor;
+  }
+  return httpGet<AssignedApprovalsResponse>(
+    "/v1/agent/approvals",
+    identity,
+    params,
+  );
+}
+
+// PR 1.4.1 Gap #6 — per-user inbox SSE channel. Mirrors
+// streamRunEvents' EventSource shape so the FE only knows one parser.
+// Reconnect with the highest received sequence_no.
+export function streamInboxEvents({
+  identity,
+  afterSequence,
+  onEvent,
+  onError,
+  onOpen,
+}: {
+  identity: RequestIdentity;
+  afterSequence: number;
+  onEvent: (event: InboxEventEnvelope) => void;
+  onError: (event: Event) => void;
+  onOpen?: () => void;
+}): EventSource {
+  const params = identityParams(identity);
+  params.set("after_sequence", String(afterSequence));
+  const eventSource = new EventSource(`/v1/agent/me/inbox/stream?${params}`);
+  eventSource.addEventListener("open", () => onOpen?.());
+  eventSource.addEventListener(SSE_EVENT_NAME, (message) => {
+    const data = String((message as MessageEvent).data);
+    try {
+      const parsed = JSON.parse(data) as InboxEventEnvelope;
+      if (
+        typeof parsed.sequence_no === "number" &&
+        typeof parsed.event_type === "string" &&
+        typeof parsed.approval_id === "string"
+      ) {
+        onEvent(parsed);
+      }
+    } catch {
+      // Malformed payload; FE caller can wire onError if needed.
+    }
   });
   eventSource.addEventListener("error", onError);
   return eventSource;

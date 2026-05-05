@@ -6,6 +6,8 @@ from runtime_api.schemas.approvals import (
     ApprovalDecisionResponse,
     ApprovalForwardTarget,
     ApprovalRequestRecord,
+    AssignedApproval,
+    AssignedApprovalsResponse,
 )
 from runtime_api.schemas.commands import (
     RuntimeApprovalResolvedCommand,
@@ -149,6 +151,8 @@ __all__ = [
     "ApprovalForwardTarget",
     "ApprovalRequestRecord",
     "ApprovalDecisionResponse",
+    "AssignedApproval",
+    "AssignedApprovalsResponse",
     "ApiErrorResponse",
     "RuntimeRunCommand",
     "RuntimeCancelCommand",

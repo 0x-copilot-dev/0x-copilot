@@ -187,6 +187,32 @@ class AsyncPersistencePort(Protocol):
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
 
+    async def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        requested_by_user_id: str,
+        status: str,
+        limit: int,
+        cursor: tuple[datetime, str] | None,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Recipient inbox query (PR 1.4.1). See sync port for contract."""
+
+    async def list_pending_expired_approvals(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Sweeper expiry-pass query (PR 1.4.1)."""
+
+    async def list_pending_approvals_for_membership_audit(
+        self,
+        *,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Sweeper membership-cascade query (PR 1.4.1)."""
+
     async def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
 

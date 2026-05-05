@@ -24,6 +24,8 @@ from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
+    ApprovalStatus,
+    AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
     ConversationConnectorScopesResponse,
@@ -67,6 +69,8 @@ from agent_runtime.persistence.records import BudgetRecord, BudgetStatus
 from runtime_api.http.workspace import register_workspace_feed_routes
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
+from runtime_api.sse.inbox_adapter import InboxSseAdapter
+from runtime_api.sse.inbox_bus import InboxEventBus
 from runtime_api.system_skills import (
     SystemSkillListResponse,
     SystemSkillsProjector,
@@ -291,6 +295,73 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def list_approvals(
+        cls,
+        request: Request,
+        assigned_to_me: bool = Query(False),
+        status_filter: str = Query("pending", alias="status", min_length=1),
+        limit: int = Query(50, ge=1, le=200),
+        cursor: str | None = Query(None, min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> AssignedApprovalsResponse:
+        """Recipient inbox endpoint (PR 1.4.1 Gap #6).
+
+        Today only ``assigned_to_me=true`` is supported; without it the
+        route returns an empty list (open for future filters like
+        ``my_team`` without changing the wire shape). Status filter
+        defaults to ``pending`` since the inbox is action-oriented.
+        """
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        if not assigned_to_me:
+            return AssignedApprovalsResponse(approvals=(), next_cursor=None)
+        try:
+            status_value = ApprovalStatus(status_filter)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Unsupported status filter for assigned approvals.",
+            ) from exc
+        return await cls.service(request).list_assigned_approvals(
+            org_id=org_id,
+            user_id=user_id,
+            status_filter=status_value,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    @classmethod
+    async def stream_inbox(
+        cls,
+        request: Request,
+        after_sequence: int = Query(0, ge=0),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> StreamingResponse:
+        """Per-user inbox SSE channel (PR 1.4.1 Gap #6).
+
+        One channel per user; carries ``approval_assigned`` and
+        ``approval_resolved`` envelopes for approvals where this user is
+        the requester. Mirrors the run-stream's ``?after_sequence=N``
+        reconnect contract.
+        """
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        del org_id  # Inbox is per-user, not per-org; tenant isolation
+        # is enforced by the bus's user-keyed subscriptions.
+        bus = InboxEventBus.get_default()
+        return StreamingResponse(
+            InboxSseAdapter.stream(
+                bus=bus,
+                user_id=user_id,
+                after_sequence=after_sequence,
+                follow=True,
+            ),
+            media_type=InboxSseAdapter.MEDIA_TYPE,
+        )
+
+    @classmethod
     async def approval_decision(
         cls,
         request: Request,
@@ -452,6 +523,20 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=ApprovalDecisionResponse,
             name=Keys.RouteName.APPROVAL_DECISION,
+        )
+        # PR 1.4.1 — recipient inbox endpoint + per-user SSE channel.
+        router.add_api_route(
+            "/approvals",
+            RuntimeApiRoutes.list_approvals,
+            methods=["GET"],
+            response_model=AssignedApprovalsResponse,
+            name=Keys.RouteName.LIST_APPROVALS,
+        )
+        router.add_api_route(
+            "/me/inbox/stream",
+            RuntimeApiRoutes.stream_inbox,
+            methods=["GET"],
+            name=Keys.RouteName.STREAM_INBOX,
         )
         router.add_api_route(
             "/history",

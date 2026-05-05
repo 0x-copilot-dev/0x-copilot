@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 from collections.abc import Callable
 from datetime import datetime, timezone
 
@@ -13,6 +15,15 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.api.membership import (
+    InMemoryWorkspaceMembershipResolver,
+    MembershipResolverUnavailable,
+    WorkspaceMembershipResolver,
+)
+from agent_runtime.api.notifications import (
+    LoggingNotificationDispatcher,
+    NotificationDispatcher,
+)
 from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.pricing import ModelPricingCatalog
 from runtime_api.schemas import (
@@ -24,6 +35,8 @@ from runtime_api.schemas import (
     ApprovalForwardTarget,
     ApprovalRequestRecord,
     ApprovalStatus,
+    AssignedApproval,
+    AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
     ConversationConnectorScopesResponse,
@@ -87,6 +100,11 @@ class RuntimeApiService:
         settings: RuntimeSettings | None = None,
         model_resolver: ModelConfigResolver | None = None,
         on_event_appended: Callable[[str], None] | None = None,
+        # PR 1.4.1 — production wires real impls; tests pass fakes. Both
+        # default to the harmless dev impl so unit tests that only
+        # exercise non-forwarding paths don't have to wire them.
+        membership_resolver: "WorkspaceMembershipResolver | None" = None,
+        notification_dispatcher: "NotificationDispatcher | None" = None,
     ) -> None:
         # The service is uniformly async on the inside. Sync ports get
         # wrapped via to_thread; async ports pass through. This way every
@@ -106,6 +124,18 @@ class RuntimeApiService:
         # service so repeated panel opens hit the in-process LRU rather than
         # re-querying ``model_pricing`` per render.
         self._pricing_catalog = ModelPricingCatalog(self.persistence)
+        # PR 1.4.1 — membership resolver + notification dispatcher are
+        # injected dependencies so production can swap impls without
+        # touching the service. Defaults are harmless: the in-memory
+        # resolver treats every (org, user) as inactive (forces explicit
+        # test wiring), and the logging dispatcher just logs structured
+        # events — matches dev behaviour.
+        self._membership_resolver: WorkspaceMembershipResolver = (
+            membership_resolver or InMemoryWorkspaceMembershipResolver()
+        )
+        self._notifications: NotificationDispatcher = (
+            notification_dispatcher or LoggingNotificationDispatcher()
+        )
 
     def list_models(self) -> ModelCatalogResponse:
         """Return selectable chat models and credential availability."""
@@ -619,6 +649,92 @@ class RuntimeApiService:
         }
     )
 
+    async def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        status_filter: ApprovalStatus,
+        limit: int,
+        cursor: str | None,
+    ) -> AssignedApprovalsResponse:
+        """Return the recipient inbox view (PR 1.4.1 Gap #6).
+
+        Filters to ``requested_by_user_id == user_id`` AND ``status == status_filter``.
+        Newest-first; cursor is opaque base64 of ``f"{created_at_iso}|{approval_id}"``.
+        """
+
+        bounded = min(
+            max(1, limit),
+            Values.MAX_ASSIGNED_APPROVAL_LIMIT,
+        )
+        decoded_cursor = self._decode_assigned_cursor(cursor)
+        records = await self.persistence.list_assigned_approvals(
+            org_id=org_id,
+            requested_by_user_id=user_id,
+            status=status_filter.value,
+            limit=bounded,
+            cursor=decoded_cursor,
+        )
+        approvals = tuple(self._record_to_assigned(record) for record in records)
+        next_cursor = (
+            self._encode_assigned_cursor(
+                records[-1].created_at, records[-1].approval_id
+            )
+            if len(records) == bounded and records
+            else None
+        )
+        return AssignedApprovalsResponse(
+            approvals=approvals,
+            next_cursor=next_cursor,
+        )
+
+    @classmethod
+    def _record_to_assigned(cls, record: ApprovalRequestRecord) -> AssignedApproval:
+        approval_kind = record.metadata.get(Keys.Field.APPROVAL_KIND)
+        action_summary = record.metadata.get(Keys.Field.ACTION_SUMMARY)
+        risk_class = record.metadata.get("risk_level") or record.metadata.get(
+            "risk_class"
+        )
+        forwarded_by = record.metadata.get(Keys.Field.FORWARDED_BY_USER_ID)
+        return AssignedApproval(
+            approval_id=record.approval_id,
+            conversation_id=record.conversation_id,
+            run_id=record.run_id,
+            approval_kind=approval_kind if isinstance(approval_kind, str) else "action",
+            status=record.status,
+            chain_parent_approval_id=record.chain_parent_approval_id,
+            forwarded_by_user_id=forwarded_by
+            if isinstance(forwarded_by, str)
+            else None,
+            forwarded_at=record.forwarded_at,
+            action_summary=action_summary if isinstance(action_summary, str) else "",
+            risk_class=risk_class if isinstance(risk_class, str) else None,
+            expires_at=record.expires_at,
+            created_at=record.created_at,
+        )
+
+    @staticmethod
+    def _encode_assigned_cursor(created_at: datetime, approval_id: str) -> str:
+        # Stable, opaque, replay-safe. The pipe is escape-free because
+        # ``approval_id`` matches Patterns.ID (no pipe).
+        raw = f"{created_at.isoformat()}|{approval_id}".encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_assigned_cursor(cursor: str | None) -> tuple[datetime, str] | None:
+        if cursor is None:
+            return None
+        padding = "=" * (-len(cursor) % 4)
+        try:
+            raw = base64.urlsafe_b64decode(cursor + padding).decode()
+            iso, approval_id = raw.split("|", 1)
+            return datetime.fromisoformat(iso), approval_id
+        except (ValueError, UnicodeDecodeError):
+            # Treat malformed cursors as "no cursor" rather than 400 — the
+            # FE may have a stale cursor across deployments.
+            return None
+
     async def record_approval_decision(
         self,
         *,
@@ -759,7 +875,7 @@ class RuntimeApiService:
                 http_status=status.HTTP_400_BAD_REQUEST,
                 retryable=False,
             )
-        self._guard_forwardable(approval=approval, target=target)
+        await self._guard_forwardable(approval=approval, target=target)
         run = await self._run_for_scope(
             org_id=approval.org_id,
             user_id=approval.user_id,
@@ -795,7 +911,13 @@ class RuntimeApiService:
                 now=now,
             )
         except RuntimeError as exc:
-            if "not_pending" in str(exc):
+            # PR 1.4 race guard: postgres adapter raises with
+            # ``approval_forward_parent_no_longer_pending`` when its
+            # ``WHERE status='pending'`` UPDATE finds nothing. PR 1.4.1
+            # in-memory adapter raises the same message for parity. The
+            # service translates either substring to the user-facing 409.
+            message = str(exc)
+            if "no_longer_pending" in message or "not_pending" in message:
                 raise RuntimeApiError(
                     RuntimeErrorCode.VALIDATION_ERROR,
                     Messages.Error.APPROVAL_FORWARD_NOT_PENDING,
@@ -882,6 +1004,19 @@ class RuntimeApiService:
                 },
             },
         )
+        # PR 1.4.1 Gap #5 — fire-and-forget recipient notification *after*
+        # the persistence transaction has committed and the audit row has
+        # landed. The dispatcher is contractually swallow-and-log on
+        # failure; we use ``asyncio.create_task`` to keep the request
+        # latency bound to the writes we own. Failure to notify never
+        # rolls back the forward — the chain re-converges either at the
+        # recipient's next page-load or at the next sweeper tick.
+        asyncio.create_task(
+            self._notifications.notify_approval_assigned(
+                approval=child,
+                forwarded_by_user_id=request.decided_by_user_id,
+            )
+        )
         return ApprovalDecisionResponse(
             approval_id=approval.approval_id,
             run_id=approval.run_id,
@@ -891,7 +1026,7 @@ class RuntimeApiService:
             child_approval_id=child.approval_id,
         )
 
-    def _guard_forwardable(
+    async def _guard_forwardable(
         self,
         *,
         approval: ApprovalRequestRecord,
@@ -902,11 +1037,10 @@ class RuntimeApiService:
         Self-forward and decision/forward_to coherence are caught by the
         ``ApprovalDecisionRequest`` validator. This guard covers state
         invariants (parent must be pending; kind must be forwardable;
-        chain depth cap) plus a defensive cross-tenant check on the
-        target user_id format. The "is the target a real workspace user?"
-        check belongs in services/backend's identity layer; for v1 we
-        rely on the audit + notification dispatch to surface a missing
-        user. Inactive members will simply never see the inbox row.
+        chain depth cap) plus the membership lookup against the identity
+        backend (PR 1.4.1 Gap #1). Membership resolution comes last so
+        cheap rejections (kind, depth) short-circuit before we hit the
+        network.
         """
 
         if approval.status is not ApprovalStatus.PENDING:
@@ -924,12 +1058,34 @@ class RuntimeApiService:
                 http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 retryable=False,
             )
-        # Walk the chain depth via metadata (cheap; no extra fetches).
+        # Walk the chain depth via the persisted column (set on insert).
         depth = self._chain_depth(approval=approval)
         if depth >= self.APPROVAL_FORWARD_MAX_CHAIN_DEPTH:
             raise RuntimeApiError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 Messages.Error.APPROVAL_FORWARD_CHAIN_TOO_DEEP,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+        # PR 1.4.1 Gap #1 — verify the forward target is a real, active
+        # member of this org *before* any DB write. Resolver failures
+        # (5xx from identity backend) surface as 503 retryable; definitive
+        # negatives surface as 422.
+        try:
+            is_active = await self._membership_resolver.is_active_member(
+                org_id=approval.org_id, user_id=target.user_id
+            )
+        except MembershipResolverUnavailable as exc:
+            raise RuntimeApiError(
+                RuntimeErrorCode.DEPENDENCY_ERROR,
+                Messages.Error.SAFE_FALLBACK,
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=True,
+            ) from exc
+        if not is_active:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.APPROVAL_FORWARD_INVALID_TARGET,
                 http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 retryable=False,
             )

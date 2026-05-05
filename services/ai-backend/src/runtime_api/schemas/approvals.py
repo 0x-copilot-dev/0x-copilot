@@ -135,3 +135,33 @@ class ApprovalDecisionResponse(RuntimeContract):
     # FE uses this to render "Waiting on @marcus" without an extra fetch.
     forwarded_to_user_id: str | None = None
     child_approval_id: str | None = None
+
+
+class AssignedApproval(RuntimeContract):
+    """One row in the recipient inbox (PR 1.4.1).
+
+    Returned by ``GET /v1/agent/approvals?assigned_to_me=true``. Carries
+    enough chain context for the FE to render "Forwarded by Sarah ·
+    10:41 — Post draft to #launch-aurora" + a deep link back into the
+    source conversation, without a second fetch.
+    """
+
+    approval_id: str
+    conversation_id: str
+    run_id: str
+    approval_kind: str
+    status: ApprovalStatus
+    chain_parent_approval_id: str | None = None
+    forwarded_by_user_id: str | None = None
+    forwarded_at: datetime | None = None
+    action_summary: str
+    risk_class: str | None = None
+    expires_at: datetime | None = None
+    created_at: datetime
+
+
+class AssignedApprovalsResponse(RuntimeContract):
+    """Paginated inbox listing returned to the recipient (PR 1.4.1)."""
+
+    approvals: tuple[AssignedApproval, ...] = Field(default_factory=tuple)
+    next_cursor: str | None = None

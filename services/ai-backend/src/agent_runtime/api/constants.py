@@ -99,6 +99,9 @@ class Keys:
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
+        # PR 1.4.1 — recipient inbox endpoint + per-user SSE channel.
+        LIST_APPROVALS = "list_approvals"
+        STREAM_INBOX = "stream_inbox"
         UPDATE_CONVERSATION_CONNECTORS = "update_conversation_connectors"
         # Usage endpoints (B4)
         USAGE_ME = "usage_me"
@@ -138,6 +141,14 @@ class Values:
     DEFAULT_MESSAGE_LIMIT = 50
     MAX_MESSAGE_LIMIT = 200
     SSE_EVENT_NAME = "runtime_event"
+    # PR 1.4.1 — sentinel actor for system-driven approval rejections
+    # (auto-expiry sweeper, membership-revocation cascade). The audit
+    # emitter sees this and records ``actor_type=system`` instead of
+    # ``user`` so SIEM exports distinguish operator-driven from
+    # background-driven rejections.
+    SYSTEM_USER_ID = "system:runtime"
+    DEFAULT_ASSIGNED_APPROVAL_LIMIT = 50
+    MAX_ASSIGNED_APPROVAL_LIMIT = 200
 
     class Status:
         ANSWERED = "answered"
@@ -213,6 +224,11 @@ class Messages:
         # forwarding with chain_parent_approval_id metadata so SIEM
         # exports can reconstruct chains end-to-end.
         APPROVAL_FORWARD = "approval.forward"
+        # PR 1.4.1 — reasons recorded in audit metadata when a system
+        # actor (the expiry sweeper) auto-rejects a pending approval.
+        # Distinct values feed SIEM dashboards and operational queries.
+        APPROVAL_REASON_EXPIRED = "expired"
+        APPROVAL_REASON_RECIPIENT_REVOKED = "recipient_membership_revoked"
         # PR 1.2 — per-chat connector scope mutation; metadata captures
         # ``before`` / ``after`` / ``diff_keys`` for forensic replay.
         CONVERSATION_CONNECTORS_UPDATE = "conversation.connectors.update"

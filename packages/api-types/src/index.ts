@@ -769,6 +769,43 @@ export interface ApprovalDecisionResponse {
   child_approval_id?: string | null;
 }
 
+// PR 1.4.1 Gap #6 — recipient inbox row.
+export interface AssignedApproval {
+  approval_id: string;
+  conversation_id: string;
+  run_id: string;
+  approval_kind: string;
+  status: ApprovalStatus;
+  chain_parent_approval_id?: string | null;
+  forwarded_by_user_id?: string | null;
+  forwarded_at?: string | null;
+  action_summary: string;
+  risk_class?: string | null;
+  expires_at?: string | null;
+  created_at: string;
+}
+
+export interface AssignedApprovalsResponse {
+  approvals: AssignedApproval[];
+  next_cursor: string | null;
+}
+
+// PR 1.4.1 Gap #6 — per-user inbox SSE envelope. Mirrors the
+// run-stream's monotonic-sequence reconnect contract; the FE consumes
+// this on `/v1/agent/me/inbox/stream`.
+export type InboxEventType = "approval_assigned" | "approval_resolved";
+
+export interface InboxEventEnvelope {
+  sequence_no: number;
+  event_type: InboxEventType;
+  approval_id: string;
+  status: string;
+  org_id: string;
+  conversation_id: string;
+  actor_user_id: string;
+  emitted_at: string;
+}
+
 export interface QuestionOption {
   label: string;
   description?: string | null;

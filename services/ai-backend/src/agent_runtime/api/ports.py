@@ -159,6 +159,52 @@ class PersistencePort(Protocol):
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
 
+    def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        requested_by_user_id: str,
+        status: str,
+        limit: int,
+        cursor: tuple[datetime, str] | None,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Return approvals addressed to ``requested_by_user_id`` (PR 1.4.1).
+
+        Used by the recipient inbox endpoint
+        ``GET /v1/agent/approvals?assigned_to_me=true``. Filters to a
+        single status (typically ``"pending"``); cursor is ``(created_at,
+        approval_id)`` for stable keyset pagination across replays.
+        Implementations honor RLS — the ``org_id`` filter narrows further
+        within the trusted tenant scope set by the caller.
+        """
+
+    def list_pending_expired_approvals(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Return pending approvals whose ``expires_at`` is in the past.
+
+        Used by the expiry sweeper (PR 1.4.1 Phase B). Implementations
+        SHOULD use ``FOR UPDATE SKIP LOCKED`` semantics so multiple
+        sweeper replicas process disjoint batches; the in-memory
+        adapter approximates with a simple atomic snapshot.
+        """
+
+    def list_pending_approvals_for_membership_audit(
+        self,
+        *,
+        limit: int,
+    ) -> Sequence[ApprovalRequestRecord]:
+        """Return pending approvals for the membership-cascade pass.
+
+        The sweeper calls this after the time-expiry pass to verify each
+        recipient is still an active workspace member. The set is
+        bounded; orgs with large pending backlogs naturally cap at
+        ``limit`` per tick.
+        """
+
     def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
 
