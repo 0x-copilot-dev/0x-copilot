@@ -13,10 +13,12 @@ import {
   AssistantComposer,
   type DetailsPanelKind,
 } from "../composer/AssistantComposer";
+import { useAuth } from "../../../auth/AuthContext";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
 import { PlainText } from "../markdown/PlainText";
+import { firstNameFromDisplayName } from "../../utils/greeting";
 import { ThreadWelcome } from "./ThreadWelcome";
 
 export function ThreadBody({
@@ -54,6 +56,16 @@ export function ThreadBody({
   onShowConnectors: () => void;
   onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
 }): ReactElement {
+  // Pull the first-token of the signed-in user's display_name for the
+  // welcome greeting. SessionIdentity.display_name is optional today
+  // (the auth contract doesn't ship the field through the HMAC bearer
+  // yet — see api/authApi.ts); when it lands, this read picks it up
+  // with no further wiring.
+  const auth = useAuth();
+  const greetingFirstName = firstNameFromDisplayName(
+    auth.identity?.display_name ?? null,
+  );
+
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
       <SelectionToolbarPrimitive.Root className="aui-selection-toolbar">
@@ -66,7 +78,7 @@ export function ThreadBody({
       </SelectionToolbarPrimitive.Root>
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <ThreadPrimitive.Empty>
-          <ThreadWelcome />
+          <ThreadWelcome firstName={greetingFirstName} />
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages>
           {({ message }) => {

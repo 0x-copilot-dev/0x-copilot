@@ -62,4 +62,24 @@ describe("firstNameFromDisplayName", () => {
   it("collapses internal whitespace runs", () => {
     expect(firstNameFromDisplayName("  Sarah   Chen  ")).toBe("Sarah");
   });
+
+  // Wire-receiver assertion: ThreadBody pulls auth.identity?.display_name
+  // and routes it through this helper. The optional SessionIdentity field
+  // (api/authApi.ts) means today's auth bearer ships display_name=undefined;
+  // a future auth-contract PR may populate it. Either input shape must
+  // produce a final greeting that matches the spec's "appends when present"
+  // contract.
+  it.each([
+    [{ display_name: "Sarah Chen" }, "Sarah"],
+    [{ display_name: null }, null],
+    [{ display_name: undefined }, null],
+    [{}, null], // pre-contract-widening: identity has no field at all
+  ])(
+    "consumes a SessionIdentity-shaped payload (%j → %j)",
+    (identity: { display_name?: string | null }, expected: string | null) => {
+      expect(firstNameFromDisplayName(identity.display_name ?? null)).toBe(
+        expected,
+      );
+    },
+  );
 });

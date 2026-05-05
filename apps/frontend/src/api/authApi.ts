@@ -90,6 +90,17 @@ export interface SessionIdentity {
   user_id: string;
   roles: string[];
   permission_scopes: string[];
+  /**
+   * Optional human-readable name for the signed-in user. Populated by the
+   * backend session response when the auth contract carries it; absent
+   * today (the HMAC bearer + `_identity_envelope` in
+   * `services/backend-facade/auth_routes.py` only ship org/user/roles/scopes),
+   * so consumers must treat this as nullable. Kept here so a future
+   * auth-contract PR widens the wire and existing FE consumers
+   * (`ThreadWelcome` greeting, sidebar `UserCard`) pick it up without code
+   * changes.
+   */
+  display_name?: string | null;
 }
 
 export interface SessionEnvelope {
