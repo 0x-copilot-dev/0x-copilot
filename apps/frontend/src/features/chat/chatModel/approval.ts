@@ -160,10 +160,28 @@ export function resolveActionFromPayload(
           part.toolCallId === approvalId,
       ),
   );
+  // PR 3.3 — chain-final transform. When the leaf approval resolves we
+  // walk the items once more to find a *parent* card (one whose
+  // ``child_approval_id === leaf approval_id`` and ``status ===
+  // "forwarded"``) and tag its result with the leaf decision + leaf
+  // decider. This re-renders the original inline card from
+  // "Waiting on @marcus" into "Approved by @marcus at 10:45 ·
+  // forwarded by you at 10:41 — Posted to #announcements" without a
+  // new event type. The leaf's own card still resolves via the
+  // existing ``resolveApprovalDecision`` / ``resolveMcpAuthDecision``
+  // branches below — chain-final is purely additive.
+  const decidedByUserId = stringValue(payload.decided_by_user_id);
+  const decidedAt = stringValue(payload.decided_at);
+  const itemsAfterParent = annotateChainParent(items, {
+    leafApprovalId: approvalId,
+    decision: status,
+    decidedByUserId,
+    decidedAt,
+  });
   if (hasMcpAuthAction) {
-    return resolveMcpAuthDecision(items, approvalId, status);
+    return resolveMcpAuthDecision(itemsAfterParent, approvalId, status);
   }
-  return resolveApprovalDecision(items, approvalId, status);
+  return resolveApprovalDecision(itemsAfterParent, approvalId, status);
 }
 
 // PR 1.4 — flip the parent card to a "Waiting on someone" pill on the
@@ -256,4 +274,56 @@ export function forwardActionFromPayload(
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
   return APPROVAL_DECISION_STATUSES.has(value);
+}
+
+// PR 3.3 — chain-final transform. The parent card was previously stamped
+// by ``forwardActionFromPayload`` with ``args.child_approval_id``; when
+// the leaf resolves, we tag the parent's *result* with the leaf
+// outcome + decider so ``ApprovalTool`` can render the chain-final
+// inline record ("Approved by @marcus at 10:45 · forwarded by you at
+// 10:41"). The parent's wire-level status stays ``forwarded`` — the
+// leaf result is informational only, never resumes a graph.
+function annotateChainParent(
+  items: ChatItem[],
+  args: {
+    leafApprovalId: string;
+    decision: string;
+    decidedByUserId: string | null;
+    decidedAt: string | null;
+  },
+): ChatItem[] {
+  return items.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    const content = item.content.map((part) => {
+      if (!isToolCallPart(part)) {
+        return part;
+      }
+      const partArgs = asRecord(part.args);
+      const childId = stringValue(partArgs.child_approval_id);
+      const partStatus = stringValue(partArgs.status);
+      if (childId !== args.leafApprovalId || partStatus !== FORWARDED_STATUS) {
+        return part;
+      }
+      const previousResult = asRecord(part.result);
+      return {
+        ...part,
+        result: {
+          ...previousResult,
+          // The wire-level parent status remains ``forwarded`` so the
+          // existing ``isForwarded`` branch in ApprovalTool keeps
+          // matching; the leaf annotations live on a separate slot
+          // that ``ApprovalTool`` reads only when present.
+          chain_leaf_decision: args.decision,
+          chain_leaf_decided_by_user_id: args.decidedByUserId,
+          chain_leaf_decided_at: args.decidedAt,
+        },
+      };
+    });
+    if (content === item.content) {
+      return item;
+    }
+    return { ...item, content };
+  });
 }

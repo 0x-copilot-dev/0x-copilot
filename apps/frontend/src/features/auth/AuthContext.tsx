@@ -71,9 +71,28 @@ export interface AuthContextValue extends AuthState {
   logout(): Promise<void>;
   refresh(): Promise<void>;
   bearer(): string | null;
+  /**
+   * PR 3.5 (closes PR 2.2 G4) — rotate the active workspace.
+   *
+   * Called from UserCard's WorkspacePicker. v1 hard-navigates to
+   * `?workspace=<orgId>` and lets <AuthGate> re-discover the session;
+   * PR 2.2 §3.7 explicitly authorised this path while the auth team's
+   * session-rotation endpoint is still in flight. Once
+   * `POST /v1/auth/sessions { workspace_id }` lands the implementation
+   * upgrades to in-place rotation without callers changing — the prop
+   * surface is identical.
+   *
+   * No-op when `orgId === identity.org_id` (already the active workspace).
+   */
+  switchWorkspace(orgId: string): Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+// Exported so consumers that need to *peek* at auth state without
+// requiring an ``<AuthProvider>`` parent (e.g. ``<MentionLabel>`` —
+// storybook, shared-thread preview, tests) can read it via
+// ``useContext(AuthContext)`` and gracefully degrade to anonymous.
+// App code should still prefer the typed ``useAuth()`` helper.
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 export interface AuthProviderProps {
   children: ReactNode;
@@ -229,6 +248,28 @@ export function AuthProvider({
     });
   }, [setBearer]);
 
+  const switchWorkspace = useCallback(
+    async (orgId: string): Promise<void> => {
+      // No-op when already on the requested workspace — prevents a
+      // pointless reload from accidental clicks on the current row.
+      if (state.identity !== null && state.identity.org_id === orgId) {
+        return;
+      }
+      // Hard-nav fallback (PR 2.2 §3.7). The new tab inherits the bearer
+      // from localStorage if persisted; <AuthGate> re-runs `refresh()` on
+      // mount which reads the org from the bearer's claims, so the URL
+      // hint is informational. We use `assign` (not `replace`) so the
+      // back button still returns to the prior workspace's URL.
+      if (typeof window === "undefined") {
+        return;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set("workspace", orgId);
+      window.location.assign(url.toString());
+    },
+    [state.identity],
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       ...state,
@@ -237,8 +278,9 @@ export function AuthProvider({
       logout: handleLogout,
       refresh,
       bearer: () => bearerRef.current,
+      switchWorkspace,
     }),
-    [state, login, completeMfa, handleLogout, refresh],
+    [state, login, completeMfa, handleLogout, refresh, switchWorkspace],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

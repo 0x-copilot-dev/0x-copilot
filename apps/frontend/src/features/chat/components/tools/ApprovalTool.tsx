@@ -4,7 +4,7 @@ import type {
   ApprovalForwardTarget,
 } from "@enterprise-search/api-types";
 import { Badge, Button } from "@enterprise-search/design-system";
-import { useEffect, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useState, type ReactElement } from "react";
 import { useApprovalFocus } from "../../approval/ApprovalFocusContext";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
 import {
@@ -18,6 +18,7 @@ import { PresentationResultRows } from "../activity/PresentationResultRows";
 import { presentationFromArgs } from "../activity/presentationHelpers";
 import { approvalDetailsContent } from "../details/approvalDetailsContent";
 import { AskAQuestionTool } from "./AskAQuestionTool";
+import { MentionLabel } from "../../../workspace/MentionLabel";
 import {
   WorkspaceMemberPicker,
   type WorkspaceMember,
@@ -79,7 +80,19 @@ export function ApprovalTool({
     stringValue(resultRecord.status) === "forwarded" ||
     stringValue(resultRecord.forwarded_to_user_id) !== null;
   const forwardedToUserId = stringValue(resultRecord.forwarded_to_user_id);
+  const forwardedByUserId = stringValue(resultRecord.forwarded_by_user_id);
   const forwardedAt = stringValue(resultRecord.forwarded_at);
+  // PR 3.3 — chain-final fields, populated by ``annotateChainParent``
+  // in chatModel/approval.ts when the leaf approval resolves. The
+  // wire-level parent status remains ``forwarded``; these slots are
+  // additive so the parent card transforms in place into the
+  // chain-final inline record.
+  const chainLeafDecision = stringValue(resultRecord.chain_leaf_decision);
+  const chainLeafDecidedByUserId = stringValue(
+    resultRecord.chain_leaf_decided_by_user_id,
+  );
+  const chainLeafDecidedAt = stringValue(resultRecord.chain_leaf_decided_at);
+  const isChainFinal = isForwarded && chainLeafDecision !== null;
 
   const [forwarding, setForwarding] = useState(false);
 
@@ -128,31 +141,90 @@ export function ApprovalTool({
     });
   };
 
+  // PR 3.3 — When the chain-final fields land we re-render the parent's
+  // status pill into "Approved by @marcus" / "Rejected by @marcus" so
+  // scrollback reads as a single coherent record without a modal.
+  const chainLeafLabel =
+    chainLeafDecision === "approved"
+      ? "Approved by"
+      : chainLeafDecision === "rejected"
+        ? "Rejected by"
+        : null;
   const approvalStatus = resolved
-    ? isForwarded
-      ? forwardedToUserId
-        ? `Waiting on @${forwardedToUserId}`
-        : "Forwarded"
-      : "Done"
+    ? isChainFinal && chainLeafLabel !== null
+      ? chainLeafDecidedByUserId
+        ? `${chainLeafLabel} @${chainLeafDecidedByUserId}`
+        : chainLeafLabel
+      : isForwarded
+        ? forwardedToUserId
+          ? `Waiting on @${forwardedToUserId}`
+          : "Forwarded"
+        : "Done"
     : "Waiting for permission";
   const actionName = toolActionName(toolName);
   const approvalTitle = resolved
-    ? isForwarded
-      ? "Forwarded for sign-off"
-      : isMcpApproval
-        ? "Permission approved"
-        : "Approval resolved"
+    ? isChainFinal && chainLeafDecision === "approved"
+      ? "Approved"
+      : isChainFinal && chainLeafDecision === "rejected"
+        ? "Rejected"
+        : isForwarded
+          ? "Forwarded for sign-off"
+          : isMcpApproval
+            ? "Permission approved"
+            : "Approval resolved"
     : isMcpApproval
       ? `Allow ${displayName ?? "connector"} ${actionName}?`
       : "Approval requested";
   const baseDescription = isMcpApproval
     ? mcpApprovalDescription(displayName, actionName, readOnly, args.message)
     : String(args.message ?? args.reason ?? approvalId);
-  const approvalDescription =
-    resolved && isForwarded && forwardedToUserId
-      ? `Forwarded to @${forwardedToUserId}${
-          forwardedAt ? ` at ${formatTimeShort(forwardedAt)}` : ""
-        }. Waiting on their decision.`
+  // PR 3.3 — Chain-final renders a structured `<dl>` so scrollback
+  // reads "Approved by @marcus at 10:45 / Forwarded by @sarah at 10:41".
+  // We render React (not a plain string) when chain-final is active so
+  // ``<MentionLabel>`` resolves user_ids to display names. ActivityCard
+  // accepts ReactNode for description.
+  const chainFinalDescription = isChainFinal ? (
+    <dl className="atlas-approval-chain">
+      <div className="atlas-approval-chain__row">
+        <dt>{chainLeafLabel}</dt>
+        <dd>
+          <MentionLabel userId={chainLeafDecidedByUserId} />
+          {chainLeafDecidedAt ? (
+            <Fragment>
+              {" at "}
+              {formatTimeShort(chainLeafDecidedAt)}
+            </Fragment>
+          ) : null}
+        </dd>
+      </div>
+      {forwardedByUserId ? (
+        <div className="atlas-approval-chain__row">
+          <dt>Forwarded by</dt>
+          <dd>
+            <MentionLabel userId={forwardedByUserId} />
+            {forwardedAt ? (
+              <Fragment>
+                {" at "}
+                {formatTimeShort(forwardedAt)}
+              </Fragment>
+            ) : null}
+          </dd>
+        </div>
+      ) : null}
+    </dl>
+  ) : null;
+  const forwardedDescription =
+    resolved && isForwarded && forwardedToUserId ? (
+      <span>
+        Forwarded to <MentionLabel userId={forwardedToUserId} />
+        {forwardedAt ? <> at {formatTimeShort(forwardedAt)}</> : null}. Waiting
+        on their decision.
+      </span>
+    ) : null;
+  const approvalDescription = isChainFinal
+    ? chainFinalDescription
+    : forwardedDescription !== null
+      ? forwardedDescription
       : baseDescription;
   const cardTitle = presentation?.title ?? approvalTitle;
   const cardDescription = presentation?.summary ?? approvalDescription;
