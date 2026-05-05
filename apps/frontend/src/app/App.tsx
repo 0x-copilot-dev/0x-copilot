@@ -18,6 +18,12 @@ import {
   type CompletedMcpAuthAction,
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
+// PR 4.1 — hydrate user profile + preferences once at the shell so the
+// Appearance attributes (data-density, data-reduce-motion, theme/accent)
+// apply on chat too, not only when Settings is open.
+import { useThemeSync } from "../features/me/useThemeSync";
+import { useUserPreferences } from "../features/me/useUserPreferences";
+import { useUserProfile } from "../features/me/useUserProfile";
 import {
   SettingsScreen,
   type SettingsSection,
@@ -233,6 +239,12 @@ function EnterpriseSearchApp({
 }): ReactElement {
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
+  // PR 4.1 — server-side profile + preferences. One round-trip each at
+  // app boot; ``useThemeSync`` mirrors appearance into ThemeProvider +
+  // <html> attrs so density/reduce-motion apply globally.
+  const profile = useUserProfile();
+  const preferences = useUserPreferences();
+  useThemeSync(preferences.data);
   const [route, setRoute] = useState<AppRoute>(() => {
     // PR 4.3 — One-shot migration of legacy ``/settings/<section>`` URLs
     // into the hashed form. Runs at most once per session because the
@@ -352,6 +364,8 @@ function EnterpriseSearchApp({
         connectors={connectors}
         skills={skills}
         identity={identity}
+        profile={profile}
+        preferences={preferences}
         initialSection={route.section}
         onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
         onSectionChange={(section) =>

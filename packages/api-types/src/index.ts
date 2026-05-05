@@ -1465,6 +1465,34 @@ export interface DraftUpdatedPayload {
 
 export type BudgetScope = "org" | "user";
 export type BudgetPeriod = "day" | "month";
+export type BudgetEnforcement = "soft" | "hard";
+export type BudgetStatus = "active" | "disabled";
+
+/**
+ * Mirror of `BudgetMeRow` (`services/ai-backend/src/runtime_api/schemas/budgets.py`).
+ * One budget that currently applies to the caller, with computed remaining headroom.
+ */
+export interface BudgetMeRow {
+  id: string;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  enforcement: BudgetEnforcement;
+  status: BudgetStatus;
+  limit_micro_usd: number | null;
+  limit_tokens: number | null;
+  current_micro_usd: number;
+  current_tokens: number;
+  remaining_micro_usd: number | null;
+  remaining_tokens: number | null;
+  period_start: string;
+  period_end: string;
+}
+
+/** Mirror of `BudgetMeResponse`. Response for `GET /v1/budgets/me`. */
+export interface BudgetMeResponse {
+  currency: "USD";
+  budgets: BudgetMeRow[];
+}
 
 export interface BudgetWarningPayload {
   budget_id: string;

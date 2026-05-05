@@ -1,0 +1,34 @@
+# Dev-only persona directory. Loaded only when BACKEND_ENVIRONMENT=development.
+# Edit and save — /v1/dev/personas reloads on file mtime change.
+orgs:
+  - id: org_acme
+    slug: acme
+    display_name: ACME Inc.
+  - id: org_contoso
+    slug: contoso
+    display_name: Contoso Ltd.
+
+personas:
+  - slug: sarah_acme
+    org_id: org_acme
+    user_id: usr_sarah
+    display_name: Sarah Chen
+    primary_email: sarah@acme.test
+    roles: [employee]
+    permission_scopes: [runtime:use]
+
+  - slug: marcus_admin
+    org_id: org_acme
+    user_id: usr_marcus
+    display_name: Marcus Johnson
+    primary_email: marcus@acme.test
+    roles: [admin]
+    permission_scopes: [runtime:use, users:admin]
+
+  - slug: alex_contoso_admin
+    org_id: org_contoso
+    user_id: usr_alex
+    display_name: Alex Rivera
+    primary_email: alex@contoso.test
+    roles: [admin]
+    permission_scopes: [runtime:use, users:admin]

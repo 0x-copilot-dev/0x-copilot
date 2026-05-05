@@ -1,16 +1,27 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UsagePanel } from "./UsagePanel";
 
 const _getMyUsage = vi.fn();
 const _getMyTopConversations = vi.fn();
+const _getOrgUsage = vi.fn();
+const _getMyBudgets = vi.fn();
 
 vi.mock("../../../../api/agentApi", () => ({
   getMyUsage: (...args: unknown[]) => _getMyUsage(...args),
   getMyTopConversations: (...args: unknown[]) =>
     _getMyTopConversations(...args),
+  getOrgUsage: (...args: unknown[]) => _getOrgUsage(...args),
+  getMyBudgets: (...args: unknown[]) => _getMyBudgets(...args),
 }));
+
+beforeEach(() => {
+  _getMyUsage.mockReset();
+  _getMyTopConversations.mockReset();
+  _getOrgUsage.mockReset();
+  _getMyBudgets.mockReset();
+});
 
 const identity = { orgId: "org_a", userId: "user_1" };
 
@@ -77,8 +88,60 @@ describe("UsagePanel", () => {
     render(<UsagePanel identity={identity} onClose={() => undefined} />);
     await waitFor(() => expect(screen.getByText(/4 runs/)).toBeInTheDocument());
     _getMyUsage.mockClear();
-    fireEvent.click(screen.getByRole("tab", { name: /30 days/i }));
+    // Default period is "30 days" (matches design's workspace default), so
+    // click "7 days" to force a refetch.
+    fireEvent.click(screen.getByRole("tab", { name: /7 days/i }));
     await waitFor(() => expect(_getMyUsage).toHaveBeenCalled());
-    expect(_getMyUsage).toHaveBeenLastCalledWith("30d", identity);
+    expect(_getMyUsage).toHaveBeenLastCalledWith("7d", identity);
+  });
+
+  it("switches to the workspace tab and loads org usage", async () => {
+    _seed({ withCost: true });
+    _getOrgUsage.mockResolvedValue({
+      period: { start: "2026-04-05T00:00:00Z", end: "2026-05-05T00:00:00Z" },
+      currency: "USD",
+      total: {
+        input: 100,
+        output: 50,
+        cached_input: 0,
+        total: 150,
+        runs_count: 2,
+        cost_micro_usd: 0,
+      },
+      by_day: [
+        {
+          day: "2026-05-04",
+          input: 100,
+          output: 50,
+          cached_input: 0,
+          total: 150,
+          runs_count: 2,
+          cost_micro_usd: 0,
+        },
+      ],
+      by_model: [],
+      by_user: [],
+      cold_start_fallback: false,
+    });
+    _getMyBudgets.mockResolvedValue({ currency: "USD", budgets: [] });
+    render(<UsagePanel identity={identity} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByText(/4 runs/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /workspace/i }));
+    await waitFor(() => expect(_getOrgUsage).toHaveBeenCalled());
+    expect(_getOrgUsage).toHaveBeenCalledWith("30d", identity);
+  });
+
+  it("renders the admin-only state on 403 from /v1/usage/org", async () => {
+    _seed({ withCost: true });
+    _getOrgUsage.mockRejectedValue(new Error("403 Forbidden"));
+    _getMyBudgets.mockResolvedValue({ currency: "USD", budgets: [] });
+    render(<UsagePanel identity={identity} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByText(/4 runs/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /workspace/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Workspace usage is admin-only/i),
+      ).toBeInTheDocument(),
+    );
   });
 });

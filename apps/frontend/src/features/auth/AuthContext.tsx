@@ -37,8 +37,26 @@ import {
   type SessionIdentity,
 } from "../../api/authApi";
 import { configureUnauthorizedHandler } from "../../api/http";
+import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";
 
 const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
+
+/**
+ * W0.1 — In dev, ensure a bearer exists before the first /v1/auth/session
+ * probe by minting one for the active persona via the dev IdP. Returns the
+ * (possibly newly-minted) bearer or ``null`` if minting failed or we're
+ * not in dev mode. Production builds tree-shake the dev IdP module.
+ */
+async function _devEnsureBearer(): Promise<string | null> {
+  if (!import.meta.env.DEV) return null;
+  try {
+    const slug = loadActivePersonaSlug();
+    const result = await mintDevBearer(slug);
+    return result.bearer;
+  } catch {
+    return null;
+  }
+}
 
 export type AuthStatus =
   | "initial"
@@ -168,10 +186,30 @@ export function AuthProvider({
         error: null,
       });
     } catch (err) {
-      // 401 → anonymous; everything else → error so the UI can render
-      // a "couldn't reach backend" banner.
       const message = err instanceof Error ? err.message : "auth probe failed";
       const looksLike401 = /401|unauthor/i.test(message);
+      // W0.1 — in dev, a 401 means there is no bearer. Mint one for the
+      // active persona via the dev IdP and retry once. Production builds
+      // tree-shake _devEnsureBearer; the catch above handles all real
+      // 401s (expired bearer, invalid signature, missing IdP).
+      if (looksLike401 && import.meta.env.DEV) {
+        const minted = await _devEnsureBearer();
+        if (minted) {
+          setBearer(minted);
+          try {
+            const envelope = await fetchCurrentSession();
+            setState({
+              status: "authenticated",
+              identity: envelope.identity,
+              mfaPending: null,
+              error: null,
+            });
+            return;
+          } catch {
+            // Fall through to anonymous below if the retry also fails.
+          }
+        }
+      }
       setBearer(null);
       setState({
         status: looksLike401 ? "anonymous" : "error",

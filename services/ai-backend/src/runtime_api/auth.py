@@ -33,7 +33,14 @@ class RuntimeServiceAuthenticator:
     def trusted_identity_from_request(
         cls, request: Request
     ) -> TrustedRequestIdentity | None:
-        """Return upstream-authenticated identity when service headers are present."""
+        """Lenient: returns identity when present, ``None`` in dev when absent.
+
+        Used by internal routes that gate on the service token only and
+        don't carry per-tenant identity (``/internal/v1/audit/cursor``,
+        the system-skills lister). Tenant routes must use
+        :meth:`require_identity` (or the ``Identity`` Depends) which
+        raises 401 on absence — that's the path that closes Bug 1.
+        """
 
         expected = cls._service_token()
         supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
@@ -47,8 +54,47 @@ class RuntimeServiceAuthenticator:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ENTERPRISE_SERVICE_TOKEN is not configured",
             )
-        elif not supplied:
+        elif not supplied and not request.headers.get(ORG_HEADER, "").strip():
+            # No service token + no identity headers + dev → "open" mode
+            # for internal routes that don't need identity.
             return None
+
+        org_id = cls._required_header(request, ORG_HEADER)
+        user_id = cls._required_header(request, USER_HEADER)
+        return TrustedRequestIdentity(
+            org_id=org_id,
+            user_id=user_id,
+            roles=cls._csv_header(request, ROLES_HEADER) or ("employee",),
+            permission_scopes=cls._csv_header(request, PERMISSION_SCOPES_HEADER),
+            connector_scopes=cls._connector_scopes(
+                request.headers.get(CONNECTOR_SCOPES_HEADER, "{}")
+            ),
+        )
+
+    @classmethod
+    def require_identity(cls, request: Request) -> TrustedRequestIdentity:
+        """Strict identity resolver — never returns ``None``.
+
+        W0.1: this is the path used by the ``Identity`` FastAPI dependency
+        and every tenant-scoped route. Identity headers are required;
+        absence raises 401. Bug 1 from the W0 QA report
+        (``org_id and user_id are required`` on /sources, /subagents,
+        /drafts) is closed because new routes use this strict path
+        instead of inheriting the lenient None-fallback.
+        """
+
+        expected = cls._service_token()
+        supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
+        if expected:
+            if supplied != expected:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "Invalid service token"
+                )
+        elif cls._environment() == "production":
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ENTERPRISE_SERVICE_TOKEN is not configured",
+            )
 
         org_id = cls._required_header(request, ORG_HEADER)
         user_id = cls._required_header(request, USER_HEADER)

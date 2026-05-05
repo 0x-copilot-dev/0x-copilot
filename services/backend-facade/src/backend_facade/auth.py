@@ -185,12 +185,16 @@ class FacadeAuthenticator:
 
     @classmethod
     def authenticate_request(cls, request: Request) -> AuthenticatedIdentity:
-        """Validate the client bearer token and return trusted identity claims."""
+        """Validate the client bearer token and return trusted identity claims.
+
+        W0.1 — there is no dev bypass. In development the FE / pytest /
+        curl harness obtains a bearer from the env-gated dev IdP
+        (``POST /v1/dev/identity/mint`` on backend) and presents it like
+        any other bearer. Same verification path, dev and prod.
+        """
 
         header = request.headers.get(AUTH_HEADER, "")
         if not header.lower().startswith("bearer "):
-            if cls._is_dev_auth_bypass_enabled():
-                return cls._development_identity()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         token = header.split(" ", maxsplit=1)[1].strip()
         return cls.verify_identity_token(token, cls._auth_secret())
@@ -398,53 +402,9 @@ class FacadeAuthenticator:
             "ENTERPRISE_SERVICE_TOKEN is not configured",
         )
 
-    @classmethod
-    def _development_identity(cls) -> AuthenticatedIdentity:
-        return AuthenticatedIdentity(
-            org_id=os.environ.get("FACADE_DEV_ORG_ID", "org_123").strip() or "org_123",
-            user_id=os.environ.get("FACADE_DEV_USER_ID", "user_123").strip()
-            or "user_123",
-            roles=("employee",),
-            permission_scopes=("runtime:use",),
-            connector_scopes={},
-        )
-
     @staticmethod
     def _environment() -> str:
         return os.environ.get("FACADE_ENVIRONMENT", "development").strip().lower()
-
-    @classmethod
-    def _is_dev_auth_bypass_enabled(cls) -> bool:
-        # Two gates:
-        #  1. ``FACADE_ENVIRONMENT=development`` — the legacy gate.
-        #  2. The deployment profile must allow it. Production profiles
-        #     (``single_tenant_managed`` / ``single_tenant_self_hosted``) keep
-        #     ``dev_auth_bypass_allowed=False`` even when the env claims to be
-        #     development, so a leaked dev env var cannot accidentally relax
-        #     auth in a regulated deploy.
-        if cls._environment() != "development":
-            return False
-        if os.environ.get("DEV_AUTH_BYPASS", "").strip().lower() != "true":
-            return False
-        return cls._deployment_allows_dev_bypass()
-
-    @staticmethod
-    def _deployment_allows_dev_bypass() -> bool:
-        # Imported lazily so the auth module stays free of import-time side
-        # effects; profile loading touches env vars and is exercised via the
-        # ``app.state.deployment`` cache in normal request flow.
-        from backend_facade.deployment_profile import (
-            DeploymentProfileError,
-            DeploymentProfileLoader,
-        )
-
-        try:
-            return DeploymentProfileLoader.load().toggles.dev_auth_bypass_allowed
-        except DeploymentProfileError:
-            # If the profile itself is misconfigured, fail closed: refuse
-            # bypass. The profile loader at app startup is the canonical place
-            # to surface the configuration error to the operator.
-            return False
 
     @classmethod
     def _require_session_binding(cls) -> bool:

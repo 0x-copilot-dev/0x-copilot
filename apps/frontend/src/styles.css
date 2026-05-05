@@ -4457,3 +4457,123 @@ p {
   font-size: 0.85rem;
   margin-top: var(--space-xs);
 }
+
+/* ---- PR 4.5 — Usage tabs + workspace chart + Share popover ---- */
+
+.details-panel__tab-switcher {
+  display: flex;
+  gap: var(--space-xs);
+  border-bottom: 1px solid var(--color-border-soft, #232325);
+  padding-bottom: var(--space-xs);
+}
+
+.details-panel__chart {
+  width: 100%;
+  /* Fixed height; ResponsiveContainer fills it. */
+  min-height: 260px;
+}
+
+.details-panel__sort {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.details-panel__sort:hover {
+  color: var(--color-text, #ededee);
+}
+.details-panel__sort[aria-pressed="true"] {
+  color: var(--color-accent, #d97757);
+}
+
+.details-panel__table tr[data-variant="other"] td {
+  color: var(--color-text-subtle, #7e7e84);
+  font-style: italic;
+}
+
+/* Share popover — sits inside `.ds-popover-content` from design-system. */
+.share-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 240px;
+}
+.share-popover__row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.share-popover__row:hover,
+.share-popover__row:focus-visible {
+  background: var(--color-surface-2, #222224);
+  outline: none;
+}
+.share-popover__row[data-success="true"] {
+  color: var(--color-success, #6ec48c);
+}
+.share-popover__icon {
+  width: 16px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--color-text-subtle, #7e7e84);
+}
+.share-popover__divider {
+  margin: 0.35rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-border-soft, #232325);
+}
+.share-popover__fieldset {
+  border: 0;
+  padding: 0.35rem 0.6rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--color-text-subtle, #7e7e84);
+  font-size: 0.78rem;
+}
+.share-popover__fieldset legend {
+  padding: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-subtle, #7e7e84);
+}
+.share-popover__fieldset[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.share-popover__fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.share-popover__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--color-text-subtle, #7e7e84);
+}
+.share-popover__toggle[data-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.share-popover__hint {
+  display: block;
+  padding: 0.2rem 0.6rem 0.4rem;
+  font-size: 0.7rem;
+  color: var(--color-text-subtle, #7e7e84);
+}

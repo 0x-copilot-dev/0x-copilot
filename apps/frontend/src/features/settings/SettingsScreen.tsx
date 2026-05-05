@@ -22,7 +22,14 @@ import { authTone } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
 import type { SkillState } from "../skills/useSkills";
 import type { RequestIdentity } from "../../api/config";
+import type { UserProfileState } from "../me/useUserProfile";
+import type { UserPreferencesState } from "../me/useUserPreferences";
 import { AccountSessionsPanel } from "./AccountSessionsPanel";
+// PR 4.1 — "You" group sections.
+import { Appearance } from "./sections/Appearance";
+import { Notifications } from "./sections/Notifications";
+import { Profile } from "./sections/Profile";
+import { Shortcuts } from "./sections/Shortcuts";
 // PR 4.3 — "AI & data" group sections.
 import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
@@ -81,9 +88,14 @@ type RailEntry =
   | { kind: "section"; id: SettingsSection; label: string };
 
 const sections: Array<RailEntry> = [
+  // PR 4.1 — "You" group: per-user profile + preferences. Atlas places
+  // this first so users land on their own settings.
+  { kind: "group", label: "You" },
+  { kind: "section", id: "profile", label: "Profile" },
+  { kind: "section", id: "appearance", label: "Appearance" },
+  { kind: "section", id: "shortcuts", label: "Shortcuts" },
+  { kind: "section", id: "notifications", label: "Notifications" },
   // PR 4.2 — "Workspace" group: workspace branding, members, billing.
-  // Sits at the top so admins land on Workspace by default once PR 4.1's
-  // "You" group merges and shifts these below it.
   { kind: "group", label: "Workspace" },
   { kind: "section", id: "workspace", label: "Workspace" },
   { kind: "section", id: "members", label: "Members" },
@@ -103,6 +115,8 @@ export function SettingsScreen({
   connectors,
   skills,
   identity,
+  profile,
+  preferences,
   initialSection = "general",
   dataResidency,
   onBackToChat,
@@ -117,6 +131,14 @@ export function SettingsScreen({
    * those sections continue to compile.
    */
   identity?: RequestIdentity;
+  /**
+   * PR 4.1 — hydrated user profile + preferences from the app shell.
+   * Optional so legacy callers that mount SettingsScreen without
+   * threading these (tests, storybook) keep working — the "You"
+   * sections render a soft-disabled state when the state is absent.
+   */
+  profile?: UserProfileState;
+  preferences?: UserPreferencesState;
   initialSection?: SettingsSection;
   /**
    * PR 4.3 — read-only deployment region label rendered in the
@@ -193,6 +215,21 @@ export function SettingsScreen({
         </nav>
       </aside>
       <section className="settings-content">
+        {/* PR 4.1 — "You" group. Render only when the shell threaded the
+            hydrated state in. Legacy mounts without these props see the
+            unchanged legacy rail. */}
+        {activeSection === "profile" && profile ? (
+          <Profile profile={profile} />
+        ) : null}
+        {activeSection === "appearance" && preferences ? (
+          <Appearance preferences={preferences} />
+        ) : null}
+        {activeSection === "shortcuts" && preferences ? (
+          <Shortcuts preferences={preferences} />
+        ) : null}
+        {activeSection === "notifications" && preferences ? (
+          <Notifications preferences={preferences} />
+        ) : null}
         {/* PR 4.2 — Workspace group. Render only when identity is plumbed
             (legacy callers that don't pass identity see the legacy rail). */}
         {activeSection === "workspace" && identity ? (

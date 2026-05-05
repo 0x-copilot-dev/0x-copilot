@@ -13,6 +13,19 @@ from backend_facade.app import create_app
 from backend_facade.settings import FacadeSettings
 
 
+async def _unused_backend(*a, **k):
+    raise AssertionError("backend should not have been called")
+
+
+def _dispatch(backend_fake, ai_fake):
+    async def _f(*args, target, **kwargs):
+        return await (ai_fake if target == "ai_backend" else backend_fake)(
+            *args, **kwargs
+        )
+
+    return _f
+
+
 class FacadeAuthTestMixin:
     def auth_headers(self, monkeypatch) -> dict[str, str]:
         monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")
@@ -70,8 +83,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
             assert args[2] == "/internal/v1/skills/system"
             return {"skills": []}
 
-        monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(fake_forward_json, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
@@ -113,8 +129,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
                 ]
             }
 
-        monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(fake_forward_json, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
@@ -141,8 +160,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
                 ]
             }
 
-        monkeypatch.setattr(facade_app, "forward_json", fake_forward_json)
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(fake_forward_json, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills", headers=self.auth_headers(monkeypatch))
@@ -187,7 +209,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
             assert "request_context" not in kwargs["json"]
             return {"conversation_id": "conv_123"}
 
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(_unused_backend, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.post(
@@ -210,7 +236,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
             assert params["include_archived"] is False
             return {"conversations": []}
 
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(_unused_backend, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get(
@@ -237,92 +267,18 @@ class TestFacadeSettings(FacadeAuthTestMixin):
 
         assert response.status_code == 401
 
-    def test_facade_uses_default_development_identity_with_explicit_dev_bypass(
-        self, monkeypatch
-    ) -> None:
-        async def fake_forward_json_to_ai(*args, **kwargs):
-            assert args[1] == "POST"
-            assert args[2] == "/v1/agent/conversations"
-            assert kwargs["json"]["org_id"] == "org_123"
-            assert kwargs["json"]["user_id"] == "user_123"
-            assert "request_context" not in kwargs["json"]
-            return {"conversation_id": "conv_dev"}
+    def test_dev_auth_bypass_env_var_is_no_longer_honored(self, monkeypatch) -> None:
+        """W0.1 — DEV_AUTH_BYPASS=true is dead. Without a bearer the facade
+        replies 401 even in development; the dev IdP is the only path."""
 
         monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
         monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
         monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
-        client = TestClient(create_app(FacadeSettings()))
-
-        response = client.post(
-            "/v1/agent/conversations",
-            json={"org_id": "forged_org", "user_id": "forged_user"},
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"conversation_id": "conv_dev"}
-
-    def test_facade_uses_configured_development_identity_with_explicit_dev_bypass(
-        self, monkeypatch
-    ) -> None:
-        async def fake_forward_json_to_ai(*args, **kwargs):
-            assert args[1] == "POST"
-            assert args[2] == "/v1/agent/runs"
-            assert kwargs["json"]["org_id"] == "org_dev"
-            assert kwargs["json"]["user_id"] == "user_dev"
-            assert kwargs["json"]["request_context"]["permission_scopes"] == (
-                "runtime:use",
-            )
-            return {"run_id": "run_dev"}
-
-        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
-        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
-        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
-        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
-        monkeypatch.setenv("FACADE_DEV_ORG_ID", "org_dev")
-        monkeypatch.setenv("FACADE_DEV_USER_ID", "user_dev")
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
-        client = TestClient(create_app(FacadeSettings()))
-
-        response = client.post(
-            "/v1/agent/runs",
-            json={
-                "conversation_id": "conversation_dev",
-                "org_id": "forged_org",
-                "user_id": "forged_user",
-                "user_input": "Hi",
-            },
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"run_id": "run_dev"}
-
-    def test_facade_does_not_send_default_service_token_in_dev_bypass(
-        self, monkeypatch
-    ) -> None:
-        async def fake_forward_json(*args, **kwargs):
-            assert kwargs["headers"]["x-enterprise-service-token"] == ""
-            assert kwargs["headers"]["x-enterprise-org-id"] == "org_123"
-            assert kwargs["headers"]["x-enterprise-user-id"] == "user_123"
-            return {"skills": []}
-
-        monkeypatch.delenv("ENTERPRISE_AUTH_SECRET", raising=False)
-        monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
-        monkeypatch.setenv("FACADE_ENVIRONMENT", "development")
-        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
-        monkeypatch.setattr(facade_app, "_forward_json", fake_forward_json)
-        client = TestClient(create_app(FacadeSettings()))
-
-        response = client.get("/v1/skills")
-
-        assert response.status_code == 200
-
-    def test_facade_rejects_missing_bearer_token_outside_development(
-        self, monkeypatch
-    ) -> None:
-        monkeypatch.setenv("FACADE_ENVIRONMENT", "staging")
-        monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
+        # Skip deployment_profile fail-loud (which catches the same env var
+        # at boot under non-saas profiles); we are exercising the request
+        # path here, not the boot check.
+        monkeypatch.setenv("DEPLOYMENT_PROFILE", "saas_multi_tenant")
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.get("/v1/skills")
@@ -356,7 +312,11 @@ class TestFacadeSettings(FacadeAuthTestMixin):
                 "latest_sequence_no": 3,
             }
 
-        monkeypatch.setattr(facade_app, "forward_json_to_ai", fake_forward_json_to_ai)
+        monkeypatch.setattr(
+            facade_app,
+            "forward_json",
+            _dispatch(_unused_backend, fake_forward_json_to_ai),
+        )
         client = TestClient(create_app(FacadeSettings()))
 
         response = client.post(

@@ -13,11 +13,23 @@ import hmac
 import json
 
 from fastapi.testclient import TestClient
-
-import backend_facade.app as facade_app
 from backend_facade.app import create_app
-from backend_facade.auth import AuthenticatedIdentity
 from backend_facade.settings import FacadeSettings
+from backend_facade.auth import AuthenticatedIdentity
+import backend_facade.app as facade_app
+
+
+async def _unused_backend(*a, **k):
+    raise AssertionError("backend should not have been called")
+
+
+def _dispatch(backend_fake, ai_fake):
+    async def _f(*args, target, **kwargs):
+        return await (ai_fake if target == "ai_backend" else backend_fake)(
+            *args, **kwargs
+        )
+
+    return _f
 
 
 def _bearer(org_id: str, user_id: str, *, secret: str = "test-auth-secret") -> str:
@@ -58,7 +70,9 @@ def test_distinct_bearer_tokens_yield_distinct_ai_backend_identity(monkeypatch) 
         captured.append(kwargs["identity"])
         return {"conversations": []}
 
-    monkeypatch.setattr(facade_app, "forward_json_to_ai", capture_forward_to_ai)
+    monkeypatch.setattr(
+        facade_app, "forward_json", _dispatch(_unused_backend, capture_forward_to_ai)
+    )
     client = TestClient(create_app(FacadeSettings()))
 
     client.get(

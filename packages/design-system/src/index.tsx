@@ -17,6 +17,15 @@ import {
   useState,
 } from "react";
 
+export {
+  Popover,
+  PopoverAnchor,
+  PopoverClose,
+  PopoverContent,
+  PopoverTrigger,
+} from "./popover";
+export type { PopoverContentProps, PopoverProps } from "./popover";
+
 export type ThemeScheme = "dark" | "light" | "slate";
 
 export type AccentScheme =

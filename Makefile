@@ -65,12 +65,19 @@ check-provider-key:
 		fi; \
 	fi
 
+# W0.1 — dev secrets shared by all three services. The dev IdP signs
+# bearers with this secret; the facade verifies with the same value. Never
+# checked into prod env (prod-build CI rejects literal "dev-only-" prefixes).
+DEV_AUTH_SECRET ?= dev-only-not-for-prod
+DEV_SERVICE_TOKEN ?= dev-only-service-token
+
 dev: check-local-env check-provider-key
 	@echo "Starting Enterprise Search dev stack"
 	@echo "UI:      http://$(BIND_HOST):$(FRONTEND_PORT)"
 	@echo "Facade:  http://$(BIND_HOST):$(FACADE_PORT)"
 	@echo "Backend: http://$(BIND_HOST):$(BACKEND_PORT)"
 	@echo "AI API:  http://$(BIND_HOST):$(AI_BACKEND_PORT)"
+	@echo "Dev IdP: POST $(BACKEND_PORT)/v1/dev/identity/mint  (or 'make dev-bearer PERSONA=...')"
 	@pids=""; \
 	cleanup() { \
 		echo; echo "Stopping Enterprise Search dev stack"; \
@@ -80,11 +87,14 @@ dev: check-local-env check-provider-key
 	trap cleanup INT TERM EXIT; \
 	(cd services/backend && \
 		BACKEND_ENVIRONMENT=development \
+		ENTERPRISE_AUTH_SECRET=$(DEV_AUTH_SECRET) \
+		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		MCP_TOKEN_VAULT_PROVIDER=local \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
 		.venv/bin/python -m uvicorn backend_app.app:app --host $(BIND_HOST) --port $(BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/ai-backend && \
 		RUNTIME_ENVIRONMENT=development \
+		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		RUNTIME_STORE_BACKEND=in_memory \
 		RUNTIME_START_IN_PROCESS_WORKER=true \
 		MCP_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
@@ -93,15 +103,24 @@ dev: check-local-env check-provider-key
 		.venv/bin/python -m uvicorn runtime_api.app:app --host $(BIND_HOST) --port $(AI_BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/backend-facade && \
 		FACADE_ENVIRONMENT=development \
-		DEV_AUTH_BYPASS=true \
-		FACADE_DEV_ORG_ID=org_123 \
-		FACADE_DEV_USER_ID=user_123 \
+		ENTERPRISE_AUTH_SECRET=$(DEV_AUTH_SECRET) \
+		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		BACKEND_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		AI_BACKEND_URL=http://$(BIND_HOST):$(AI_BACKEND_PORT) \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
 		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
 	(npm run dev --workspace @enterprise-search/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
 	wait $$pids
+
+# W0.1 — print a dev bearer to stdout. Useful for curl scripts.
+#   make dev-bearer                       → mints sarah_acme
+#   make dev-bearer PERSONA=marcus_admin  → mints marcus_admin
+PERSONA ?= sarah_acme
+dev-bearer:
+	@curl -sS -X POST http://$(BIND_HOST):$(BACKEND_PORT)/v1/dev/identity/mint \
+		-H 'content-type: application/json' \
+		-d '{"persona_slug":"$(PERSONA)"}' \
+		| python3 -c "import json,sys;print(json.load(sys.stdin)['bearer'])"
 
 docker-dev: check-provider-key
 	docker compose -f docker-compose.dev.yml up --build

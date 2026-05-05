@@ -21,7 +21,7 @@ from enterprise_service_contracts.scopes import RUNTIME_USE
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.draft_service import DraftService
-from runtime_api.auth import RuntimeServiceAuthenticator
+from runtime_api.identity import Identity
 from runtime_api.rbac import RequireScopes
 from runtime_api.schemas import (
     Draft,
@@ -41,10 +41,10 @@ class DraftRoutes:
         cls,
         request: Request,
         conversation_id: str,
+        identity: Identity,
     ) -> DraftListResponse:
-        org_id, _user_id = cls._scoped_identity(request)
         return await cls._service(request).list_for_conversation(
-            org_id=org_id, conversation_id=conversation_id
+            org_id=identity.org_id, conversation_id=conversation_id
         )
 
     @classmethod
@@ -52,11 +52,11 @@ class DraftRoutes:
         cls,
         request: Request,
         draft_id: str,
+        identity: Identity,
         version: int | None = Query(None, ge=1),
     ) -> Draft:
-        org_id, _user_id = cls._scoped_identity(request)
         return await cls._service(request).get(
-            org_id=org_id, draft_id=draft_id, version=version
+            org_id=identity.org_id, draft_id=draft_id, version=version
         )
 
     @classmethod
@@ -65,11 +65,11 @@ class DraftRoutes:
         request: Request,
         draft_id: str,
         payload: DraftPatchRequest,
+        identity: Identity,
     ) -> Draft:
-        org_id, user_id = cls._scoped_identity(request)
         return await cls._service(request).patch(
-            org_id=org_id,
-            user_id=user_id,
+            org_id=identity.org_id,
+            user_id=identity.user_id,
             draft_id=draft_id,
             request=payload,
         )
@@ -80,11 +80,11 @@ class DraftRoutes:
         request: Request,
         draft_id: str,
         payload: DraftSendRequest,
+        identity: Identity,
     ) -> DraftSendResponse:
-        org_id, user_id = cls._scoped_identity(request)
         return await cls._service(request).send(
-            org_id=org_id,
-            user_id=user_id,
+            org_id=identity.org_id,
+            user_id=identity.user_id,
             draft_id=draft_id,
             request=payload,
         )
@@ -95,11 +95,11 @@ class DraftRoutes:
         request: Request,
         draft_id: str,
         payload: DraftDiscardRequest,
+        identity: Identity,
     ) -> Draft:
-        org_id, user_id = cls._scoped_identity(request)
         return await cls._service(request).discard(
-            org_id=org_id,
-            user_id=user_id,
+            org_id=identity.org_id,
+            user_id=identity.user_id,
             draft_id=draft_id,
             request=payload,
         )
@@ -115,16 +115,6 @@ class DraftRoutes:
                 "Draft service is not configured.",
             )
         return service
-
-    @staticmethod
-    def _scoped_identity(request: Request) -> tuple[str, str]:
-        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
-        if identity is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "org_id and user_id are required.",
-            )
-        return identity.org_id, identity.user_id
 
 
 def register_draft_routes(router: APIRouter) -> None:

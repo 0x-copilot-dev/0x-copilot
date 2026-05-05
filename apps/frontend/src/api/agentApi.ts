@@ -30,8 +30,10 @@ import type {
   UpdateConversationConnectorScopesRequest,
   UpdateConversationRequest,
   UpdateWorkspaceDefaultsRequest,
+  BudgetMeResponse,
   UsageConversationRow,
   UsageMeResponse,
+  UsageOrgResponse,
   UsagePeriod,
   WorkspaceDefaultsResponse,
   WorkspaceExportResponse,
@@ -306,6 +308,27 @@ export function getMyTopConversations(
     identity,
     { period, limit: String(limit) },
   );
+}
+
+/**
+ * PR 4.5: org-wide usage rollup for the period (admin / auditor only).
+ * Returns 403 to non-admin callers; UI surfaces an admin-only empty state.
+ */
+export function getOrgUsage(
+  period: UsagePeriod,
+  identity: RequestIdentity,
+): Promise<UsageOrgResponse> {
+  return httpGet<UsageOrgResponse>("/v1/usage/org", identity, { period });
+}
+
+/**
+ * PR 4.5: caller's currently-applicable budgets with remaining headroom.
+ * Drives the plan-limit overlay on the workspace usage chart.
+ */
+export function getMyBudgets(
+  identity: RequestIdentity,
+): Promise<BudgetMeResponse> {
+  return httpGet<BudgetMeResponse>("/v1/budgets/me", identity);
 }
 
 export function listModels(

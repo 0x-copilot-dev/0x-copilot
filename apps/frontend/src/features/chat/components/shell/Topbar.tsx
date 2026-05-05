@@ -71,6 +71,13 @@ export interface TopbarProps {
 
   /* nav */
   onShare: () => void;
+  /**
+   * PR 4.5 — optional render-prop slot. When supplied, replaces the default
+   * share `IconButton` with the supplied node (typically `<SharePopover>`).
+   * Falls back to the legacy click-to-copy `IconButton` when omitted so the
+   * topbar remains usable without the popover wired in.
+   */
+  shareSlot?: ReactNode;
   onOpenSettings: () => void;
 
   /**
@@ -126,6 +133,7 @@ export function Topbar(props: TopbarProps): ReactElement {
     onDepthChange,
     depthVisible,
     onShare,
+    shareSlot,
     onOpenSettings,
     chromeDisabled,
   } = props;
@@ -206,16 +214,18 @@ export function Topbar(props: TopbarProps): ReactElement {
             {connectorsPopover}
           </span>
           <UsageMeter pct={usagePct} onOpen={onOpenUsage} />
-          <IconButton
-            type="button"
-            variant="ghost"
-            onClick={onShare}
-            aria-label="Share this conversation"
-            data-tooltip="Share"
-            data-tooltip-placement="bottom"
-          >
-            ⤴
-          </IconButton>
+          {shareSlot ?? (
+            <IconButton
+              type="button"
+              variant="ghost"
+              onClick={onShare}
+              aria-label="Share this conversation"
+              data-tooltip="Share"
+              data-tooltip-placement="bottom"
+            >
+              ⤴
+            </IconButton>
+          )}
           <IconButton
             type="button"
             variant="ghost"

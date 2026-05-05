@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.workspace_feed_service import WorkspaceFeedService
-from runtime_api.auth import RuntimeServiceAuthenticator
+from runtime_api.identity import Identity
 from runtime_api.schemas import (
     SourceListResponse,
     SubagentListResponse,
@@ -33,14 +33,14 @@ class WorkspaceFeedRoutes:
         cls,
         request: Request,
         conversation_id: str,
+        identity: Identity,
         status_filter: SubagentStatusFilter = Query(
             SubagentStatusFilter.ALL, alias="status"
         ),
         limit: int = Query(50, ge=1, le=200),
     ) -> SubagentListResponse:
-        org_id, _ = cls._scoped_identity(request)
         return await cls._service(request).list_subagents(
-            org_id=org_id,
+            org_id=identity.org_id,
             conversation_id=conversation_id,
             status_filter=status_filter,
             limit=limit,
@@ -51,12 +51,12 @@ class WorkspaceFeedRoutes:
         cls,
         request: Request,
         conversation_id: str,
+        identity: Identity,
         run_id: str | None = Query(None, min_length=1, max_length=128),
         limit: int = Query(200, ge=1, le=500),
     ) -> SourceListResponse:
-        org_id, _ = cls._scoped_identity(request)
         return await cls._service(request).list_sources(
-            org_id=org_id,
+            org_id=identity.org_id,
             conversation_id=conversation_id,
             run_id=run_id,
             limit=limit,
@@ -71,16 +71,6 @@ class WorkspaceFeedRoutes:
                 "Workspace feed service is not configured.",
             )
         return service
-
-    @staticmethod
-    def _scoped_identity(request: Request) -> tuple[str, str]:
-        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
-        if identity is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "org_id and user_id are required.",
-            )
-        return identity.org_id, identity.user_id
 
 
 def register_workspace_feed_routes(router: APIRouter) -> None:

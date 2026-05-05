@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from enterprise_service_contracts.headers import REQUEST_ID_HEADER
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 import httpx
 from pydantic import BaseModel, Field
-
+from backend_facade.settings import FacadeSettings
 from backend_facade.auth import AuthenticatedIdentity, FacadeAuthenticator
 from backend_facade.auth_routes import register_auth_routes
 from backend_facade.me_routes import register_me_routes
@@ -28,7 +29,8 @@ from backend_facade.observability import (
     emit_access_log,
 )
 from backend_facade.routes.health import register_health_routes
-from backend_facade.settings import FacadeSettings
+
+ForwardTarget = Literal["backend", "ai_backend"]
 
 
 class FacadeConversationRequest(BaseModel):
@@ -131,6 +133,25 @@ def create_app(
             media_type=upstream.headers.get("content-type"),
         )
 
+    # ----- Dev IdP proxy (W0.1) -----
+    # Two unauthenticated proxies to ``services/backend`` /v1/dev/*; they are
+    # the bootstrap path the FE / pytest fixture / curl harness uses to mint
+    # a bearer. Registered only when FACADE_ENVIRONMENT=development AND the
+    # deployment profile permits it. Backend is the actual gate — it only
+    # registers /v1/dev/* when BACKEND_ENVIRONMENT=development, so two-key
+    # safety in production.
+    if _dev_idp_enabled():
+
+        @app.get("/v1/dev/personas")
+        async def list_dev_personas() -> dict[str, object]:
+            return await _proxy_dev(app, "GET", "/v1/dev/personas")
+
+        @app.post("/v1/dev/identity/mint")
+        async def mint_dev_identity(
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return await _proxy_dev(app, "POST", "/v1/dev/identity/mint", json=payload)
+
     @app.get("/v1/session")
     async def get_session(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
@@ -152,6 +173,7 @@ def create_app(
             app,
             "POST",
             "/v1/mcp/servers",
+            target="backend",
             json=identity.scoped_payload(payload),
             identity=identity,
         )
@@ -163,6 +185,7 @@ def create_app(
             app,
             "GET",
             "/v1/mcp/servers",
+            target="backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -177,6 +200,7 @@ def create_app(
             app,
             "DELETE",
             f"/v1/mcp/servers/{server_id}",
+            target="backend",
             params=identity.scoped_params(),
             expect_json=False,
             identity=identity,
@@ -194,6 +218,7 @@ def create_app(
             app,
             "PATCH",
             f"/v1/mcp/servers/{server_id}",
+            target="backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -208,6 +233,7 @@ def create_app(
             app,
             "POST",
             f"/v1/mcp/servers/{server_id}/auth/start",
+            target="backend",
             json=identity.scoped_payload(payload),
             identity=identity,
         )
@@ -222,6 +248,7 @@ def create_app(
             app,
             "POST",
             f"/v1/mcp/servers/{server_id}/auth/skip",
+            target="backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -246,6 +273,7 @@ def create_app(
             app,
             "GET",
             "/v1/mcp/oauth/callback",
+            target="backend",
             params=params,
             identity=identity,
         )
@@ -255,10 +283,11 @@ def create_app(
         request: Request, payload: FacadeConversationRequest
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             "/v1/agent/conversations",
+            target="ai_backend",
             json=identity.scoped_payload(payload.model_dump(exclude_none=True)),
             identity=identity,
         )
@@ -271,10 +300,11 @@ def create_app(
         include_deleted: bool = False,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/agent/conversations",
+            target="ai_backend",
             params=identity.scoped_params(
                 {
                     "limit": limit,
@@ -291,10 +321,11 @@ def create_app(
         conversation_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -307,10 +338,11 @@ def create_app(
         include_deleted: bool = False,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/messages",
+            target="ai_backend",
             params=identity.scoped_params(
                 {"limit": limit, "include_deleted": include_deleted}
             ),
@@ -323,10 +355,11 @@ def create_app(
         conversation_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/context",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -339,10 +372,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "PATCH",
             f"/v1/agent/conversations/{conversation_id}/connectors",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -356,10 +390,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "PATCH",
             f"/v1/agent/conversations/{conversation_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -372,10 +407,11 @@ def create_app(
     ) -> Response:
         identity = FacadeAuthenticator.authenticate_request(request)
         # The runtime API returns 204 — preserve that shape (no JSON body).
-        await forward_json_to_ai(
+        await forward_json(
             app,
             "DELETE",
             f"/v1/agent/conversations/{conversation_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -387,10 +423,11 @@ def create_app(
         conversation_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             f"/v1/agent/conversations/{conversation_id}/restore",
+            target="ai_backend",
             params=identity.scoped_params(),
             json={},
             identity=identity,
@@ -400,10 +437,11 @@ def create_app(
     @app.get("/v1/agent/workspace/defaults")
     async def get_workspace_defaults(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/agent/workspace/defaults",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -414,10 +452,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "PUT",
             "/v1/agent/workspace/defaults",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -429,10 +468,11 @@ def create_app(
     @app.get("/v1/retention/effective")
     async def get_retention_effective(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/retention/effective",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -447,10 +487,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             "/v1/agent/workspace/export",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -467,10 +508,11 @@ def create_app(
         confirm_slug = request.query_params.get("confirm_slug")
         if confirm_slug is not None:
             params["confirm_slug"] = confirm_slug
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "DELETE",
             "/v1/agent/workspace/data",
+            target="ai_backend",
             params=params,
             identity=identity,
         )
@@ -482,10 +524,11 @@ def create_app(
         conversation_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/drafts",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -498,10 +541,11 @@ def create_app(
         identity = FacadeAuthenticator.authenticate_request(request)
         params = dict(identity.scoped_params())
         params.update({k: v for k, v in request.query_params.items()})
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/drafts/{draft_id}",
+            target="ai_backend",
             params=params,
             identity=identity,
         )
@@ -513,10 +557,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "PATCH",
             f"/v1/agent/drafts/{draft_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -529,10 +574,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             f"/v1/agent/drafts/{draft_id}/send",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -545,10 +591,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             f"/v1/agent/drafts/{draft_id}/discard",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -566,10 +613,11 @@ def create_app(
         params: dict[str, object] = {"limit": limit}
         if status is not None:
             params["status"] = status
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/subagents",
+            target="ai_backend",
             params=identity.scoped_params(params),
             identity=identity,
         )
@@ -585,10 +633,11 @@ def create_app(
         params: dict[str, object] = {"limit": limit}
         if run_id is not None:
             params["run_id"] = run_id
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/conversations/{conversation_id}/sources",
+            target="ai_backend",
             params=identity.scoped_params(params),
             identity=identity,
         )
@@ -596,10 +645,11 @@ def create_app(
     @app.get("/v1/agent/models")
     async def list_models(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/agent/models",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -609,10 +659,11 @@ def create_app(
         request: Request, payload: FacadeRunRequest
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             "/v1/agent/runs",
+            target="ai_backend",
             json=identity.scoped_payload(
                 payload.model_dump(exclude_none=True), include_request_context=True
             ),
@@ -628,6 +679,7 @@ def create_app(
             app,
             "POST",
             "/v1/skills",
+            target="backend",
             json=identity.scoped_payload(payload),
             identity=identity,
         )
@@ -647,13 +699,15 @@ def create_app(
             app,
             "GET",
             "/v1/skills",
+            target="backend",
             params=identity.scoped_params(),
             identity=identity,
         )
-        system_payload = await forward_json_to_ai(
+        system_payload = await forward_json(
             app,
             "GET",
             "/internal/v1/skills/system",
+            target="ai_backend",
             identity=identity,
         )
         backend_skills = _coerce_skill_list(backend_payload.get("skills"))
@@ -670,6 +724,7 @@ def create_app(
             app,
             "GET",
             f"/v1/skills/{skill_id}",
+            target="backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -685,6 +740,7 @@ def create_app(
             app,
             "PUT",
             f"/v1/skills/{skill_id}",
+            target="backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -700,6 +756,7 @@ def create_app(
             app,
             "DELETE",
             f"/v1/skills/{skill_id}",
+            target="backend",
             params=identity.scoped_params(),
             expect_json=False,
             identity=identity,
@@ -713,10 +770,11 @@ def create_app(
         after_sequence: int = Query(0, ge=0),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/runs/{run_id}/events",
+            target="ai_backend",
             params=identity.scoped_params({"after_sequence": after_sequence}),
             identity=identity,
         )
@@ -727,10 +785,11 @@ def create_app(
         run_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/agent/runs/{run_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -786,10 +845,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             f"/v1/agent/runs/{run_id}/cancel",
+            target="ai_backend",
             params=identity.scoped_params(),
             json={**payload, "requested_by_user_id": identity.user_id},
             identity=identity,
@@ -802,10 +862,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             f"/v1/agent/approvals/{approval_id}/decision",
+            target="ai_backend",
             params={"org_id": identity.org_id},
             json={**payload, "decided_by_user_id": identity.user_id},
             identity=identity,
@@ -817,10 +878,11 @@ def create_app(
         reason: str | None = Query(None),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "DELETE",
             "/v1/agent/history",
+            target="ai_backend",
             params=identity.scoped_params({"reason": reason} if reason else None),
             identity=identity,
         )
@@ -838,10 +900,11 @@ def create_app(
         period: str = Query("7d"),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/usage/me",
+            target="ai_backend",
             params=identity.scoped_params({"period": period}),
             identity=identity,
         )
@@ -853,10 +916,11 @@ def create_app(
         limit: int = Query(10, ge=1, le=100),
     ) -> list[dict[str, object]]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(  # type: ignore[return-value]
+        return await forward_json(  # type: ignore[return-value]
             app,
             "GET",
             "/v1/usage/me/conversations",
+            target="ai_backend",
             params=identity.scoped_params({"period": period, "limit": limit}),
             identity=identity,
         )
@@ -867,10 +931,11 @@ def create_app(
         run_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/usage/runs/{run_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -882,10 +947,11 @@ def create_app(
         period: str = Query("30d"),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             f"/v1/usage/conversations/{conversation_id}",
+            target="ai_backend",
             params=identity.scoped_params({"period": period}),
             identity=identity,
         )
@@ -896,10 +962,11 @@ def create_app(
         period: str = Query("month"),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/usage/org",
+            target="ai_backend",
             params=identity.scoped_params({"period": period}),
             identity=identity,
         )
@@ -914,10 +981,11 @@ def create_app(
     @app.get("/v1/budgets")
     async def list_budgets(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/budgets",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -928,10 +996,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "POST",
             "/v1/budgets",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -940,10 +1009,11 @@ def create_app(
     @app.get("/v1/budgets/me")
     async def my_budgets(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "GET",
             "/v1/budgets/me",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -955,10 +1025,11 @@ def create_app(
         payload: dict[str, object],
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "PATCH",
             f"/v1/budgets/{budget_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             json=payload,
             identity=identity,
@@ -970,10 +1041,11 @@ def create_app(
         budget_id: str,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json_to_ai(
+        return await forward_json(
             app,
             "DELETE",
             f"/v1/budgets/{budget_id}",
+            target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,
         )
@@ -988,37 +1060,35 @@ async def forward_json(
     method: str,
     path: str,
     *,
+    target: ForwardTarget,
     params: dict[str, object] | None = None,
     json: dict[str, object] | None = None,
     expect_json: bool = True,
     identity: AuthenticatedIdentity,
 ) -> dict[str, object]:
+    """Forward an authenticated request to the named upstream service.
+
+    ``target="backend"`` routes to ``services/backend`` (MCP / skills / OAuth /
+    SCIM / dev IdP). ``target="ai_backend"`` routes to ``services/ai-backend``
+    (conversations / runs / events / approvals / drafts / sources / subagents).
+
+    Returns ``{}`` for 2xx no-content responses (e.g. DELETE → 204). Pass
+    ``expect_json=False`` to receive ``None`` instead. The 204 short-circuit
+    fixes Bug 2 from the W0 QA report (json.JSONDecodeError on empty body).
+    """
+
+    base_url = (
+        settings_for(app).backend_url
+        if target == "backend"
+        else settings_for(app).ai_backend_url
+    )
     return await _forward_json(
-        base_url=settings_for(app).backend_url,
+        base_url=base_url,
         method=method,
         path=path,
         params=params,
         json=json,
         expect_json=expect_json,
-        headers=_outbound_headers(identity),
-    )
-
-
-async def forward_json_to_ai(
-    app: FastAPI,
-    method: str,
-    path: str,
-    *,
-    params: dict[str, object] | None = None,
-    json: dict[str, object] | None = None,
-    identity: AuthenticatedIdentity,
-) -> dict[str, object]:
-    return await _forward_json(
-        base_url=settings_for(app).ai_backend_url,
-        method=method,
-        path=path,
-        params=params,
-        json=json,
         headers=_outbound_headers(identity),
     )
 
@@ -1036,6 +1106,63 @@ def _outbound_headers(identity: AuthenticatedIdentity) -> dict[str, str]:
     if ctx is not None and ctx.request_id:
         headers[REQUEST_ID_HEADER] = ctx.request_id
     return headers
+
+
+def _dev_idp_enabled() -> bool:
+    """Whether to expose unauthenticated ``/v1/dev/*`` proxies to backend.
+
+    Two gates:
+      1. ``FACADE_ENVIRONMENT=development`` — same gate as everything else dev.
+      2. The deployment profile must permit dev affordances; production
+         profiles set ``dev_auth_bypass_allowed=False`` and we reuse that
+         flag rather than adding a parallel knob.
+
+    The actual safety lives on the backend side: ``/v1/dev/*`` is only
+    registered there when ``BACKEND_ENVIRONMENT=development``, so even if
+    the facade leaked the proxy in production the upstream would 404.
+    """
+
+    import os as _os
+
+    if (
+        _os.environ.get("FACADE_ENVIRONMENT", "development").strip().lower()
+        != "development"
+    ):
+        return False
+    try:
+        from backend_facade.deployment_profile import DeploymentProfileLoader
+
+        return DeploymentProfileLoader.load().toggles.dev_auth_bypass_allowed
+    except Exception:
+        return False
+
+
+async def _proxy_dev(
+    app: FastAPI,
+    method: str,
+    path: str,
+    *,
+    json: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Unauthenticated proxy to ``services/backend`` for dev-only endpoints."""
+
+    base_url = settings_for(app).backend_url
+    async with httpx.AsyncClient(timeout=10) as client:
+        upstream = await client.request(
+            method,
+            f"{base_url}{path}",
+            json=json,
+        )
+    if upstream.status_code >= 400:
+        raise HTTPException(upstream.status_code, _upstream_error_detail(upstream))
+    if upstream.status_code == 204 or not upstream.content:
+        return {}
+    payload = upstream.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object"
+        )
+    return payload
 
 
 async def _forward_json(
@@ -1058,6 +1185,15 @@ async def _forward_json(
         )
     if response.status_code >= 400:
         raise HTTPException(response.status_code, _upstream_error_detail(response))
+    # HTTP-aware no-content handling. ai-backend's DELETE / idempotent POST
+    # routes correctly return 204 No Content with empty body; calling
+    # response.json() on an empty body raises JSONDecodeError. (Bug 2.)
+    if (
+        response.status_code == 204
+        or response.headers.get("content-length") == "0"
+        or not response.content
+    ):
+        return {} if expect_json else None  # type: ignore[return-value]
     if not expect_json:
         return {}
     payload = response.json()

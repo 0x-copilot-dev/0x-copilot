@@ -85,6 +85,7 @@ from backend_app.observability import (
     configure_logging,
     emit_access_log,
 )
+from backend_app.dev_idp import register_dev_idp_routes
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.billing import register_billing_routes
 from backend_app.routes.health import register_health_routes
@@ -884,6 +885,8 @@ def create_app(
     register_me_routes(app)
     register_siem_admin_routes(app)
     register_health_routes(app)
+    # Dev IdP (W0.1) — env-gated; no-op in production.
+    register_dev_idp_routes(app)
 
     return app
 

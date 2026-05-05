@@ -54,6 +54,7 @@ import {
   type DetailsPanelKind,
 } from "./components/details/DetailsPanelHost";
 import { Topbar, activeConnectorsFromScopes } from "./components/shell";
+import { SharePopover } from "../share/SharePopover";
 import {
   DEFAULT_THINKING_DEPTH,
   applyDepth,
@@ -1254,6 +1255,15 @@ export function ChatScreen({
                 onDepthChange={setDepth}
                 depthVisible={depthVisible}
                 onShare={() => void onShare()}
+                shareSlot={
+                  <SharePopover
+                    chatTitle={currentTitle(conversations, conversationId)}
+                    chatUrl={
+                      typeof window !== "undefined" ? window.location.href : ""
+                    }
+                    onStatus={(message) => setStatus(message)}
+                  />
+                }
                 onOpenSettings={() => onOpenSettings("general")}
               />
             }
