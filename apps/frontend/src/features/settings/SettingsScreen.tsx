@@ -20,8 +20,15 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { authTone } from "../connectors/ConnectorConsentCard";
 import type { ConnectorState } from "../connectors/useConnectors";
+import { useThemeSync } from "../me/useThemeSync";
+import { useUserPreferences } from "../me/useUserPreferences";
+import { useUserProfile } from "../me/useUserProfile";
 import type { SkillState } from "../skills/useSkills";
 import { AccountSessionsPanel } from "./AccountSessionsPanel";
+import { Appearance } from "./sections/Appearance";
+import { Notifications } from "./sections/Notifications";
+import { Profile } from "./sections/Profile";
+import { Shortcuts } from "./sections/Shortcuts";
 
 const DEFAULT_SKILL_MARKDOWN = `---
 name: custom-workflow
@@ -42,6 +49,12 @@ Use this skill when...
 `;
 
 export type SettingsSection =
+  // PR 4.1 — "You" group: per-user, persisted server-side, follow you
+  // across devices via /v1/me/profile + /v1/me/preferences.
+  | "profile"
+  | "appearance"
+  | "shortcuts"
+  | "notifications"
   | "general"
   | "account"
   | "capabilities"
@@ -49,13 +62,23 @@ export type SettingsSection =
   | "skills"
   | "claude-code";
 
-const sections: Array<{ id: SettingsSection; label: string }> = [
-  { id: "general", label: "General" },
-  { id: "account", label: "Account" },
-  { id: "capabilities", label: "Capabilities" },
-  { id: "connectors", label: "Connectors" },
-  { id: "skills", label: "Skills" },
-  { id: "claude-code", label: "Claude Code" },
+const sections: Array<
+  | { kind: "group"; label: string }
+  | { kind: "section"; id: SettingsSection; label: string }
+> = [
+  // PR 4.1 — "You" group at the top, matching the Atlas design doc.
+  { kind: "group", label: "You" },
+  { kind: "section", id: "profile", label: "Profile" },
+  { kind: "section", id: "appearance", label: "Appearance" },
+  { kind: "section", id: "shortcuts", label: "Shortcuts" },
+  { kind: "section", id: "notifications", label: "Notifications" },
+  { kind: "group", label: "Workspace" },
+  { kind: "section", id: "general", label: "General" },
+  { kind: "section", id: "account", label: "Account" },
+  { kind: "section", id: "capabilities", label: "Capabilities" },
+  { kind: "section", id: "connectors", label: "Connectors" },
+  { kind: "section", id: "skills", label: "Skills" },
+  { kind: "section", id: "claude-code", label: "Claude Code" },
 ];
 
 export function SettingsScreen({
@@ -78,6 +101,15 @@ export function SettingsScreen({
     setActiveSection(initialSection);
   }, [initialSection]);
 
+  // PR 4.1 — per-user profile + preferences. Hydrated once on Settings
+  // open (parallel to each other); the "You" sections render against
+  // the shared state without per-section refetches. ``useThemeSync``
+  // mirrors appearance into ThemeProvider + html-attrs so the page
+  // recolors / densifies / motion-reduces immediately on local edit.
+  const profile = useUserProfile();
+  const preferences = useUserPreferences();
+  useThemeSync(preferences.data);
+
   return (
     <main className="settings-shell">
       <aside className="settings-nav">
@@ -97,23 +129,43 @@ export function SettingsScreen({
         </button>
         <h1>Settings</h1>
         <nav aria-label="Settings sections">
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              className={activeSection === section.id ? "is-active" : undefined}
-              type="button"
-              title={`Open ${section.label} settings`}
-              onClick={() => {
-                setActiveSection(section.id);
-                onSectionChange?.(section.id);
-              }}
-            >
-              {section.label}
-            </button>
-          ))}
+          {sections.map((entry, index) =>
+            entry.kind === "group" ? (
+              <div
+                key={`group-${index}`}
+                className="settings-nav-group"
+                aria-hidden="true"
+              >
+                {entry.label}
+              </div>
+            ) : (
+              <button
+                key={entry.id}
+                className={activeSection === entry.id ? "is-active" : undefined}
+                type="button"
+                title={`Open ${entry.label} settings`}
+                onClick={() => {
+                  setActiveSection(entry.id);
+                  onSectionChange?.(entry.id);
+                }}
+              >
+                {entry.label}
+              </button>
+            ),
+          )}
         </nav>
       </aside>
       <section className="settings-content">
+        {activeSection === "profile" ? <Profile profile={profile} /> : null}
+        {activeSection === "appearance" ? (
+          <Appearance preferences={preferences} />
+        ) : null}
+        {activeSection === "shortcuts" ? (
+          <Shortcuts preferences={preferences} />
+        ) : null}
+        {activeSection === "notifications" ? (
+          <Notifications preferences={preferences} />
+        ) : null}
         {activeSection === "general" ? <GeneralSettings /> : null}
         {activeSection === "account" ? <AccountSettings /> : null}
         {activeSection === "capabilities" ? (

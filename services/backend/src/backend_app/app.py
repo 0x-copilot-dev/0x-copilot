@@ -50,6 +50,7 @@ from backend_app.identity import (
     IdentityStore,
     InMemoryIdentityStore,
     InMemoryLockoutStore,
+    InMemoryMeStore,
     InMemoryMfaStore,
     InMemoryOidcStore,
     InMemoryPasswordStore,
@@ -58,6 +59,7 @@ from backend_app.identity import (
     InMemorySessionStore,
     LockoutService,
     LockoutStore,
+    MeStore,
     MfaService,
     MfaStore,
     OidcService,
@@ -84,6 +86,8 @@ from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.health import register_health_routes
 from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.me import register_me_routes
+from backend_app.routes.me_preferences import register_me_preferences_routes
+from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
@@ -213,6 +217,7 @@ def create_app(
     saml_verifier: SamlVerifier | None = None,
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
+    me_store: MeStore | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -828,6 +833,23 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    # PR 4.1 — Settings → "You" group: profile + preferences sidecars.
+    # The store is unconditional (no secret deps; in-memory in dev, postgres
+    # in prod via the same pool the identity store uses). Both routes
+    # require RUNTIME_USE — caller is the session user.
+    resolved_me_store: MeStore = me_store or InMemoryMeStore()
+    app.state.me_store = resolved_me_store
+    register_me_profile_routes(
+        app,
+        me_store=resolved_me_store,
+        identity_store=resolved_identity_store,
+    )
+    register_me_preferences_routes(
+        app,
+        me_store=resolved_me_store,
+        identity_store=resolved_identity_store,
+    )
 
     register_audit_export_routes(app)
     register_me_routes(app)

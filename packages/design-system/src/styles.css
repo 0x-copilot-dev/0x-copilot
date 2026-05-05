@@ -26,6 +26,48 @@
   --duration-fast: 120ms;
   --duration-normal: 180ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* PR 4.1 — comfortable density tokens. The compact override drops
+     these by ~20% in the [data-density="compact"] block below. Sites
+     that style with hard-coded paddings ignore the toggle; we accept
+     that small surface in v1 and migrate the remaining components to
+     the tokens incrementally. */
+  --space-row-gap: var(--space-sm);
+  --space-card-pad: var(--space-md);
+  --space-section: var(--space-xl);
+  --line-height-body: 1.55;
+}
+
+/* PR 4.1 — Compact density. */
+:root[data-density="compact"] {
+  --space-row-gap: 0.375rem;
+  --space-card-pad: 0.625rem;
+  --space-section: 1rem;
+  --line-height-body: 1.45;
+}
+
+/* PR 4.1 — Reduce motion. The explicit "always" override beats the OS
+   query so the user's choice wins. "auto" defers to ``prefers-reduced-
+   motion``. "off" lets the FE force motion on even when the OS prefers
+   reduced. Selectors target every animatable descendant; we accept
+   ``!important`` because animations live in many third-party stylesheets
+   we can't refactor in one PR. */
+:root[data-reduce-motion="always"] *,
+:root[data-reduce-motion="always"] *::before,
+:root[data-reduce-motion="always"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-reduce-motion="auto"] *,
+  :root[data-reduce-motion="auto"] *::before,
+  :root[data-reduce-motion="auto"] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 :root,

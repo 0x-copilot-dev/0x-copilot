@@ -43,6 +43,58 @@ def register_me_routes(app: FastAPI) -> None:
         _raise_for_upstream(response)
         return response.json()
 
+    # PR 4.1 — Settings → "You" group: profile + preferences sidecars.
+    # Identity is established the same way as /v1/me/workspaces — bearer
+    # verify, then service-token forward. The sidecar routes are caller-
+    # scoped: the backend resolves the write target from the headers, so
+    # the body never carries a user_id.
+
+    @app.get("/v1/me/profile")
+    async def get_my_profile(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "GET", "profile")
+
+    @app.put("/v1/me/profile")
+    async def put_my_profile(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "PUT", "profile")
+
+    @app.get("/v1/me/preferences")
+    async def get_my_preferences(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "GET", "preferences")
+
+    @app.put("/v1/me/preferences")
+    async def put_my_preferences(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "PUT", "preferences")
+
+
+async def _forward_me(request: Request, method: str, slug: str) -> dict[str, object]:
+    backend_url = settings_for(request.app).backend_url
+    body: bytes | None = None
+    if method != "GET":
+        body = await request.body()
+    async with httpx.AsyncClient(timeout=10) as client:
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        headers = FacadeAuthenticator.service_headers(identity)
+        if method != "GET":
+            # Preserve the JSON content-type so FastAPI on the upstream
+            # parses Pydantic without needing a manual Content-Type header.
+            headers = {**headers, "content-type": "application/json"}
+        # Pass org_id / user_id as query params too. With the service token
+        # set, the backend route trusts the headers and ignores the params;
+        # in dev (no service token) the params are the dev fallback. This
+        # matches the pattern /v1/me/workspaces uses.
+        params = {"org_id": identity.org_id, "user_id": identity.user_id}
+        response = await client.request(
+            method,
+            f"{backend_url}/internal/v1/me/{slug}",
+            params=params,
+            content=body,
+            headers=headers,
+        )
+    _raise_for_upstream(response)
+    return response.json()
+
 
 def _raise_for_upstream(response: httpx.Response) -> None:
     # Same shape as auth_routes._raise_for_upstream; kept as a private copy

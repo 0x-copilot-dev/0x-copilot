@@ -4147,3 +4147,195 @@ p {
     transition: none;
   }
 }
+
+/* PR 4.1 — Settings → "You" group: Profile / Appearance / Shortcuts / Notifications.
+   Forms / radio pills / accent grid / matrix grid. */
+
+.settings-nav-group {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: var(--space-md) 0 var(--space-xs) var(--space-sm);
+  text-transform: uppercase;
+}
+
+.me-form {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.me-form__email-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.me-form__actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-xs);
+}
+
+.me-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.me-radio-pill {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+}
+
+.me-radio-pill:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.me-radio-pill--active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.me-radio-pill--active:hover {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+  color: var(--color-accent-contrast);
+}
+
+.me-accent-grid {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.me-accent-swatch {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-sm);
+  padding: 0.5rem 0.75rem;
+}
+
+.me-accent-swatch:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.me-accent-swatch--active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+  color: var(--color-text);
+}
+
+.me-accent-swatch__chip {
+  border-radius: var(--radius-full);
+  display: inline-block;
+  height: 1.1rem;
+  width: 1.1rem;
+}
+
+.me-accent-swatch__label {
+  font-size: 0.85rem;
+}
+
+.me-shortcuts-card {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.me-shortcuts-category {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.me-shortcuts-list {
+  display: grid;
+  gap: var(--space-md);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.me-shortcuts-row__controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.me-shortcuts-chord {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.me-shortcuts-recorder {
+  font-family: var(--font-mono);
+  width: 14rem;
+}
+
+.me-notifications-grid {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.me-notifications-grid__head {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(4rem, 1fr));
+  padding-bottom: var(--space-xs);
+}
+
+.me-notifications-grid__row {
+  align-items: center;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(4rem, 1fr));
+  padding: var(--space-xs) 0;
+}
+
+.me-notifications-grid__label,
+.me-notifications-grid__channel {
+  color: var(--color-text-subtle);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.me-notifications-grid__event {
+  display: grid;
+  gap: 2px;
+}
+
+.me-notifications-grid__event small {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+}
+
+.me-notifications-grid__cell {
+  display: flex;
+  justify-content: flex-start;
+}

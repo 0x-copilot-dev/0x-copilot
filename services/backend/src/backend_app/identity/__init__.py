@@ -26,6 +26,13 @@ from backend_app.identity.mfa import (
     MfaService,
     MfaWebAuthnRejected,
 )
+from backend_app.identity.me_store import (
+    InMemoryMeStore,
+    MeStore,
+    PostgresMeStore,
+    UserPreferencesRecord,
+    UserProfileRecord,
+)
 from backend_app.identity.mfa_store import (
     InMemoryMfaStore,
     MfaStore,
@@ -145,6 +152,7 @@ __all__ = [
     "IdentityStore",
     "InMemoryIdentityStore",
     "InMemoryLockoutStore",
+    "InMemoryMeStore",
     "InMemoryMfaStore",
     "InMemoryOidcStore",
     "InMemoryPasswordStore",
@@ -156,6 +164,7 @@ __all__ = [
     "LockoutService",
     "LockoutStore",
     "LoginRejectedError",
+    "MeStore",
     "MfaChallengeInvalid",
     "MfaCodeRejected",
     "MfaConfig",
@@ -181,6 +190,7 @@ __all__ = [
     "PasswordStore",
     "PostgresIdentityStore",
     "PostgresLockoutStore",
+    "PostgresMeStore",
     "PostgresMfaStore",
     "PostgresOidcStore",
     "PostgresPasswordStore",
@@ -222,6 +232,8 @@ __all__ = [
     "SessionService",
     "SessionStore",
     "TokenEndpointClient",
+    "UserPreferencesRecord",
+    "UserProfileRecord",
     "WeakPasswordError",
     "audit_session_event",
 ]

@@ -40,6 +40,10 @@ type AppRoute =
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 const settingsSections = [
+  "profile",
+  "appearance",
+  "shortcuts",
+  "notifications",
   "general",
   "account",
   "capabilities",

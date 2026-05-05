@@ -1785,3 +1785,99 @@ export function isSourceIngestedPayload(
   }
   return isCitationSourceRef((payload as Record<string, unknown>).citation);
 }
+// -----------------------------------------------------------------------------
+// PR 4.1 — Settings → "You" group: profile + preferences sidecars.
+// -----------------------------------------------------------------------------
+
+/** Working-hours band the user keeps. UI converts ``HH:MM`` + ``tz`` to local
+ *  time at render. Server stores wall-clock strings (no DST drift logic). */
+export interface WorkingHours {
+  tz: string;
+  start: string; // 'HH:MM' 24-hour
+  end: string;
+  days: number[]; // 0=Sun .. 6=Sat
+}
+
+export interface UserProfile {
+  user_id: string;
+  email: string;
+  email_verified_at: string | null;
+  display_name: string | null;
+  title: string | null;
+  timezone: string | null; // IANA tz id, e.g. 'America/Los_Angeles'
+  locale: string | null; // BCP-47 tag, e.g. 'en-US'
+  working_hours: WorkingHours | null;
+  avatar_url: string | null;
+  updated_at: string;
+}
+
+export type UserProfileTheme = "system" | "light" | "dark" | "slate";
+
+/** Mirrors `ACCENT_SCHEMES` in `@enterprise-search/design-system`. */
+export type UserProfileAccent =
+  | "atlas-orange"
+  | "gold"
+  | "amber"
+  | "red"
+  | "lime"
+  | "teal"
+  | "blue"
+  | "violet";
+
+export type UserProfileDensity = "comfortable" | "compact";
+export type UserProfileReduceMotion = "auto" | "always" | "off";
+
+export interface AppearancePreferences {
+  theme: UserProfileTheme;
+  accent: UserProfileAccent;
+  density: UserProfileDensity;
+  reduce_motion: UserProfileReduceMotion;
+}
+
+export interface ShortcutsPreferences {
+  /** Map of registry id → tinykeys chord (e.g. `'chat.search': '$mod+P'`). */
+  overrides: Record<string, string>;
+}
+
+export type NotificationEvent =
+  | "mention"
+  | "approval_needed"
+  | "run_finished"
+  | "weekly_digest";
+
+export type NotificationChannel = "email" | "slack" | "desktop";
+
+export interface NotificationsPreferences {
+  matrix: Record<NotificationEvent, Record<NotificationChannel, boolean>>;
+}
+
+export interface UserPreferences {
+  appearance: AppearancePreferences;
+  shortcuts: ShortcutsPreferences;
+  notifications: NotificationsPreferences;
+  /** ISO timestamp of the last write; '' when no row exists yet (fresh user). */
+  updated_at: string;
+}
+
+/** Merge-patch shape — every field optional, `null` clears (RFC 7396).
+ *  Note: `working_hours: null` clears the band; omit to leave untouched. */
+export type UpdateUserProfileRequest = {
+  display_name?: string | null;
+  title?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  working_hours?: WorkingHours | null;
+  avatar_url?: string | null;
+};
+
+/** Deep-partial merge-patch: send only the keys you want to change.
+ *  `notifications.matrix.mention.email = false` updates only that cell. */
+export interface UpdateUserPreferencesRequest {
+  appearance?: Partial<AppearancePreferences>;
+  shortcuts?: { overrides?: Record<string, string> };
+  notifications?: {
+    matrix?: Partial<
+      Record<NotificationEvent, Partial<Record<NotificationChannel, boolean>>>
+    >;
+  };
+}
