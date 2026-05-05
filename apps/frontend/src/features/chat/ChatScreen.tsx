@@ -40,9 +40,15 @@ import {
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
+import { ConnectorPopover } from "../connectors/ConnectorPopover";
 import type { ConnectorState } from "../connectors/useConnectors";
 import { useConversationConnectors } from "../connectors/useConversationConnectors";
+import {
+  activeCount as activeConnectorCount,
+  projectConnectors,
+} from "../connectors/projectConnectors";
 import type { SkillState } from "../skills/useSkills";
+import { ComposerConnectorsButton } from "./components/composer/ComposerConnectorsButton";
 import {
   DetailsPanelHost,
   type DetailsPanelKind,
@@ -56,6 +62,7 @@ import {
   type ThinkingDepth,
 } from "./depth";
 import { useLocalStorageState } from "../../utils/useLocalStorageState";
+import { useViewportOverlay } from "../../utils/useViewportOverlay";
 import { ApprovalFocusProvider } from "./approval/ApprovalFocusContext";
 
 type ChatSettingsTarget = "general" | "connectors" | "skills";
@@ -80,7 +87,22 @@ import {
   emptyCitationRegistry,
   type CitationRegistryByRun,
 } from "./chatModel/citationsRegistry";
+import { applySubagentEvent } from "./chatModel/subagentReducer";
+import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
+import { listSources } from "../../api/agentApi";
+import {
+  applySourceEvent,
+  emptySourceMap,
+  seedSourceMap,
+  type SourceEntryMap,
+} from "./chatModel/sourcesReducer";
+import { WorkspacePane } from "./components/workspace/WorkspacePane";
+import { useWorkspacePaneState } from "./components/workspace/useWorkspacePaneState";
+import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
+import { useSubagents } from "./components/workspace/useSubagents";
+import { useDrafts } from "./components/workspace/useDrafts";
+import { useApprovalsQueue } from "./components/workspace/useApprovalsQueue";
 import {
   AssistantThread,
   AssistantThreadList,
@@ -95,6 +117,7 @@ import {
   type CompletedMcpAuthAction,
 } from "./mcpAuthAction";
 import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
+import { useAuth } from "../auth/AuthContext";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -118,6 +141,11 @@ export function ChatScreen({
   oauthStatus: string | null;
   completedMcpAuthAction: CompletedMcpAuthAction | null;
 }): ReactElement {
+  // PR 3.5 (closes PR 2.2 G4) — UserCard's WorkspacePicker forwards a
+  // chosen orgId up through Sidebar → AssistantThreadList → here. We hand
+  // it to the auth context, which currently hard-navs to ?workspace=<id>
+  // and lets <AuthGate> re-discover the session (PR 2.2 §3.7 fallback).
+  const auth = useAuth();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -142,8 +170,6 @@ export function ChatScreen({
     DEFAULT_THINKING_DEPTH,
     isThinkingDepth,
   );
-  // PR 2.1 — workspace pane open/closed; PR 3.2 ships the pane body.
-  const [panelOpen, setPanelOpen] = useState(true);
   const streamRef = useRef<EventSource | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -159,6 +185,29 @@ export function ChatScreen({
   const [citations, setCitations] = useState<CitationRegistryByRun>(
     emptyCitationRegistry,
   );
+  // PR 3.2 — Sources tab snapshot. Seeded from
+  // `GET /v1/agent/conversations/{id}/sources` on conversation switch,
+  // overlaid live by `applySourceEvent`. Conversation-scoped, not run-
+  // scoped, because the Sources tab spans every run in the chat.
+  const [sourcesMap, setSourcesMap] = useState<SourceEntryMap>(emptySourceMap);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+
+  // PR 3.2 — Workspace pane state (open/closed + active tab + per-conv
+  // manual-close memory). Topbar panel toggle, pane close button, and
+  // the auto-open signal all read/write through here.
+  const paneState = useWorkspacePaneState({
+    conversationId,
+    initialOpen: false,
+    initialTab: "sources",
+  });
+  // PR 3.2 — workspace data feeds. Each hook owns its own archive seed
+  // + cancellation; `handleEvent` overlays live deltas through the
+  // setters / reducers.
+  const subagentsState = useSubagents(conversationId, identity);
+  const draftsState = useDrafts(conversationId, identity);
+  const { setSubagents } = subagentsState;
+  const { setRegistry: setDraftRegistry } = draftsState;
 
   const suggestedServers = useMemo(
     () =>
@@ -263,6 +312,38 @@ export function ChatScreen({
     );
   }, [connectors.servers]);
 
+  // PR 3.2 — seed the Sources tab snapshot on conversation switch. The
+  // live source_ingested event reducer overlays subsequent events. We
+  // seed in a focused effect (rather than reusing loadHistoryItems) so
+  // the round-trip never blocks message history rendering.
+  useEffect(() => {
+    if (conversationId === null || identity === null) {
+      setSourcesMap(emptySourceMap());
+      setSourcesError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setSourcesLoading(true);
+    setSourcesError(null);
+    void listSources(conversationId, identity)
+      .then((response) => {
+        if (cancelled) return;
+        setSourcesMap(seedSourceMap(response.sources));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setSourcesError(
+          err instanceof Error ? err.message : "Could not load sources",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setSourcesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, identity]);
+
   const handleEvent = useCallback(
     (event: RuntimeEventEnvelope) => {
       latestSequenceRef.current = Math.max(
@@ -277,6 +358,12 @@ export function ChatScreen({
         ),
       );
       setCitations((current) => applyCitationEvent(current, event));
+      // PR 3.2 — Sources / Agents / Draft live overlays. Each reducer
+      // is a no-op for events it doesn't recognize, so the dispatch
+      // table stays flat.
+      setSourcesMap((current) => applySourceEvent(current, event));
+      setSubagents((current) => applySubagentEvent(current, event));
+      setDraftRegistry((current) => applyDraftUpdatedEvent(current, event));
       if (isRunUiEvent(event)) {
         setLatestRunEvent(event);
       }
@@ -297,7 +384,7 @@ export function ChatScreen({
         void refreshConversations();
       }
     },
-    [refreshConversations],
+    [refreshConversations, setSubagents, setDraftRegistry],
   );
 
   const startEventStream = useCallback(
@@ -619,6 +706,10 @@ export function ChatScreen({
     setConversationId(null);
     setItems([]);
     setCitations(emptyCitationRegistry());
+    // PR 3.2 — clear workspace-pane data feeds so a stale conversation's
+    // sources / drafts don't leak into the empty welcome state.
+    setSourcesMap(emptySourceMap());
+    setSourcesError(null);
     setLatestRunEvent(null);
     setShowConnectorSuggestions(false);
     setStatus("Ready");
@@ -796,6 +887,28 @@ export function ChatScreen({
     return citationsForRun(citations, fallbackRunId);
   }, [activeRunId, citations, items]);
 
+  // PR 3.2 — pure projection over `items` for the Approvals tab.
+  const approvalsQueue = useApprovalsQueue(items);
+
+  // PR 3.2 — auto-open the workspace pane on first non-empty data feed
+  // for a conversation visit (per Atlas spec). Honours the user's
+  // manual close memory: if they've closed the pane in this conv this
+  // session, the signal is suppressed.
+  useWorkspacePaneAutoOpenSignal({
+    conversationId,
+    sourceCount: sourcesMap.size,
+    subagentCount: subagentsState.subagents.size,
+    draftCount: draftsState.drafts.length,
+    pendingApprovalsCount: approvalsQueue.pending.length,
+    suppressed: paneState.isAutoOpenSuppressed(conversationId),
+    onAutoOpen: paneState.openOn,
+  });
+
+  // PR 3.2 — viewport-overlay mode below 1100px so the pane never
+  // pushes the chat off-screen. CSS handles the actual fixed-positioning;
+  // this flag carries the state to the pane via a data-attr.
+  const overlayMode = useViewportOverlay(1100);
+
   const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(() => {
     const threads: ExternalStoreThreadData<"regular">[] = [];
     const archivedThreads: ExternalStoreThreadData<"archived">[] = [];
@@ -883,6 +996,86 @@ export function ChatScreen({
       activeConnectorsFromScopes(connectors.servers, conversationScopes.scopes),
     [connectors.servers, conversationScopes.scopes],
   );
+  // PR 3.4 — projection of the workspace-installed catalog + per-chat
+  // overrides into the four-state row vocabulary the popover renders.
+  // Memoised so the popover doesn't re-mount its keyboard-nav handler
+  // on every parent render.
+  const connectorRows = useMemo(
+    () => projectConnectors(connectors.servers, conversationScopes.scopes),
+    [connectors.servers, conversationScopes.scopes],
+  );
+  const connectorsActiveCount = useMemo(
+    () => activeConnectorCount(connectorRows),
+    [connectorRows],
+  );
+
+  // PR 3.4 — single open-state owner for the per-chat ConnectorPopover.
+  // The same popover serves the topbar pill (anchored down) and the
+  // composer button (anchored up). Only one is open at a time.
+  const [connectorsPopover, setConnectorsPopover] = useState<
+    null | "topbar" | "composer"
+  >(null);
+  const topbarConnectorsRef = useRef<HTMLButtonElement | null>(null);
+  const composerConnectorsRef = useRef<HTMLButtonElement | null>(null);
+  const closeConnectorsPopover = useCallback(
+    () => setConnectorsPopover(null),
+    [],
+  );
+  const onTopbarConnectorsOpen = useCallback(
+    () => setConnectorsPopover((prev) => (prev === "topbar" ? null : "topbar")),
+    [],
+  );
+  const onComposerConnectorsOpen = useCallback(
+    () =>
+      setConnectorsPopover((prev) => (prev === "composer" ? null : "composer")),
+    [],
+  );
+  // Close the popover when the conversation switches — the rows are
+  // about to change underneath the user, and the per-chat scopes would
+  // momentarily disagree with the open popover's state.
+  useEffect(() => {
+    setConnectorsPopover(null);
+  }, [conversationId]);
+
+  const renderConnectorPopover = useCallback(
+    (
+      triggerRef: React.RefObject<HTMLElement | null>,
+      placement: "down" | "up",
+    ) => (
+      <ConnectorPopover
+        open
+        onClose={closeConnectorsPopover}
+        triggerRef={triggerRef}
+        rows={connectorRows}
+        onToggle={(serverId, nextScopes) => {
+          void conversationScopes
+            .patch({ [serverId]: nextScopes ?? null })
+            .catch(() => {
+              // Hook surfaces the error string; it renders inline.
+            });
+        }}
+        onConnect={(serverId) => {
+          void connectors.authenticate(serverId);
+        }}
+        onEnableInSettings={() => {
+          closeConnectorsPopover();
+          onOpenSettings("connectors");
+        }}
+        onManage={() => onOpenSettings("connectors")}
+        placement={placement}
+        error={conversationScopes.error}
+        readOnly={currentConversation === null}
+      />
+    ),
+    [
+      closeConnectorsPopover,
+      connectorRows,
+      conversationScopes,
+      connectors,
+      onOpenSettings,
+      currentConversation,
+    ],
+  );
   const selectedModel = useMemo(
     () => demoModels.find((model) => model.id === selectedModelId) ?? null,
     [selectedModelId],
@@ -954,11 +1147,14 @@ export function ChatScreen({
     <AssistantRuntimeProvider runtime={runtime} aui={aui}>
       <ApprovalFocusProvider>
         <main
-          className={
-            sidebarCollapsed
-              ? "aui-workspace aui-workspace--sidebar-collapsed"
-              : "aui-workspace"
-          }
+          className={[
+            "aui-workspace",
+            sidebarCollapsed && "aui-workspace--sidebar-collapsed",
+            paneState.open && !overlayMode && "aui-workspace--pane-open",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          data-pane-overlay={overlayMode ? "true" : "false"}
         >
           <AssistantThreadList
             activeRunId={activeRunId}
@@ -971,6 +1167,15 @@ export function ChatScreen({
             onSwitchToThread={(id) => void loadConversationById(id)}
             onStartNewChat={onStartNewChat}
             onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+            onSwitchWorkspace={(orgId) => {
+              // PR 3.5 / G4 — cancel-then-switch when a run is streaming
+              // (PR 2.2 §3.7); auth.switchWorkspace then hard-navs.
+              if (activeRunId !== null) {
+                void onCancel().then(() => auth.switchWorkspace(orgId));
+                return;
+              }
+              void auth.switchWorkspace(orgId);
+            }}
           />
           <AssistantThread
             topbar={
@@ -1009,11 +1214,17 @@ export function ChatScreen({
                 onToggleSidebar={() =>
                   setSidebarCollapsed((current) => !current)
                 }
-                panelOpen={panelOpen}
-                onTogglePanel={() => setPanelOpen((current) => !current)}
+                panelOpen={paneState.open}
+                onTogglePanel={() => paneState.toggle()}
                 connectors={activeConnectorGlyphs}
-                connectorsOpen={false}
-                onOpenConnectors={() => onOpenSettings("connectors")}
+                connectorsOpen={connectorsPopover === "topbar"}
+                onOpenConnectors={onTopbarConnectorsOpen}
+                connectorsTriggerRef={topbarConnectorsRef}
+                connectorsPopover={
+                  connectorsPopover === "topbar"
+                    ? renderConnectorPopover(topbarConnectorsRef, "down")
+                    : null
+                }
                 usagePct={null}
                 onOpenUsage={() => setDetailsPanel("usage")}
                 models={demoModels}
@@ -1038,6 +1249,20 @@ export function ChatScreen({
                 onShowConnectors={() => setShowConnectorSuggestions(true)}
                 onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
                 runIndicator={runIndicator}
+                connectorsTrigger={
+                  <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
+                    <ComposerConnectorsButton
+                      ref={composerConnectorsRef}
+                      activeCount={connectorsActiveCount}
+                      open={connectorsPopover === "composer"}
+                      onClick={onComposerConnectorsOpen}
+                      disabled={currentConversation === null}
+                    />
+                    {connectorsPopover === "composer"
+                      ? renderConnectorPopover(composerConnectorsRef, "up")
+                      : null}
+                  </span>
+                }
                 connectorSuggestions={
                   showConnectorSuggestions && suggestedServers.length > 0 ? (
                     <ConnectorSuggestionCard
@@ -1053,6 +1278,49 @@ export function ChatScreen({
               />
             </CitationsProvider>
           </AssistantThread>
+          <WorkspacePane
+            state={paneState}
+            sources={sourcesMap}
+            sourcesLoading={sourcesLoading}
+            sourcesError={sourcesError}
+            subagents={subagentsState.subagents}
+            subagentsLoading={subagentsState.loading}
+            subagentsError={subagentsState.error}
+            draft={draftsState.latest}
+            draftLoading={draftsState.loading}
+            draftError={draftsState.error}
+            onPatchDraft={(request) =>
+              draftsState.latest === null
+                ? Promise.reject(new Error("No active draft"))
+                : draftsState.patch(draftsState.latest.draft_id, request)
+            }
+            onSendDraft={(request) =>
+              draftsState.latest === null
+                ? Promise.reject(new Error("No active draft"))
+                : draftsState.send(draftsState.latest.draft_id, request)
+            }
+            onDiscardDraft={(request) =>
+              draftsState.latest === null
+                ? Promise.reject(new Error("No active draft"))
+                : draftsState.discard(draftsState.latest.draft_id, request)
+            }
+            approvalsQueue={approvalsQueue}
+            skills={skills.skills}
+            skillsLoading={skills.loading}
+            skillsError={skills.error}
+            onPickSkill={(skill) => {
+              const composer = aui.composer();
+              const current = composer.getState().text.trimEnd();
+              composer.setText(
+                current ? `${current} /${skill.name} ` : `/${skill.name} `,
+              );
+              if (overlayMode) {
+                paneState.close("viewport");
+              }
+            }}
+            onOpenSkillSettings={() => onOpenSettings("skills")}
+            overlay={overlayMode}
+          />
           {detailsPanel !== null ? (
             <DetailsPanelHost
               kind={detailsPanel}
