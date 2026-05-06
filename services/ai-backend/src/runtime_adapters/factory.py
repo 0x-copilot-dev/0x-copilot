@@ -12,15 +12,17 @@ from agent_runtime.api.async_ports import (
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.persistence.ports import DraftStorePort
+from agent_runtime.persistence.ports import DraftStorePort, ShareStorePort
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import (
     AsyncInMemoryRuntimeApiStore,
     InMemoryRuntimeApiStore,
 )
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
+from runtime_adapters.in_memory.share_store import InMemoryShareStore
 from runtime_adapters.postgres import PostgresRuntimeApiStore
 from runtime_adapters.postgres.draft_store import PostgresDraftStore
+from runtime_adapters.postgres.share_store import PostgresShareStore
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,10 @@ class RuntimePorts:
     # PR 1.3.5 — Workspace-pane Draft store, shared by the API (DraftService)
     # and the worker (DraftBackend constructed per run).
     draft_store: DraftStorePort | None = None
+    # PR 6.1 — conversation share store. Same role as ``draft_store``;
+    # backs both the recipient view (ShareService) and PR 6.2's fork
+    # service (via ``ShareSnapshotPort.resolve_by_token`` on ShareService).
+    share_store: ShareStorePort | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,8 @@ class AsyncRuntimePorts:
     # parent store's pool + FieldCodec; in_memory backends use the
     # process-local InMemoryDraftStore.
     draft_store: DraftStorePort | None = None
+    # PR 6.1 — conversation share store (see RuntimePorts.share_store).
+    share_store: ShareStorePort | None = None
 
 
 class RuntimeAdapterFactory:
@@ -76,6 +84,7 @@ class RuntimeAdapterFactory:
                 queue=store,
                 backend=backend,
                 draft_store=InMemoryDraftStore(),
+                share_store=InMemoryShareStore(),
             )
         if backend == "postgres":
             raise AgentRuntimeError(
@@ -123,6 +132,7 @@ class RuntimeAdapterFactory:
                 backend=backend,
                 store=store,
                 draft_store=InMemoryDraftStore(),
+                share_store=InMemoryShareStore(),
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -139,6 +149,7 @@ class RuntimeAdapterFactory:
                 backend=backend,
                 store=store,
                 draft_store=PostgresDraftStore(store),
+                share_store=PostgresShareStore(store),
             )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,

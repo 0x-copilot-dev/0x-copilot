@@ -1670,6 +1670,92 @@ export interface SourceListResponse {
   truncated: boolean;
 }
 
+// ----- PR 6.1: Conversation sharing -----------------------------------------
+//
+// Mirrors ``services/ai-backend/src/runtime_api/schemas/shares.py``. The
+// server is the source of truth; these shapes are what ``backend-facade``
+// returns. The plaintext ``share_token`` rides only on the create response
+// — the server stores ``sha256(plaintext)`` and never re-emits it.
+
+export type ShareViewAccess = "workspace" | "specific";
+
+export interface ConversationShare {
+  share_id: string;
+  share_token_prefix: string | null;
+  view_access: ShareViewAccess;
+  recipient_user_ids: string[];
+  sources_visible_to_viewer: boolean;
+  snapshot_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  view_count?: number;
+}
+
+export interface CreateShareRequest {
+  view_access: ShareViewAccess;
+  recipient_user_ids?: string[];
+  sources_visible_to_viewer: boolean;
+  expires_at?: string | null;
+  include_link: boolean;
+}
+
+export interface CreateShareResponse extends ConversationShare {
+  /** Plaintext bearer token — returned exactly ONCE. Never persisted client-side. */
+  share_token: string;
+  share_url: string;
+}
+
+export interface ListSharesResponse {
+  shares: ConversationShare[];
+}
+
+export interface UpdateShareRequest {
+  sources_visible_to_viewer?: boolean | null;
+  expires_at?: string | null;
+  recipient_user_ids?: string[] | null;
+  /** When true and ``expires_at`` is omitted, clears the existing expiry. */
+  clear_expires_at?: boolean;
+}
+
+export interface SharedByUser {
+  user_id: string;
+  display_name?: string | null;
+}
+
+export interface SharedConversationSummary {
+  share_id: string;
+  view_access: ShareViewAccess;
+  sources_visible_to_viewer: boolean;
+  snapshot_at: string;
+  shared_by: SharedByUser;
+}
+
+export type RecipientPreviewReason =
+  | "ok"
+  | "revoked"
+  | "expired"
+  | "foreign_org"
+  | "not_recipient"
+  | "share_not_found";
+
+export interface RecipientPreview {
+  share: SharedConversationSummary;
+  can_view: boolean;
+  reason: RecipientPreviewReason;
+}
+
+export interface SharedConversationView {
+  share: SharedConversationSummary;
+  conversation: Conversation;
+  messages: Message[];
+  events_by_run_id: Record<string, RuntimeEventEnvelope[]>;
+  sources: SourceEntry[];
+  drafts: Draft[];
+  subagents: SubagentEntry[];
+}
+
 export function isRuntimeEventEnvelope(
   value: unknown,
 ): value is RuntimeEventEnvelope {

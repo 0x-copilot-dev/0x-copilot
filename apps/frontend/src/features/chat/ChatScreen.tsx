@@ -1261,6 +1261,8 @@ export function ChatScreen({
                     chatUrl={
                       typeof window !== "undefined" ? window.location.href : ""
                     }
+                    conversationId={conversationId}
+                    identity={identity}
                     onStatus={(message) => setStatus(message)}
                   />
                 }

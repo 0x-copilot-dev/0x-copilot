@@ -82,10 +82,17 @@ class RuntimeApiAppFactory:
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
+        # PR 6.1 — share_service composes ShareStore + persistence + event
+        # store + workspace_feed (sources tab) + draft_service (drafts).
+        # MUST run before ``default_conversation_fork_service`` because it
+        # also registers itself as ``app.state.share_snapshot_port`` —
+        # PR 6.2's fork service depends on that port.
+        app.state.share_service = cls.default_share_service(app)
+        if app.state.share_service is not None:
+            app.state.share_snapshot_port = app.state.share_service
         # PR 6.2 — conversation fork service. The share-snapshot port is
-        # owned by PR 6.1; until that lands the bootstrap leaves the
-        # service ``None`` and the route returns 503. Tests inject the
-        # service directly via ``app.state.conversation_fork_service``.
+        # owned by PR 6.1 (registered above). Tests can override by
+        # wiring ``app.state.conversation_fork_service`` directly.
         app.state.conversation_fork_service = cls.default_conversation_fork_service(app)
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
@@ -261,6 +268,47 @@ class RuntimeApiAppFactory:
             return None
         return CapabilityAuthGate(
             tool_registry=tool_registry, mcp_registry=mcp_registry
+        )
+
+    @classmethod
+    def default_share_service(cls, app: FastAPI):
+        """Wire :class:`ShareService` (PR 6.1).
+
+        The share service backs:
+
+        - the creator surface (``POST /v1/agent/conversations/{id}/share``,
+          list / patch / revoke),
+        - the recipient view (``GET /v1/agent/shares/{share_token}``),
+        - PR 6.2's fork service via ``ShareSnapshotPort.resolve_by_token``.
+
+        Returns ``None`` when no ports are wired (minimal test apps).
+        Production/dev always have either sync or async ports configured.
+        """
+
+        from agent_runtime.api.share_service import ShareService
+        from runtime_adapters.in_memory.share_store import InMemoryShareStore
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        if ports is None:  # pragma: no cover — only hit when boot has no ports
+            return None
+        share_store = getattr(ports, "share_store", None) or InMemoryShareStore()
+        api_service = getattr(app.state, "runtime_api_service", None)
+        if api_service is None:
+            return None
+        # Construct using the runtime API service's already-adapted
+        # async ports — no double-wrapping (the service's __init__ ran
+        # ``adapt_persistence_to_async`` once).
+        import os as _os
+
+        return ShareService(
+            store=share_store,
+            persistence=api_service.persistence,
+            event_store=api_service.event_store,
+            workspace_feed_service=getattr(app.state, "workspace_feed_service", None),
+            draft_service=getattr(app.state, "draft_service", None),
+            notifications=getattr(api_service, "_notifications", None),
+            app_base_url=_os.environ.get("RUNTIME_APP_BASE_URL", "").strip(),
         )
 
     @classmethod

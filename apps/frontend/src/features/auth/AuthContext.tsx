@@ -242,12 +242,22 @@ export function AuthProvider({
         }
       }
       setBearer(null);
-      setState({
-        status: looksLike401 ? "anonymous" : "error",
-        identity: null,
-        mfaPending: null,
-        workspacePick: null,
-        error: looksLike401 ? null : message,
+      // PR 5.1 — don't stomp on a pending interactive flow (mfa_pending,
+      // workspace_pick) that may have transitioned while ``refresh`` was
+      // in flight. Those states are owned by ``login`` / ``consumeMagicLink``
+      // and outlive a 401 from the session probe (the bearer hasn't been
+      // minted yet by definition).
+      setState((prev) => {
+        if (prev.status === "mfa_pending" || prev.status === "workspace_pick") {
+          return prev;
+        }
+        return {
+          status: looksLike401 ? "anonymous" : "error",
+          identity: null,
+          mfaPending: null,
+          workspacePick: null,
+          error: looksLike401 ? null : message,
+        };
       });
     }
   }, [setBearer]);

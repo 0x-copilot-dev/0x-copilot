@@ -621,6 +621,106 @@ def create_app(
             identity=identity,
         )
 
+    # PR 6.1 — conversation sharing (creator surface + recipient view).
+    # The bearer token rides in the URL path on the recipient endpoints,
+    # but the caller must still be a valid session — the token grants
+    # access to the *share row*, not the *user identity*.
+    @app.post("/v1/agent/conversations/{conversation_id}/share")
+    async def create_share(
+        request: Request,
+        conversation_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/conversations/{conversation_id}/share",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/conversations/{conversation_id}/shares")
+    async def list_shares(
+        request: Request,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/shares",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.patch("/v1/agent/shares/{share_id}")
+    async def update_share(
+        request: Request,
+        share_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "PATCH",
+            f"/v1/agent/shares/{share_id}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/agent/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def revoke_share(
+        request: Request,
+        share_id: str,
+    ) -> Response:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        await forward_json(
+            app,
+            "DELETE",
+            f"/v1/agent/shares/{share_id}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            expect_json=False,
+            identity=identity,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/v1/agent/shares/{share_token}")
+    async def get_shared_conversation(
+        request: Request,
+        share_token: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/shares/{share_token}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/shares/{share_token}/preview")
+    async def preview_shared_conversation(
+        request: Request,
+        share_token: str,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/shares/{share_token}/preview",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # PR 1.5 — Workspace pane data feeds (subagents + sources). Read-only.
     @app.get("/v1/agent/conversations/{conversation_id}/subagents")
     async def list_subagents(

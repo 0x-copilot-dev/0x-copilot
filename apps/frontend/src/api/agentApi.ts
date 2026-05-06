@@ -7,9 +7,12 @@ import type {
   Conversation,
   ConversationContextResponse,
   ConversationListResponse,
+  ConversationShare,
   CreateConversationRequest,
   CreateRunRequest,
   CreateRunResponse,
+  CreateShareRequest,
+  CreateShareResponse,
   ConversationConnectorScopesResponse,
   Draft,
   ForkRequest,
@@ -20,17 +23,21 @@ import type {
   DraftSendRequest,
   DraftSendResponse,
   InboxEventEnvelope,
+  ListSharesResponse,
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
+  RecipientPreview,
   RetentionEffectiveResponse,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
+  SharedConversationView,
   SourceListResponse,
   SubagentListResponse,
   SubagentStatusFilter,
   UpdateConversationConnectorScopesRequest,
   UpdateConversationRequest,
+  UpdateShareRequest,
   UpdateWorkspaceDefaultsRequest,
   BudgetMeResponse,
   UsageConversationRow,
@@ -621,4 +628,73 @@ export function streamInboxEvents({
   });
   eventSource.addEventListener("error", onError);
   return eventSource;
+}
+
+// PR 6.1 — Conversation sharing. Six endpoints; the bearer ``share_token``
+// rides in the URL on the recipient endpoints, but the caller must still
+// be a valid session — the token grants access to the *share row*, not
+// the *user identity*.
+
+export function createShare(
+  conversationId: string,
+  request: CreateShareRequest,
+  identity: RequestIdentity,
+): Promise<CreateShareResponse> {
+  return httpPostQuery<CreateShareResponse>(
+    `/v1/agent/conversations/${encodeURIComponent(conversationId)}/share`,
+    request,
+    identity,
+  );
+}
+
+export function listShares(
+  conversationId: string,
+  identity: RequestIdentity,
+): Promise<ListSharesResponse> {
+  return httpGet<ListSharesResponse>(
+    `/v1/agent/conversations/${encodeURIComponent(conversationId)}/shares`,
+    identity,
+  );
+}
+
+export function updateShare(
+  shareId: string,
+  request: UpdateShareRequest,
+  identity: RequestIdentity,
+): Promise<ConversationShare> {
+  return httpPatchQuery<ConversationShare>(
+    `/v1/agent/shares/${encodeURIComponent(shareId)}`,
+    request,
+    identity,
+  );
+}
+
+export function revokeShare(
+  shareId: string,
+  identity: RequestIdentity,
+): Promise<void> {
+  return httpDelete(
+    `/v1/agent/shares/${encodeURIComponent(shareId)}`,
+    identity,
+  );
+}
+
+export function getSharedConversation(
+  shareToken: string,
+  identity: RequestIdentity,
+): Promise<SharedConversationView> {
+  return httpGet<SharedConversationView>(
+    `/v1/agent/shares/${encodeURIComponent(shareToken)}`,
+    identity,
+  );
+}
+
+export function previewSharedConversation(
+  shareToken: string,
+  identity: RequestIdentity,
+): Promise<RecipientPreview> {
+  return httpGet<RecipientPreview>(
+    `/v1/agent/shares/${encodeURIComponent(shareToken)}/preview`,
+    identity,
+  );
 }
