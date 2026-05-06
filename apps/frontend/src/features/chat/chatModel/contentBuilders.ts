@@ -10,6 +10,7 @@ import {
   approvalPart,
   mcpAuthPart,
   subagentActivityRecord,
+  subagentFleetPart,
   subagentPart,
   toolPart,
 } from "./partFactories";
@@ -204,6 +205,16 @@ export function upsertSubagentPart(
   items: ChatItem[],
   event: RuntimeEventEnvelope,
 ): ChatItem[] {
+  // PR A2 — fleet bookend events (`subagent_fleet_started` /
+  // `subagent_fleet_finished`) own a sibling `run_subagent_fleet` part keyed
+  // by `fleet_id`; child `subagent_*` events keep their own `run_subagent`
+  // parts so the singleton path (without a fleet) still works unchanged.
+  if (
+    event.event_type === "subagent_fleet_started" ||
+    event.event_type === "subagent_fleet_finished"
+  ) {
+    return upsertSubagentFleetPart(items, event);
+  }
   const key = subagentKeyForEvent(event);
   if (key === null) {
     return items;
@@ -221,6 +232,43 @@ export function upsertSubagentPart(
     }
     return upsertPart(content, part);
   });
+}
+
+function upsertSubagentFleetPart(
+  items: ChatItem[],
+  event: RuntimeEventEnvelope,
+): ChatItem[] {
+  const fleetId = fleetIdFromEvent(event);
+  if (fleetId === null) {
+    return items;
+  }
+  return updateAssistantContent(items, event, (content) => {
+    const existing = content.find(
+      (part): part is ThreadToolCallPart =>
+        isToolCallPart(part) &&
+        part.toolName === "run_subagent_fleet" &&
+        part.toolCallId === fleetId,
+    );
+    const part = subagentFleetPart(event, fleetId, existing);
+    return upsertPart(content, part);
+  });
+}
+
+function fleetIdFromEvent(event: RuntimeEventEnvelope): string | null {
+  const payload = event.payload;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+  const raw = (payload as Record<string, unknown>).fleet_id;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function upsertSubagentActivity(

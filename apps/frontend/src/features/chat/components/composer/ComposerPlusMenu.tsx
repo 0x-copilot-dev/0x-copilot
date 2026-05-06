@@ -3,6 +3,47 @@ import type { ReactElement } from "react";
 
 export type ComposerMenuView = "root" | "mcp" | "skills";
 
+const iconProps = {
+  className: "aui-plus-menu__icon",
+  viewBox: "0 0 24 24",
+  width: 16,
+  height: 16,
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.75,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+
+const ImageIcon = (): ReactElement => (
+  <svg {...iconProps}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <circle cx="9" cy="10" r="2" />
+    <path d="m21 16-5-5-9 9" />
+  </svg>
+);
+
+const PaperclipIcon = (): ReactElement => (
+  <svg {...iconProps}>
+    <path d="m21 11-9 9a5 5 0 1 1-7-7l9-9a3.5 3.5 0 1 1 5 5l-9 9a2 2 0 1 1-3-3l8-8" />
+  </svg>
+);
+
+const LayersIcon = (): ReactElement => (
+  <svg {...iconProps}>
+    <path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z" />
+    <path d="M3 12.5 12 17l9-4.5" />
+    <path d="M3 17.5 12 22l9-4.5" />
+  </svg>
+);
+
+const BoltIcon = (): ReactElement => (
+  <svg {...iconProps}>
+    <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+  </svg>
+);
+
 export function ComposerPlusMenu({
   view,
   connectors,
@@ -154,42 +195,46 @@ export function ComposerPlusMenu({
       aria-label="Attachment and tools menu"
     >
       <button
-        className="aui-trigger-popover__item"
+        className="aui-trigger-popover__item aui-plus-menu__item"
         type="button"
         role="menuitem"
         title="Attach an image"
         onClick={onAttachImage}
       >
+        <ImageIcon />
         <strong>Attach Image</strong>
         <span>Upload PNG, JPG, GIF, or WebP images.</span>
       </button>
       <button
-        className="aui-trigger-popover__item"
+        className="aui-trigger-popover__item aui-plus-menu__item"
         type="button"
         role="menuitem"
         title="Attach a file"
         onClick={onAttachFile}
       >
+        <PaperclipIcon />
         <strong>Attach File</strong>
         <span>Upload PDF, DOCX, spreadsheets, slides, or text files.</span>
       </button>
       <button
-        className="aui-trigger-popover__item"
+        className="aui-trigger-popover__item aui-plus-menu__item"
         type="button"
         role="menuitem"
         title="Open MCP server menu"
         onClick={onOpenMcp}
       >
+        <LayersIcon />
         <strong>MCP Servers</strong>
         <span>Choose an available server or open MCP settings.</span>
       </button>
       <button
-        className="aui-trigger-popover__item"
+        className="aui-trigger-popover__item aui-plus-menu__item"
         type="button"
         role="menuitem"
         title="Open skills menu"
         onClick={onOpenSkills}
       >
+        <BoltIcon />
         <strong>Skills</strong>
         <span>Choose an enabled skill or open skill settings.</span>
       </button>

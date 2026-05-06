@@ -15,6 +15,7 @@ import { ConnectorAuthTool } from "../tools/ConnectorAuthTool";
 import { McpTool } from "../tools/McpTool";
 import { ProgressTool } from "../tools/ProgressTool";
 import { SubagentTool } from "../tools/SubagentTool";
+import { SubagentFleetTool } from "../tools/SubagentFleetTool";
 import { ToolFallback } from "../tools/ToolFallback";
 import { ToolGroup } from "../tools/ToolGroup";
 import { AssistantMessageFooter } from "./AssistantMessageFooter";
@@ -27,6 +28,7 @@ export function AssistantMessage({
   onOpenSources,
   onResumeToolCall,
   onReload,
+  onForkFromHere,
 }: {
   message: ThreadMessageLike;
   onMcpAuthConnect: (payload: {
@@ -56,6 +58,12 @@ export function AssistantMessage({
    * read-only previews stay clean.
    */
   onReload?: () => void;
+  /**
+   * PR A3 — "Retry from here" handler. The host (`ChatScreen`) wires
+   * this to `forkConversationFromMessage` and a navigation event so
+   * the user lands in the freshly forked conversation.
+   */
+  onForkFromHere?: () => void;
 }): ReactElement {
   const metrics = performanceMetricsFromMetadata(message.metadata);
   const showFooter = isTerminalAssistantStatus(message.status);
@@ -88,6 +96,7 @@ export function AssistantMessage({
                 call_mcp_tool: McpTool,
                 load_mcp_server: McpTool,
                 run_subagent: SubagentTool,
+                run_subagent_fleet: SubagentFleetTool,
                 run_progress: ProgressTool,
                 approval_request: ApprovalTool,
                 mcp_auth_required: (props) => (
@@ -113,6 +122,7 @@ export function AssistantMessage({
           metrics={metrics}
           getText={() => textFromMessage(message)}
           onReload={onReload}
+          onForkFromHere={onForkFromHere}
         />
       ) : null}
     </Message>

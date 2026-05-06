@@ -78,6 +78,13 @@ export function subagentPart(
     subagentNameForEvent(event) ??
     stringValue(existingArgs.subagent_name) ??
     "Subagent";
+  // PR A2 — capture `parent_fleet_id` so the renderer can decide whether to
+  // suppress this subagent card in favor of nesting under a `<SubagentFleetCard>`.
+  // Always preserves the original (server-stamped) value once seen so a late
+  // PROGRESS / COMPLETED without the field can't blank it out.
+  const parentFleetId =
+    payloadString(event.payload, "parent_fleet_id") ??
+    stringValue(existingArgs.parent_fleet_id);
   const summary =
     event.summary ??
     payloadString(event.payload, "summary") ??
@@ -117,6 +124,7 @@ export function subagentPart(
     short_summary: shortSummary ?? null,
     task_summary: taskSummary ?? null,
     started_at: startedAt,
+    parent_fleet_id: parentFleetId ?? null,
   };
   return {
     type: "tool-call",
@@ -127,6 +135,73 @@ export function subagentPart(
     result: status === "completed" ? summary : existing?.result,
     isError: status === "failed",
   };
+}
+
+// PR A2 — fleet bookend part. Emitted on `subagent_fleet_started` and
+// updated on each child `subagent_*` event (running/done counts) plus
+// `subagent_fleet_finished` (elapsed). Renders as `<SubagentFleetCard>`
+// via the `run_subagent_fleet` tool-name route.
+export function subagentFleetPart(
+  event: RuntimeEventEnvelope,
+  fleetId: string,
+  existing: ThreadToolCallPart | undefined,
+): ThreadToolCallPart {
+  const existingArgs = asRecord(existing?.args);
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  const title =
+    payloadString(payload, "title") ??
+    stringValue(existingArgs.title) ??
+    event.display_title ??
+    "Subagents working in parallel";
+  const sub =
+    payloadString(payload, "sub") ?? stringValue(existingArgs.sub) ?? null;
+  const agentIds =
+    readStringArray(payload.agent_ids) ??
+    readStringArray(existingArgs.agent_ids) ??
+    [];
+  const total = agentIds.length;
+  const elapsed =
+    payloadString(payload, "elapsed") ??
+    stringValue(existingArgs.elapsed) ??
+    null;
+  const completed =
+    event.event_type === "subagent_fleet_finished" ||
+    existingArgs.completed === true;
+  const args = {
+    ...existingArgs,
+    fleet_id: fleetId,
+    title,
+    sub,
+    agent_ids: agentIds,
+    total,
+    elapsed,
+    completed,
+  };
+  return {
+    type: "tool-call",
+    toolCallId: fleetId,
+    toolName: "run_subagent_fleet",
+    args: jsonArgs(args),
+    argsText: title,
+    result: completed ? "completed" : undefined,
+    isError: false,
+  };
+}
+
+function readStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.trim().length > 0) {
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 export function subagentActivityRecord(

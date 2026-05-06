@@ -1,37 +1,5 @@
 import { act, render, screen, within } from "@testing-library/react";
-import type { ComponentType, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// Render the assistant-ui suggestion primitives as transparent pass-throughs
-// so the welcome can render without a full AssistantRuntimeProvider in the
-// test. SuggestionByIndex invokes its components.Suggestion; Trigger becomes
-// a plain <button> that emits its children.
-vi.mock("@assistant-ui/react", () => ({
-  ThreadPrimitive: {
-    SuggestionByIndex: ({
-      components: { Suggestion },
-    }: {
-      index: number;
-      components: { Suggestion: ComponentType };
-    }) => <Suggestion />,
-  },
-  SuggestionPrimitive: {
-    Trigger: ({
-      children,
-      className,
-      title,
-    }: {
-      children: ReactNode;
-      className?: string;
-      title?: string;
-      send?: boolean;
-    }) => (
-      <button type="button" className={className} title={title}>
-        {children}
-      </button>
-    ),
-  },
-}));
 
 import { ThreadWelcome } from "./ThreadWelcome";
 

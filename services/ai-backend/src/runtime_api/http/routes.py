@@ -584,6 +584,13 @@ class RuntimeApiRouter:
         from runtime_api.http.share_fork_routes import register_share_fork_routes
 
         register_share_fork_routes(router)
+        # PR A3 / 8.0.3c — owner forks their own conversation from a
+        # specific message (Retry from here). Mounted alongside the
+        # share-fork POST so the route table groups the two fork
+        # pathways. Same 503-when-not-configured opacity.
+        from runtime_api.http.self_fork_routes import register_self_fork_routes
+
+        register_self_fork_routes(router)
         return router
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.api.constants import Keys, Messages
@@ -37,6 +38,14 @@ class StreamUpdateProcessor:
         SUBAGENT_ID = "subagent_id"
         CALL_ID = "call_id"
         CONTENT = "content"
+        # PR A2 — fleet bookends. When the supervisor dispatches >1 task
+        # tool call in a single update tick we wrap them in a fleet so the
+        # FE can render a single SubagentFleetCard.
+        FLEET_ID = "fleet_id"
+        PARENT_FLEET_ID = "parent_fleet_id"
+        AGENT_IDS = "agent_ids"
+        TITLE = "title"
+        ELAPSED = "elapsed"
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
@@ -58,6 +67,16 @@ class StreamUpdateProcessor:
         # Per-run metrics handle, set by the run handler so we can attach the
         # subagent token rollup to SUBAGENT_COMPLETED payloads (B2).
         self._metrics_by_run: dict[str, AssistantRunMetrics] = {}
+        # PR A2 — fleet bookend bookkeeping. `_fleet_id_by_task_id` maps a
+        # supervisor `task` call_id back to its fleet so SUBAGENT_COMPLETED
+        # can stamp `parent_fleet_id` and decrement the remaining set;
+        # `_fleet_remaining` tracks the open task_ids per fleet so the
+        # processor can emit SUBAGENT_FLEET_FINISHED when the last child
+        # closes; `_fleet_started_at` lets the FINISHED payload carry an
+        # `elapsed` string without joining events on the consumer side.
+        self._fleet_id_by_task_id: dict[tuple[str, str], str] = {}
+        self._fleet_remaining: dict[tuple[str, str], set[str]] = {}
+        self._fleet_started_at: dict[tuple[str, str], datetime] = {}
 
     def bind_metrics(self, run_id: str, metrics: AssistantRunMetrics) -> None:
         """Register the per-run metrics object so SUBAGENT_COMPLETED can rollup."""
@@ -226,7 +245,26 @@ class StreamUpdateProcessor:
         """Append lifecycle events derived from documented Deep Agents update chunks."""
 
         emitted = False
-        for payload in self.task_tool_call_payloads(data):
+        start_payloads = self.task_tool_call_payloads(data)
+        # PR A2 — when the supervisor dispatches >1 task tool call in the
+        # same update tick, emit a SUBAGENT_FLEET_STARTED bookend first and
+        # stamp `parent_fleet_id` on each child SUBAGENT_STARTED payload so
+        # the FE renders one card. A single-dispatch tick keeps the
+        # singleton path (no fleet wrapper).
+        fleet_id = await self._maybe_emit_fleet_started(
+            run=run,
+            payloads=start_payloads,
+            metadata=metadata,
+        )
+        for payload in start_payloads:
+            if fleet_id is not None:
+                payload[self._Fields.PARENT_FLEET_ID] = fleet_id
+                task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
+                if task_id is not None:
+                    self._fleet_id_by_task_id[(run.run_id, task_id)] = fleet_id
+                    self._fleet_remaining.setdefault((run.run_id, fleet_id), set()).add(
+                        task_id
+                    )
             await self.append_task_lifecycle_event(
                 run=run,
                 event_type=RuntimeApiEventType.SUBAGENT_STARTED,
@@ -235,6 +273,14 @@ class StreamUpdateProcessor:
             )
             emitted = True
         for payload in self.task_tool_result_payloads(data):
+            task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
+            child_fleet_id = (
+                self._fleet_id_by_task_id.get((run.run_id, task_id))
+                if task_id is not None
+                else None
+            )
+            if child_fleet_id is not None:
+                payload[self._Fields.PARENT_FLEET_ID] = child_fleet_id
             await self.append_task_lifecycle_event(
                 run=run,
                 event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
@@ -242,6 +288,13 @@ class StreamUpdateProcessor:
                 metadata=metadata,
             )
             emitted = True
+            if child_fleet_id is not None and task_id is not None:
+                await self._maybe_emit_fleet_finished(
+                    run=run,
+                    fleet_id=child_fleet_id,
+                    task_id=task_id,
+                    metadata=metadata,
+                )
         if emitted or not namespace.is_subagent:
             return emitted
 
@@ -259,6 +312,95 @@ class StreamUpdateProcessor:
             parent_task_id=namespace.subagent_task_id,
         )
         return True
+
+    async def _maybe_emit_fleet_started(
+        self,
+        *,
+        run: RunRecord,
+        payloads: tuple[JsonObject, ...],
+        metadata: JsonObject,
+    ) -> str | None:
+        """Emit SUBAGENT_FLEET_STARTED when this tick dispatches >1 subagent."""
+
+        if len(payloads) < 2:
+            return None
+        agent_ids: list[str] = []
+        for payload in payloads:
+            name = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
+            if name is not None:
+                agent_ids.append(name)
+        fleet_id = uuid4().hex
+        title = self._fleet_title(agent_ids)
+        fleet_payload: JsonObject = {
+            self._Fields.FLEET_ID: fleet_id,
+            self._Fields.TITLE: title,
+            self._Fields.AGENT_IDS: tuple(agent_ids),
+        }
+        self._fleet_started_at[(run.run_id, fleet_id)] = datetime.now(timezone.utc)
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_FLEET_STARTED,
+            payload=fleet_payload,
+            metadata=metadata,
+        )
+        return fleet_id
+
+    async def _maybe_emit_fleet_finished(
+        self,
+        *,
+        run: RunRecord,
+        fleet_id: str,
+        task_id: str,
+        metadata: JsonObject,
+    ) -> None:
+        """Decrement the fleet's open-child set; emit FINISHED when empty."""
+
+        key = (run.run_id, fleet_id)
+        remaining = self._fleet_remaining.get(key)
+        if remaining is None:
+            return
+        remaining.discard(task_id)
+        self._fleet_id_by_task_id.pop((run.run_id, task_id), None)
+        if remaining:
+            return
+        self._fleet_remaining.pop(key, None)
+        elapsed_str: str | None = None
+        started_at = self._fleet_started_at.pop(key, None)
+        if started_at is not None:
+            elapsed_seconds = max(
+                0,
+                round((datetime.now(timezone.utc) - started_at).total_seconds()),
+            )
+            elapsed_str = self._format_elapsed(elapsed_seconds)
+        finished_payload: JsonObject = {self._Fields.FLEET_ID: fleet_id}
+        if elapsed_str is not None:
+            finished_payload[self._Fields.ELAPSED] = elapsed_str
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_FLEET_FINISHED,
+            payload=finished_payload,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _fleet_title(agent_ids: list[str]) -> str:
+        if not agent_ids:
+            return "Subagents working in parallel"
+        if len(agent_ids) == 1:
+            return f"{agent_ids[0]} working"
+        return f"{len(agent_ids)} subagents working in parallel"
+
+    @staticmethod
+    def _format_elapsed(seconds: int) -> str:
+        if seconds < 60:
+            return f"0:{seconds:02d}"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}:{secs:02d}"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
 
     @classmethod
     def task_tool_call_payload(

@@ -6,6 +6,26 @@ from collections.abc import Iterable, Mapping
 
 from agent_runtime.observability.constants import Defaults, Patterns, UserContentKeys
 
+# Known-safe integer/count keys whose names happen to contain the
+# substring ``token`` (the redactor's sensitive-key regex matches
+# anywhere in the key name). These carry observability counters — never
+# credentials — so we surface their numeric values to clients rather
+# than redacting them.
+_TOKEN_COUNT_KEYS = frozenset(
+    {
+        "before_tokens",
+        "after_tokens",
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "context_tokens",
+        "max_input_tokens",
+        "max_output_tokens",
+    }
+)
+
 
 class ObservabilityRedactor:
     """Redact secrets and shrink oversized payloads before stream emission."""
@@ -66,6 +86,8 @@ class ObservabilityRedactor:
         *,
         max_string_length: int | None,
     ) -> object:
+        if key in _TOKEN_COUNT_KEYS:
+            return cls.redact_json_value(value, max_string_length=max_string_length)
         if Patterns.SENSITIVE_KEY.search(key):
             return Defaults.REDACTED
         if key in UserContentKeys.KEYS:

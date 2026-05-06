@@ -49,6 +49,8 @@ export const SETTINGS_SECTIONS = [
   "capabilities",
   "skills",
   "claude-code",
+  // Personal API keys
+  "api-keys",
 ] as const satisfies readonly SettingsSection[];
 
 const VALID = new Set<string>(SETTINGS_SECTIONS);

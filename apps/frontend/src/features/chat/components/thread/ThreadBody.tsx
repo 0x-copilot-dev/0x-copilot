@@ -1,10 +1,5 @@
-import {
-  SelectionToolbarPrimitive,
-  ThreadPrimitive,
-} from "@assistant-ui/react";
-import { Message, MessageParts } from "../../runtime/components";
 import type { McpServer, Skill } from "@enterprise-search/api-types";
-import type { ReactElement, ReactNode } from "react";
+import { forwardRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   PlanningIndicator,
   type RunIndicator,
@@ -22,132 +17,171 @@ import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
 import { PlainText } from "../markdown/PlainText";
 import { firstNameFromDisplayName } from "../../utils/greeting";
+import {
+  Composer,
+  Message,
+  MessageParts,
+  ThreadEmpty,
+  ThreadMessages,
+  ThreadRoot,
+  ThreadScrollToBottom,
+  ThreadViewport,
+  type ComposerHandle,
+} from "../../runtime";
+import type {
+  AttachmentAdapter,
+  CompleteAttachment,
+  ThreadMessageLike,
+} from "../../runtime/types";
 import { ThreadWelcome } from "./ThreadWelcome";
 
-export function ThreadBody({
-  connectors,
-  skills,
-  connectorSuggestions,
-  runIndicator,
-  onMcpAuthConnect,
-  onMcpAuthSkip,
-  onOpenMcpSettings,
-  onOpenSkillsSettings,
-  onShowConnectors,
-  onOpenDetailsPanel,
-  onOpenSources,
-  connectorsTrigger,
-  activeModelLabel,
-  models,
-  selectedModel,
-  onModelChange,
-  depth,
-  onDepthChange,
-  depthVisible,
-  controlsDisabled,
-  onSelectSuggestion,
-  onResumeToolCall,
-  onReload,
-}: {
-  connectors: {
-    servers: McpServer[];
-    loading: boolean;
-  };
-  skills: {
-    skills: Skill[];
-    loading: boolean;
-  };
-  connectorSuggestions: ReactNode;
-  runIndicator: RunIndicator | null;
-  onMcpAuthConnect: (payload: {
-    approvalId: string;
-    serverId: string;
-  }) => Promise<void>;
-  onMcpAuthSkip: (payload: {
-    approvalId: string;
-    serverId: string;
-  }) => Promise<void>;
-  onOpenMcpSettings: () => void;
-  onOpenSkillsSettings: () => void;
-  onShowConnectors: () => void;
-  onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
-  /**
-   * PR 3.5 / G9 — opens the workspace pane on the Sources tab and scrolls
-   * to the chosen citation row. Fired from MessageSourcesStrip clicks
-   * inside the assistant message. Optional so non-pane mounts (storybook
-   * / shared-thread preview) silently degrade.
-   */
-  onOpenSources?: (citationId: string) => void;
-  /** PR 3.4 — slot through to the AssistantComposer's connectors trigger. */
-  connectorsTrigger?: ReactNode;
-  /** PR 8.0.1 — display name of the active model, surfaced in the
-   * composer footer hint row. */
-  activeModelLabel?: string;
-  /** PR 8.0.2 — model + thinking-depth controls moved from the topbar
-   * into the composer. Plumbed through the same way the composer
-   * already receives `connectorsTrigger`. */
-  models?: Array<ModelCatalogModel & { disabled?: boolean }>;
-  selectedModel?: string;
-  onModelChange?: (id: string) => void;
-  depth?: ThinkingDepth;
-  onDepthChange?: (depth: ThinkingDepth) => void;
-  depthVisible?: boolean;
-  controlsDisabled?: boolean;
-  /**
-   * Empty-thread suggestion picker. Routed through to `ThreadWelcome`
-   * so the host (`ChatScreen`) controls how a clicked card becomes a
-   * runtime append.
-   */
-  onSelectSuggestion?: (prompt: string) => void;
-  /**
-   * Tool-call interrupt resolution. Wired through `MessageContext` so
-   * approval / mcp-auth / ask-a-question tool renderers can ship the
-   * user's decision back to the host's resume pipeline. Optional —
-   * preview / shared-thread mounts pass nothing and tools become
-   * read-only.
-   */
-  onResumeToolCall?: (payload: unknown) => void;
-  /**
-   * Footer Reload button handler. The host is given the assistant
-   * message id so it can resolve the parent user message and start a
-   * new run. Optional — preview / shared-thread mounts hide the button.
-   */
-  onReload?: (assistantMessageId: string) => void;
-}): ReactElement {
-  // Pull the first-token of the signed-in user's display_name for the
-  // welcome greeting. PR 8.0.2 — try the session identity first (cheap,
-  // no fetch); fall back to the lazy `/v1/me/profile` hook (used by
-  // UserCard too) so dev personas whose bearer doesn't carry
-  // display_name still get a personalised greeting on first paint after
-  // the profile fetch resolves.
+// `Composer` is referenced in the type signature for the forwarded ref
+// but the value isn't used directly here. Suppress the no-unused-import
+// hint without changing the surface.
+void Composer;
+
+export interface ThreadBodyHandle {
+  composerHandle: ComposerHandle | null;
+}
+
+export const ThreadBody = forwardRef<
+  ComposerHandle,
+  {
+    messages: readonly ThreadMessageLike[];
+    /** Whether a run is currently in flight. Drives Composer Send/Stop. */
+    running?: boolean;
+    /** Composer disabled when there's no active conversation. */
+    disabled?: boolean;
+    /** Adapter for composer attachments. */
+    attachmentAdapter?: AttachmentAdapter;
+    /** Id of the user message currently being inline-edited. */
+    editingMessageId?: string | null;
+    onEditCancel?: () => void;
+    onEditSave?: (sourceMessageId: string, text: string) => void;
+    /** Composer submission. Called with finalised attachments. */
+    onSubmit?: (payload: {
+      text: string;
+      attachments: ReadonlyArray<CompleteAttachment>;
+    }) => void | Promise<void>;
+    /** Stop-run handler. */
+    onCancel?: () => void;
+    connectors: {
+      servers: McpServer[];
+      loading: boolean;
+    };
+    skills: {
+      skills: Skill[];
+      loading: boolean;
+    };
+    connectorSuggestions: ReactNode;
+    runIndicator: RunIndicator | null;
+    onMcpAuthConnect: (payload: {
+      approvalId: string;
+      serverId: string;
+    }) => Promise<void>;
+    onMcpAuthSkip: (payload: {
+      approvalId: string;
+      serverId: string;
+    }) => Promise<void>;
+    onOpenMcpSettings: () => void;
+    onOpenSkillsSettings: () => void;
+    onShowConnectors: () => void;
+    onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+    onOpenSources?: (citationId: string) => void;
+    connectorsTrigger?: ReactNode;
+    activeModelLabel?: string;
+    models?: Array<ModelCatalogModel & { disabled?: boolean }>;
+    selectedModel?: string;
+    onModelChange?: (id: string) => void;
+    depth?: ThinkingDepth;
+    onDepthChange?: (depth: ThinkingDepth) => void;
+    depthVisible?: boolean;
+    controlsDisabled?: boolean;
+    onSelectSuggestion?: (prompt: string) => void;
+    onResumeToolCall?: (payload: unknown) => void;
+    onReload?: (assistantMessageId: string) => void;
+  }
+>(function ThreadBody(
+  {
+    messages,
+    running = false,
+    disabled = false,
+    attachmentAdapter,
+    editingMessageId,
+    onEditCancel,
+    onEditSave,
+    onSubmit,
+    onCancel,
+    connectors,
+    skills,
+    connectorSuggestions,
+    runIndicator,
+    onMcpAuthConnect,
+    onMcpAuthSkip,
+    onOpenMcpSettings,
+    onOpenSkillsSettings,
+    onShowConnectors,
+    onOpenDetailsPanel,
+    onOpenSources,
+    connectorsTrigger,
+    activeModelLabel,
+    models,
+    selectedModel,
+    onModelChange,
+    depth,
+    onDepthChange,
+    depthVisible,
+    controlsDisabled,
+    onSelectSuggestion,
+    onResumeToolCall,
+    onReload,
+  },
+  composerRef,
+): ReactElement {
   const auth = useAuth();
   const profile = useMyProfile();
   const greetingFirstName = firstNameFromDisplayName(
     auth.identity?.display_name ?? profile?.display_name ?? null,
   );
+  const [atBottom, setAtBottom] = useState(true);
+  const isEmpty = messages.length === 0;
+
+  // Build a scroll-key that invalidates whenever the message list grows
+  // or the trailing message's content length changes (covers streaming
+  // text deltas, tool-call arrivals, etc.).
+  const tail = messages[messages.length - 1];
+  const tailLen =
+    typeof tail?.content === "string"
+      ? tail.content.length
+      : Array.isArray(tail?.content)
+        ? tail!.content.length
+        : 0;
+  const scrollKey = `${messages.length}:${tailLen}:${running ? 1 : 0}`;
 
   return (
-    <ThreadPrimitive.Root className="aui-thread-root">
-      <SelectionToolbarPrimitive.Root className="aui-selection-toolbar">
-        <SelectionToolbarPrimitive.Quote
-          className="aui-selection-toolbar__button"
-          title="Quote selected text"
-        >
-          Quote
-        </SelectionToolbarPrimitive.Quote>
-      </SelectionToolbarPrimitive.Root>
-      <ThreadPrimitive.Viewport className="aui-thread-viewport">
-        <ThreadPrimitive.Empty>
+    <ThreadRoot className="aui-thread-root">
+      <ThreadViewport
+        className="aui-thread-viewport"
+        scrollKey={scrollKey}
+        onAtBottomChange={setAtBottom}
+      >
+        <ThreadEmpty isEmpty={isEmpty}>
           <ThreadWelcome
             firstName={greetingFirstName}
             onSelectSuggestion={onSelectSuggestion}
           />
-        </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages>
-          {({ message }) => {
+        </ThreadEmpty>
+        <ThreadMessages messages={messages} editingMessageId={editingMessageId}>
+          {({ message, isEditing }) => {
             if (message.role === "user") {
-              return message.composer.isEditing ? (
-                <UserEditComposer />
+              return isEditing ? (
+                <UserEditComposer
+                  message={message}
+                  onCancel={() => onEditCancel?.()}
+                  onSave={(text) =>
+                    message.id !== undefined && onEditSave?.(message.id, text)
+                  }
+                />
               ) : (
                 <UserMessage message={message} />
               );
@@ -166,11 +200,15 @@ export function ThreadBody({
                 onMcpAuthSkip={onMcpAuthSkip}
                 onOpenSources={onOpenSources}
                 onResumeToolCall={onResumeToolCall}
-                onReload={onReload ? () => onReload(message.id) : undefined}
+                onReload={
+                  onReload && message.id !== undefined
+                    ? () => onReload(message.id as string)
+                    : undefined
+                }
               />
             );
           }}
-        </ThreadPrimitive.Messages>
+        </ThreadMessages>
         {connectorSuggestions}
         {runIndicator ? (
           <PlanningIndicator
@@ -178,17 +216,20 @@ export function ThreadBody({
             visible={runIndicator.visible}
           />
         ) : null}
-        <ThreadPrimitive.ScrollToBottom
+        <ThreadScrollToBottom
           className="aui-scroll-bottom"
           title="Scroll to bottom"
+          visible={!atBottom}
         >
           Scroll to bottom
-        </ThreadPrimitive.ScrollToBottom>
-      </ThreadPrimitive.Viewport>
+        </ThreadScrollToBottom>
+      </ThreadViewport>
       <div className="aui-thread-footer">
         <AssistantComposer
+          ref={composerRef}
           connectors={connectors}
           skills={skills}
+          attachmentAdapter={attachmentAdapter}
           onOpenMcpSettings={onOpenMcpSettings}
           onOpenSkillsSettings={onOpenSkillsSettings}
           onShowConnectors={onShowConnectors}
@@ -202,8 +243,18 @@ export function ThreadBody({
           onDepthChange={onDepthChange}
           depthVisible={depthVisible}
           controlsDisabled={controlsDisabled}
+          running={running}
+          disabled={disabled}
+          onSubmit={(payload) =>
+            onSubmit?.({
+              text: payload.text,
+              attachments:
+                payload.attachments as ReadonlyArray<CompleteAttachment>,
+            })
+          }
+          onCancel={onCancel}
         />
       </div>
-    </ThreadPrimitive.Root>
+    </ThreadRoot>
   );
-}
+});

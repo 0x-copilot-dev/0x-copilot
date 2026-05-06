@@ -30,6 +30,8 @@ import { Appearance } from "./sections/Appearance";
 import { Notifications } from "./sections/Notifications";
 import { Profile } from "./sections/Profile";
 import { Shortcuts } from "./sections/Shortcuts";
+// PR B3 / 8.0.3g — personal API keys.
+import { ApiKeys } from "./sections/ApiKeys";
 // PR 4.3 — "AI & data" group sections.
 import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
@@ -82,7 +84,9 @@ export type SettingsSection =
   | "capabilities"
   | "connectors"
   | "skills"
-  | "claude-code";
+  | "claude-code"
+  // Personal API keys (per-user; admin tokens live elsewhere).
+  | "api-keys";
 
 // PR 4.3 — sections array supports a "group" entry alongside section
 // rows so the rail can render Atlas's design grouping. Other PRs
@@ -99,6 +103,7 @@ const sections: Array<RailEntry> = [
   { kind: "section", id: "appearance", label: "Appearance" },
   { kind: "section", id: "shortcuts", label: "Shortcuts" },
   { kind: "section", id: "notifications", label: "Notifications" },
+  { kind: "section", id: "api-keys", label: "API keys" },
   // PR 4.2 — "Workspace" group: workspace branding, members, billing.
   { kind: "group", label: "Workspace" },
   { kind: "section", id: "workspace", label: "Workspace" },
@@ -235,6 +240,7 @@ export function SettingsScreen({
         {activeSection === "notifications" && preferences ? (
           <Notifications preferences={preferences} />
         ) : null}
+        {activeSection === "api-keys" ? <ApiKeys /> : null}
         {/* PR 4.2 — Workspace group. Render only when identity is plumbed
             (legacy callers that don't pass identity see the legacy rail). */}
         {activeSection === "workspace" && identity ? (

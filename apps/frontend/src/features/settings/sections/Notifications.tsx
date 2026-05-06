@@ -5,6 +5,7 @@ import type {
 import { Card, Switch } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import type { UserPreferencesState } from "../../me/useUserPreferences";
+import { NotificationsV2Panel } from "./NotificationsV2Panel";
 
 const EVENT_LABELS: Record<NotificationEvent, { label: string; hint: string }> =
   {
@@ -160,6 +161,8 @@ export function Notifications({
           <p className="app-error">{preferences.error}</p>
         ) : null}
       </Card>
+
+      <NotificationsV2Panel />
     </div>
   );
 }

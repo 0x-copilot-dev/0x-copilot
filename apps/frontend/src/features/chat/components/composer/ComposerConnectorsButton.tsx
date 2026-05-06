@@ -47,9 +47,22 @@ export const ComposerConnectorsButton = forwardRef<
       aria-label={label}
       data-tooltip="Per-chat connectors"
     >
-      <span className="atlas-composer-connectors__icon" aria-hidden="true">
-        ◇
-      </span>
+      <svg
+        className="atlas-composer-connectors__icon"
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z" />
+        <path d="M3 12.5 12 17l9-4.5" />
+        <path d="M3 17.5 12 22l9-4.5" />
+      </svg>
       {activeCount > 0 ? (
         <span className="atlas-composer-connectors__count" aria-hidden="true">
           {activeCount}

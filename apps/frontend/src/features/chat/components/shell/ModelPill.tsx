@@ -42,14 +42,26 @@ export function ModelPill({
         <span className="atlas-model-pill__name">
           {selected?.name ?? "Model"}
         </span>
-        <span aria-hidden="true" className="atlas-model-pill__caret">
-          ▾
-        </span>
+        <svg
+          aria-hidden="true"
+          className="atlas-model-pill__caret"
+          viewBox="0 0 24 24"
+          width="12"
+          height="12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
       </button>
       <Menu
         open={open}
         onClose={() => setOpen(false)}
         anchorRef={buttonRef}
+        side="up"
         align="left"
         className="atlas-model-pill__menu"
       >

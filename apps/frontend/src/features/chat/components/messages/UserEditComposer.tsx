@@ -1,37 +1,46 @@
-import { ComposerPrimitive } from "@assistant-ui/react";
 import type { ReactElement } from "react";
+import { EditComposer } from "../../runtime/composer";
+import type { ThreadMessageLike } from "../../runtime/types";
 
 /**
- * Inline edit composer for a user message. The outer wrapper is a plain
- * div — it carries only the visual class. The inner `ComposerPrimitive`
- * is what owns edit state today (replaced in Phase 4 of the
- * `@assistant-ui/react` migration).
+ * Inline edit composer for a user message. Replaces the previous
+ * `MessagePrimitive` + `ComposerPrimitive` implementation. Receives
+ * the message being edited so it can seed the textarea with the
+ * existing text, and the host's save / cancel callbacks.
+ *
+ * Behaviour parity with the assistant-ui edit composer:
+ *  - ⏎ saves; ⇧+⏎ adds a newline.
+ *  - Esc cancels.
+ *  - Auto-focus + select-all on mount so the user can immediately
+ *    overwrite the existing text.
  */
-export function UserEditComposer(): ReactElement {
+export function UserEditComposer({
+  message,
+  onCancel,
+  onSave,
+}: {
+  message: ThreadMessageLike;
+  onCancel: () => void;
+  onSave: (text: string) => void;
+}): ReactElement {
   return (
-    <div className="aui-message aui-message--user">
-      <ComposerPrimitive.Root className="aui-edit-composer">
-        <ComposerPrimitive.Input
-          className="aui-composer__input"
-          aria-label="Edit message"
-          maxRows={8}
-          submitMode="enter"
-        />
-        <div className="aui-edit-composer__actions">
-          <ComposerPrimitive.Cancel
-            className="aui-ghost-button"
-            title="Cancel editing"
-          >
-            Cancel
-          </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send
-            className="aui-send-button"
-            title="Save edited message"
-          >
-            Save
-          </ComposerPrimitive.Send>
-        </div>
-      </ComposerPrimitive.Root>
-    </div>
+    <EditComposer
+      initialText={textFromMessage(message)}
+      onCancel={onCancel}
+      onSave={onSave}
+    />
   );
+}
+
+function textFromMessage(message: ThreadMessageLike): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!content) return "";
+  const parts: string[] = [];
+  for (const part of content) {
+    if (part.type === "text") {
+      parts.push(part.text);
+    }
+  }
+  return parts.join("\n");
 }

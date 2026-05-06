@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 __all__ = [
     "ForkRequest",
     "ForkResponse",
+    "SelfForkRequest",
     "ShareSnapshot",
     "ShareSnapshotPort",
     "FORK_TITLE_MAX_LENGTH",
@@ -68,24 +69,46 @@ class ForkRequest(BaseModel):
 
 
 class ForkResponse(BaseModel):
-    """Response shape for the fork endpoint.
+    """Response shape for both the share-fork and self-fork endpoints.
 
     Carries the new conversation's id (the FE navigates to
     ``/?conversationId={conversation_id}``) plus enough context for the
     post-fork toast and the audit row the FE renders against the user
     inbox.
+
+    Lineage is explicit but disjoint: share-forks set
+    ``forked_from_share_id`` and leave ``forked_from_message_id`` NULL;
+    self-forks (PR A3) do the inverse.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: str
     parent_conversation_id: str
-    forked_from_share_id: str
+    forked_from_share_id: str | None = None
+    forked_from_message_id: str | None = None
     fork_message_count: int = Field(ge=0)
     title: str | None = None
     folder: str | None = None
     created_at: datetime
     user_id: str
+
+
+class SelfForkRequest(BaseModel):
+    """Body for ``POST /v1/agent/conversations/{conversation_id}/fork`` (PR A3).
+
+    The owner of a conversation forks from a specific message in their
+    own thread (the "Retry from here" affordance). ``from_message_id``
+    caps the message-slice copied into the new conversation; it MUST
+    belong to the source conversation. ``title`` and ``folder`` follow
+    the same shape as :class:`ForkRequest`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_message_id: str = Field(min_length=1, max_length=128)
+    title: str | None = Field(default=None, max_length=FORK_TITLE_MAX_LENGTH)
+    folder: str | None = Field(default=None, max_length=FORK_FOLDER_MAX_LENGTH)
 
 
 class ShareSnapshot(BaseModel):

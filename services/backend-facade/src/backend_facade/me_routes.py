@@ -65,8 +65,95 @@ def register_me_routes(app: FastAPI) -> None:
     async def put_my_preferences(request: Request) -> dict[str, object]:
         return await _forward_me(request, "PUT", "preferences")
 
+    # PR B4 / 8.0.3e — typed notification preferences + quiet hours.
+    @app.get("/v1/me/notifications")
+    async def get_my_notifications(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "GET", "notifications")
 
-async def _forward_me(request: Request, method: str, slug: str) -> dict[str, object]:
+    @app.put("/v1/me/notifications")
+    async def put_my_notifications(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "PUT", "notifications")
+
+    # PR B3 / 8.0.3g — personal API keys (atlas_pk_*).
+    @app.get("/v1/me/api-keys")
+    async def list_my_api_keys(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "GET", "api-keys")
+
+    @app.post("/v1/me/api-keys")
+    async def create_my_api_key(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "api-keys")
+
+    @app.delete("/v1/me/api-keys/{api_key_id}", status_code=204)
+    async def revoke_my_api_key(request: Request, api_key_id: str) -> None:
+        await _forward_me(
+            request,
+            "DELETE",
+            f"api-keys/{api_key_id}",
+            expect_json=False,
+        )
+
+    @app.post("/v1/me/api-keys/{api_key_id}/rotate", status_code=201)
+    async def rotate_my_api_key(request: Request, api_key_id: str) -> dict[str, object]:
+        return await _forward_me(
+            request,
+            "POST",
+            f"api-keys/{api_key_id}/rotate",
+        )
+
+    # PR B1 / 8.0.3d — tool-use policy (per-user override; admin
+    # workspace-default writes go through a separate workspace route
+    # below).
+    @app.get("/v1/me/policies/tool-use")
+    async def get_my_tool_use_policy(request: Request) -> dict[str, object]:
+        return await _forward_policy(request, "GET", "tool-use", scope="user")
+
+    @app.put("/v1/me/policies/tool-use")
+    async def put_my_tool_use_policy(request: Request) -> dict[str, object]:
+        return await _forward_policy(request, "PUT", "tool-use", scope="user")
+
+    # PR B2 / 8.0.3f — privacy & data settings (per-user override).
+    @app.get("/v1/me/policies/privacy")
+    async def get_my_privacy_settings(request: Request) -> dict[str, object]:
+        return await _forward_policy(request, "GET", "privacy", scope="user")
+
+    @app.put("/v1/me/policies/privacy")
+    async def put_my_privacy_settings(request: Request) -> dict[str, object]:
+        return await _forward_policy(request, "PUT", "privacy", scope="user")
+
+    # Workspace-default mutations require ADMIN_USERS — the backend
+    # enforces the scope check; the facade just routes the request.
+    @app.get("/v1/workspace/policies/tool-use")
+    async def get_workspace_tool_use_policy(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_policy(request, "GET", "tool-use", scope="workspace")
+
+    @app.put("/v1/workspace/policies/tool-use")
+    async def put_workspace_tool_use_policy(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_policy(request, "PUT", "tool-use", scope="workspace")
+
+    @app.get("/v1/workspace/policies/privacy")
+    async def get_workspace_privacy_settings(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_policy(request, "GET", "privacy", scope="workspace")
+
+    @app.put("/v1/workspace/policies/privacy")
+    async def put_workspace_privacy_settings(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_policy(request, "PUT", "privacy", scope="workspace")
+
+
+async def _forward_me(
+    request: Request,
+    method: str,
+    slug: str,
+    *,
+    expect_json: bool = True,
+) -> dict[str, object]:
     backend_url = settings_for(request.app).backend_url
     body: bytes | None = None
     if method != "GET":
@@ -93,6 +180,56 @@ async def _forward_me(request: Request, method: str, slug: str) -> dict[str, obj
             headers=headers,
         )
     _raise_for_upstream(response)
+    if not expect_json:
+        return {}
+    if not response.content:
+        return {}
+    return response.json()
+
+
+async def _forward_policy(
+    request: Request,
+    method: str,
+    policy_kind: str,
+    *,
+    scope: str,
+) -> dict[str, object]:
+    """Forward to ``/internal/v1/policies/{policy_kind}`` with the
+    appropriate ``scope_user_id`` query param.
+
+    ``scope='user'`` adds ``scope_user_id=<caller>`` so the backend
+    targets the user override row. ``scope='workspace'`` omits the
+    param so the backend targets the workspace default — the backend
+    requires ADMIN_USERS for that path.
+    """
+
+    backend_url = settings_for(request.app).backend_url
+    body: bytes | None = None
+    if method != "GET":
+        body = await request.body()
+    async with httpx.AsyncClient(timeout=10) as client:
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        headers = FacadeAuthenticator.service_headers(identity)
+        if method != "GET":
+            headers = {**headers, "content-type": "application/json"}
+        params: dict[str, str] = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+        }
+        if scope == "user":
+            params["scope_user_id"] = identity.user_id
+        response = await client.request(
+            method,
+            f"{backend_url}/internal/v1/policies/{policy_kind}",
+            params=params,
+            content=body,
+            headers=headers,
+        )
+    _raise_for_upstream(response)
+    if not response.content:
+        return {}
     return response.json()
 
 

@@ -36,3 +36,21 @@ export {
   type MessagePartsComponents,
   type MessageProps,
 } from "./components";
+
+export {
+  Composer,
+  ComposerSendButton,
+  EditComposer,
+  type ComposerHandle,
+  type ComposerProps,
+  type ComposerSubmitPayload,
+} from "./composer";
+
+export {
+  ThreadEmpty,
+  ThreadMessages,
+  ThreadRoot,
+  ThreadScrollToBottom,
+  ThreadViewport,
+  type ThreadMessageRenderValue,
+} from "./thread";

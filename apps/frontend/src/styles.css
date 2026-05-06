@@ -682,6 +682,15 @@ p {
   font: inherit;
 }
 
+/* Sidebar controls cluster: stacks "+ New chat" + search input with
+ * a small gap. The two used to butt directly against each other
+ * because nothing scoped this container. */
+.aui-sidebar__controls {
+  display: grid;
+  gap: var(--space-sm);
+  padding-top: var(--space-sm);
+}
+
 .aui-new-thread {
   align-items: center;
   background: transparent;
@@ -689,10 +698,40 @@ p {
   color: var(--color-text);
   display: flex;
   font-weight: 500;
-  justify-content: center;
+  /* Label hugs the left, chord chip hugs the right; the gap keeps
+   * the two from touching when the button is narrow. */
+  justify-content: space-between;
+  gap: var(--space-md);
   min-height: 2.25rem;
   padding: 0.5rem 0.75rem;
   width: 100%;
+}
+
+.aui-new-thread:hover {
+  background: var(--color-surface-muted);
+}
+
+/* "⌘N" chord chip — was unstyled and rendered as raw text directly
+ * abutting the "+ New chat" label. Renders as a subtle kbd-like
+ * pill so the keyboard hint reads as a hint, not as part of the
+ * button label. */
+.aui-new-thread__chord {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 500;
+  height: 1.1rem;
+  letter-spacing: 0.02em;
+  padding: 0 0.35rem;
+}
+
+.aui-new-thread:disabled .aui-new-thread__chord {
+  opacity: 0.5;
 }
 
 .aui-thread-list-item {
@@ -716,7 +755,16 @@ p {
 }
 
 /* Conversation row — two-line: title (top) + meta (timestamp or live pill).
- * Active row highlights via the parent .aui-thread-list-item[data-active]. */
+ * Active row highlights via the parent .aui-thread-list-item[data-active].
+ *
+ * Layout: title uses the full row width by default. The `⋯`
+ * overflow menu (`.aui-conversation-row__menu`) is absolutely
+ * positioned over the row on hover. We do NOT shift padding on
+ * hover — the title's shape never changes. With the smaller
+ * title font (`0.78rem`) most titles fit without truncation and
+ * the `⋯` lands in the natural whitespace at the end of the row.
+ * If a title does happen to fill the row, the button's opaque
+ * surface covers the truncated tail cleanly. */
 .aui-conversation-row {
   display: grid;
   gap: 2px;
@@ -725,7 +773,10 @@ p {
 
 .aui-conversation-row__title {
   color: var(--color-text);
-  font-size: 0.85rem;
+  /* Smaller than the previous 0.85rem so most chat titles fit on
+   * one line. With less text width pressure the `⋯` overflow has
+   * natural whitespace to land in on hover. */
+  font-size: 0.78rem;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -785,8 +836,14 @@ p {
 .aui-conversation-row__menu {
   display: none;
   position: absolute;
-  right: 0.35rem;
-  top: 0.35rem;
+  right: 0.4rem;
+  /* Aligned with the title row, not vertically centred against
+   * the whole two-line row. The button-host has 0.55rem of
+   * padding-top from `.aui-thread-list-item__trigger`, and the
+   * title's line-height puts the visual centre at roughly
+   * 0.95rem from the top — `top: 0.4rem` lands the 1.4rem-tall
+   * button right next to the title. */
+  top: 0.4rem;
 }
 
 .aui-conversation-row-host:hover .aui-conversation-row__menu,
@@ -795,19 +852,27 @@ p {
 }
 
 .aui-conversation-row__more {
-  background: color-mix(in srgb, var(--color-bg-elevated) 70%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
-  border-radius: 4px;
+  align-items: center;
+  /* Opaque match to the row's hover background so the title's
+   * ellipsis never bleeds through the button. Solid surface →
+   * the button reads as a discrete affordance, not a transparent
+   * pill floating over text. */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
   color: var(--color-text-subtle);
   cursor: pointer;
-  font-size: 0.85rem;
-  height: 1.1rem;
-  line-height: 0.6rem;
-  width: 1.4rem;
+  display: inline-flex;
+  font-size: 0.95rem;
+  height: 1.4rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.5rem;
 }
 
 .aui-conversation-row__more:hover {
-  background: var(--color-surface);
+  background: var(--color-surface-muted);
   color: var(--color-text);
 }
 
@@ -874,6 +939,45 @@ p {
 .aui-user-card {
   margin-top: auto;
   padding-top: var(--space-sm);
+  /* Anchor for the design-system Menu primitive, which renders
+   * position:absolute and resolves against the nearest positioned
+   * ancestor. Without this rule the popover lands relative to <body>. */
+  position: relative;
+}
+
+.aui-sidebar-search {
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 0.4rem;
+  padding: 0 0.625rem;
+}
+
+.aui-sidebar-search:focus-within {
+  border-color: var(--color-accent);
+}
+
+.aui-sidebar-search__icon {
+  color: var(--color-text-subtle);
+  flex: none;
+  height: 0.85rem;
+  width: 0.85rem;
+}
+
+.aui-sidebar-search__input {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  flex: 1;
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+  padding: 0.45rem 0;
+}
+
+.aui-sidebar-search__input::-webkit-search-cancel-button {
+  appearance: none;
 }
 
 .aui-user-card__trigger {
@@ -885,9 +989,9 @@ p {
   cursor: pointer;
   display: grid;
   font: inherit;
-  gap: var(--space-sm);
+  gap: 0.5rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 0.5rem 0.625rem;
+  padding: 0.4rem 0.5rem;
   text-align: left;
   width: 100%;
 }
@@ -898,6 +1002,198 @@ p {
 
 .aui-user-card__trigger[aria-expanded="true"] {
   background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+/* Chevron (▾) on the right of the user-card trigger — was an unstyled
+ * inline span that rendered as full-size body text. Renders as a
+ * subtle dim glyph aligned with the body column. */
+.aui-user-card__trigger > [aria-hidden="true"]:last-child {
+  color: var(--color-text-subtle);
+  flex: none;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+/* ─── User-card menu (popover content) ───────────────────────────────
+ * Without these rules every child rendered with browser defaults — the
+ * native <select>, the <button>s for Settings/Sign out, and the
+ * heading labels all looked like raw form chrome. The outer popover
+ * (background, border, shadow) is already styled by the design-system
+ * `.ui-dropdown__menu` rule; we only need to paint the contents. */
+
+.aui-user-card__menu {
+  /* Comfortable popover footprint for the dev-persona select +
+   * workspace picker + actions. Default ui-dropdown is 15rem; we
+   * widen so the persona select doesn't truncate "Sarah Chen · acme
+   * · employee" and so the action row breathes. */
+  min-width: 18rem;
+  padding: var(--space-md);
+  gap: var(--space-md);
+}
+
+.aui-user-card__menu-section {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.aui-user-card__menu-heading {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.aui-user-card__menu-error {
+  color: var(--color-danger);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.aui-user-card__menu-divider {
+  background: var(--color-border);
+  height: 1px;
+  margin: 0;
+  width: 100%;
+}
+
+/* Dev persona — native <select> styled to match the rest of the
+ * surface. Custom caret via background-image; no third-party
+ * combobox. */
+.aui-user-card__dev-persona-select {
+  appearance: none;
+  background-color: var(--color-surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-subtle) 50%),
+    linear-gradient(135deg, var(--color-text-subtle) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-repeat: no-repeat;
+  background-size:
+    5px 5px,
+    5px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.45rem 1.75rem 0.45rem 0.625rem;
+  width: 100%;
+}
+
+.aui-user-card__dev-persona-select:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.aui-user-card__dev-persona-select:hover {
+  background-color: var(--color-surface-muted);
+}
+
+/* Action row — Settings + Sign out as a tight grid, equal width. */
+.aui-user-card__menu-actions {
+  display: grid;
+  gap: var(--space-sm);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+}
+
+.aui-user-card__menu-item {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.82rem;
+  gap: 0.4rem;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.4rem 0.625rem;
+  text-align: center;
+  transition: background-color 0.12s ease;
+  width: 100%;
+}
+
+.aui-user-card__menu-item:hover {
+  background: var(--color-surface-muted);
+}
+
+.aui-user-card__menu-item:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+/* ─── Workspace picker (inside the user-card menu) ─────────────────── */
+.aui-workspace-picker__note {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.aui-workspace-picker__error {
+  color: var(--color-danger);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.aui-workspace-picker__list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aui-workspace-picker__list > li {
+  list-style: none;
+}
+
+.aui-workspace-picker__row {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 1px;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  width: 100%;
+}
+
+.aui-workspace-picker__row:hover {
+  background: var(--color-surface-muted);
+}
+
+.aui-workspace-picker__row[aria-current="true"] {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+.aui-workspace-picker__name {
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-workspace-picker__sub {
+  color: var(--color-text-subtle);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .aui-user-card__avatar {
@@ -1607,8 +1903,26 @@ p {
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
+  gap: var(--space-sm);
   justify-content: space-between;
   position: relative;
+}
+
+.aui-composer-tools {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.atlas-composer-mic {
+  height: 28px;
+  width: 28px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
 }
 
 .aui-plus-menu-root {
@@ -1741,19 +2055,42 @@ p {
 
 .aui-send-button {
   align-items: center;
-  background: var(--color-text);
-  border: 1px solid var(--color-text);
-  border-radius: var(--radius-full);
-  color: var(--color-bg);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
   justify-content: center;
   min-height: 2rem;
   min-width: 2rem;
   padding: 0.25rem;
   text-decoration: none;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.aui-send-button:hover:not([disabled]) {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.aui-send-button:not([disabled]):not(.aui-send-button--stop) {
+  color: var(--color-text);
+  border-color: color-mix(
+    in oklab,
+    var(--color-accent) 35%,
+    var(--color-border)
+  );
+}
+
+.aui-send-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Stop = same circle, icon flips to a square. The design uses a quiet
@@ -1829,6 +2166,33 @@ p {
   gap: var(--space-2xs);
   padding: var(--space-sm);
   text-align: left;
+}
+
+.aui-plus-menu__item {
+  grid-template-columns: 16px 1fr;
+  gap: 0 var(--space-sm);
+  align-items: center;
+}
+
+.aui-plus-menu__item > .aui-plus-menu__icon {
+  grid-row: 1;
+  grid-column: 1;
+  color: var(--color-text-muted);
+}
+
+.aui-plus-menu__item > strong {
+  grid-row: 1;
+  grid-column: 2;
+}
+
+.aui-plus-menu__item > span {
+  grid-row: 2;
+  grid-column: 2;
+}
+
+.aui-plus-menu__item:hover .aui-plus-menu__icon,
+.aui-plus-menu__item[data-highlighted] .aui-plus-menu__icon {
+  color: var(--color-text);
 }
 
 .aui-trigger-popover__back {
@@ -4280,24 +4644,41 @@ p {
  * menu in `.aui-composer-action-wrapper`). Mirrors the count-pill
  * vocabulary of the topbar pill at composer scale. */
 .atlas-composer-connectors {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 6px;
+  justify-content: center;
   height: 28px;
-  width: auto;
+  width: 28px;
+  padding: 0;
+  color: var(--color-text-muted);
+}
+
+.atlas-composer-connectors:hover:not([disabled]) {
+  color: var(--color-text);
 }
 
 .atlas-composer-connectors__icon {
-  font-size: 13px;
-  line-height: 1;
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .atlas-composer-connectors__count {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-accent);
-  padding: 0 2px;
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--color-bg);
 }
 
 /* PR 3.4 — connector popover body. The host shell is design-system
@@ -4485,6 +4866,25 @@ p {
   color: var(--color-text);
   font-size: 12px;
   cursor: pointer;
+  outline: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.atlas-model-pill:hover:not([disabled]) {
+  border-color: color-mix(
+    in oklab,
+    var(--color-accent) 50%,
+    var(--color-border)
+  );
+}
+
+.atlas-model-pill:focus-visible,
+.atlas-model-pill[aria-expanded="true"] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px
+    color-mix(in oklab, var(--color-accent) 22%, transparent);
 }
 
 .atlas-model-pill[disabled] {
@@ -4512,10 +4912,10 @@ p {
 .atlas-model-pill__menu {
   min-width: 280px;
   padding: 4px;
-  background: var(--color-surface);
+  background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
-  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.18));
+  box-shadow: var(--shadow-md, 0 18px 48px rgb(0 0 0 / 0.32));
 }
 
 .atlas-model-pill__head {

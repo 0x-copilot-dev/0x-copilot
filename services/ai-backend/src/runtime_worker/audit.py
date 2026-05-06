@@ -242,12 +242,18 @@ class WorkerAuditEmitter:
         actor_user_id: str,
         source_conversation_id: str,
         target_conversation_id: str,
-        share_id: str,
         snapshot_at: datetime,
         message_count: int,
+        share_id: str | None = None,
+        from_message_id: str | None = None,
         orphan_warnings: int = 0,
     ) -> None:
-        """Audit one PR 6.2 fork.
+        """Audit a fork (share-fork PR 6.2 or self-fork PR A3).
+
+        Exactly one of ``share_id`` (share-fork lineage) or
+        ``from_message_id`` (self-fork lineage) is populated; the other
+        is ``None`` so SIEM exports can disambiguate the two pathways
+        from a single audit row shape.
 
         ``orphan_warnings`` counts copied messages whose
         ``parent_message_id`` couldn't be resolved in the snapshot set
@@ -257,10 +263,13 @@ class WorkerAuditEmitter:
         metadata: dict[str, Any] = {
             "source_conversation_id": source_conversation_id,
             "target_conversation_id": target_conversation_id,
-            "share_id": share_id,
             "snapshot_at": snapshot_at.isoformat(),
             "message_count": int(message_count),
         }
+        if share_id is not None:
+            metadata["share_id"] = share_id
+        if from_message_id is not None:
+            metadata["from_message_id"] = from_message_id
         if orphan_warnings > 0:
             metadata["orphan_parent_warnings"] = int(orphan_warnings)
         await self._emit(

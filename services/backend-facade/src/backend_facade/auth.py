@@ -191,12 +191,24 @@ class FacadeAuthenticator:
         curl harness obtains a bearer from the env-gated dev IdP
         (``POST /v1/dev/identity/mint`` on backend) and presents it like
         any other bearer. Same verification path, dev and prod.
+
+        PR B3 — when the bearer starts with ``atlas_pk_`` the static
+        path can't authenticate (the hash + pepper live on the
+        backend). Sync routes that don't have an httpx client raise a
+        503 to nudge them through ``verify_with_touch`` which can do
+        the round-trip; in practice every facade route uses the async
+        ``verify_with_touch`` path.
         """
 
         header = request.headers.get(AUTH_HEADER, "")
         if not header.lower().startswith("bearer "):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         token = header.split(" ", maxsplit=1)[1].strip()
+        if token.startswith("atlas_pk_"):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "API-key bearer must be verified via the async path",
+            )
         return cls.verify_identity_token(token, cls._auth_secret())
 
     @classmethod
@@ -218,8 +230,24 @@ class FacadeAuthenticator:
         Falls back to the sync ``authenticate_request`` path for back-compat
         bearers that lack a ``sid`` claim — those carry no server-side
         session to touch and behave exactly as before A2.
+
+        PR B3 — when the bearer starts with ``atlas_pk_`` we bypass the
+        session machinery entirely and route through the backend's
+        ``/internal/v1/auth/api-keys/verify`` endpoint, which parses,
+        verifies (HMAC + pepper, constant-time), stamps last-used, and
+        returns identity claims minted from the row. The cached LRU
+        path is reused: keying on ``sha256(bearer)`` means a CI bot
+        hammering the same key only pays one verify per cache window.
         """
 
+        bearer_header = _bearer_from_authorization_header(request)
+        if bearer_header is not None and bearer_header.startswith("atlas_pk_"):
+            return await cls._verify_api_key_bearer(
+                bearer_header,
+                backend_url=backend_url,
+                http_client=http_client,
+                cache_bypass=cache_bypass,
+            )
         identity = cls.authenticate_request(request)
         bearer = _bearer_from_authorization_header(request)
         if bearer is None:
@@ -271,6 +299,57 @@ class FacadeAuthenticator:
         )
         _TOUCH_CACHE.put(token_hash=token_hash, identity=canonical)
         return canonical
+
+    @classmethod
+    async def _verify_api_key_bearer(
+        cls,
+        bearer: str,
+        *,
+        backend_url: str,
+        http_client: httpx.AsyncClient,
+        cache_bypass: bool,
+    ) -> AuthenticatedIdentity:
+        """Verify an ``atlas_pk_*`` bearer through the backend's
+        internal verify route, then mint identity claims for upstream
+        forwarding."""
+
+        token_hash = hashlib.sha256(bearer.encode("utf-8")).hexdigest()
+        if not cache_bypass:
+            cached = _TOUCH_CACHE.get(token_hash=token_hash)
+            if cached is not None:
+                return cached
+        response = await http_client.post(
+            f"{backend_url}/internal/v1/auth/api-keys/verify",
+            json={"bearer": bearer},
+            headers={
+                SERVICE_TOKEN_HEADER: cls._service_token(),
+                # The verify route doesn't trust caller-supplied
+                # identity headers — it derives identity from the
+                # row — but the service-token guard still needs an
+                # org/user shaped value. Send a placeholder; the
+                # backend overrides on success.
+                ORG_HEADER: "system",
+                USER_HEADER: "system",
+            },
+            timeout=5.0,
+        )
+        if response.status_code == status.HTTP_401_UNAUTHORIZED:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token")
+        if response.status_code >= 400:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "Backend api-key verify upstream returned an error",
+            )
+        body = response.json() if response.content else {}
+        scopes = tuple(str(s) for s in body.get("scopes") or () if s)
+        identity = AuthenticatedIdentity(
+            org_id=str(body.get("org_id") or ""),
+            user_id=str(body.get("user_id") or ""),
+            roles=("api_key",),
+            permission_scopes=scopes,
+        )
+        _TOUCH_CACHE.put(token_hash=token_hash, identity=identity)
+        return identity
 
     @staticmethod
     def touch_cache() -> _TouchCache:

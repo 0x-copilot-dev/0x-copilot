@@ -149,6 +149,11 @@ class Keys:
         DELETE_WORKSPACE_DATA = "delete_workspace_data"
         # PR 6.2 — recipient forks a shared chat into their own workspace.
         FORK_SHARE = "fork_share"
+        # PR A3 / 8.0.3c — owner forks their own conversation from a
+        # message ("Retry from here"). Same target conversation row shape
+        # as the share-fork path; the difference is in the source-side
+        # validation (own-org only, no share token).
+        FORK_CONVERSATION = "fork_conversation"
 
 
 class Values:

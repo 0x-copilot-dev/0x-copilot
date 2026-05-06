@@ -31,6 +31,7 @@ import {
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
+import { ToolUsePolicyPanel } from "./ToolUsePolicyPanel";
 
 const SAVE_DEBOUNCE_MS = 300;
 const SYSTEM_PROMPT_MAX = 8 * 1024;
@@ -253,6 +254,8 @@ export function ModelAndBehavior({
           <p role="alert">{submitError}</p>
         </Card>
       )}
+
+      <ToolUsePolicyPanel />
     </div>
   );
 }

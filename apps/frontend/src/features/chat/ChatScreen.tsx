@@ -6,16 +6,9 @@ import type {
   ModelCatalogModel,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
-import {
-  AssistantRuntimeProvider,
-  useAui,
-  useExternalStoreRuntime,
-} from "@assistant-ui/react";
 import type {
   AppendMessage,
   CompleteAttachment,
-  ExternalStoreThreadData,
-  ExternalStoreThreadListAdapter,
   ThreadMessageLike,
 } from "./runtime/types";
 import {
@@ -24,6 +17,7 @@ import {
   AtlasImageAttachmentAdapter,
   AtlasTextAttachmentAdapter,
   AtlasWebSpeechDictationAdapter,
+  type ComposerHandle,
 } from "./runtime";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -975,52 +969,6 @@ export function ChatScreen({
   // this flag carries the state to the pane via a data-attr.
   const overlayMode = useViewportOverlay(1100);
 
-  const threadListAdapter = useMemo<ExternalStoreThreadListAdapter>(() => {
-    const threads: ExternalStoreThreadData<"regular">[] = [];
-    const archivedThreads: ExternalStoreThreadData<"archived">[] = [];
-
-    for (const conversation of conversations) {
-      const thread = {
-        id: conversation.conversation_id,
-        remoteId: conversation.conversation_id,
-        title: conversation.title ?? "Untitled chat",
-      };
-      if (conversation.status === "archived") {
-        archivedThreads.push({ ...thread, status: "archived" });
-      } else {
-        threads.push({ ...thread, status: "regular" });
-      }
-    }
-
-    if (
-      conversationId !== null &&
-      !threads.some((thread) => thread.id === conversationId) &&
-      !archivedThreads.some((thread) => thread.id === conversationId)
-    ) {
-      threads.unshift({
-        status: "regular",
-        id: conversationId,
-        remoteId: conversationId,
-        title: currentTitle(conversations, conversationId),
-      });
-    }
-
-    return {
-      threadId: conversationId ?? undefined,
-      isLoading: historyLoading,
-      threads,
-      archivedThreads,
-      onSwitchToNewThread: onStartNewChat,
-      onSwitchToThread: loadConversationById,
-    };
-  }, [
-    conversationId,
-    conversations,
-    historyLoading,
-    loadConversationById,
-    onStartNewChat,
-  ]);
-
   const attachmentAdapter = useMemo(
     () =>
       new AtlasCompositeAttachmentAdapter([
@@ -1038,7 +986,14 @@ export function ChatScreen({
         : undefined,
     [],
   );
-  const aui = useAui();
+  // Composer imperative handle. The skill picker (workspace pane)
+  // calls `setText` here; the Composer also exposes `submit` /
+  // `addAttachment` for programmatic flows.
+  const composerHandleRef = useRef<ComposerHandle | null>(null);
+  // Tracks which user message the user is currently inline-editing.
+  // ThreadBody renders `UserEditComposer` for that message; cancel +
+  // save callbacks live here.
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
   // PR 2.1 — current conversation row + per-chat connector glyphs feed
   // for the topbar pills. Read-only here; ConnectorPopover (PR 3.4)
@@ -1239,25 +1194,61 @@ export function ChatScreen({
     [handleReload, items],
   );
 
-  const runtime = useExternalStoreRuntime<ChatThreadMessage>({
-    messages: threadMessages,
-    convertMessage: (message) => message,
-    setMessages: (messages) => setItems(threadMessagesToChatItems(messages)),
-    isRunning: activeRunId !== null,
-    onNew,
-    onEdit,
-    onReload: handleReload,
-    onResumeToolCall: ({ payload }) => handleResumeToolCall(payload),
-    onCancel,
-    adapters: {
-      attachments: attachmentAdapter,
-      dictation: dictationAdapter,
-      threadList: threadListAdapter,
+  // Composer submission. Wraps the Composer's `{text, attachments}`
+  // payload in the `AppendMessage` shape that `submitUserMessage`
+  // expects, then runs the same optimistic-message → run-creation →
+  // SSE-stream pipeline as a typed prompt.
+  const onComposerSubmit = useCallback(
+    async ({
+      text,
+      attachments,
+    }: {
+      text: string;
+      attachments: ReadonlyArray<CompleteAttachment>;
+    }): Promise<void> => {
+      const append = {
+        role: "user",
+        content: [{ type: "text", text }],
+        attachments,
+        parentId: null,
+        sourceId: null,
+        runConfig: undefined,
+      } as unknown as AppendMessage;
+      await submitUserMessage(append);
     },
-  });
+    [submitUserMessage],
+  );
+
+  // Inline-edit save. Resolves the parent of the source message and
+  // dispatches a fresh run with `branchId` so the original assistant
+  // child stays in the tree.
+  const onEditSave = useCallback(
+    async (sourceMessageId: string, text: string): Promise<void> => {
+      const item = items.find(
+        (candidate): candidate is Extract<ChatItem, { kind: "message" }> =>
+          candidate.kind === "message" && candidate.id === sourceMessageId,
+      );
+      const parentId = item?.parentId ?? null;
+      const append = {
+        role: "user",
+        content: [{ type: "text", text }],
+        attachments: [],
+        parentId,
+        sourceId: sourceMessageId,
+        runConfig: undefined,
+      } as unknown as AppendMessage;
+      await submitUserMessage(append, {
+        parentMessageId: parentId,
+        sourceMessageId,
+        branchId: nextBranchId(),
+      });
+      setEditingMessageId(null);
+    },
+    [items, submitUserMessage],
+  );
 
   return (
-    <AssistantRuntimeProvider runtime={runtime} aui={aui}>
+    <>
       <ApprovalFocusProvider>
         <main
           className={[
@@ -1371,6 +1362,18 @@ export function ChatScreen({
               terminalRuns={terminalRuns}
             >
               <ThreadBody
+                ref={composerHandleRef}
+                messages={threadMessages}
+                running={activeRunId !== null}
+                disabled={false}
+                attachmentAdapter={attachmentAdapter}
+                editingMessageId={editingMessageId}
+                onEditCancel={() => setEditingMessageId(null)}
+                onEditSave={(sourceMessageId, text) =>
+                  void onEditSave(sourceMessageId, text)
+                }
+                onSubmit={onComposerSubmit}
+                onCancel={() => void onCancel()}
                 connectors={connectors}
                 skills={skills}
                 onMcpAuthConnect={onMcpAuthConnect}
@@ -1453,11 +1456,13 @@ export function ChatScreen({
             skillsLoading={skills.loading}
             skillsError={skills.error}
             onPickSkill={(skill) => {
-              const composer = aui.composer();
-              const current = composer.getState().text.trimEnd();
-              composer.setText(
-                current ? `${current} /${skill.name} ` : `/${skill.name} `,
-              );
+              const handle = composerHandleRef.current;
+              if (handle) {
+                const current = handle.getText().trimEnd();
+                handle.setText(
+                  current ? `${current} /${skill.name} ` : `/${skill.name} `,
+                );
+              }
               if (overlayMode) {
                 paneState.close("viewport");
               }
@@ -1476,7 +1481,7 @@ export function ChatScreen({
           ) : null}
         </main>
       </ApprovalFocusProvider>
-    </AssistantRuntimeProvider>
+    </>
   );
 }
 
@@ -1555,11 +1560,20 @@ function normalizeRunContentPart(
     | CompleteAttachment["content"][number],
 ): NonNullable<CreateRunRequest["content"]>[number] {
   if (part.type === "file") {
+    // OpaqueMessagePart can satisfy `type: "file"` with loose field
+    // typing; assert the concrete shape at this boundary so the
+    // wire payload is correctly typed.
+    const file = part as {
+      type: "file";
+      filename: string;
+      data: string;
+      mimeType: string;
+    };
     return {
       type: "file",
-      filename: part.filename,
-      data: part.data,
-      mime_type: part.mimeType,
+      filename: file.filename,
+      data: file.data,
+      mime_type: file.mimeType,
     };
   }
   return { ...part } as NonNullable<CreateRunRequest["content"]>[number];

@@ -100,6 +100,10 @@ class RuntimeApiAppFactory:
         # owned by PR 6.1 (registered above). Tests can override by
         # wiring ``app.state.conversation_fork_service`` directly.
         app.state.conversation_fork_service = cls.default_conversation_fork_service(app)
+        # PR A3 / 8.0.3c — owner-driven self-fork. Independent from the
+        # share-fork service above (no share-snapshot dependency); the
+        # only required state is persistence + audit.
+        app.state.self_fork_service = cls.default_self_fork_service(app)
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
@@ -414,6 +418,26 @@ class RuntimeApiAppFactory:
             share_snapshots=share_snapshot_port,
             audit=WorkerAuditEmitter(api_service.persistence),
             notifications=api_service._notifications,
+        )
+
+    @classmethod
+    def default_self_fork_service(cls, app: FastAPI):
+        """Wire :class:`SelfForkService` (PR A3 / 8.0.3c).
+
+        Returns ``None`` when the runtime API service isn't yet wired —
+        the self-fork route then surfaces 503 to callers. The service
+        only needs persistence + audit; no share-snapshot port.
+        """
+
+        from agent_runtime.api.self_fork import SelfForkService
+        from runtime_worker.audit import WorkerAuditEmitter
+
+        api_service = getattr(app.state, "runtime_api_service", None)
+        if api_service is None:
+            return None
+        return SelfForkService(
+            persistence=api_service.persistence,
+            audit=WorkerAuditEmitter(api_service.persistence),
         )
 
     @classmethod

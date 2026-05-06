@@ -108,6 +108,12 @@ from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.login_email_first import register_login_email_first_routes
 from backend_app.routes.me import register_me_routes
 from backend_app.routes.me_preferences import register_me_preferences_routes
+from backend_app.routes.api_keys import register_api_key_routes
+from backend_app.routes.notifications import (
+    register_notification_preferences_routes,
+)
+from backend_app.routes.privacy import register_privacy_settings_routes
+from backend_app.routes.tool_use_policies import register_tool_use_policy_routes
 from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.members import register_members_routes
 from backend_app.routes.mfa import register_mfa_routes
@@ -278,6 +284,11 @@ def create_app(
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
     me_store: MeStore | None = None,
+    tool_use_policy_store: object | None = None,
+    notification_prefs_store: object | None = None,
+    privacy_settings_store: object | None = None,
+    api_key_store: object | None = None,
+    api_key_pepper: bytes | None = None,
     invitation_store: InvitationStore | None = None,
     invitations_service: InvitationsService | None = None,
     auth_provider_domain_store: AuthProviderDomainStore | None = None,
@@ -979,6 +990,94 @@ def create_app(
     register_me_preferences_routes(
         app,
         me_store=resolved_me_store,
+        identity_store=resolved_identity_store,
+    )
+    # PR B1 / 8.0.3d — tool-use policy (workspace default + per-user
+    # override). Three axes (read/write/destructive), four modes
+    # (auto/ask/require/block); the AI backend's
+    # ``ToolPermissionChecker`` reads this once per run start.
+    from backend_app.policies.store import (
+        InMemoryToolUsePolicyStore,
+        ToolUsePolicyStore,
+    )
+
+    resolved_policy_store: ToolUsePolicyStore = (
+        tool_use_policy_store or InMemoryToolUsePolicyStore()  # type: ignore[assignment]
+    )
+    app.state.tool_use_policy_store = resolved_policy_store
+    register_tool_use_policy_routes(
+        app,
+        policy_store=resolved_policy_store,
+        identity_store=resolved_identity_store,
+    )
+    # PR B4 / 8.0.3e — typed notification preferences + quiet hours.
+    # Replaces the JSONB blob in user_preferences.preferences.notifications
+    # with two indexed tables. Hydration is materialised at the route
+    # layer so the FE always sees the full matrix.
+    from backend_app.notifications.store import (
+        InMemoryNotificationPrefsStore,
+        NotificationPrefsStore,
+    )
+
+    resolved_notif_store: NotificationPrefsStore = (
+        notification_prefs_store or InMemoryNotificationPrefsStore()  # type: ignore[assignment]
+    )
+    app.state.notification_prefs_store = resolved_notif_store
+    register_notification_preferences_routes(
+        app,
+        notification_prefs_store=resolved_notif_store,
+        identity_store=resolved_identity_store,
+    )
+    # PR B2 / 8.0.3f — privacy & data settings (workspace default +
+    # per-user override). Five toggles + one knob; same scope shape
+    # as the tool-use policy.
+    from backend_app.privacy.store import (
+        InMemoryPrivacySettingsStore,
+        PrivacySettingsStore,
+    )
+
+    resolved_privacy_store: PrivacySettingsStore = (
+        privacy_settings_store or InMemoryPrivacySettingsStore()  # type: ignore[assignment]
+    )
+    app.state.privacy_settings_store = resolved_privacy_store
+    register_privacy_settings_routes(
+        app,
+        privacy_store=resolved_privacy_store,
+        identity_store=resolved_identity_store,
+    )
+    # PR B3 / 8.0.3g — personal API keys (atlas_pk_… bearer for CI /
+    # scripts). Plaintext is shown ONCE on creation; the server stores
+    # only the HMAC hash under a deployment pepper. The bearer-auth
+    # path lives in backend_app/api_keys/auth.py and is consumed by
+    # the auth middleware (out of scope for this PR — the storage and
+    # the user-facing CRUD land here).
+    import os as _os
+    from backend_app.api_keys.store import (
+        ApiKeyStore,
+        InMemoryApiKeyStore,
+    )
+    from backend_app.api_keys.auth import ApiKeyHasher
+
+    resolved_api_key_store: ApiKeyStore = (
+        api_key_store or InMemoryApiKeyStore()  # type: ignore[assignment]
+    )
+    pepper = api_key_pepper or _os.environ.get("BACKEND_API_KEY_PEPPER", "").encode(
+        "utf-8"
+    )
+    if len(pepper) < 16:
+        # Dev-only fallback so `make dev` doesn't refuse to boot when
+        # the operator hasn't provisioned the pepper yet. Production
+        # MUST set BACKEND_API_KEY_PEPPER (≥ 16 bytes) — without it,
+        # rotating the dev fallback invalidates every key, which is
+        # exactly the emergency lever we want.
+        pepper = b"dev-only-pepper-NOT-FOR-PROD!"
+    resolved_api_key_hasher = ApiKeyHasher(server_pepper=pepper)
+    app.state.api_key_store = resolved_api_key_store
+    app.state.api_key_hasher = resolved_api_key_hasher
+    register_api_key_routes(
+        app,
+        api_key_store=resolved_api_key_store,
+        api_key_hasher=resolved_api_key_hasher,
         identity_store=resolved_identity_store,
     )
 

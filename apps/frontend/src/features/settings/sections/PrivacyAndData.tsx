@@ -40,6 +40,7 @@ import {
 } from "../../../api/agentApi";
 import type { RequestIdentity } from "../../../api/config";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
+import { PrivacyOverridesPanel } from "./PrivacyOverridesPanel";
 
 const RETENTION_LABELS: Readonly<Record<RetentionKind, string>> = {
   messages: "Messages",
@@ -86,6 +87,13 @@ export function PrivacyAndData({
       <ExportCard identity={identity} />
 
       <DeleteAllCard identity={identity} orgId={identity.orgId} />
+
+      <h3>Per-user overrides</h3>
+      <p>
+        Override the workspace defaults above for your own account. Empty values
+        fall through to the workspace setting.
+      </p>
+      <PrivacyOverridesPanel />
     </div>
   );
 }

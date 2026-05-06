@@ -94,26 +94,16 @@ export function Sidebar({
     >
       <div className="aui-sidebar__header">
         <LogoMark />
-        <div className="aui-sidebar__header-actions">
+        {onToggleSidebar ? (
           <IconButton
             type="button"
-            aria-label="Refresh conversations"
-            data-tooltip="Refresh conversations"
-            onClick={onRefresh}
+            aria-label="Hide sidebar"
+            data-tooltip="Hide sidebar (⌘\\)"
+            onClick={onToggleSidebar}
           >
-            ↻
+            ⤺
           </IconButton>
-          {onToggleSidebar ? (
-            <IconButton
-              type="button"
-              aria-label="Hide sidebar"
-              data-tooltip="Hide sidebar (⌘\\)"
-              onClick={onToggleSidebar}
-            >
-              ⤺
-            </IconButton>
-          ) : null}
-        </div>
+        ) : null}
       </div>
       <div className="aui-sidebar__controls">
         <button

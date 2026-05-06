@@ -961,6 +961,174 @@ def test_discard_ledger_frees_per_run_state() -> None:
     assert fresh.has_entries() is False
 
 
+async def test_parallel_dispatch_wraps_subagents_in_a_fleet() -> None:
+    """When the supervisor dispatches >1 task tool call in a single update
+    tick, the processor emits SUBAGENT_FLEET_STARTED first, stamps
+    `parent_fleet_id` on each child SUBAGENT_STARTED, and emits
+    SUBAGENT_FLEET_FINISHED only once the last child completes."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    namespace = StreamNamespace.from_value(())
+
+    parallel_dispatch = {
+        "model_request": {
+            "messages": [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "task",
+                            "id": "task_alpha",
+                            "args": {
+                                "subagent_type": "doc_reader",
+                                "description": "Read launch brief.",
+                            },
+                        },
+                        {
+                            "name": "task",
+                            "id": "task_beta",
+                            "args": {
+                                "subagent_type": "press_scout",
+                                "description": "Scan press coverage.",
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+    }
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data=parallel_dispatch,
+        metadata={},
+    )
+
+    fleet_started = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_FLEET_STARTED
+    ]
+    assert len(fleet_started) == 1
+    fleet_payload = fleet_started[0]["payload"]
+    assert tuple(fleet_payload["agent_ids"]) == ("doc_reader", "press_scout")
+    fleet_id = fleet_payload["fleet_id"]
+    assert isinstance(fleet_id, str) and fleet_id
+
+    started_payloads = [
+        event["payload"]
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_STARTED
+    ]
+    assert len(started_payloads) == 2
+    assert {payload["parent_fleet_id"] for payload in started_payloads} == {fleet_id}
+
+    # First child completes — fleet stays open, no FINISHED yet.
+    completion_alpha = {
+        "tools": {
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "task",
+                    "tool_call_id": "task_alpha",
+                    "content": "Brief read.",
+                }
+            ]
+        }
+    }
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data=completion_alpha,
+        metadata={},
+    )
+    assert not [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_FLEET_FINISHED
+    ]
+    completed_alpha = next(
+        event["payload"]
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_COMPLETED
+        and event["payload"]["task_id"] == "task_alpha"
+    )
+    assert completed_alpha["parent_fleet_id"] == fleet_id
+
+    # Second child completes — fleet closes.
+    completion_beta = {
+        "tools": {
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "task",
+                    "tool_call_id": "task_beta",
+                    "content": "Press coverage scanned.",
+                }
+            ]
+        }
+    }
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data=completion_beta,
+        metadata={},
+    )
+    fleet_finished = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_FLEET_FINISHED
+    ]
+    assert len(fleet_finished) == 1
+    assert fleet_finished[0]["payload"]["fleet_id"] == fleet_id
+
+
+async def test_single_dispatch_does_not_wrap_in_a_fleet() -> None:
+    """A single subagent dispatch keeps the singleton path with no fleet
+    bookend events — fleet wrapping is only for parallel batches."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    namespace = StreamNamespace.from_value(())
+
+    single_dispatch = {
+        "model_request": {
+            "messages": [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "task",
+                            "id": "task_solo",
+                            "args": {
+                                "subagent_type": "researcher",
+                                "description": "Investigate the launch.",
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data=single_dispatch,
+        metadata={},
+    )
+
+    event_types = [event["event_type"] for event in producer.events]
+    assert RuntimeApiEventType.SUBAGENT_FLEET_STARTED not in event_types
+    started_payloads = [
+        event["payload"]
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_STARTED
+    ]
+    assert len(started_payloads) == 1
+    assert "parent_fleet_id" not in started_payloads[0]
+
+
 async def test_subagent_completed_without_started_omits_duration_ms() -> None:
     """If a SUBAGENT_COMPLETED arrives without a matching SUBAGENT_STARTED on
     this processor (e.g. event-store replay scenarios), we omit the field

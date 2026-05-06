@@ -45,11 +45,16 @@ export function ConversationRow({
         data-active={active ? "true" : undefined}
         data-live={isLive ? "true" : undefined}
         aria-current={active ? "true" : undefined}
+        aria-label={title}
         disabled={disabled}
+        // Only set the native `title` attribute when the row is
+        // disabled — otherwise the chat title is already visible
+        // inline and the browser's native tooltip just leaks an
+        // ugly pill outside the sidebar on hover.
         title={
           disabled
             ? "Stop the current response before switching threads"
-            : title
+            : undefined
         }
         onClick={() => {
           if (!disabled) {

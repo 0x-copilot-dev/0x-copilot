@@ -227,6 +227,51 @@ class RuntimeEventProducer:
             )
         return envelope
 
+    async def append_compression_note(
+        self,
+        *,
+        run: RunRecord,
+        before_tokens: int,
+        after_tokens: int,
+        strategy: str,
+        summary: str | None = None,
+        payload_refs: Mapping[str, object] | None = None,
+        metadata: JsonObject | None = None,
+    ) -> RuntimeEventEnvelope:
+        """Emit a ``COMPRESSION_NOTE`` envelope for the chat NoteCard.
+
+        Called from the memory-compression hook when the context window
+        manager redacts older messages mid-run. ``strategy`` mirrors
+        ``ContextCompressionStrategy`` values (``summarize``, ``offload``,
+        etc.) so the FE can branch its NoteCard copy if it needs to. The
+        ``payload_refs`` slot lets callers attach offload/file refs without
+        leaking content into the prompt path.
+        """
+
+        if before_tokens < 0 or after_tokens < 0:
+            raise ValueError("before_tokens and after_tokens must be non-negative")
+        if after_tokens > before_tokens:
+            raise ValueError("after_tokens must not exceed before_tokens")
+        clean_strategy = strategy.strip()
+        if not clean_strategy:
+            raise ValueError("strategy must be a non-empty string")
+        payload: JsonObject = {
+            "before_tokens": int(before_tokens),
+            "after_tokens": int(after_tokens),
+            "strategy": clean_strategy,
+        }
+        if summary is not None and summary.strip():
+            payload["summary"] = summary.strip()
+        if payload_refs:
+            payload["payload_refs"] = dict(payload_refs)
+        return await self.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.COMPRESSION_NOTE,
+            payload=payload,
+            metadata=metadata or {},
+        )
+
     async def append_stream_events(
         self,
         *,

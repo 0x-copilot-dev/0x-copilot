@@ -91,6 +91,7 @@ from runtime_api.schemas.fork import (
     ForkRequest,
     ForkResponse,
     RUNTIME_FORK_MAX_MESSAGES_DEFAULT,
+    SelfForkRequest,
     ShareSnapshot,
     ShareSnapshotPort,
 )
@@ -223,6 +224,7 @@ __all__ = [
     "SubagentTokenUsage",
     "ForkRequest",
     "ForkResponse",
+    "SelfForkRequest",
     "FORK_FOLDER_MAX_LENGTH",
     "FORK_TITLE_MAX_LENGTH",
     "RUNTIME_FORK_MAX_MESSAGES_DEFAULT",
