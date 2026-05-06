@@ -16,6 +16,7 @@ import {
   classNames,
 } from "@enterprise-search/design-system";
 import { forwardRef, type ReactElement, type Ref } from "react";
+import { sourceFreshnessLabel } from "./sourceFreshness";
 
 export interface SourceRowProps {
   source: SourceEntry;
@@ -80,19 +81,13 @@ export const SourceRow = forwardRef(function SourceRow(
           {source.citation_count > 1
             ? `Cited ${source.citation_count}× · `
             : null}
-          {source.freshness_at
-            ? `Updated ${formatFreshness(source.freshness_at)}`
-            : `Last cited ${formatFreshness(source.last_cited_at)}`}
+          {sourceFreshnessLabel({
+            connectorSlug: source.source_connector,
+            freshnessAt: source.freshness_at,
+            lastCitedAt: source.last_cited_at,
+          })}
         </p>
       </Card>
     </li>
   );
 });
-
-function formatFreshness(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  return date.toLocaleString();
-}

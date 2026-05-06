@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.presentation import PresentationGenerator
@@ -13,6 +14,44 @@ from runtime_api.schemas import (
     RuntimeEventPresentation,
     RuntimeEventPresentationProjector,
 )
+
+
+async def resolve_presentation(
+    generator: PresentationGenerator,
+    *,
+    run: RunRecord,
+    event_type: RuntimeApiEventType,
+    source: StreamEventSource,
+    payload: Mapping[str, object],
+    metadata: Mapping[str, object],
+    timeline_fields: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    """Mirror the producer's split: preliminary, then conditional enrichment.
+
+    Production splits the call so the SSE stream gets a card immediately
+    (preliminary, sync) and the LLM polish lands as a follow-up
+    ``presentation_updated`` event (enrich, async, off the hot path).
+    Tests exercise the same composition through this helper instead of a
+    single combined wrapper.
+    """
+
+    preliminary = generator.preliminary_presentation_for_event(
+        event_type=event_type,
+        payload=payload,
+        metadata=metadata,
+        timeline_fields=timeline_fields,
+    )
+    if not generator.event_eligible_for_enrichment(event_type, payload, metadata):
+        return preliminary
+    enriched = await generator.enrich_presentation_for_event(
+        run=run,
+        event_type=event_type,
+        source=source,
+        payload=payload,
+        metadata=metadata,
+        timeline_fields=timeline_fields,
+    )
+    return enriched or preliminary
 
 
 class RecordingPersistence:
@@ -194,7 +233,8 @@ async def test_presentation_generator_uses_valid_llm_json() -> None:
         }
     )
 
-    presentation = await generator.presentation_for_event(
+    presentation = await resolve_presentation(
+        generator,
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_RESULT,
         source=StreamEventSource.RUNTIME,
@@ -237,7 +277,8 @@ async def test_approval_requested_uses_deterministic_template_without_calling_ll
 
     generator = PresentationGenerator(presenter=recording_presenter)
 
-    presentation = await generator.presentation_for_event(
+    presentation = await resolve_presentation(
+        generator,
         run=run_record(),
         event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
         source=StreamEventSource.RUNTIME,
@@ -264,7 +305,8 @@ async def test_approval_requested_uses_deterministic_template_without_calling_ll
 
 async def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> None:
     generator = PresentationGenerator()
-    presentation = await generator.presentation_for_event(
+    presentation = await resolve_presentation(
+        generator,
         run=run_record(),
         event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
         source=StreamEventSource.RUNTIME,
@@ -296,7 +338,8 @@ async def test_tool_call_completed_does_not_generate_weaker_presentation() -> No
         }
     )
 
-    presentation = await generator.presentation_for_event(
+    presentation = await resolve_presentation(
+        generator,
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
         source=StreamEventSource.RUNTIME,
@@ -333,7 +376,8 @@ async def test_tool_result_context_includes_preview_rows() -> None:
         }
 
     generator = PresentationGenerator(presenter=presenter)
-    presentation = await generator.presentation_for_event(
+    presentation = await resolve_presentation(
+        generator,
         run=run_record(),
         event_type=RuntimeApiEventType.TOOL_RESULT,
         source=StreamEventSource.RUNTIME,

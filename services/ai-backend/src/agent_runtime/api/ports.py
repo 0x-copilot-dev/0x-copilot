@@ -23,7 +23,11 @@ from runtime_api.schemas import (
     RunRecord,
     WorkspaceDefaultsRecord,
 )
-from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
+from agent_runtime.persistence.records import (
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+    ToolBudgetRecord,
+)
 
 
 @runtime_checkable
@@ -320,6 +324,15 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Clear ``deleted_at``. Returns ``None`` when the row was already
         reaped by the retention sweeper (vs. simply not deleted).
+        """
+
+    def list_tool_budgets_for_org(self, *, org_id: str) -> Sequence[ToolBudgetRecord]:
+        """Return per-tool budgets visible to ``org_id`` (B8).
+
+        Includes both the org's own rows (``org_id = %s``) and the global
+        seed/default rows (``org_id IS NULL``). The
+        :class:`ToolBudgetMiddleware` performs its own most-specific-wins
+        resolution against this snapshot.
         """
 
 

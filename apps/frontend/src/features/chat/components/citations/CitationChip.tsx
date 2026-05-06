@@ -33,35 +33,35 @@ export function CitationChip({
 }): ReactElement {
   const citation = useCitation(citationId);
   if (citation === undefined) {
+    // PR 8.0.1 — rendered as a span pill (not <sup>) so the chip sits
+    // inline on the prose baseline, matching the design's pill shape.
     return (
-      <sup
+      <span
         className="citation-chip citation-chip--unresolved"
         aria-label="Unresolved citation"
         title="This citation could not be resolved."
       >
         ?
-      </sup>
+      </span>
     );
   }
   return (
-    <sup
+    <a
       className="citation-chip"
+      data-citation-id={citation.citation_id}
       data-connector={citation.source_connector}
+      href={citation.source_url ?? "#"}
       title={`${citation.title} — ${citation.source_connector}`}
+      onClick={(event) => {
+        if (onSelect) {
+          event.preventDefault();
+          onSelect(citation);
+        }
+      }}
+      rel="noreferrer"
+      target={citation.source_url ? "_blank" : undefined}
     >
-      <a
-        href={citation.source_url ?? "#"}
-        onClick={(event) => {
-          if (onSelect) {
-            event.preventDefault();
-            onSelect(citation);
-          }
-        }}
-        rel="noreferrer"
-        target={citation.source_url ? "_blank" : undefined}
-      >
-        {citation.ordinal}
-      </a>
-    </sup>
+      {citation.ordinal}
+    </a>
   );
 }

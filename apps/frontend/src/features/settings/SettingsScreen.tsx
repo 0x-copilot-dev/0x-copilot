@@ -177,11 +177,11 @@ export function SettingsScreen({
   return (
     <main className="settings-shell">
       <aside className="settings-nav">
-        <div className="settings-brand">
+        <div className="settings-brand aui-logo">
           <span className="aui-logo__mark" aria-hidden="true">
-            *
+            A
           </span>
-          <span>assistant-ui</span>
+          <span className="aui-logo__wordmark">Atlas</span>
         </div>
         <button
           className="settings-back"

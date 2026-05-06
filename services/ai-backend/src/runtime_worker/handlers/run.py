@@ -19,6 +19,8 @@ from agent_runtime.budgets import (
 )
 from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
 from agent_runtime.capabilities.citations import CitationLedger
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
+from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -218,6 +220,19 @@ class RuntimeRunHandler:
         ledger_token = (
             CitationLedger.bind_for_run(ledger) if ledger is not None else None
         )
+        # B8 — per-tool budget guard. Loads the org's
+        # ``runtime_tool_budgets`` snapshot, binds it alongside the
+        # in-flight ``ToolCallLedger`` so every LangChain
+        # :class:`ToolBudgetGuardedTool` invocation goes through
+        # :meth:`ToolBudgetMiddleware.check_admit` before reaching the
+        # underlying tool. ``None`` when the org has no budgets — the
+        # guard is unbound and the wrapper is a passthrough.
+        budget_guard = await self._build_tool_budget_guard(run)
+        budget_token = (
+            ToolBudgetGuard.bind_for_run(budget_guard)
+            if budget_guard is not None
+            else None
+        )
         # PR 3.3 — non-blocking MCP discovery service. Built per-run so
         # idempotency / audit / event emission share the same RunRecord
         # the ledger uses. Returns ``None`` when the feature is off; the
@@ -388,6 +403,8 @@ class RuntimeRunHandler:
         finally:
             if ledger_token is not None:
                 CitationLedger.unbind(ledger_token)
+            if budget_token is not None:
+                ToolBudgetGuard.unbind(budget_token)
             if discovery_token is not None:
                 McpDiscoveryService.unbind(discovery_token)
 
@@ -1183,6 +1200,36 @@ class RuntimeRunHandler:
                     outcome.value,
                     exc_info=True,
                 )
+
+    async def _build_tool_budget_guard(self, run: RunRecord) -> ToolBudgetGuard | None:
+        """B8 — load the org's per-tool budgets and build a per-run guard.
+
+        Returns ``None`` when the persistence port doesn't expose the
+        method yet (older test stubs) or when the org has no rows.
+        Reuses the per-run :class:`ToolCallLedger` already maintained by
+        the stream orchestrator so admission decisions and the
+        ``tool_call_started``/``tool_result`` reconciler share state.
+        """
+
+        loader = getattr(self.persistence, "list_tool_budgets_for_org", None)
+        if loader is None:
+            return None
+        try:
+            budgets = await loader(org_id=run.org_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "tool_budget_load_failed", exc_info=True
+            )
+            return None
+        if not budgets:
+            return None
+        ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
+        return ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(budgets),
+            ledger=ledger,
+            run=run,
+            event_producer=self.event_producer,
+        )
 
     def _bind_citation_ledger(self, run: RunRecord) -> CitationLedger | None:
         """Build a per-run :class:`CitationLedger`, or ``None`` when disabled.

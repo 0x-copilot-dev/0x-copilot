@@ -45,18 +45,20 @@ export function ConversationRow({
         }
       }}
     >
-      {isLive ? (
-        <span className="aui-conversation-row__pulse" aria-hidden="true" />
-      ) : null}
       <span className="aui-conversation-row__title">{title}</span>
-      {isLive ? <span className="sr-only">live</span> : null}
       <span className="aui-conversation-row__meta">
         {conversation.folder ? (
           <span className="aui-conversation-row__folder">
             {conversation.folder}
           </span>
         ) : null}
-        <span className="aui-conversation-row__time">{time}</span>
+        {isLive ? (
+          <span className="aui-conversation-row__live" aria-label="Live run">
+            live
+          </span>
+        ) : (
+          <span className="aui-conversation-row__time">{time}</span>
+        )}
       </span>
     </button>
   );

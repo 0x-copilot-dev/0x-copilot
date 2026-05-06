@@ -12,6 +12,7 @@ from agent_runtime.capabilities.skills.virtual import (
     BackendSkillProvider,
     VirtualSkillRegistry,
 )
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedRegistry
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -79,8 +80,13 @@ class DefaultRuntimeDependenciesFactory:
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
         self._validate_capability_mode(_context)
         mcp_registry = self._mcp_registry(_context)
+        # B8 — wrap the tool registry so every model-visible LangChain
+        # ``BaseTool`` goes through the per-run :class:`ToolBudgetGuard`.
+        # The wrapper is a no-op when no guard is bound (unit tests of
+        # tools in isolation), so this is safe to apply unconditionally.
+        tool_registry = ToolBudgetGuardedRegistry(inner=WebSearchToolRegistry())
         return RuntimeDependencies(
-            tool_registry=WebSearchToolRegistry(),
+            tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_source_config=self._skill_source_config(),
             skill_registry=self._skill_registry(_context),

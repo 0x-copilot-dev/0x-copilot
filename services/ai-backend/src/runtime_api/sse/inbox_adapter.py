@@ -13,11 +13,11 @@ FE can use one parser for both.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from agent_runtime.api.constants import Values
+from runtime_api.schemas.inbox import InboxEventEnvelopeSchema
 from runtime_api.sse.inbox_bus import InboxEventBus, InboxEventEnvelope
 
 
@@ -64,20 +64,28 @@ class InboxSseAdapter:
 
     @classmethod
     def format_event(cls, event: InboxEventEnvelope) -> str:
-        payload = {
-            "event_type": event.event_type,
-            "approval_id": event.approval_id,
-            "status": event.status,
-            "org_id": event.org_id,
-            "conversation_id": event.conversation_id,
-            "actor_user_id": event.actor_user_id,
-            "emitted_at": event.emitted_at.astimezone(timezone.utc).isoformat(),
-            "sequence_no": event.sequence_no,
-        }
+        """Return one SSE-framed inbox event.
+
+        Builds the wire body through :class:`InboxEventEnvelopeSchema`
+        so the SSE shape is locked to the documented contract — any
+        field rename on the schema fails validation here instead of
+        silently desyncing the FE.
+        """
+
+        schema = InboxEventEnvelopeSchema(
+            sequence_no=event.sequence_no,
+            event_type=event.event_type,
+            approval_id=event.approval_id,
+            status=event.status,
+            org_id=event.org_id,
+            conversation_id=event.conversation_id,
+            actor_user_id=event.actor_user_id,
+            emitted_at=event.emitted_at.astimezone(timezone.utc),
+        )
         return (
             f"event: {Values.SSE_EVENT_NAME}\n"
             f"id: {event.sequence_no}\n"
-            f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            f"data: {schema.model_dump_json()}\n\n"
         )
 
     @staticmethod

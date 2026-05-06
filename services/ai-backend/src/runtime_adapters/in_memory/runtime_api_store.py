@@ -27,6 +27,8 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    ToolBudgetEnforcement,
+    ToolBudgetRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -119,6 +121,21 @@ class InMemoryRuntimeApiStore:
         self.retention_policies: dict[str, tuple] = {}
         # Workspace defaults (PR 1.6). Keyed by org_id; one row per org.
         self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
+        # B8 — per-tool call-count + input-token budgets. Mirrors the
+        # ``runtime_tool_budgets`` table. The seed row matches the
+        # migration's ``('seed_default', NULL, '*', 6, 'hard', ...)`` so
+        # in-memory and Postgres deploys behave identically out of the
+        # box. Tests can override by adding rows for a specific
+        # ``(org_id, tool_name)`` pair.
+        self.tool_budgets: dict[str, ToolBudgetRecord] = {
+            "seed_default": ToolBudgetRecord(
+                id="seed_default",
+                org_id=None,
+                tool_name="*",
+                max_calls_per_run=6,
+                enforcement=ToolBudgetEnforcement.HARD,
+            ),
+        }
 
     def create_conversation(
         self, request: CreateConversationRequest
@@ -1460,6 +1477,21 @@ class InMemoryRuntimeApiStore:
                 key=lambda b: b.created_at,
                 reverse=True,
             )
+        )
+
+    def list_tool_budgets_for_org(self, *, org_id: str) -> Sequence[ToolBudgetRecord]:
+        """Return per-tool budgets visible to ``org_id`` (org rows + global).
+
+        Mirrors the ``runtime_tool_budgets`` SELECT used by the postgres
+        adapter (``WHERE org_id = %s OR org_id IS NULL``). The middleware
+        does its own most-specific-wins resolution; this method only
+        delivers the raw rows.
+        """
+
+        return tuple(
+            b
+            for b in self.tool_budgets.values()
+            if b.org_id == org_id or b.org_id is None
         )
 
     def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:

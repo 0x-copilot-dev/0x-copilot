@@ -18,7 +18,7 @@ Hazard-fix highlights:
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -65,6 +65,8 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    ToolBudgetEnforcement,
+    ToolBudgetRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -2889,6 +2891,51 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._budget_record(row) for row in rows)
+
+    async def list_tool_budgets_for_org(
+        self, *, org_id: str
+    ) -> Sequence[ToolBudgetRecord]:
+        """B8 — return per-tool budgets the org can see (own rows + global).
+
+        The RLS policy ``tenant_or_global`` on ``runtime_tool_budgets``
+        already lets a tenant connection read its own rows AND the
+        ``org_id IS NULL`` global rows; the WHERE clause here makes the
+        intent explicit so a future RLS tightening doesn't silently
+        drop the global rows.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_tool_budgets
+                 WHERE org_id = %s OR org_id IS NULL
+                """,
+                (org_id,),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._tool_budget_record(row) for row in rows)
+
+    @staticmethod
+    def _tool_budget_record(row: Mapping[str, object]) -> ToolBudgetRecord:
+        return ToolBudgetRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]) if row.get("org_id") is not None else None,
+            tool_name=str(row["tool_name"]),
+            max_calls_per_run=int(row["max_calls_per_run"]),
+            max_input_tokens_per_call=(
+                int(row["max_input_tokens_per_call"])
+                if row.get("max_input_tokens_per_call") is not None
+                else None
+            ),
+            max_input_tokens_per_run=(
+                int(row["max_input_tokens_per_run"])
+                if row.get("max_input_tokens_per_run") is not None
+                else None
+            ),
+            enforcement=ToolBudgetEnforcement(row["enforcement"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
     async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
         async with self._tenant_connection(org_id=org_id) as conn:

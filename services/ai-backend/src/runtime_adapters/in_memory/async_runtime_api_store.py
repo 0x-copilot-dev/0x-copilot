@@ -561,6 +561,9 @@ class AsyncInMemoryRuntimeApiStore:
     async def list_budgets(self, **kwargs):  # type: ignore[no-untyped-def]
         return self._store.list_budgets(**kwargs)
 
+    async def list_tool_budgets_for_org(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.list_tool_budgets_for_org(**kwargs)
+
     async def get_budget(self, **kwargs):  # type: ignore[no-untyped-def]
         return self._store.get_budget(**kwargs)
 

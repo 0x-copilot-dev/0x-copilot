@@ -28,6 +28,7 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    ToolBudgetRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -629,6 +630,16 @@ class AsyncPersistencePort(Protocol):
 
     async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
         """List configured budgets for an org (admin endpoint)."""
+
+    async def list_tool_budgets_for_org(
+        self, *, org_id: str
+    ) -> Sequence[ToolBudgetRecord]:
+        """Return per-tool budgets visible to ``org_id`` (B8).
+
+        Includes the org's own rows and the global seed/default rows
+        (``org_id IS NULL``). The :class:`ToolBudgetMiddleware` performs
+        its own most-specific-wins resolution against the snapshot.
+        """
 
     async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
         """Fetch one budget scoped to an org."""

@@ -506,6 +506,9 @@ class SyncToAsyncPersistence:
     async def list_budgets(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.list_budgets, **kwargs)
 
+    async def list_tool_budgets_for_org(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.list_tool_budgets_for_org, **kwargs)
+
     async def get_budget(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.get_budget, **kwargs)
 

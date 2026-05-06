@@ -613,6 +613,18 @@ textarea {
   font-size: 0.78rem;
 }
 
+/* PR 8.0.1 — brand-aware variants override the fallback surface colour
+ * via inline style; keep the shared shape rules here so a brand glyph
+ * matches the letter-circle's footprint. */
+.ui-app-icon--brand {
+  font-weight: 700;
+  text-transform: none;
+}
+
+.ui-app-icon--drive {
+  font-size: 0.7rem;
+}
+
 .ui-connector-chip {
   align-items: center;
   background: var(--color-surface);
@@ -639,6 +651,93 @@ textarea {
 .ui-connector-chip[data-state="workspace-off"] {
   border-style: dashed;
   color: var(--color-text-subtle);
+}
+
+/* Inline harness row — compressed tool-call vocabulary.
+ *
+ * Single dim line. No card chrome. Stacks vertically with small gaps
+ * when multiple appear consecutively. Glyph is success-tone on done,
+ * danger on error; the row body itself stays muted. */
+.ui-harness-row {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  display: inline-flex;
+  flex-wrap: wrap;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 0.75rem;
+  gap: 0.5rem;
+  line-height: 1.3;
+  max-width: 100%;
+  padding: 0.3rem 0.7rem;
+}
+.ui-harness-row__glyph {
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  font-weight: 700;
+  flex: none;
+}
+.ui-harness-row[data-status="done"] .ui-harness-row__glyph {
+  color: var(--color-success);
+}
+.ui-harness-row[data-status="error"] .ui-harness-row__glyph {
+  color: var(--color-danger);
+}
+.ui-harness-row__spinner {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-top-color: var(--color-accent);
+  animation: ui-harness-spin 0.9s linear infinite;
+}
+@keyframes ui-harness-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ui-harness-row__tool {
+  color: var(--color-text);
+  font-weight: 500;
+}
+.ui-harness-row__args {
+  color: var(--color-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 32ch;
+}
+.ui-harness-row__sep {
+  color: color-mix(in srgb, var(--color-text-subtle) 50%, transparent);
+}
+.ui-harness-row__result {
+  color: var(--color-text-muted);
+}
+
+/* One-line italic-dim acknowledgement. */
+.ui-status-line {
+  align-items: baseline;
+  color: var(--color-text-subtle);
+  display: flex;
+  font-size: 0.85rem;
+  font-style: italic;
+  gap: 0.45rem;
+  line-height: 1.5;
+  margin: 0.25rem 0;
+}
+.ui-status-line__bullet {
+  color: var(--color-accent);
+  font-style: normal;
+}
+.ui-status-line__text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Popover — thin Radix wrapper. Token-driven. Reduce-motion aware. */

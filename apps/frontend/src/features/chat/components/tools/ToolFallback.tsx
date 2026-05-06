@@ -1,4 +1,5 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import { HarnessRow } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { largeToolResultFromValue, stringValue } from "../../utils/jsonUtils";
 import { inlineToolTitle, toolStatusLabel } from "../../utils/toolLabels";
@@ -8,7 +9,6 @@ import {
 } from "../../utils/toolResultAnalysis";
 import { activityParams } from "../../utils/activityDataBuilders";
 import { ActivityCard } from "../activity/ActivityCard";
-import { ActivityItem } from "../activity/ActivityItem";
 import { GeneratedPresentationCard } from "../activity/GeneratedPresentationCard";
 import { presentationFromArgs } from "../activity/presentationHelpers";
 import { toolDetailsContent } from "../details/toolDetailsContent";
@@ -17,6 +17,23 @@ import {
   summarizeToolValue,
 } from "../results/summarize";
 
+/**
+ * Compact tool render path.
+ *
+ * - When the tool's args produced a `presentation` payload, render the
+ *   generated presentation card (rich result with thumbnails / etc).
+ * - When the result is "complex" (rich shape, error, requires action),
+ *   render the full `<ActivityCard>`.
+ * - Otherwise render a single inline `<HarnessRow>`:
+ *
+ *       ✓ tool_name (args) | → result
+ *
+ *   This matches the design doc's "compress tool calls" rule — raw tool
+ *   name in mono, args truncated, dim result. The design's
+ *   `<ActivityCard>` collapse for ≥ 4 consecutive harness rows is the
+ *   responsibility of the parent renderer (PR follow-up); single rows
+ *   render flush.
+ */
 export function ToolFallback({
   toolName,
   args,
@@ -48,13 +65,11 @@ export function ToolFallback({
   }
   if (!shouldRenderFullToolCard(status.type, isError, result)) {
     return (
-      <ActivityItem
-        title={title}
-        status={statusLabel}
-        variant="tool"
-        description={activitySummary}
-        result={resultSummary}
-        details={details}
+      <HarnessRow
+        status={harnessStatus(status.type, isError)}
+        tool={toolName}
+        args={activitySummary ?? null}
+        result={resultSummary ?? null}
       />
     );
   }
@@ -69,4 +84,17 @@ export function ToolFallback({
       details={details}
     />
   );
+}
+
+function harnessStatus(
+  status: string,
+  isError: boolean | undefined,
+): "running" | "done" | "error" {
+  if (isError) {
+    return "error";
+  }
+  if (status === "running" || status === "incomplete") {
+    return "running";
+  }
+  return "done";
 }

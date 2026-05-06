@@ -3,11 +3,9 @@ import { Button, classNames } from "@enterprise-search/design-system";
 import { useMemo, useState, type FormEvent, type ReactElement } from "react";
 import { Streamdown } from "streamdown";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
-import { ActivityCard } from "../activity/ActivityCard";
 import { presentationFromArgs } from "../activity/presentationHelpers";
 import { MarkdownLink } from "../markdown/MarkdownLink";
 
-const DEFAULT_HEADER = "Quick question";
 const QUESTION_MARKDOWN_COMPONENTS = { a: MarkdownLink };
 
 interface NormalizedOption {
@@ -31,7 +29,6 @@ export function AskAQuestionTool({
   presentation: ReturnType<typeof presentationFromArgs>;
   resume: ToolCallMessagePartProps<Record<string, unknown>>["resume"];
 }): ReactElement {
-  const header = stringValue(args.header) ?? DEFAULT_HEADER;
   const question =
     stringValue(args.question) ?? stringValue(args.message) ?? "";
   const options = useMemo(() => normalizeOptions(args.options), [args.options]);
@@ -98,26 +95,27 @@ export function AskAQuestionTool({
   const resolvedSelected = selectedFromResult(result);
 
   return (
-    <ActivityCard
-      title={header}
-      status={resolved ? "Answered" : "Awaiting reply"}
-      variant="approval"
-      params={[]}
-      detailsLabel={presentation?.debug_label ?? "Question details"}
+    <section
+      className="aui-question-card"
+      data-resolved={resolved ? "true" : undefined}
+      aria-label="Atlas needs an answer"
     >
-      {/* The question is markdown-rendered via Streamdown, which emits block
-          elements (<div>, <ul>, <h2>). It cannot live in ActivityCard's
-          `description` prop because that wraps content in a <p>. Render it as
-          the first child so it lands in the card body's <div>. */}
-      {question ? (
-        <Streamdown
-          className="aui-question-card__body"
-          components={QUESTION_MARKDOWN_COMPONENTS}
-          mode="static"
-        >
-          {question}
-        </Streamdown>
-      ) : null}
+      <div className="aui-question-card__head">
+        <span className="aui-question-card__icon" aria-hidden="true">
+          ?
+        </span>
+        <div className="aui-question-card__question">
+          {question ? (
+            <Streamdown
+              className="aui-question-card__body"
+              components={QUESTION_MARKDOWN_COMPONENTS}
+              mode="static"
+            >
+              {question}
+            </Streamdown>
+          ) : null}
+        </div>
+      </div>
       {resolved ? (
         <ResolvedAnswer answer={resolvedAnswer} selected={resolvedSelected} />
       ) : (
@@ -133,12 +131,12 @@ export function AskAQuestionTool({
           ) : null}
           {showFreeText ? (
             <form
-              className="aui-tool-card__actions aui-question-card__free-text"
+              className="aui-question-card__free-text"
               onSubmit={onFreeTextSubmit}
             >
               <input
                 type="text"
-                className="aui-tool-card__input"
+                className="aui-question-card__input"
                 placeholder={
                   options.length > 0
                     ? "Or type a different answer"
@@ -160,7 +158,7 @@ export function AskAQuestionTool({
               </Button>
             </form>
           ) : multiSelect ? (
-            <div className="aui-tool-card__actions">
+            <div className="aui-question-card__free-text">
               <Button
                 type="button"
                 size="sm"
@@ -173,7 +171,7 @@ export function AskAQuestionTool({
           ) : null}
         </div>
       )}
-    </ActivityCard>
+    </section>
   );
 }
 
@@ -243,28 +241,20 @@ function ResolvedAnswer({
   answer: string | null;
   selected: string[];
 }): ReactElement | null {
-  if (selected.length > 0) {
-    return (
-      <ul className="aui-question-card__chips aui-question-card__chips--resolved">
-        {selected.map((label) => (
-          <li key={label} className="aui-question-card__chip-item">
-            <span
-              className={classNames(
-                "aui-question-card__chip",
-                "aui-question-card__chip--selected",
-              )}
-            >
-              {label}
-            </span>
-          </li>
-        ))}
-      </ul>
-    );
-  }
-  if (!answer) {
+  const chosen = selected.length > 0 ? selected.join(", ") : answer;
+  if (!chosen) {
     return null;
   }
-  return <div className="aui-question-card__answer">{answer}</div>;
+  return (
+    <div className="aui-question-card__resolved">
+      <span className="aui-question-card__resolved-check" aria-hidden="true">
+        ✓
+      </span>
+      <span>
+        You answered <strong>{chosen}</strong>
+      </span>
+    </div>
+  );
 }
 
 function normalizeOptions(value: unknown): NormalizedOption[] {

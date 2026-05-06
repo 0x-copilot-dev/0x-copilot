@@ -48,17 +48,20 @@ function provideCitation(c: CitationSourceRef) {
 }
 
 describe("CitationChip CSS contract", () => {
-  it("resolved chip carries `citation-chip` class + `data-connector` attribute", () => {
+  it("resolved chip is a baseline pill <a> (not <sup>) with class + data-connector", () => {
+    // PR 8.0.1 — chip rendered as <a> directly so it sits on the prose
+    // baseline; pill shape comes from CSS, not <sup> superscript.
     render(
       <CitationsProvider citations={provideCitation(citation())}>
         <CitationChip citationId="c1" />
       </CitationsProvider>,
     );
-    // The <sup> is the chip wrapper; its class is the contract.
-    const sup = screen.getByRole("link").closest("sup");
-    expect(sup).not.toBeNull();
-    expect(sup?.className).toContain("citation-chip");
-    expect(sup?.getAttribute("data-connector")).toBe("notion");
+    const link = screen.getByRole("link");
+    expect(link.tagName).toBe("A");
+    expect(link.closest("sup")).toBeNull();
+    expect(link.className).toContain("citation-chip");
+    expect(link.getAttribute("data-connector")).toBe("notion");
+    expect(link.getAttribute("data-citation-id")).toBe("c1");
   });
 
   it("renders the ordinal as the chip body so consumers can scan by number", () => {

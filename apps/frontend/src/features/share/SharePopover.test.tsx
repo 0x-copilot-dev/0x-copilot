@@ -92,12 +92,14 @@ describe("SharePopover", () => {
     expect(window.location.href).toContain("Demo");
   });
 
-  it("renders the v2 tooltip alongside the disabled fieldset", async () => {
+  it("renders a hint alongside the disabled fieldset", async () => {
     render(
       <SharePopover chatTitle="Demo" chatUrl="https://app.example.com/c/abc" />,
     );
     await openPopover();
-    expect(screen.getByText(/sharing settings ship with v2/i)).toBeVisible();
+    expect(
+      screen.getByText(/send a message to share this chat/i),
+    ).toBeVisible();
     // Both view-access radios are disabled.
     const radios = screen.getAllByRole("radio");
     expect(radios.length).toBeGreaterThan(0);

@@ -353,7 +353,7 @@ function ShareForm({
       <div className="share-popover__toggle">
         <Switch
           checked={sourcesVisible}
-          onCheckedChange={setSourcesVisible}
+          onChange={(event) => setSourcesVisible(event.target.checked)}
           disabled={busy || !canMutate}
           label="Sources visible to viewer"
         />

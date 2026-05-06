@@ -10,6 +10,12 @@ from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from agent_runtime.api.membership import (
+    HttpWorkspaceMembershipResolver,
+    InMemoryWorkspaceMembershipResolver,
+    MembershipResolverUnavailable,
+    WorkspaceMembershipResolver,
+)
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.deployment import (
     DeploymentProfile,
@@ -163,14 +169,17 @@ class RuntimeApiAppFactory:
             publish_inbox=_inbox_publish,
             post=None,
         )
-        # The membership resolver default is also the in-memory impl
-        # (reject everything) — production wires the HTTP impl in a
-        # follow-up that depends on the backend's identity client; the
-        # Phase A landing of this PR keeps the wire surface but leaves
-        # the production HTTP injection to the deployment harness.
-        # Tests wire ``InMemoryWorkspaceMembershipResolver`` directly.
+        # PR 1.4.1 — production wires the HTTP membership resolver when
+        # the trusted backend lane is configured (BACKEND_BASE_URL +
+        # ENTERPRISE_SERVICE_TOKEN). When either is missing we fall back
+        # to the in-memory empty resolver — that path is now used only
+        # by dev / single-process runs where forwarded approvals cannot
+        # reach a different workspace anyway. Tests wire their own
+        # ``InMemoryWorkspaceMembershipResolver`` via the constructor.
+        membership_resolver = cls.default_membership_resolver()
         app.state.runtime_settings = settings
         app.state.runtime_event_bus = event_bus
+        app.state.runtime_membership_resolver = membership_resolver
         if settings.store.backend in _ASYNC_BACKENDS:
             async_ports = RuntimeAdapterFactory.async_from_settings(settings)
             app.state.async_runtime_ports = async_ports
@@ -185,6 +194,7 @@ class RuntimeApiAppFactory:
                     notification_dispatcher, InboxAndEmailNotificationDispatcher
                 )
                 else LoggingNotificationDispatcher(),
+                membership_resolver=membership_resolver,
             )
         ports = RuntimeAdapterFactory.from_settings(settings)
         app.state.runtime_ports = ports
@@ -195,7 +205,64 @@ class RuntimeApiAppFactory:
             settings=settings,
             on_event_appended=event_bus.notify_sync,
             notification_dispatcher=notification_dispatcher,
+            membership_resolver=membership_resolver,
         )
+
+    @classmethod
+    def default_membership_resolver(cls) -> WorkspaceMembershipResolver:
+        """Pick the right resolver for the current deployment.
+
+        Production wires :class:`HttpWorkspaceMembershipResolver` when the
+        trusted backend lane is fully configured (``BACKEND_BASE_URL`` +
+        ``ENTERPRISE_SERVICE_TOKEN``). If either env var is missing we
+        return an empty :class:`InMemoryWorkspaceMembershipResolver` so
+        the wire surface is intact (the runtime still calls
+        ``is_active_member``) but every check returns ``False`` — the
+        same conservative-deny behaviour the resolver shipped with
+        before this wiring landed. Tests bypass this method by passing
+        their own resolver to :class:`RuntimeApiService`.
+        """
+
+        import os
+
+        backend_base_url = os.environ.get("BACKEND_BASE_URL", "").strip()
+        service_token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
+        if not backend_base_url or not service_token:
+            return InMemoryWorkspaceMembershipResolver()
+        return HttpWorkspaceMembershipResolver(
+            fetch=cls._httpx_membership_fetcher(),
+            backend_base_url=backend_base_url,
+            service_token=service_token,
+        )
+
+    @classmethod
+    def _httpx_membership_fetcher(cls):
+        """Return a small ``HttpFetcher`` callable backed by httpx.
+
+        Kept inside the factory (not module-level) so the import of
+        httpx is local to the wiring path and tests that don't exercise
+        production composition don't pay for the import.
+        """
+
+        import httpx
+
+        async def fetch(
+            url: str, headers: dict[str, str]
+        ) -> tuple[int, dict[str, object]]:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.get(url, headers=headers)
+            except (httpx.HTTPError, OSError) as exc:
+                raise MembershipResolverUnavailable(
+                    "Identity backend unreachable while resolving membership."
+                ) from exc
+            try:
+                body = response.json() if response.content else {}
+            except ValueError:
+                body = {}
+            return response.status_code, body
+
+        return fetch
 
     @classmethod
     def default_draft_service(cls, app):

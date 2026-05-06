@@ -34,6 +34,7 @@ export function ThreadBody({
   onOpenDetailsPanel,
   onOpenSources,
   connectorsTrigger,
+  activeModelLabel,
 }: {
   connectors: {
     servers: McpServer[];
@@ -66,6 +67,9 @@ export function ThreadBody({
   onOpenSources?: (citationId: string) => void;
   /** PR 3.4 — slot through to the AssistantComposer's connectors trigger. */
   connectorsTrigger?: ReactNode;
+  /** PR 8.0.1 — display name of the active model, surfaced in the
+   * composer footer hint row. */
+  activeModelLabel?: string;
 }): ReactElement {
   // Pull the first-token of the signed-in user's display_name for the
   // welcome greeting. SessionIdentity.display_name is optional today
@@ -140,6 +144,7 @@ export function ThreadBody({
           onShowConnectors={onShowConnectors}
           onOpenDetailsPanel={onOpenDetailsPanel}
           connectorsTrigger={connectorsTrigger}
+          activeModelLabel={activeModelLabel}
         />
       </div>
     </ThreadPrimitive.Root>

@@ -93,42 +93,6 @@ class PresentationGenerator:
         }
     )
 
-    async def presentation_for_event(
-        self,
-        *,
-        run: RunRecord,
-        event_type: RuntimeApiEventType,
-        source: StreamEventSource,
-        payload: JsonObject,
-        metadata: JsonObject,
-        timeline_fields: Mapping[str, object],
-    ) -> JsonObject | None:
-        """Return validated presentation JSON (preliminary + LLM enrichment).
-
-        Backwards-compatible single-call entry point. Producers should prefer
-        ``preliminary_presentation_for_event`` (synchronous, no LLM) followed
-        by a background ``enrich_presentation_for_event`` so events emit to
-        the SSE stream within milliseconds instead of blocking on the LLM.
-        """
-
-        preliminary = self.preliminary_presentation_for_event(
-            event_type=event_type,
-            payload=payload,
-            metadata=metadata,
-            timeline_fields=timeline_fields,
-        )
-        if not self.event_eligible_for_enrichment(event_type, payload, metadata):
-            return preliminary
-        enriched = await self.enrich_presentation_for_event(
-            run=run,
-            event_type=event_type,
-            source=source,
-            payload=payload,
-            metadata=metadata,
-            timeline_fields=timeline_fields,
-        )
-        return enriched or preliminary
-
     def preliminary_presentation_for_event(
         self,
         *,

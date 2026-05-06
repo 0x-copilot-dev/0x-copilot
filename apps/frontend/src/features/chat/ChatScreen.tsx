@@ -1303,6 +1303,7 @@ export function ChatScreen({
                       : null}
                   </span>
                 }
+                activeModelLabel={selectedModel?.name}
                 connectorSuggestions={
                   showConnectorSuggestions && suggestedServers.length > 0 ? (
                     <ConnectorSuggestionCard

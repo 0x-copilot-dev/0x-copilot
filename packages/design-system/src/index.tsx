@@ -296,6 +296,48 @@ export function StatusPill({
   );
 }
 
+/**
+ * Brand-aware connector glyph mapping. The set is small and curated:
+ * the top connectors that have recognisable monograms or simple shapes
+ * the user is used to seeing. Anything outside this map renders the
+ * letter-circle fallback.
+ *
+ * Glyphs are intentionally simple (one-letter or one-symbol) and use
+ * the connector's brand colour as the background — recognisable at the
+ * 16px sidebar size without being ad-hoc per-component.
+ */
+interface BrandGlyph {
+  label: string;
+  bg: string;
+  fg: string;
+  symbol: string;
+}
+
+const BRAND_GLYPHS: Record<string, BrandGlyph> = {
+  notion: { label: "Notion", bg: "#ffffff", fg: "#191919", symbol: "N" },
+  drive: { label: "Drive", bg: "#ffffff", fg: "#1a73e8", symbol: "▲" },
+  slack: { label: "Slack", bg: "#4a154b", fg: "#ffffff", symbol: "#" },
+  salesforce: {
+    label: "Salesforce",
+    bg: "#00a1e0",
+    fg: "#ffffff",
+    symbol: "S",
+  },
+  confluence: {
+    label: "Confluence",
+    bg: "#172b4d",
+    fg: "#2684ff",
+    symbol: "C",
+  },
+  github: { label: "GitHub", bg: "#0d1117", fg: "#ffffff", symbol: "G" },
+  linear: { label: "Linear", bg: "#5e6ad2", fg: "#ffffff", symbol: "L" },
+  figma: { label: "Figma", bg: "#0d0d0d", fg: "#ffffff", symbol: "F" },
+  snowflake: { label: "Snowflake", bg: "#29b5e8", fg: "#ffffff", symbol: "S" },
+  datadog: { label: "Datadog", bg: "#632ca6", fg: "#ffffff", symbol: "D" },
+  intercom: { label: "Intercom", bg: "#1f8ded", fg: "#ffffff", symbol: "I" },
+  pagerduty: { label: "PagerDuty", bg: "#06ac38", fg: "#ffffff", symbol: "P" },
+};
+
 export function AppIcon({
   name,
   color,
@@ -307,6 +349,30 @@ export function AppIcon({
   color?: string;
   size?: "sm" | "lg";
 }): ReactElement {
+  // PR 8.0.1 — brand-aware mapping. Consumers still pass `name={connector.id}`
+  // (or any short string for non-connector callers, e.g. avatar initials);
+  // brand awareness is internal. Explicit `color` prop wins over the map
+  // so existing call-sites that hard-code a tenant brand colour still work.
+  const slug = name.toLowerCase();
+  const brand = !color ? BRAND_GLYPHS[slug] : undefined;
+  if (brand) {
+    return (
+      <span
+        className={classNames(
+          "ui-app-icon",
+          "ui-app-icon--brand",
+          `ui-app-icon--${slug}`,
+          size === "lg" && "ui-app-icon--lg",
+          className,
+        )}
+        style={{ background: brand.bg, color: brand.fg }}
+        aria-label={brand.label}
+        {...props}
+      >
+        {brand.symbol}
+      </span>
+    );
+  }
   return (
     <span
       className={classNames(
@@ -324,6 +390,86 @@ export function AppIcon({
     >
       {name.charAt(0)}
     </span>
+  );
+}
+
+export type HarnessRowStatus = "running" | "done" | "error";
+
+/**
+ * Inline harness row — the design's compressed tool-call vocabulary.
+ *
+ *     ✓ tool_name (args) | → result
+ *
+ * Lightweight by design: no card chrome, no fat success pill. Renders
+ * as a single dim line. Multiple in a row read as a list.
+ *
+ * Consumers compose this for each `tool_call_*` envelope; the
+ * `ActivityCard` collapse rule (≥ 4 consecutive harness rows) wraps
+ * many of these in a single summary card.
+ */
+export function HarnessRow({
+  status,
+  tool,
+  args,
+  result,
+  className,
+  ...props
+}: HTMLAttributes<HTMLDivElement> & {
+  status: HarnessRowStatus;
+  tool: string;
+  args?: ReactNode;
+  result?: ReactNode;
+}): ReactElement {
+  const glyph = status === "running" ? "·" : status === "error" ? "✕" : "✓";
+  return (
+    <div
+      className={classNames("ui-harness-row", className)}
+      data-status={status}
+      role="status"
+      {...props}
+    >
+      <span className="ui-harness-row__glyph" aria-hidden="true">
+        {status === "running" ? (
+          <span className="ui-harness-row__spinner" />
+        ) : (
+          glyph
+        )}
+      </span>
+      <span className="ui-harness-row__tool">{tool}</span>
+      {args !== undefined && args !== null && args !== "" ? (
+        <span className="ui-harness-row__args">({args})</span>
+      ) : null}
+      {result !== undefined && result !== null && result !== "" ? (
+        <>
+          <span className="ui-harness-row__sep" aria-hidden="true">
+            |
+          </span>
+          <span className="ui-harness-row__result">→ {result}</span>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One-line italic-dim acknowledgement.
+ *
+ *     • Got it. Drafting customer-led.
+ *
+ * Driven by the existing `observation` / `status` envelope kinds.
+ */
+export function StatusLine({
+  children,
+  className,
+  ...props
+}: HTMLAttributes<HTMLDivElement>): ReactElement {
+  return (
+    <div className={classNames("ui-status-line", className)} {...props}>
+      <span className="ui-status-line__bullet" aria-hidden="true">
+        •
+      </span>
+      <span className="ui-status-line__text">{children}</span>
+    </div>
   );
 }
 

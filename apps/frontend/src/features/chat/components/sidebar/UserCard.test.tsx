@@ -13,8 +13,12 @@ import type { ReactElement, ReactNode } from "react";
 import type { WorkspaceListResponse } from "@enterprise-search/api-types";
 
 const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
+const mockGetMyProfile = vi.fn(async () => {
+  throw new Error("getMyProfile not configured for this test");
+});
 vi.mock("../../../../api/meApi", () => ({
   listMyWorkspaces: () => mockListMyWorkspaces(),
+  getMyProfile: () => mockGetMyProfile(),
 }));
 
 const mockUseAuth = vi.fn();

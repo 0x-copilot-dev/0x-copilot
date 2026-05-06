@@ -34,14 +34,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
 )
-from runtime_worker.tool_call_ledger import ToolCallLedger
+
+if TYPE_CHECKING:  # pragma: no cover — typing-only.
+    # ``ToolCallLedger`` lives under ``runtime_worker`` whose
+    # ``__init__`` re-exports the worker entrypoint; importing it at
+    # module scope would drag the whole worker package in (and create a
+    # cycle once :mod:`runtime_worker.dependencies` imports the
+    # downstream :class:`ToolBudgetGuard`). The middleware only uses
+    # ``ToolCallLedger`` in a parameter annotation, so a TYPE_CHECKING
+    # import is sufficient.
+    from runtime_worker.tool_call_ledger import ToolCallLedger
 
 
 _GLOBAL_TOOL_NAME = "*"
@@ -107,7 +116,7 @@ class ToolBudgetMiddleware:
     def check_admit(
         self,
         *,
-        ledger: ToolCallLedger,
+        ledger: "ToolCallLedger",
         tool_name: str,
         estimated_input_tokens: int = 0,
     ) -> ToolBudgetDecision:

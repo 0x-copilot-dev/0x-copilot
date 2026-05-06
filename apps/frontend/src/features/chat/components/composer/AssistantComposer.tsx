@@ -35,6 +35,7 @@ export function AssistantComposer({
   onShowConnectors,
   onOpenDetailsPanel,
   connectorsTrigger,
+  activeModelLabel,
 }: {
   connectors: {
     servers: McpServer[];
@@ -55,6 +56,12 @@ export function AssistantComposer({
    * shared with the topbar `<ConnectorsPill>` trigger.
    */
   connectorsTrigger?: ReactNode;
+  /**
+   * PR 8.0.1 — display name of the active model. Surfaced in the
+   * composer footer hint row (`{model} · Sources cited inline`).
+   * Falls back to "Atlas" when omitted.
+   */
+  activeModelLabel?: string;
 }): ReactElement {
   const aui = useAui();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -200,7 +207,7 @@ export function AssistantComposer({
           <ComposerPrimitive.Input
             className="aui-composer__input"
             aria-label="Message"
-            placeholder="Send a message... (@ to mention, / for commands)"
+            placeholder="Ask Atlas to find, summarize, or draft something for your team…"
             minRows={1}
             maxRows={5}
             submitMode="enter"
@@ -267,11 +274,33 @@ export function AssistantComposer({
                 aria-label="Stop response"
                 data-tooltip="Stop response"
               >
-                Stop
+                <span
+                  className="aui-send-button__stop-icon"
+                  aria-hidden="true"
+                />
               </ComposerPrimitive.Cancel>
             </AuiIf>
           </div>
         </ComposerPrimitive.AttachmentDropzone>
+        <AuiIf condition={(state) => !state.thread.isRunning}>
+          <div className="aui-composer__hint" aria-hidden="false">
+            <span>
+              <kbd>↵</kbd> send
+            </span>
+            <span className="aui-composer__hint-sep" aria-hidden="true" />
+            <span>
+              <kbd>⇧</kbd>+<kbd>↵</kbd> new line
+            </span>
+            <span className="aui-composer__hint-sep" aria-hidden="true" />
+            <span>
+              <kbd>/</kbd> skills
+            </span>
+            <span className="aui-composer__hint-grow" />
+            <span className="aui-composer__hint-meta">
+              {activeModelLabel ?? "Atlas"} · Sources cited inline
+            </span>
+          </div>
+        </AuiIf>
         <ComposerPrimitive.Unstable_TriggerPopover
           char="/"
           adapter={slash.adapter}

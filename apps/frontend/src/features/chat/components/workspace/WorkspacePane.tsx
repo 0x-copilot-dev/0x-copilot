@@ -29,6 +29,7 @@ import {
   workspaceTabPanelId,
   type WorkspaceTabsItem,
 } from "./WorkspaceTabs";
+import { TAB_LABELS, tabLabel } from "./pluralize";
 import type { WorkspacePaneTabId } from "./useWorkspacePaneAutoOpen";
 import type { WorkspacePaneState } from "./useWorkspacePaneState";
 import type { ApprovalsQueueProjection } from "./useApprovalsQueue";
@@ -98,36 +99,43 @@ export function WorkspacePane({
     return null;
   }
 
-  const tabs: readonly WorkspaceTabsItem<WorkspacePaneTabId>[] = [
+  // PR 8.0.1 — Singular/plural labels per count, hide tabs whose surface
+  // is empty so the tab strip never asks "Skill 0?".
+  const sourcesCount = sources.size;
+  const agentsCount = subagents.size;
+  const pendingApprovals = approvalsQueue.pending.length;
+  const approvalsCount = pendingApprovals + approvalsQueue.recent.length;
+  const skillsCount = skills.length;
+
+  const tabs: WorkspaceTabsItem<WorkspacePaneTabId>[] = [
     {
       id: "sources",
-      label: "Sources",
-      badge: sources.size > 0 ? <span>{sources.size}</span> : undefined,
+      label: tabLabel(TAB_LABELS.sources, sourcesCount),
+      badge: sourcesCount > 0 ? <span>{sourcesCount}</span> : undefined,
     },
     {
       id: "agents",
-      label: "Agents",
+      label: tabLabel(TAB_LABELS.agents, agentsCount),
       badge: agentsBadge(subagents),
     },
-    {
-      id: "draft",
-      label: "Draft",
-      badge: draft !== null ? <span>1</span> : undefined,
-    },
-    {
-      id: "approvals",
-      label: "Approvals",
-      badge:
-        approvalsQueue.pending.length > 0 ? (
-          <span>{approvalsQueue.pending.length}</span>
-        ) : undefined,
-    },
-    {
-      id: "skills",
-      label: "Skills",
-      badge: skills.length > 0 ? <span>{skills.length}</span> : undefined,
-    },
   ];
+  if (draft !== null) {
+    tabs.push({ id: "draft", label: "Draft", badge: <span>1</span> });
+  }
+  if (approvalsCount > 0) {
+    tabs.push({
+      id: "approvals",
+      label: tabLabel(TAB_LABELS.approval, pendingApprovals || approvalsCount),
+      badge: pendingApprovals > 0 ? <span>{pendingApprovals}</span> : undefined,
+    });
+  }
+  if (skillsCount > 0) {
+    tabs.push({
+      id: "skills",
+      label: tabLabel(TAB_LABELS.skill, skillsCount),
+      badge: <span>{skillsCount}</span>,
+    });
+  }
 
   const panelId = workspaceTabPanelId(tablistId, state.activeTab);
 
