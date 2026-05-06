@@ -1,4 +1,4 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "../../runtime/types";
 import type { ReactElement } from "react";
 import { largeToolResultFromValue, stringValue } from "../../utils/jsonUtils";
 import {

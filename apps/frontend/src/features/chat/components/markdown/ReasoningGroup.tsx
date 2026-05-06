@@ -1,4 +1,4 @@
-import type { ReasoningGroupProps } from "@assistant-ui/react";
+import type { ReasoningGroupProps } from "../../runtime/types";
 import type { ReactElement } from "react";
 import { ThinkingIcon } from "../icons/ThinkingIcon";
 

@@ -18,8 +18,6 @@ import { LogoMark } from "../thread/LogoMark";
 import { Crumb } from "./Crumb";
 import { ConversationTitle } from "./ConversationTitle";
 import { ConnectorsPill, type ActiveConnectorGlyph } from "./ConnectorsPill";
-import { ModelPill } from "./ModelPill";
-import { ThinkingDepthControl } from "./ThinkingDepthControl";
 import { UsageMeter } from "./UsageMeter";
 
 export interface TopbarProps {
@@ -253,20 +251,11 @@ export function Topbar(props: TopbarProps): ReactElement {
           </IconButton>
         </div>
       </div>
-      <div className="atlas-topbar__row atlas-topbar__row--controls">
-        <ModelPill
-          models={models}
-          value={selectedModel}
-          onChange={onModelChange}
-          disabled={chromeDisabled}
-        />
-        <ThinkingDepthControl
-          value={depth}
-          onChange={onDepthChange}
-          visible={depthVisible}
-          disabled={chromeDisabled}
-        />
-      </div>
+      {/* PR 8.0.2 — model + thinking-depth moved into the composer's
+          tools row. The topbar now collapses to a single row matching
+          the design's mock. The composer is the canonical anchor for
+          run-time controls (model, depth, connectors); the topbar
+          carries identity + status only. */}
     </header>
   );
 }

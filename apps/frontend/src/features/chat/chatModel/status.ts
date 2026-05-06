@@ -1,5 +1,5 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
-import type { MessageStatus as AssistantMessageStatus } from "@assistant-ui/react";
+import type { MessageStatus as AssistantMessageStatus } from "../runtime/types";
 import { isToolCallPart, payloadString } from "./recordHelpers";
 import type {
   ChatItem,

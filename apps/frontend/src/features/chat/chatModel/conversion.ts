@@ -2,7 +2,7 @@ import type {
   Message,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
-import type { ThreadMessageLike } from "@assistant-ui/react";
+import type { ThreadMessageLike } from "../runtime/types";
 import { applyRuntimeEvent } from "./eventReducer";
 import { mergeMetadata, metadataFromMessage } from "./metadata";
 import { assistantMessageId } from "./recordHelpers";

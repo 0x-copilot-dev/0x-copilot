@@ -8,22 +8,23 @@ import type {
 } from "@enterprise-search/api-types";
 import {
   AssistantRuntimeProvider,
-  type Attachment,
-  type AttachmentAdapter,
-  CompositeAttachmentAdapter,
-  type CompleteAttachment,
-  type PendingAttachment,
-  SimpleImageAttachmentAdapter,
-  SimpleTextAttachmentAdapter,
-  Suggestions,
-  WebSpeechDictationAdapter,
   useAui,
   useExternalStoreRuntime,
-  type AppendMessage,
-  type ExternalStoreThreadData,
-  type ExternalStoreThreadListAdapter,
-  type ThreadMessageLike,
 } from "@assistant-ui/react";
+import type {
+  AppendMessage,
+  CompleteAttachment,
+  ExternalStoreThreadData,
+  ExternalStoreThreadListAdapter,
+  ThreadMessageLike,
+} from "./runtime/types";
+import {
+  AtlasCompositeAttachmentAdapter,
+  AtlasFileAttachmentAdapter,
+  AtlasImageAttachmentAdapter,
+  AtlasTextAttachmentAdapter,
+  AtlasWebSpeechDictationAdapter,
+} from "./runtime";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -110,10 +111,7 @@ import {
   AssistantThreadList,
   ThreadBody,
 } from "./assistantUiComponents";
-import {
-  CHAT_PROMPT_SUGGESTIONS,
-  REGENERATE_PREVIOUS_RESPONSE_PROMPT,
-} from "./prompts";
+import { REGENERATE_PREVIOUS_RESPONSE_PROMPT } from "./prompts";
 import {
   rememberPendingMcpAuthAction,
   type CompletedMcpAuthAction,
@@ -670,6 +668,27 @@ export function ChatScreen({
     [submitUserMessage],
   );
 
+  /**
+   * Welcome-card click. The empty-thread suggestion grid (`ThreadWelcome`)
+   * passes the picked prompt up here; we wrap it in a minimal
+   * `AppendMessage` so the submit pipeline (optimistic message → run
+   * creation → SSE stream) is identical to a typed prompt.
+   */
+  const onSelectSuggestion = useCallback(
+    async (prompt: string): Promise<void> => {
+      const message = {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+        attachments: [],
+        parentId: null,
+        sourceId: null,
+        runConfig: undefined,
+      } as unknown as AppendMessage;
+      await submitUserMessage(message);
+    },
+    [submitUserMessage],
+  );
+
   const onEdit = useCallback(
     async (message: AppendMessage): Promise<void> => {
       const parentMessageId = appendMessageParentId(message);
@@ -979,23 +998,22 @@ export function ChatScreen({
 
   const attachmentAdapter = useMemo(
     () =>
-      new CompositeAttachmentAdapter([
-        new SimpleImageAttachmentAdapter(),
-        new SimpleTextAttachmentAdapter(),
-        new GenericFileAttachmentAdapter(),
+      new AtlasCompositeAttachmentAdapter([
+        new AtlasImageAttachmentAdapter(),
+        new AtlasTextAttachmentAdapter(),
+        new AtlasFileAttachmentAdapter(),
       ]),
     [],
   );
   const dictationAdapter = useMemo(
     () =>
-      typeof window !== "undefined" && WebSpeechDictationAdapter.isSupported()
-        ? new WebSpeechDictationAdapter()
+      typeof window !== "undefined" &&
+      AtlasWebSpeechDictationAdapter.isSupported()
+        ? new AtlasWebSpeechDictationAdapter()
         : undefined,
     [],
   );
-  const aui = useAui({
-    suggestions: Suggestions(CHAT_PROMPT_SUGGESTIONS),
-  });
+  const aui = useAui();
 
   // PR 2.1 — current conversation row + per-chat connector glyphs feed
   // for the topbar pills. Read-only here; ConnectorPopover (PR 3.4)
@@ -1304,6 +1322,12 @@ export function ChatScreen({
                   </span>
                 }
                 activeModelLabel={selectedModel?.name}
+                models={demoModels}
+                selectedModel={selectedModelId}
+                onModelChange={setSelectedModelId}
+                depth={depth}
+                onDepthChange={setDepth}
+                depthVisible={depthVisible}
                 connectorSuggestions={
                   showConnectorSuggestions && suggestedServers.length > 0 ? (
                     <ConnectorSuggestionCard
@@ -1316,6 +1340,7 @@ export function ChatScreen({
                     />
                   ) : null
                 }
+                onSelectSuggestion={(prompt) => void onSelectSuggestion(prompt)}
               />
             </CitationsProvider>
           </AssistantThread>
@@ -1375,77 +1400,6 @@ export function ChatScreen({
       </ApprovalFocusProvider>
     </AssistantRuntimeProvider>
   );
-}
-
-class GenericFileAttachmentAdapter implements AttachmentAdapter {
-  public accept =
-    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
-
-  public async add({ file }: { file: File }): Promise<PendingAttachment> {
-    return {
-      id: `${file.name}-${file.lastModified}`,
-      type: "file",
-      name: file.name,
-      contentType: file.type || mimeTypeForFile(file.name),
-      file,
-      status: { type: "requires-action", reason: "composer-send" },
-    };
-  }
-
-  public async send(
-    attachment: PendingAttachment,
-  ): Promise<CompleteAttachment> {
-    return {
-      ...attachment,
-      status: { type: "complete" },
-      content: [
-        {
-          type: "file",
-          filename: attachment.name,
-          data: await readFileDataURL(attachment.file),
-          mimeType:
-            attachment.contentType ||
-            mimeTypeForFile(attachment.name) ||
-            "application/octet-stream",
-        },
-      ],
-    };
-  }
-
-  public async remove(_attachment: Attachment): Promise<void> {
-    return undefined;
-  }
-}
-
-function readFileDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = (error) => reject(error);
-    reader.readAsDataURL(file);
-  });
-}
-
-function mimeTypeForFile(fileName: string): string {
-  const extension = fileName.split(".").pop()?.toLowerCase();
-  switch (extension) {
-    case "pdf":
-      return "application/pdf";
-    case "doc":
-      return "application/msword";
-    case "docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    case "xls":
-      return "application/vnd.ms-excel";
-    case "xlsx":
-      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    case "ppt":
-      return "application/vnd.ms-powerpoint";
-    case "pptx":
-      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    default:
-      return "";
-  }
 }
 
 async function replayEventsForMessages(

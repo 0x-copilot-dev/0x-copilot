@@ -1,4 +1,4 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "../../runtime/types";
 import type {
   ApprovalDecision,
   ApprovalForwardTarget,

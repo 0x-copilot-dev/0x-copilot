@@ -21,8 +21,12 @@ import type {
 } from "@enterprise-search/api-types";
 
 const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
+const mockGetMyProfile = vi.fn(async () => {
+  throw new Error("getMyProfile not configured for this test");
+});
 vi.mock("../../api/meApi", () => ({
   listMyWorkspaces: () => mockListMyWorkspaces(),
+  getMyProfile: () => mockGetMyProfile(),
 }));
 
 const mockSwitchWorkspace = vi.fn(async (_orgId: string) => undefined);
@@ -57,7 +61,7 @@ const conversations: Conversation[] = [
 
 describe("workspace switch wiring (PR 3.5 / G4)", () => {
   it("UserCard → WorkspacePicker click → ChatScreen-supplied onSwitchWorkspace runs", async () => {
-    mockListMyWorkspaces.mockResolvedValueOnce({
+    mockListMyWorkspaces.mockResolvedValue({
       workspaces: [
         {
           org_id: "org_personal",

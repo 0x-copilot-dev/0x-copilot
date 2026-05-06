@@ -2,7 +2,7 @@ import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type {
   MessageStatus as AssistantMessageStatus,
   ThreadMessageLike,
-} from "@assistant-ui/react";
+} from "../runtime/types";
 
 export type ThreadMessageContent = Exclude<
   ThreadMessageLike["content"],

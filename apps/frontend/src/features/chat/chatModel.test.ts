@@ -3,7 +3,7 @@ import type {
   McpServer,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
-import type { ThreadMessageLike } from "@assistant-ui/react";
+import type { ThreadMessageLike } from "./runtime/types";
 import { describe, expect, it } from "vitest";
 import {
   applyRuntimeEvent,

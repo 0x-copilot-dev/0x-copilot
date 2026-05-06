@@ -1,4 +1,5 @@
-import { MessagePrimitive, type ThreadMessageLike } from "@assistant-ui/react";
+import { MessagePrimitive } from "@assistant-ui/react";
+import type { ThreadMessageLike } from "../../runtime/types";
 import type { ReactElement } from "react";
 import {
   isTerminalAssistantStatus,
@@ -8,6 +9,7 @@ import { useRunCitations } from "../citations/citationsContext";
 import { MarkdownText } from "../markdown/MarkdownText";
 import { Reasoning } from "../markdown/Reasoning";
 import { ReasoningGroup } from "../markdown/ReasoningGroup";
+import { LogoMark } from "../thread/LogoMark";
 import { ApprovalTool } from "../tools/ApprovalTool";
 import { ConnectorAuthTool } from "../tools/ConnectorAuthTool";
 import { McpTool } from "../tools/McpTool";
@@ -54,6 +56,9 @@ export function AssistantMessage({
   const showStrip = showFooter && sealedCitations.length > 0;
   return (
     <MessagePrimitive.Root className="aui-message aui-message--assistant">
+      <span className="aui-message__avatar" aria-hidden="true">
+        <LogoMark compact />
+      </span>
       <div className="aui-message__body">
         <MessagePrimitive.Parts
           components={{

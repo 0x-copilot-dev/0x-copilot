@@ -2,7 +2,7 @@ import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type {
   MessageStatus as AssistantMessageStatus,
   ThreadMessageLike,
-} from "@assistant-ui/react";
+} from "../runtime/types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { mcpApprovalMatchesWrapper, mcpAuthMatchesWrapper } from "./mcpAuth";
 import { mergeMetadata } from "./metadata";

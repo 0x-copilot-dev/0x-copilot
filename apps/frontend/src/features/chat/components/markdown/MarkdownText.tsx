@@ -1,4 +1,4 @@
-import type { TextMessagePartProps } from "@assistant-ui/react";
+import type { TextMessagePartProps } from "../../runtime/types";
 import { classNames } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { Streamdown } from "streamdown";

@@ -1011,6 +1011,9 @@ p {
 }
 
 .aui-message--assistant {
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr);
   max-width: min(70ch, 48rem);
 }
 
@@ -1018,6 +1021,34 @@ p {
   background: transparent;
   border: 0;
   padding: 0;
+}
+
+/* PR 8.0.2 — orange A mark on every assistant turn. The mark is the
+ * `<LogoMark compact />` primitive (single source of truth for the
+ * brand glyph). 20px size, accent fill, placed in the message grid's
+ * first column. The footer + sources strip span both columns to keep
+ * the prose left-aligned to the same gutter as the mark. */
+.aui-message__avatar {
+  align-self: start;
+  display: inline-flex;
+  flex: none;
+  margin-top: 0.1rem;
+}
+
+.aui-message__avatar .aui-logo {
+  font-size: 0;
+}
+
+.aui-message__avatar .aui-logo__mark {
+  font-size: 0.78rem;
+  height: 1.4rem;
+  width: 1.4rem;
+}
+
+.aui-message--assistant .aui-assistant-message-footer,
+.aui-message--assistant .aui-sources-strip {
+  grid-column: 2;
+  margin-left: 0;
 }
 
 .aui-message__body {
@@ -4022,6 +4053,33 @@ p {
 .atlas-connectors-pill__empty {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+/* PR 8.0.2 — connectors pill empty-state. Renders as a CTA (`+ Connect
+ * a tool`) when the user has zero connectors authorised, instead of
+ * the misleading "All paused" hard-state. Dashed accent border so the
+ * affordance is visible without dominating the topbar. */
+.atlas-connectors-pill--empty {
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 50%, transparent);
+  color: var(--color-accent);
+  height: 28px;
+  padding: 0 0.6rem;
+}
+
+.atlas-connectors-pill--empty:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border-color: var(--color-accent);
+}
+
+.atlas-connectors-pill__plus {
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.atlas-connectors-pill__cta {
+  font-size: 0.78rem;
+  font-weight: 500;
 }
 
 .atlas-connectors-pill__caret {

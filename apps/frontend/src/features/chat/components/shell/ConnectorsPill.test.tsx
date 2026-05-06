@@ -81,9 +81,12 @@ describe("ConnectorsPill", () => {
     expect(screen.queryByText(/^\+\d+$/)).toBeNull();
   });
 
-  it("shows 'All paused' when none active", () => {
+  it("shows 'Connect a tool' CTA when none active (PR 8.0.2)", () => {
     render(<ConnectorsPill active={[]} onOpen={() => undefined} />);
-    expect(screen.getByText("All paused")).toBeInTheDocument();
+    expect(screen.getByText("Connect a tool")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /connect a tool/i })).toHaveClass(
+      "atlas-connectors-pill--empty",
+    );
   });
 
   it("calls onOpen on click", () => {

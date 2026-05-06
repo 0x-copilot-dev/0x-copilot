@@ -1,4 +1,4 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "../../runtime/types";
 import { Button } from "@enterprise-search/design-system";
 import { useState, type ReactElement } from "react";
 import { formatDateTime, stringValue } from "../../utils/jsonUtils";

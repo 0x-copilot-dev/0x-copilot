@@ -1,4 +1,4 @@
-import type { TextMessagePartProps } from "@assistant-ui/react";
+import type { TextMessagePartProps } from "../../runtime/types";
 import type { ReactElement } from "react";
 
 export function PlainText({ text }: TextMessagePartProps): ReactElement {

@@ -36,10 +36,10 @@ export const ConnectorsPill = forwardRef<
 ): ReactElement {
   const visible = active.slice(0, MAX_GLYPHS);
   const overflow = Math.max(0, active.length - MAX_GLYPHS);
-  const label =
-    active.length === 0
-      ? "Connectors — none active for this chat"
-      : `Connectors — ${active.length} active for this chat`;
+  const isEmpty = active.length === 0;
+  const label = isEmpty
+    ? "Connect a tool — none active for this chat"
+    : `Connectors — ${active.length} active for this chat`;
   return (
     <button
       ref={ref}
@@ -48,36 +48,50 @@ export const ConnectorsPill = forwardRef<
         "ui-icon-button",
         "ui-icon-button--ghost",
         "atlas-connectors-pill",
+        isEmpty && "atlas-connectors-pill--empty",
       )}
       onClick={onOpen}
       disabled={disabled}
       aria-haspopup="menu"
       aria-expanded={open ?? false}
       aria-label={label}
-      data-tooltip="Per-chat connectors"
+      data-tooltip={isEmpty ? "Connect a tool" : "Per-chat connectors"}
       data-tooltip-placement="bottom"
     >
-      <span className="atlas-connectors-pill__stack" aria-hidden="true">
-        {visible.length === 0 ? (
-          <span className="atlas-connectors-pill__empty">All paused</span>
-        ) : (
-          visible.map((connector) => (
-            <AppIcon
-              key={connector.id}
-              name={connector.name}
-              color={connector.color}
-              size="sm"
-              className="atlas-connectors-pill__glyph"
-            />
-          ))
-        )}
-        {overflow > 0 ? (
-          <span className="atlas-connectors-pill__overflow">+{overflow}</span>
-        ) : null}
-      </span>
-      <span aria-hidden="true" className="atlas-connectors-pill__caret">
-        ▾
-      </span>
+      {isEmpty ? (
+        // PR 8.0.2 — empty state reads as a CTA, not a misleading
+        // "All paused" hard-state. The same click opens the existing
+        // ConnectorPopover, whose empty branch points the user at
+        // Settings → Connectors.
+        <>
+          <span className="atlas-connectors-pill__plus" aria-hidden="true">
+            +
+          </span>
+          <span className="atlas-connectors-pill__cta">Connect a tool</span>
+        </>
+      ) : (
+        <>
+          <span className="atlas-connectors-pill__stack" aria-hidden="true">
+            {visible.map((connector) => (
+              <AppIcon
+                key={connector.id}
+                name={connector.name}
+                color={connector.color}
+                size="sm"
+                className="atlas-connectors-pill__glyph"
+              />
+            ))}
+            {overflow > 0 ? (
+              <span className="atlas-connectors-pill__overflow">
+                +{overflow}
+              </span>
+            ) : null}
+          </span>
+          <span aria-hidden="true" className="atlas-connectors-pill__caret">
+            ▾
+          </span>
+        </>
+      )}
     </button>
   );
 });

@@ -1,25 +1,14 @@
-import { SuggestionPrimitive, ThreadPrimitive } from "@assistant-ui/react";
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentType,
-  type ReactElement,
-} from "react";
-import {
-  CATEGORY_LABEL,
-  CHAT_PROMPT_SUGGESTIONS,
-  type ChatPromptSuggestion,
-} from "../../prompts";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { CATEGORY_LABEL, CHAT_PROMPT_SUGGESTIONS } from "../../prompts";
 import { welcomeGreeting } from "../../utils/greeting";
 
 /**
- * Empty-thread welcome surface. The runtime is already seeded with
- * `Suggestions(CHAT_PROMPT_SUGGESTIONS)` from `ChatScreen`, so each card uses
- * `ThreadPrimitive.SuggestionByIndex` to bind a `SuggestionPrimitive.Trigger`
- * to the correct runtime suggestion index. The eyebrow + title + sub render
- * from our own static data so we can attach a category color without leaking
- * the field into the runtime contract (which only carries title/label/prompt).
+ * Empty-thread welcome surface. Renders a time-aware greeting headline and
+ * four suggestion cards (`DRAFT`, `SUMMARIZE`, `FIND`, `COMPARE`) that send
+ * a fixed prompt when clicked. Receives the suggestion-pick callback from
+ * the host (`ChatScreen`) which routes it to the runtime — keeps this
+ * component free of any runtime context dependency so it can be rendered
+ * standalone (storybook, shared-thread preview).
  *
  * `firstName` is optional. When the auth identity carries no display name,
  * the greeting drops the comma + name — same shape, no jitter.
@@ -27,63 +16,50 @@ import { welcomeGreeting } from "../../utils/greeting";
 export function ThreadWelcome({
   firstName = null,
   now = new Date(),
+  onSelectSuggestion,
 }: {
   firstName?: string | null;
   now?: Date;
+  /**
+   * Fired when the user clicks one of the four prompt cards. The host
+   * appends the prompt to the runtime as a user message. When omitted
+   * (e.g. read-only previews) the card renders as a no-op button.
+   */
+  onSelectSuggestion?: (prompt: string) => void;
 } = {}): ReactElement {
   const greeting = useMinuteAwareGreeting(now, firstName);
-
-  // One stable Suggestion render-component per index. Memoised so the
-  // identity is stable across renders; assistant-ui treats the component
-  // reference as a remount key.
-  const cards = useMemo(
-    () =>
-      CHAT_PROMPT_SUGGESTIONS.map((suggestion, index) => ({
-        index,
-        prompt: suggestion.prompt,
-        Suggestion: makeSuggestionCard(suggestion),
-      })),
-    [],
-  );
 
   return (
     <section className="aui-welcome aui-welcome--atlas">
       <h1 className="aui-welcome__greeting" data-testid="welcome-greeting">
-        {greeting}
+        {greeting}{" "}
+        <em className="aui-welcome__question">What are we shipping today?</em>
       </h1>
       <ul className="aui-welcome__suggestions" aria-label="Suggested prompts">
-        {cards.map(({ index, prompt, Suggestion }) => (
-          <li key={prompt}>
-            <ThreadPrimitive.SuggestionByIndex
-              index={index}
-              components={{ Suggestion }}
-            />
+        {CHAT_PROMPT_SUGGESTIONS.map((suggestion) => (
+          <li key={suggestion.prompt}>
+            <button
+              type="button"
+              className="aui-welcome-card"
+              title="Send this suggestion"
+              onClick={() => onSelectSuggestion?.(suggestion.prompt)}
+            >
+              <span
+                className="aui-welcome-card__eyebrow"
+                data-category={suggestion.category}
+              >
+                {CATEGORY_LABEL[suggestion.category]}
+              </span>
+              <strong className="aui-welcome-card__title">
+                {suggestion.title}
+              </strong>
+              <span className="aui-welcome-card__sub">{suggestion.label}</span>
+            </button>
           </li>
         ))}
       </ul>
     </section>
   );
-}
-
-function makeSuggestionCard(suggestion: ChatPromptSuggestion): ComponentType {
-  return function SuggestionCard() {
-    return (
-      <SuggestionPrimitive.Trigger
-        className="aui-welcome-card"
-        title="Send this suggestion"
-        send
-      >
-        <span
-          className="aui-welcome-card__eyebrow"
-          data-category={suggestion.category}
-        >
-          {CATEGORY_LABEL[suggestion.category]}
-        </span>
-        <strong className="aui-welcome-card__title">{suggestion.title}</strong>
-        <span className="aui-welcome-card__sub">{suggestion.label}</span>
-      </SuggestionPrimitive.Trigger>
-    );
-  };
 }
 
 /**

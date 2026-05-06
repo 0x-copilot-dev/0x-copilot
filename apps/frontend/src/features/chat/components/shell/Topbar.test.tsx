@@ -53,7 +53,10 @@ const baseProps = {
 };
 
 describe("Topbar", () => {
-  it("renders identity row + status + per-run controls", () => {
+  it("renders identity row + status (single row, PR 8.0.2)", () => {
+    // PR 8.0.2 — model + thinking-depth controls moved into the
+    // composer. The topbar collapses to a single row (identity +
+    // status pills only).
     render(<Topbar {...baseProps} />);
     expect(screen.getByText("Acme")).toBeInTheDocument();
     expect(screen.getByText("Launches")).toBeInTheDocument();
@@ -65,11 +68,15 @@ describe("Topbar", () => {
         .getAllByRole("status")
         .find((node) => node.classList.contains("ui-status-pill")),
     ).toHaveTextContent("Ready");
-    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+    // No model pill, no depth control in topbar — they live in the composer.
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Model:/ })).toBeNull();
   });
 
-  it("hides depth control when not visible", () => {
+  it("does not render the depth control regardless of `depthVisible` (moved to composer)", () => {
     render(<Topbar {...baseProps} depthVisible={false} />);
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    render(<Topbar {...baseProps} depthVisible={true} />);
     expect(screen.queryByRole("radiogroup")).toBeNull();
   });
 
@@ -89,12 +96,13 @@ describe("Topbar", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("disables interactive controls when chromeDisabled", () => {
+  it("propagates chromeDisabled to interactive pills", () => {
+    // PR 8.0.2 — model + depth no longer in topbar; chrome-disabled
+    // now applies to the connectors pill (and any other interactive
+    // pill that lands here in the future).
     render(<Topbar {...baseProps} chromeDisabled />);
-    // Model pill button is the only one with the model name accessible label
-    expect(
-      screen.getByRole("button", { name: /Model: GPT-5\.4/ }),
-    ).toBeDisabled();
+    const connectors = screen.getByLabelText(/Connect a tool|Connectors —/);
+    expect(connectors).toBeDisabled();
   });
 
   describe("depth announcement", () => {

@@ -7,7 +7,11 @@ import {
   type Unstable_MentionCategory,
   type Unstable_SlashCommand,
 } from "@assistant-ui/react";
-import type { McpServer, Skill } from "@enterprise-search/api-types";
+import type {
+  McpServer,
+  ModelCatalogModel,
+  Skill,
+} from "@enterprise-search/api-types";
 import {
   useEffect,
   useMemo,
@@ -16,10 +20,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import type { ThinkingDepth } from "../../depth";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
 } from "../../prompts";
+import { ModelPill } from "../shell/ModelPill";
+import { ThinkingDepthControl } from "../shell/ThinkingDepthControl";
 import { AttachmentPill } from "./AttachmentPill";
 import { ComposerPlusMenu, type ComposerMenuView } from "./ComposerPlusMenu";
 import { TriggerPopoverList } from "./TriggerPopoverList";
@@ -36,6 +43,13 @@ export function AssistantComposer({
   onOpenDetailsPanel,
   connectorsTrigger,
   activeModelLabel,
+  models,
+  selectedModel,
+  onModelChange,
+  depth,
+  onDepthChange,
+  depthVisible,
+  controlsDisabled,
 }: {
   connectors: {
     servers: McpServer[];
@@ -62,6 +76,19 @@ export function AssistantComposer({
    * Falls back to "Atlas" when omitted.
    */
   activeModelLabel?: string;
+  /**
+   * PR 8.0.2 — model + thinking-depth controls moved here from the
+   * topbar. The composer is the canonical anchor for run-time
+   * controls (model, depth, connectors); the topbar keeps identity +
+   * status only. Props mirror the previous `Topbar` shape.
+   */
+  models?: Array<ModelCatalogModel & { disabled?: boolean }>;
+  selectedModel?: string;
+  onModelChange?: (id: string) => void;
+  depth?: ThinkingDepth;
+  onDepthChange?: (depth: ThinkingDepth) => void;
+  depthVisible?: boolean;
+  controlsDisabled?: boolean;
 }): ReactElement {
   const aui = useAui();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -259,6 +286,24 @@ export function AssistantComposer({
               ) : null}
             </div>
             {connectorsTrigger ?? null}
+            {/* PR 8.0.2 — model + depth moved from the topbar. The
+                composer is the canonical anchor for run-time controls. */}
+            {models && selectedModel !== undefined && onModelChange ? (
+              <ModelPill
+                models={models}
+                value={selectedModel}
+                onChange={onModelChange}
+                disabled={controlsDisabled}
+              />
+            ) : null}
+            {depth !== undefined && onDepthChange ? (
+              <ThinkingDepthControl
+                value={depth}
+                onChange={onDepthChange}
+                visible={depthVisible ?? true}
+                disabled={controlsDisabled}
+              />
+            ) : null}
             <AuiIf condition={(state) => !state.thread.isRunning}>
               <ComposerPrimitive.Send
                 className="aui-send-button aui-composer-send"

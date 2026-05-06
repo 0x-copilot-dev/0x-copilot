@@ -13,7 +13,10 @@ import {
   AssistantComposer,
   type DetailsPanelKind,
 } from "../composer/AssistantComposer";
+import type { ModelCatalogModel } from "@enterprise-search/api-types";
+import type { ThinkingDepth } from "../../depth";
 import { useAuth } from "../../../auth/AuthContext";
+import { useMyProfile } from "../../../auth/useMyProfile";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
@@ -35,6 +38,14 @@ export function ThreadBody({
   onOpenSources,
   connectorsTrigger,
   activeModelLabel,
+  models,
+  selectedModel,
+  onModelChange,
+  depth,
+  onDepthChange,
+  depthVisible,
+  controlsDisabled,
+  onSelectSuggestion,
 }: {
   connectors: {
     servers: McpServer[];
@@ -70,15 +81,33 @@ export function ThreadBody({
   /** PR 8.0.1 — display name of the active model, surfaced in the
    * composer footer hint row. */
   activeModelLabel?: string;
+  /** PR 8.0.2 — model + thinking-depth controls moved from the topbar
+   * into the composer. Plumbed through the same way the composer
+   * already receives `connectorsTrigger`. */
+  models?: Array<ModelCatalogModel & { disabled?: boolean }>;
+  selectedModel?: string;
+  onModelChange?: (id: string) => void;
+  depth?: ThinkingDepth;
+  onDepthChange?: (depth: ThinkingDepth) => void;
+  depthVisible?: boolean;
+  controlsDisabled?: boolean;
+  /**
+   * Empty-thread suggestion picker. Routed through to `ThreadWelcome`
+   * so the host (`ChatScreen`) controls how a clicked card becomes a
+   * runtime append.
+   */
+  onSelectSuggestion?: (prompt: string) => void;
 }): ReactElement {
   // Pull the first-token of the signed-in user's display_name for the
-  // welcome greeting. SessionIdentity.display_name is optional today
-  // (the auth contract doesn't ship the field through the HMAC bearer
-  // yet — see api/authApi.ts); when it lands, this read picks it up
-  // with no further wiring.
+  // welcome greeting. PR 8.0.2 — try the session identity first (cheap,
+  // no fetch); fall back to the lazy `/v1/me/profile` hook (used by
+  // UserCard too) so dev personas whose bearer doesn't carry
+  // display_name still get a personalised greeting on first paint after
+  // the profile fetch resolves.
   const auth = useAuth();
+  const profile = useMyProfile();
   const greetingFirstName = firstNameFromDisplayName(
-    auth.identity?.display_name ?? null,
+    auth.identity?.display_name ?? profile?.display_name ?? null,
   );
 
   return (
@@ -93,7 +122,10 @@ export function ThreadBody({
       </SelectionToolbarPrimitive.Root>
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <ThreadPrimitive.Empty>
-          <ThreadWelcome firstName={greetingFirstName} />
+          <ThreadWelcome
+            firstName={greetingFirstName}
+            onSelectSuggestion={onSelectSuggestion}
+          />
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages>
           {({ message }) => {
@@ -145,6 +177,13 @@ export function ThreadBody({
           onOpenDetailsPanel={onOpenDetailsPanel}
           connectorsTrigger={connectorsTrigger}
           activeModelLabel={activeModelLabel}
+          models={models}
+          selectedModel={selectedModel}
+          onModelChange={onModelChange}
+          depth={depth}
+          onDepthChange={onDepthChange}
+          depthVisible={depthVisible}
+          controlsDisabled={controlsDisabled}
         />
       </div>
     </ThreadPrimitive.Root>

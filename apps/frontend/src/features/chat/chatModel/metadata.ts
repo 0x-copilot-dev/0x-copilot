@@ -4,7 +4,7 @@ import {
   type Message,
   type RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
-import type { MessageTiming, ThreadMessageLike } from "@assistant-ui/react";
+import type { MessageTiming, ThreadMessageLike } from "../runtime/types";
 import { asRecord } from "../utils/jsonUtils";
 
 export function metadataFromMessage(

@@ -1,4 +1,4 @@
-import type { ReasoningMessagePartProps } from "@assistant-ui/react";
+import type { ReasoningMessagePartProps } from "../../runtime/types";
 import type { ReactElement } from "react";
 import { Streamdown } from "streamdown";
 

@@ -1,4 +1,4 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "../../runtime/types";
 import { Button, classNames } from "@enterprise-search/design-system";
 import { useMemo, useState, type FormEvent, type ReactElement } from "react";
 import { Streamdown } from "streamdown";

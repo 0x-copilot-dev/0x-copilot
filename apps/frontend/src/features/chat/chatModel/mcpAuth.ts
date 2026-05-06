@@ -1,5 +1,5 @@
 import type { ApprovalDecision, McpServer } from "@enterprise-search/api-types";
-import type { MessageStatus as AssistantMessageStatus } from "@assistant-ui/react";
+import type { MessageStatus as AssistantMessageStatus } from "../runtime/types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { isToolCallPart, jsonArgs, sameText } from "./recordHelpers";
 import { hasPendingAction } from "./status";

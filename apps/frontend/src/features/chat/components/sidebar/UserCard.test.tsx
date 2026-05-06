@@ -68,7 +68,7 @@ describe("UserCard", () => {
 
   it("toggles popover on trigger click", async () => {
     setIdentity();
-    mockListMyWorkspaces.mockResolvedValueOnce({ workspaces: [] });
+    mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const user = userEvent.setup();
     render(<UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />);
     expect(screen.queryByTestId("user-menu")).toBeNull();
@@ -82,7 +82,7 @@ describe("UserCard", () => {
       identity: baseIdentity,
       logout,
     });
-    mockListMyWorkspaces.mockResolvedValueOnce({ workspaces: [] });
+    mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const user = userEvent.setup();
     render(<UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />);
     await user.click(screen.getByRole("button", { expanded: false }));
@@ -92,7 +92,7 @@ describe("UserCard", () => {
 
   it("invokes onOpenSettings on Settings click", async () => {
     setIdentity();
-    mockListMyWorkspaces.mockResolvedValueOnce({ workspaces: [] });
+    mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const onOpenSettings = vi.fn();
     const user = userEvent.setup();
     render(
@@ -108,7 +108,7 @@ describe("UserCard", () => {
   // the prop to the picker so consumers can wire it.
   it("forwards onSwitchWorkspace into the WorkspacePicker", async () => {
     setIdentity();
-    mockListMyWorkspaces.mockResolvedValueOnce({
+    mockListMyWorkspaces.mockResolvedValue({
       workspaces: [
         {
           org_id: "org_personal",

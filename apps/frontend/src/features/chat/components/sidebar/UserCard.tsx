@@ -1,7 +1,8 @@
-import { AppIcon, Menu } from "@enterprise-search/design-system";
+import { Menu } from "@enterprise-search/design-system";
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { getMyProfile } from "../../../../api/meApi";
+import { listMyWorkspaces } from "../../../../api/meApi";
 import { useAuth } from "../../../auth/AuthContext";
+import { useMyProfile } from "../../../auth/useMyProfile";
 import { DevPersonaSwitcher } from "./DevPersonaSwitcher";
 import { WorkspacePicker } from "./WorkspacePicker";
 
@@ -12,16 +13,16 @@ import { WorkspacePicker } from "./WorkspacePicker";
  * `<workspace> · <role>` sub. Opens an anchored popover with workspace
  * switcher / Settings / Sign out.
  *
- * Identity sources, in priority order:
- *   1. `getMyProfile()` (lazy `/v1/me/profile`) for `display_name`. The
- *      profile lives on the backend `users` row; we keep a per-mount
- *      snapshot — no global cache, no churn.
- *   2. `useAuth()` for the bearer-derived role + org/user fallback.
+ * Identity sources (priority order):
+ *   1. shared `useMyProfile()` (lazy `/v1/me/profile`) for `display_name`.
+ *   2. `useMyCurrentWorkspaceName()` (lazy `/v1/me/workspaces`) for the
+ *      friendly workspace name (PR 8.0.2 — was rendering raw org_id).
+ *   3. `useAuth()` for the bearer-derived role + org/user fallback.
  *
- * All sources degrade gracefully — when the profile request hasn't
- * returned yet (or the endpoint isn't wired in dev), the chip falls
- * back to user_id / org_id so it never goes blank. The chip
- * re-renders on resolution.
+ * All sources degrade gracefully — when a request hasn't returned yet
+ * (or the endpoint isn't wired in dev), the chip falls back to
+ * user_id / org_id so it never goes blank. The chip re-renders on
+ * resolution.
  */
 export function UserCard({
   onOpenSettings,
@@ -34,6 +35,9 @@ export function UserCard({
   const profile = useMyProfile();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const workspaceName = useMyCurrentWorkspaceName(
+    auth.identity?.org_id ?? null,
+  );
 
   if (auth.identity === null) {
     return null;
@@ -43,6 +47,7 @@ export function UserCard({
   const orgId = auth.identity.org_id;
   const role = auth.identity.roles[0] ?? null;
   const displayName = profile?.display_name?.trim() || userId;
+  const orgLabel = workspaceName ?? orgId;
   const initials = computeInitials(displayName);
 
   return (
@@ -55,11 +60,16 @@ export function UserCard({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <AppIcon name={initials} />
+        <span
+          className="ui-app-icon aui-user-card__avatar"
+          aria-label={displayName}
+        >
+          {initials}
+        </span>
         <span className="aui-user-card__body">
           <span className="aui-user-card__name">{displayName}</span>
           <span className="aui-user-card__sub">
-            {orgId}
+            {orgLabel}
             {role ? ` · ${capitalize(role)}` : ""}
           </span>
         </span>
@@ -112,43 +122,33 @@ export function UserCard({
   );
 }
 
-interface ProfileSnapshot {
-  display_name: string | null;
-}
-
-/** Lazy `/v1/me/profile` fetch keyed on the bearer's user_id.
- * Returns null until the first response lands; failures swallow
- * silently — the card has a safe fallback. */
-function useMyProfile(): ProfileSnapshot | null {
-  const auth = useAuth();
-  const userId = auth.identity?.user_id ?? null;
-  const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
-
+/** Lazy `/v1/me/workspaces` fetch keyed on the bearer's org_id. The
+ * `WorkspacePicker` mounted inside the same UserCard popover already
+ * fetches the same endpoint; the browser dedupes the concurrent
+ * requests so we don't pay twice. */
+function useMyCurrentWorkspaceName(orgId: string | null): string | null {
+  const [name, setName] = useState<string | null>(null);
   useEffect(() => {
-    if (userId === null) {
-      setProfile(null);
+    if (orgId === null) {
+      setName(null);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const response = await getMyProfile();
-        if (cancelled) {
-          return;
-        }
-        setProfile({ display_name: response.display_name });
+        const response = await listMyWorkspaces();
+        if (cancelled) return;
+        const current = response.workspaces.find((w) => w.org_id === orgId);
+        setName(current?.display_name?.trim() ?? null);
       } catch {
-        if (!cancelled) {
-          setProfile(null);
-        }
+        if (!cancelled) setName(null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId]);
-
-  return profile;
+  }, [orgId]);
+  return name;
 }
 
 /** Two-letter initials from a display name; falls back to first char. */
