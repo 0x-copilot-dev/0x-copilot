@@ -22,3 +22,17 @@ export {
   AtlasWebSpeechDictationAdapter,
   type AtlasDictationOptions,
 } from "./dictation";
+
+export {
+  ActionBar,
+  ActionBarCopy,
+  ActionBarReload,
+  Message,
+  MessageAttachments,
+  MessageContext,
+  MessageParts,
+  useMessage,
+  type MessageContextValue,
+  type MessagePartsComponents,
+  type MessageProps,
+} from "./components";

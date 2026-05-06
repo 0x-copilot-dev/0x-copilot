@@ -13,28 +13,20 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { ComponentType, ReactNode } from "react";
 import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 
-vi.mock("@assistant-ui/react", () => ({
-  MessagePrimitive: {
-    Root: ({
-      children,
-      className,
-    }: {
-      children: ReactNode;
-      className?: string;
-    }) => (
-      <div className={className} data-testid="message-root">
-        {children}
-      </div>
-    ),
-    Parts: () => <span data-testid="parts" />,
-  },
-}));
+// Stub the parts walker; AssistantMessage's body is not what this
+// integration test exercises (we assert MessageSourcesStrip mount).
+vi.mock("./runtime/components", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    MessageParts: () => <span data-testid="parts" />,
+  };
+});
 // Stub heavy children — we only assert the strip mount.
 vi.mock("./components/markdown/MarkdownText", () => ({
   MarkdownText: () => null,
@@ -148,7 +140,12 @@ describe("AssistantMessage integration (PR 3.5 / G9)", () => {
         terminalRuns={new Set([RUN_ID])}
       >
         <AssistantMessage
-          message={{ status: message.status, metadata: message.metadata }}
+          message={{
+            role: "assistant",
+            content: [],
+            status: message.status,
+            metadata: message.metadata,
+          }}
           onMcpAuthConnect={async () => undefined}
           onMcpAuthSkip={async () => undefined}
         />

@@ -1122,14 +1122,8 @@ export function ChatScreen({
   );
   const depthVisible = modelSupportsDepth(selectedModel);
 
-  const runtime = useExternalStoreRuntime<ChatThreadMessage>({
-    messages: threadMessages,
-    convertMessage: (message) => message,
-    setMessages: (messages) => setItems(threadMessagesToChatItems(messages)),
-    isRunning: activeRunId !== null,
-    onNew,
-    onEdit,
-    onReload: async (parentId) => {
+  const handleReload = useCallback(
+    async (parentId?: string | null): Promise<void> => {
       if (activeRunId !== null || conversationId === null) {
         return;
       }
@@ -1161,7 +1155,27 @@ export function ChatScreen({
       setStatus("Queued...");
       startEventStream(run.run_id, latestSequenceRef.current);
     },
-    onResumeToolCall: ({ payload }) => {
+    [
+      activeRunId,
+      conversationId,
+      depth,
+      identity,
+      items,
+      selectedModelId,
+      startEventStream,
+    ],
+  );
+
+  /**
+   * Tool-call interrupt resolution. The footer-button → `<MessageParts>` →
+   * tool renderer chain calls this with the tool's `resume` payload; we
+   * dispatch by approval_kind to the matching decision handler. The same
+   * shape is also forwarded into `useExternalStoreRuntime` so the
+   * assistant-ui primitive paths still functioning during migration
+   * keep working.
+   */
+  const handleResumeToolCall = useCallback(
+    (payload: unknown): void => {
       if (isMcpAuthResumePayload(payload)) {
         void onMcpAuthDecision(payload.approval_id, payload.decision);
         return;
@@ -1175,6 +1189,40 @@ export function ChatScreen({
         );
       }
     },
+    // onApprovalDecision / onMcpAuthDecision are stable function refs in
+    // this component (declared with useCallback or as named functions),
+    // so we omit them from the dep list to avoid resurrecting them on
+    // every render and re-creating the runtime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /**
+   * Footer Reload click handler. ThreadBody passes the assistant
+   * message id; we resolve the parent user message via `parentId` on
+   * the assistant's `ChatItem` row.
+   */
+  const handleReloadFromAssistant = useCallback(
+    (assistantMessageId: string): void => {
+      const item = items.find(
+        (candidate): candidate is Extract<ChatItem, { kind: "message" }> =>
+          candidate.kind === "message" && candidate.id === assistantMessageId,
+      );
+      const parentId = item?.parentId ?? undefined;
+      void handleReload(parentId ?? undefined);
+    },
+    [handleReload, items],
+  );
+
+  const runtime = useExternalStoreRuntime<ChatThreadMessage>({
+    messages: threadMessages,
+    convertMessage: (message) => message,
+    setMessages: (messages) => setItems(threadMessagesToChatItems(messages)),
+    isRunning: activeRunId !== null,
+    onNew,
+    onEdit,
+    onReload: handleReload,
+    onResumeToolCall: ({ payload }) => handleResumeToolCall(payload),
     onCancel,
     adapters: {
       attachments: attachmentAdapter,
@@ -1341,6 +1389,8 @@ export function ChatScreen({
                   ) : null
                 }
                 onSelectSuggestion={(prompt) => void onSelectSuggestion(prompt)}
+                onResumeToolCall={handleResumeToolCall}
+                onReload={handleReloadFromAssistant}
               />
             </CitationsProvider>
           </AssistantThread>

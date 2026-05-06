@@ -1,8 +1,8 @@
 import {
-  MessagePrimitive,
   SelectionToolbarPrimitive,
   ThreadPrimitive,
 } from "@assistant-ui/react";
+import { Message, MessageParts } from "../../runtime/components";
 import type { McpServer, Skill } from "@enterprise-search/api-types";
 import type { ReactElement, ReactNode } from "react";
 import {
@@ -46,6 +46,8 @@ export function ThreadBody({
   depthVisible,
   controlsDisabled,
   onSelectSuggestion,
+  onResumeToolCall,
+  onReload,
 }: {
   connectors: {
     servers: McpServer[];
@@ -97,6 +99,20 @@ export function ThreadBody({
    * runtime append.
    */
   onSelectSuggestion?: (prompt: string) => void;
+  /**
+   * Tool-call interrupt resolution. Wired through `MessageContext` so
+   * approval / mcp-auth / ask-a-question tool renderers can ship the
+   * user's decision back to the host's resume pipeline. Optional —
+   * preview / shared-thread mounts pass nothing and tools become
+   * read-only.
+   */
+  onResumeToolCall?: (payload: unknown) => void;
+  /**
+   * Footer Reload button handler. The host is given the assistant
+   * message id so it can resolve the parent user message and start a
+   * new run. Optional — preview / shared-thread mounts hide the button.
+   */
+  onReload?: (assistantMessageId: string) => void;
 }): ReactElement {
   // Pull the first-token of the signed-in user's display_name for the
   // welcome greeting. PR 8.0.2 — try the session identity first (cheap,
@@ -133,14 +149,14 @@ export function ThreadBody({
               return message.composer.isEditing ? (
                 <UserEditComposer />
               ) : (
-                <UserMessage />
+                <UserMessage message={message} />
               );
             }
             if (message.role === "system") {
               return (
-                <MessagePrimitive.Root className="aui-system-message">
-                  <MessagePrimitive.Parts components={{ Text: PlainText }} />
-                </MessagePrimitive.Root>
+                <Message message={message} className="aui-system-message">
+                  <MessageParts components={{ Text: PlainText }} />
+                </Message>
               );
             }
             return (
@@ -149,6 +165,8 @@ export function ThreadBody({
                 onMcpAuthConnect={onMcpAuthConnect}
                 onMcpAuthSkip={onMcpAuthSkip}
                 onOpenSources={onOpenSources}
+                onResumeToolCall={onResumeToolCall}
+                onReload={onReload ? () => onReload(message.id) : undefined}
               />
             );
           }}

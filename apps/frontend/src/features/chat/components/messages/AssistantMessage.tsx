@@ -1,6 +1,6 @@
-import { MessagePrimitive } from "@assistant-ui/react";
-import type { ThreadMessageLike } from "../../runtime/types";
 import type { ReactElement } from "react";
+import { Message, MessageParts } from "../../runtime/components";
+import type { ThreadMessageLike } from "../../runtime/types";
 import {
   isTerminalAssistantStatus,
   performanceMetricsFromMetadata,
@@ -25,11 +25,10 @@ export function AssistantMessage({
   onMcpAuthConnect,
   onMcpAuthSkip,
   onOpenSources,
+  onResumeToolCall,
+  onReload,
 }: {
-  message: {
-    metadata?: ThreadMessageLike["metadata"];
-    status?: ThreadMessageLike["status"];
-  };
+  message: ThreadMessageLike;
   onMcpAuthConnect: (payload: {
     approvalId: string;
     serverId: string;
@@ -45,6 +44,18 @@ export function AssistantMessage({
    * non-pane mounts silently degrade.
    */
   onOpenSources?: (citationId: string) => void;
+  /**
+   * Wired by the host (`ChatScreen`). Called by tool renderers when the
+   * user resolves an interrupt — approval decision, MCP-auth choice,
+   * ask-a-question answer. Forwarded into the runtime's resume pipeline.
+   */
+  onResumeToolCall?: (payload: unknown) => void;
+  /**
+   * Footer Reload button handler. Calls `runtime.reload(messageId)` via
+   * the host. Optional — when omitted the Reload button is hidden so
+   * read-only previews stay clean.
+   */
+  onReload?: () => void;
 }): ReactElement {
   const metrics = performanceMetricsFromMetadata(message.metadata);
   const showFooter = isTerminalAssistantStatus(message.status);
@@ -55,12 +66,16 @@ export function AssistantMessage({
   const sealedCitations = useRunCitations(runId, { sealedOnly: true });
   const showStrip = showFooter && sealedCitations.length > 0;
   return (
-    <MessagePrimitive.Root className="aui-message aui-message--assistant">
+    <Message
+      message={message}
+      className="aui-message aui-message--assistant"
+      onResumeToolCall={onResumeToolCall}
+    >
       <span className="aui-message__avatar" aria-hidden="true">
         <LogoMark compact />
       </span>
       <div className="aui-message__body">
-        <MessagePrimitive.Parts
+        <MessageParts
           components={{
             Text: MarkdownText,
             Reasoning,
@@ -93,8 +108,14 @@ export function AssistantMessage({
           onSelect={(citation) => onOpenSources?.(citation.citation_id)}
         />
       ) : null}
-      {showFooter ? <AssistantMessageFooter metrics={metrics} /> : null}
-    </MessagePrimitive.Root>
+      {showFooter ? (
+        <AssistantMessageFooter
+          metrics={metrics}
+          getText={() => textFromMessage(message)}
+          onReload={onReload}
+        />
+      ) : null}
+    </Message>
   );
 }
 
@@ -103,4 +124,21 @@ function readRunId(
 ): string | undefined {
   const value = metadata?.custom?.run_id;
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function textFromMessage(message: ThreadMessageLike): string {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!content) {
+    return "";
+  }
+  const out: string[] = [];
+  for (const part of content) {
+    if (part.type === "text") {
+      out.push(part.text);
+    }
+  }
+  return out.join("\n");
 }

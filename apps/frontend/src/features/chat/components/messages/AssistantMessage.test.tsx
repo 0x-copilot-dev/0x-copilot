@@ -10,28 +10,21 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { ComponentType, ReactNode } from "react";
 import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 
-vi.mock("@assistant-ui/react", () => ({
-  MessagePrimitive: {
-    Root: ({
-      children,
-      className,
-    }: {
-      children: ReactNode;
-      className?: string;
-    }) => (
-      <div className={className} data-testid="message-root">
-        {children}
-      </div>
-    ),
-    Parts: () => <span data-testid="parts" />,
-  },
-}));
+// Stub the parts walker so we exercise only the strip-mount branch and
+// the class contract. The real walker is covered by its own tests; here
+// we just need a sentinel so AssistantMessage's body renders.
+vi.mock("../../runtime/components", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    MessageParts: () => <span data-testid="parts" />,
+  };
+});
 
 // Stub everything `AssistantMessage` imports so we exercise only the
 // strip-mount branch and the class contract. The real MarkdownText /
@@ -123,6 +116,8 @@ function renderWith(props: {
     >
       <AssistantMessage
         message={{
+          role: "assistant",
+          content: [],
           status: props.status as never,
           metadata: props.runId
             ? { custom: { run_id: props.runId } }
@@ -137,10 +132,10 @@ function renderWith(props: {
 
 describe("AssistantMessage", () => {
   it("renders the flush-left class contract that styles.css keys off", () => {
-    renderWith({ status: { type: "complete" } });
-    const root = screen.getByTestId("message-root");
-    expect(root.className).toContain("aui-message");
-    expect(root.className).toContain("aui-message--assistant");
+    const { container } = renderWith({ status: { type: "complete" } });
+    const root = container.querySelector(".aui-message");
+    expect(root).not.toBeNull();
+    expect(root!.className).toContain("aui-message--assistant");
   });
 
   it("does not render MessageSourcesStrip mid-stream (status running)", () => {

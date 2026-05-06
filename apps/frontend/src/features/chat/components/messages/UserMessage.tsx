@@ -1,17 +1,26 @@
-import { MessagePrimitive } from "@assistant-ui/react";
 import type { ReactElement } from "react";
+import {
+  Message,
+  MessageAttachments,
+  MessageParts,
+} from "../../runtime/components";
+import type { ThreadMessageLike } from "../../runtime/types";
 import { PlainText } from "../markdown/PlainText";
 import { AttachmentPill } from "../composer/AttachmentPill";
 
-export function UserMessage(): ReactElement {
+export function UserMessage({
+  message,
+}: {
+  message: ThreadMessageLike;
+}): ReactElement {
   return (
-    <MessagePrimitive.Root className="aui-message aui-message--user">
+    <Message message={message} className="aui-message aui-message--user">
       <div className="aui-message__body">
-        <MessagePrimitive.Attachments>
+        <MessageAttachments>
           {({ attachment }) => <AttachmentPill attachment={attachment} />}
-        </MessagePrimitive.Attachments>
-        <MessagePrimitive.Parts components={{ Text: PlainText }} />
+        </MessageAttachments>
+        <MessageParts components={{ Text: PlainText }} />
       </div>
-    </MessagePrimitive.Root>
+    </Message>
   );
 }

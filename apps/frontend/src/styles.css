@@ -797,6 +797,115 @@ p {
   color: var(--color-text);
 }
 
+/* PR 8.0.2 — UserCard layout. Was previously unstyled (bare spans
+ * collapsed onto one inline line — `Sarah ChenACME Inc.`). Now: avatar
+ * column · body column · chevron column; body stacks name above sub. */
+.aui-user-card {
+  margin-top: auto;
+  padding-top: var(--space-sm);
+}
+
+.aui-user-card__trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  width: 100%;
+}
+
+.aui-user-card__trigger:hover {
+  background: var(--color-surface-muted);
+}
+
+.aui-user-card__trigger[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+}
+
+.aui-user-card__avatar {
+  /* Override the design-system .ui-app-icon defaults so the user
+   * initials read as a small accent chip rather than a generic grey
+   * circle. */
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  height: 1.5rem;
+  width: 1.5rem;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.aui-user-card__body {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.aui-user-card__name {
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-user-card__sub {
+  color: var(--color-text-subtle);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* PR 8.0.2 — sidebar conversation groups. The list was inheriting the
+ * browser's default `<ul>` styling (disc bullets + 40px padding-left)
+ * because nothing scoped here ever touched it. Strip both. */
+.aui-conversation-groups {
+  display: grid;
+  gap: var(--space-md);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.aui-conversation-group {
+  display: grid;
+  gap: 2px;
+}
+
+.aui-conversation-group__heading {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.25rem;
+  padding: 0 0.625rem;
+  text-transform: uppercase;
+}
+
+.aui-conversation-group__list {
+  display: grid;
+  gap: 1px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aui-conversation-group__list > li {
+  list-style: none;
+}
+
 .aui-chat-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

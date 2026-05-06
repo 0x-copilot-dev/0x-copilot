@@ -1,9 +1,15 @@
-import { ComposerPrimitive, MessagePrimitive } from "@assistant-ui/react";
+import { ComposerPrimitive } from "@assistant-ui/react";
 import type { ReactElement } from "react";
 
+/**
+ * Inline edit composer for a user message. The outer wrapper is a plain
+ * div — it carries only the visual class. The inner `ComposerPrimitive`
+ * is what owns edit state today (replaced in Phase 4 of the
+ * `@assistant-ui/react` migration).
+ */
 export function UserEditComposer(): ReactElement {
   return (
-    <MessagePrimitive.Root className="aui-message aui-message--user">
+    <div className="aui-message aui-message--user">
       <ComposerPrimitive.Root className="aui-edit-composer">
         <ComposerPrimitive.Input
           className="aui-composer__input"
@@ -26,6 +32,6 @@ export function UserEditComposer(): ReactElement {
           </ComposerPrimitive.Send>
         </div>
       </ComposerPrimitive.Root>
-    </MessagePrimitive.Root>
+    </div>
   );
 }
