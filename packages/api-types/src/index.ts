@@ -119,7 +119,8 @@ export type RuntimeActivityKind =
   | "approval"
   | "heartbeat"
   | "event"
-  | "draft";
+  | "draft"
+  | "note";
 export type RuntimeEventSource =
   | "main_agent"
   | "runtime"
@@ -163,7 +164,10 @@ export type RuntimeApiEventType =
   | "budget_warning"
   | "run_rejected"
   | "source_ingested"
-  | "draft_updated";
+  | "draft_updated"
+  | "compression_note"
+  | "subagent_fleet_started"
+  | "subagent_fleet_finished";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -211,6 +215,9 @@ export const RUNTIME_API_EVENT_TYPES = [
   "run_rejected",
   "source_ingested",
   "draft_updated",
+  "compression_note",
+  "subagent_fleet_started",
+  "subagent_fleet_finished",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -224,6 +231,7 @@ export const RUNTIME_ACTIVITY_KINDS = [
   "heartbeat",
   "event",
   "draft",
+  "note",
 ] as const satisfies readonly RuntimeActivityKind[];
 
 // PR 1.4 — two-stage approval forwarding. The "forwarded" decision is an
@@ -305,6 +313,11 @@ export interface Conversation {
    */
   enabled_connectors?: ConversationConnectorScopes;
   connectors_updated_at?: string | null;
+  /** PR A3 — id of the message this conversation was self-forked from
+   * ("retry from here" / "fork to new chat"). Mutually exclusive with
+   * forked_from_share_id (declared below); both nullable for non-fork
+   * rows. */
+  forked_from_message_id?: string | null;
   /**
    * PR 1.6 — conversation lifecycle additions. ``deleted_at`` is the
    * soft-delete tombstone (the C8 retention sweeper reaps the row on
@@ -1431,6 +1444,35 @@ export interface RuntimeEventPayloadByType {
   run_rejected: RunRejectedPayload;
   source_ingested: SourceIngestedPayload;
   draft_updated: DraftUpdatedPayload;
+  /** PR A1 — context-compression note. Server-emitted when the
+   * memory-compression hook redacts older context; FE renders an
+   * inline `<NoteCard>`. Payload mirrors `CompressionEventRecord`
+   * (before/after tokens, strategy, optional summary). */
+  compression_note: CompressionNotePayload;
+  /** PR A2 — parallel subagent fleet bookends. Children carry
+   * `parent_fleet_id` for grouping. */
+  subagent_fleet_started: SubagentFleetStartedPayload;
+  subagent_fleet_finished: SubagentFleetFinishedPayload;
+}
+
+export interface CompressionNotePayload {
+  before_tokens: number;
+  after_tokens: number;
+  strategy: string;
+  summary?: string | null;
+  payload_refs?: Record<string, unknown>;
+}
+
+export interface SubagentFleetStartedPayload {
+  fleet_id: string;
+  title: string;
+  sub?: string | null;
+  agent_ids: readonly string[];
+}
+
+export interface SubagentFleetFinishedPayload {
+  fleet_id: string;
+  elapsed?: string | null;
 }
 
 // PR 1.3 — Workspace-pane Draft artifact contracts. Mirrors
@@ -2433,4 +2475,159 @@ export interface ListAuditEventsResponse {
   has_more: boolean;
   /** Streams whose underlying store was unavailable on this read. */
   degraded_streams: string[];
+}
+
+// =====================================================================
+// PR B1 — tool-use policy (workspace default + per-user override).
+// =====================================================================
+
+export type ToolPolicyKind = "read" | "write" | "destructive";
+export type ToolPolicyMode = "auto" | "ask" | "require" | "block";
+
+export interface ToolUsePolicyEntry {
+  kind: ToolPolicyKind;
+  mode: ToolPolicyMode;
+  updated_at: string;
+  updated_by_user_id: string | null;
+}
+
+/** Workspace-level (admin) and per-user policy share the same shape;
+ * the route discriminates the scope. */
+export interface ToolUsePolicyResponse {
+  scope: "workspace" | "user";
+  org_id: string;
+  user_id: string | null;
+  policies: ToolUsePolicyEntry[];
+}
+
+export interface UpdateToolUsePolicyRequest {
+  policies: Array<{ kind: ToolPolicyKind; mode: ToolPolicyMode }>;
+}
+
+// =====================================================================
+// PR B2 — privacy & data settings (workspace default + per-user override).
+// =====================================================================
+
+export type DataResidencyRegion = "us-east-1" | "eu-west-1" | "ap-northeast-1";
+
+export interface PrivacySettingsResponse {
+  scope: "workspace" | "user";
+  org_id: string;
+  user_id: string | null;
+  training_opt_out: boolean;
+  region: DataResidencyRegion | null;
+  retention_days: number | null;
+  share_metadata: boolean;
+  memory_enabled: boolean;
+  updated_at: string;
+}
+
+export interface UpdatePrivacySettingsRequest {
+  training_opt_out?: boolean;
+  region?: DataResidencyRegion | null;
+  retention_days?: number | null;
+  share_metadata?: boolean;
+  memory_enabled?: boolean;
+}
+
+// =====================================================================
+// PR B3 — personal API keys (atlas_pk_… bearer for CI / scripts).
+// =====================================================================
+
+export interface ApiKeySummary {
+  id: string;
+  label: string;
+  key_prefix: string;
+  scopes: readonly string[];
+  last_used_at: string | null;
+  created_at: string;
+  rotated_from_id: string | null;
+}
+
+export interface ApiKeyListResponse {
+  keys: ApiKeySummary[];
+}
+
+export interface CreateApiKeyRequest {
+  label: string;
+  scopes?: readonly string[];
+}
+
+export interface CreateApiKeyResponse {
+  key: ApiKeySummary;
+  /** Plaintext secret. Returned ONCE — the server stores only the hash. */
+  plaintext: string;
+}
+
+// =====================================================================
+// PR B4 — notification preferences v2 + quiet hours.
+// =====================================================================
+
+/** PR B4 channel set. Distinct from the legacy `NotificationChannel`
+ * (which is "email" | "slack" | "desktop"); the v2 dispatcher targets
+ * in-app / email / push instead. */
+export type NotificationChannelV2 = "in_app" | "email" | "push";
+export type NotificationEventKind =
+  | "long_task_finished"
+  | "approval_requested"
+  | "mention"
+  | "connector_error"
+  | "weekly_digest"
+  | "product_updates";
+
+export interface NotificationPreferenceEntry {
+  event_kind: NotificationEventKind;
+  channel: NotificationChannelV2;
+  enabled: boolean;
+}
+
+export interface NotificationQuietHours {
+  enabled: boolean;
+  from_local: string; // HH:MM 24h
+  to_local: string; // HH:MM 24h
+  tz: string; // IANA tz id
+}
+
+export interface NotificationPreferencesResponse {
+  user_id: string;
+  preferences: NotificationPreferenceEntry[];
+  quiet_hours: NotificationQuietHours;
+}
+
+export interface UpdateNotificationPreferencesRequest {
+  preferences?: NotificationPreferenceEntry[];
+  quiet_hours?: NotificationQuietHours;
+}
+
+// =====================================================================
+// PR B5 — unified audit-log read-model (workspace admin).
+// =====================================================================
+
+export type AuditEventKind =
+  | "identity"
+  | "mcp"
+  | "skill"
+  | "deploy"
+  | "approval"
+  | "connector"
+  | "tool_policy"
+  | "api_key"
+  | "privacy"
+  | "share";
+
+export interface AuditEventRow {
+  event_id: string;
+  event_kind: AuditEventKind;
+  action: string;
+  actor_user_id: string | null;
+  subject: string | null;
+  metadata: Record<string, unknown>;
+  occurred_at: string;
+  chain_seq: number;
+}
+
+export interface AuditEventListResponse {
+  events: AuditEventRow[];
+  next_cursor: string | null;
+  has_more: boolean;
 }

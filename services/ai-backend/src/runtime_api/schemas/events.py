@@ -243,6 +243,11 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.SUBAGENT_STARTED,
             RuntimeApiEventType.SUBAGENT_PROGRESS,
             RuntimeApiEventType.SUBAGENT_COMPLETED,
+            # PR A2 — fleet group bookends share the SUBAGENT bucket so
+            # the FE can render fleets and singletons through the same
+            # reducer; per-event `parent_fleet_id` discriminates.
+            RuntimeApiEventType.SUBAGENT_FLEET_STARTED,
+            RuntimeApiEventType.SUBAGENT_FLEET_FINISHED,
         }:
             return RuntimeActivityKind.SUBAGENT
         if event_type in {

@@ -100,6 +100,13 @@ class RuntimeApiEventType(StrEnum):
     SUBAGENT_STARTED = "subagent_started"
     SUBAGENT_PROGRESS = "subagent_progress"
     SUBAGENT_COMPLETED = "subagent_completed"
+    # PR A2 — parallel-batch grouping. When the orchestrator dispatches
+    # > 1 subagent in a single tick, it wraps them in a fleet so the FE
+    # can render a single `<SubagentFleetCard>` instead of N siblings.
+    # Each child subagent event carries `parent_fleet_id` in
+    # `payload.parent_fleet_id` for binding.
+    SUBAGENT_FLEET_STARTED = "subagent_fleet_started"
+    SUBAGENT_FLEET_FINISHED = "subagent_fleet_finished"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
     # PR 1.4 — two-stage approval forwarding. Emitted between

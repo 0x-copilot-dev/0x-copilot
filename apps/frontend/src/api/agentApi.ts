@@ -159,6 +159,28 @@ export function forkShare(
   );
 }
 
+/**
+ * PR A3 — self-fork. The user picks "retry from here" or "fork to new
+ * chat" on a message in their own conversation. Server creates a new
+ * conversation seeded with the messages up to (and including)
+ * `from_message_id`, optionally overriding model + connector scopes
+ * for the next run. Returns the new conversation id.
+ */
+export interface SelfForkRequest {
+  from_message_id: string;
+  model?: string | null;
+  enabled_connectors?: Record<string, readonly string[] | null> | null;
+}
+export function forkConversationFromMessage(
+  conversationId: string,
+  request: SelfForkRequest,
+): Promise<ForkResponse> {
+  return httpPost<ForkResponse>(
+    `/v1/agent/conversations/${encodeURIComponent(conversationId)}/fork`,
+    request,
+  );
+}
+
 /** B5: per-conversation `/context` slash-command panel data. */
 export function getConversationContext(
   conversationId: string,
