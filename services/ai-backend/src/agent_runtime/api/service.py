@@ -154,11 +154,10 @@ class RuntimeApiService:
         self._notifications: NotificationDispatcher = (
             notification_dispatcher or LoggingNotificationDispatcher()
         )
-        # PR 8.0.5 — late import to avoid a cycle: the resolver module
-        # imports from ``execution.contracts`` which lives upstream of
-        # this file in the dep graph, but the constructor is reached
-        # at module-init time so we keep the import local.
-
+        # PR 8.0.5 — fall back to the no-op resolver so unit tests that
+        # don't exercise the runtime-policy path keep their existing
+        # wiring; production wires ``HttpUserPoliciesResolver`` via the
+        # app factory.
         self._user_policies_resolver: UserPoliciesResolver = (
             user_policies_resolver or NullUserPoliciesResolver()
         )
