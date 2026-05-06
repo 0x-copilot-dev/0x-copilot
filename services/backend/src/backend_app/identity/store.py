@@ -167,8 +167,23 @@ class IdentityStore(Protocol):
         self, record: IdentityAuditEventRecord, *, conn: Any | None = None
     ) -> IdentityAuditEventRecord: ...
     def list_identity_audit(
-        self, *, org_id: str, limit: int = 100
-    ) -> tuple[IdentityAuditEventRecord, ...]: ...
+        self,
+        *,
+        org_id: str,
+        limit: int = 100,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before: datetime | None = None,
+    ) -> tuple[IdentityAuditEventRecord, ...]:
+        """List audit rows for ``org_id`` newest-first.
+
+        Filters compose; ``before`` is the keyset-pagination cursor
+        (returns rows with ``created_at < before``). ``since`` /
+        ``until`` are an absolute time window.
+        """
+        ...
 
     # Login attempts ----------------------------------------------------
     def append_login_attempt(
@@ -599,10 +614,33 @@ class InMemoryIdentityStore:
         return record
 
     def list_identity_audit(
-        self, *, org_id: str, limit: int = 100
+        self,
+        *,
+        org_id: str,
+        limit: int = 100,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before: datetime | None = None,
     ) -> tuple[IdentityAuditEventRecord, ...]:
+        def _matches(r: IdentityAuditEventRecord) -> bool:
+            if r.org_id != org_id:
+                return False
+            if action is not None and r.action != action:
+                return False
+            if actor_user_id is not None and r.actor_user_id != actor_user_id:
+                return False
+            if since is not None and r.created_at < since:
+                return False
+            if until is not None and r.created_at > until:
+                return False
+            if before is not None and r.created_at >= before:
+                return False
+            return True
+
         rows = sorted(
-            (r for r in self.identity_audit_events if r.org_id == org_id),
+            (r for r in self.identity_audit_events if _matches(r)),
             key=lambda r: r.created_at,
             reverse=True,
         )
@@ -1251,18 +1289,43 @@ class PostgresIdentityStore:
         return record
 
     def list_identity_audit(
-        self, *, org_id: str, limit: int = 100
+        self,
+        *,
+        org_id: str,
+        limit: int = 100,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before: datetime | None = None,
     ) -> tuple[IdentityAuditEventRecord, ...]:
+        # Build the WHERE clause incrementally so each filter contributes
+        # one parameterised predicate; never string-format user input.
+        where: list[str] = ["org_id = %s"]
+        params: list[Any] = [org_id]
+        if action is not None:
+            where.append("action = %s")
+            params.append(action)
+        if actor_user_id is not None:
+            where.append("actor_user_id = %s")
+            params.append(actor_user_id)
+        if since is not None:
+            where.append("created_at >= %s")
+            params.append(since)
+        if until is not None:
+            where.append("created_at <= %s")
+            params.append(until)
+        if before is not None:
+            where.append("created_at < %s")
+            params.append(before)
+        params.append(limit)
+        sql = (
+            "SELECT * FROM identity_audit_events WHERE "
+            + " AND ".join(where)
+            + " ORDER BY created_at DESC LIMIT %s"
+        )
         with self._cursor(None) as cur:
-            cur.execute(
-                """
-                SELECT * FROM identity_audit_events
-                WHERE org_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (org_id, limit),
-            )
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         return tuple(_row_to_identity_audit(row) for row in rows)
 

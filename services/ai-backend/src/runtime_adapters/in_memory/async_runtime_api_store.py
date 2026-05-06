@@ -410,6 +410,9 @@ class AsyncInMemoryRuntimeApiStore:
     async def upsert_org_daily_usage(self, row):  # type: ignore[no-untyped-def]
         self._store.upsert_org_daily_usage(row)
 
+    async def upsert_connector_daily_usage(self, row):  # type: ignore[no-untyped-def]
+        self._store.upsert_connector_daily_usage(row)
+
     async def query_user_daily_usage(
         self,
         *,
@@ -435,6 +438,42 @@ class AsyncInMemoryRuntimeApiStore:
         return self._store.query_org_daily_usage(
             org_id=org_id, start_day=start_day, end_day=end_day
         )
+
+    async def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ):  # type: ignore[no-untyped-def]
+        return self._store.query_connector_daily_usage(
+            org_id=org_id, start_day=start_day, end_day=end_day
+        )
+
+    async def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ):  # type: ignore[no-untyped-def]
+        return self._store.query_model_call_usage_for_range(
+            org_id=org_id, start=start, end=end
+        )
+
+    async def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ):  # type: ignore[no-untyped-def]
+        return self._store.query_last_completed_tool_connector_slug(
+            org_id=org_id, run_id=run_id, before=before
+        )
+
+    async def list_audit_log_events(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._store.list_audit_log_events(**kwargs)
 
     async def query_run_usage(
         self,

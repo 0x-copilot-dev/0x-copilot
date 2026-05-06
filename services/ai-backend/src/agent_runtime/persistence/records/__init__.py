@@ -64,6 +64,7 @@ from agent_runtime.persistence.records.telemetry import (
     ModelPricingRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
+    UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "ModelPricingRecord",
     "RuntimeModelCallUsageRecord",
     "RuntimeRunUsageRecord",
+    "UsageDailyConnectorRow",
     "UsageDailyOrgRow",
     "UsageDailyUserRow",
     "AuditLogRecord",

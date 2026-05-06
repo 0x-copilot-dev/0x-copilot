@@ -55,6 +55,7 @@ from runtime_api.schemas.usage import (
     ConversationUsageResponse,
     RunUsageBreakdown,
     RunUsageCallRow,
+    UsageConnectorRow,
     UsageConversationRow,
     UsageDailyRow,
     UsageMeResponse,
@@ -630,11 +631,19 @@ class UsageApiRoutes:
                 )
             )
         total = cls._totals_from_rows(rows)
+        by_connector = await cls._user_connector_breakdown(
+            persistence,
+            org_id=org_id,
+            user_id=user_id,
+            start=cls._cap_cold_start(start, end),
+            end=end,
+        )
         return UsageMeResponse(
             period=UsagePeriodWindow(start=start, end=end),
             total=total,
             by_day=cls._rows_by_day(rows),
             by_model=cls._rows_by_model(rows),
+            by_connector=by_connector,
             cold_start_fallback=cold_start,
         )
 
@@ -766,6 +775,16 @@ class UsageApiRoutes:
             runs_count=len(rows),
             cost_micro_usd=cls._sum_costs(rows),
         )
+        # Per-connector breakdown for this conversation: scan per-call
+        # rows (no rollup table for per-conversation; live computation).
+        call_rows = [
+            row
+            for row in await persistence.query_model_call_usage_for_range(
+                org_id=org_id, start=start, end=end
+            )
+            if row.conversation_id == conversation_id
+        ]
+        by_connector = cls._connector_rows_from_calls(call_rows)
         return ConversationUsageResponse(
             conversation_id=conversation_id,
             period=UsagePeriodWindow(start=start, end=end),
@@ -787,6 +806,7 @@ class UsageApiRoutes:
                 )
                 for r in rows
             ),
+            by_connector=by_connector,
         )
 
     @classmethod
@@ -820,11 +840,18 @@ class UsageApiRoutes:
                 run_rows, refreshed_at=datetime.now(timezone.utc)
             )
         total = cls._totals_from_rows(rows)
+        by_connector = await cls._org_connector_breakdown(
+            persistence,
+            org_id=org_id,
+            start=cls._cap_cold_start(start, end),
+            end=end,
+        )
         return UsageOrgResponse(
             period=UsagePeriodWindow(start=start, end=end),
             total=total,
             by_day=cls._rows_by_day(rows),
             by_model=cls._rows_by_model(rows),
+            by_connector=by_connector,
             cold_start_fallback=cold_start,
         )
 
@@ -937,6 +964,140 @@ class UsageApiRoutes:
                 continue
             total = (total or 0) + cost
         return total
+
+    @classmethod
+    async def _user_connector_breakdown(
+        cls,
+        persistence,  # type: ignore[no-untyped-def]
+        *,
+        org_id: str,
+        user_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[UsageConnectorRow, ...]:
+        """PR 7.2 — per-connector breakdown for ``/v1/usage/me``.
+
+        No per-(org, user, connector) rollup exists. We compute live
+        from per-call rows filtered to this user. The window is bounded
+        by the same cold-start cap the rest of /usage/me uses, so this
+        is at most a 30-day per-call scan.
+        """
+
+        runs = await persistence.query_run_usage_for_range(
+            org_id=org_id, user_id=user_id, start=start, end=end
+        )
+        if not runs:
+            return ()
+        run_ids = {row.run_id for row in runs}
+        call_rows = [
+            row
+            for row in await persistence.query_model_call_usage_for_range(
+                org_id=org_id, start=start, end=end
+            )
+            if row.run_id in run_ids
+        ]
+        return cls._connector_rows_from_calls(call_rows)
+
+    @classmethod
+    async def _org_connector_breakdown(
+        cls,
+        persistence,  # type: ignore[no-untyped-def]
+        *,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[UsageConnectorRow, ...]:
+        """PR 7.2 — per-connector breakdown for ``/v1/usage/org``.
+
+        Tries the rollup table first; falls back to a live scan of
+        per-call rows when empty (cold-start). Same posture as the
+        existing ``cold_start_fallback`` for the by-day / by-model
+        axes — by_connector is silently rebuilt; the response's
+        single ``cold_start_fallback`` flag covers both.
+        """
+
+        rollup_rows = await persistence.query_connector_daily_usage(
+            org_id=org_id, start_day=start, end_day=end
+        )
+        if rollup_rows:
+            return cls._connector_rows_from_rollup(rollup_rows)
+        call_rows = await persistence.query_model_call_usage_for_range(
+            org_id=org_id, start=start, end=end
+        )
+        return cls._connector_rows_from_calls(call_rows)
+
+    @classmethod
+    def _connector_rows_from_calls(cls, call_rows) -> tuple[UsageConnectorRow, ...]:  # type: ignore[no-untyped-def]
+        per_connector: dict[str, dict[str, int | None | set[str]]] = defaultdict(
+            lambda: {
+                "input": 0,
+                "output": 0,
+                "cached_input": 0,
+                "total": 0,
+                "run_ids": set(),
+                "cost_micro_usd": None,
+            }
+        )
+        for row in call_rows:
+            slug = row.connector_slug or ""
+            bucket = per_connector[slug]
+            bucket["input"] = (bucket["input"] or 0) + int(row.input_tokens)
+            bucket["output"] = (bucket["output"] or 0) + int(row.output_tokens)
+            bucket["cached_input"] = (bucket["cached_input"] or 0) + int(
+                row.cached_input_tokens
+            )
+            bucket["total"] = (bucket["total"] or 0) + int(row.total_tokens)
+            run_ids = bucket["run_ids"]
+            assert isinstance(run_ids, set)
+            run_ids.add(row.run_id)
+            if row.cost_micro_usd is not None:
+                bucket["cost_micro_usd"] = (
+                    bucket["cost_micro_usd"] or 0
+                ) + row.cost_micro_usd
+        return tuple(
+            UsageConnectorRow(
+                connector_slug=slug,
+                input=int(bucket["input"] or 0),
+                output=int(bucket["output"] or 0),
+                cached_input=int(bucket["cached_input"] or 0),
+                total=int(bucket["total"] or 0),
+                runs_count=len(bucket["run_ids"])
+                if isinstance(bucket["run_ids"], set)
+                else 0,
+                cost_micro_usd=bucket["cost_micro_usd"],
+            )
+            for slug, bucket in sorted(per_connector.items())
+        )
+
+    @classmethod
+    def _connector_rows_from_rollup(cls, rollup_rows) -> tuple[UsageConnectorRow, ...]:  # type: ignore[no-untyped-def]
+        per_connector: dict[str, dict[str, int | None]] = defaultdict(
+            lambda: {
+                "input": 0,
+                "output": 0,
+                "cached_input": 0,
+                "total": 0,
+                "runs_count": 0,
+                "cost_micro_usd": None,
+            }
+        )
+        for row in rollup_rows:
+            bucket = per_connector[row.connector_slug]
+            bucket["input"] = (bucket["input"] or 0) + int(row.input_tokens)
+            bucket["output"] = (bucket["output"] or 0) + int(row.output_tokens)
+            bucket["cached_input"] = (bucket["cached_input"] or 0) + int(
+                row.cached_input_tokens
+            )
+            bucket["total"] = (bucket["total"] or 0) + int(row.total_tokens)
+            bucket["runs_count"] = (bucket["runs_count"] or 0) + int(row.runs_count)
+            if row.cost_micro_usd is not None:
+                bucket["cost_micro_usd"] = (
+                    bucket["cost_micro_usd"] or 0
+                ) + row.cost_micro_usd
+        return tuple(
+            UsageConnectorRow(connector_slug=slug, **bucket)  # type: ignore[arg-type]
+            for slug, bucket in sorted(per_connector.items())
+        )
 
 
 class UsageApiRouter:
@@ -1298,4 +1459,11 @@ class InternalRuntimeApiRouter:
             # SIEM pump only.
             dependencies=[Depends(RequireScopes(ADMIN_AUDIT_EXPORT))],
         )
+        # PR 7.1 — paginated audit list for the in-product Settings →
+        # Members → Audit log surface. The facade composes this with
+        # the backend's four audit chains to produce the unified
+        # /v1/audit endpoint.
+        from runtime_api.http.audit_list_routes import register_audit_list_routes
+
+        register_audit_list_routes(router)
         return router

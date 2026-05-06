@@ -75,6 +75,23 @@ class UsageConversationRow(RuntimeContract):
     cost_micro_usd: int | None = None
 
 
+class UsageConnectorRow(RuntimeContract):
+    """One connector in a by-connector breakdown (PR 7.2).
+
+    ``connector_slug`` is the empty string for the "(unattributed)"
+    bucket — calls before any tool fired this turn. The frontend
+    renders the empty slug as a localised label.
+    """
+
+    connector_slug: str
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cached_input: NonNegativeInt = 0
+    total: NonNegativeInt = 0
+    runs_count: NonNegativeInt = 0
+    cost_micro_usd: int | None = None
+
+
 class UsagePeriodWindow(RuntimeContract):
     """Inclusive start, exclusive end of the period being reported."""
 
@@ -90,6 +107,7 @@ class UsageMeResponse(RuntimeContract):
     total: UsageTotals
     by_day: tuple[UsageDailyRow, ...] = ()
     by_model: tuple[UsageModelRow, ...] = ()
+    by_connector: tuple[UsageConnectorRow, ...] = ()
     cold_start_fallback: bool = Field(
         default=False,
         description=(
@@ -108,6 +126,7 @@ class UsageOrgResponse(RuntimeContract):
     by_day: tuple[UsageDailyRow, ...] = ()
     by_model: tuple[UsageModelRow, ...] = ()
     by_user: tuple[UsageConversationRow, ...] = ()
+    by_connector: tuple[UsageConnectorRow, ...] = ()
     cold_start_fallback: bool = False
 
 
@@ -159,6 +178,7 @@ class ConversationUsageResponse(RuntimeContract):
     currency: Literal["USD"] = "USD"
     total: UsageTotals
     by_run: tuple["UsageRunRow", ...] = ()
+    by_connector: tuple[UsageConnectorRow, ...] = ()
 
 
 class UsageRunRow(RuntimeContract):

@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from agent_runtime.api.async_ports import AsyncEventStorePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
+from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -32,6 +34,7 @@ class StreamingResult:
 class _Fields:
     ACTION_REQUIRED = "action_required"
     CONTENT = "content"
+    CONNECTOR_SLUG = "connector_slug"
     DELTA = "delta"
     MESSAGE = "message"
     MESSAGE_ID = "message_id"
@@ -105,7 +108,9 @@ class StreamingExecutor:
         event_store: AsyncEventStorePort,
         event_producer: RuntimeEventProducer,
         stream_event_mapper: StreamOrchestrator,
+        attribution: UsageAttributionResolver | None = None,
         track_subagents: bool = False,
+        citation_pipeline: CitationStreamPipeline | None = None,
     ) -> StreamingResult:
         result = StreamingResult()
         active_subagent_tasks: set[str] = set()
@@ -126,6 +131,7 @@ class StreamingExecutor:
                 event_producer=event_producer,
                 message_id=chunk_message_id,
                 source=chunk,
+                attribution=attribution,
             )
             latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
             candidate = stream_event_mapper.stream_result_candidate(chunk)
@@ -141,8 +147,21 @@ class StreamingExecutor:
                     event_producer=event_producer,
                     message_id=candidate_id,
                     source=candidate,
+                    attribution=attribution,
                 )
             delta = stream_event_mapper.stream_delta(chunk)
+            if citation_pipeline is not None:
+                # Hook the provider citation pipeline (PRD 01) between the
+                # parsed delta and the wire emission. The pipeline returns
+                # the (possibly rewritten) delta with ``[c<id>]`` chips
+                # appended for any native citation primitives the chunk
+                # carries; the ledger registers the source as a side
+                # effect, firing one ``source_ingested`` event per unique
+                # source. Pass-through providers (no native citations) and
+                # unbound ledgers return ``raw_delta`` unchanged.
+                delta = await citation_pipeline.adapt_chunk(
+                    chunk=chunk, raw_delta=delta
+                )
             await stream_event_mapper.append_activity_events(
                 run=run,
                 chunk=chunk,
@@ -196,6 +215,7 @@ class StreamingExecutor:
         event_producer: RuntimeEventProducer,
         message_id: str | None,
         source: object,
+        attribution: UsageAttributionResolver | None = None,
     ) -> None:
         """Emit ``MODEL_CALL_COMPLETED`` once per AIMessage with usage (B2).
 
@@ -203,7 +223,10 @@ class StreamingExecutor:
         are ignored. The payload carries the slot's accumulated counts —
         which match what the per-call row will store — wrapped in the
         existing ``AssistantPerformanceMetrics`` shape so SSE consumers
-        share the same schema as ``RUN_COMPLETED``.
+        share the same schema as ``RUN_COMPLETED``. PR 7.2 stamps the
+        connector that prompted this call onto the slot (so the eventual
+        ``runtime_model_call_usage`` row carries it) and includes it in
+        the wire payload as an additive optional field.
         """
 
         if message_id is None:
@@ -218,6 +241,12 @@ class StreamingExecutor:
         completed_at = datetime.now(timezone.utc)
         if not metrics.per_call.mark_completed(message_id, completed_at=completed_at):
             return
+        if attribution is not None and slot.connector_slug is None:
+            slot.connector_slug = await attribution.resolve(
+                org_id=run.org_id,
+                run_id=run.run_id,
+                before=completed_at,
+            )
         started_at = slot.started_at or completed_at
         duration_ms = AssistantRunMetrics._duration_ms(started_at, completed_at)
         usage_payload = {
@@ -226,18 +255,21 @@ class StreamingExecutor:
             "cached_input": slot.cached_input_tokens,
             "total": slot.total_tokens,
         }
+        performance_metrics: dict[str, object] = {
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_ms": duration_ms,
+            _Fields.USAGE: usage_payload,
+        }
+        if slot.connector_slug is not None:
+            performance_metrics[_Fields.CONNECTOR_SLUG] = slot.connector_slug
         await event_producer.append_api_event(
             run=run,
             source=StreamEventSource.MODEL,
             event_type=RuntimeApiEventType.MODEL_CALL_COMPLETED,
             payload={
                 _Fields.MESSAGE_ID: message_id,
-                _Fields.PERFORMANCE_METRICS: {
-                    "started_at": started_at.isoformat(),
-                    "completed_at": completed_at.isoformat(),
-                    "duration_ms": duration_ms,
-                    _Fields.USAGE: usage_payload,
-                },
+                _Fields.PERFORMANCE_METRICS: performance_metrics,
             },
         )
 

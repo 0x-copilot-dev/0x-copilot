@@ -1,0 +1,4 @@
+src/agent_runtime/settings.py:77: unused variable 'TEST' (60% confidence)
+src/agent_runtime/settings.py:99: unused variable 'max_parallel_subagents' (60% confidence)
+src/agent_runtime/settings.py:129: unused variable 'cache_ttl_seconds' (60% confidence)
+src/agent_runtime/settings.py:155: unused variable 'default_timeout_seconds' (60% confidence)

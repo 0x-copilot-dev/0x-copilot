@@ -753,6 +753,23 @@ export interface UsageConversationRow {
   cost_micro_usd: number | null;
 }
 
+/**
+ * One connector in a by-connector breakdown (PR 7.2).
+ *
+ * `connector_slug` is the empty string (`""`) for the "(unattributed)"
+ * bucket — calls before any tool fired this turn. The frontend renders
+ * the empty slug as a localised "Unattributed" label.
+ */
+export interface UsageConnectorRow {
+  connector_slug: string;
+  input: number;
+  output: number;
+  cached_input: number;
+  total: number;
+  runs_count: number;
+  cost_micro_usd: number | null;
+}
+
 export interface UsagePeriodWindow {
   start: string;
   end: string;
@@ -764,6 +781,7 @@ export interface UsageMeResponse {
   total: UsageTotals;
   by_day: UsageDailyRow[];
   by_model: UsageModelRow[];
+  by_connector: UsageConnectorRow[];
   cold_start_fallback: boolean;
 }
 
@@ -774,6 +792,7 @@ export interface UsageOrgResponse {
   by_day: UsageDailyRow[];
   by_model: UsageModelRow[];
   by_user: UsageConversationRow[];
+  by_connector: UsageConnectorRow[];
   cold_start_fallback: boolean;
 }
 
@@ -823,6 +842,7 @@ export interface ConversationUsageResponse {
   currency: "USD";
   total: UsageTotals;
   by_run: UsageRunRow[];
+  by_connector: UsageConnectorRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -2350,4 +2370,67 @@ export interface SessionSelectResponse {
   org_id: string;
   requires_mfa: boolean;
   expires_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// PR 7.1 — admin audit log query (Settings → Members → Audit log)
+// ---------------------------------------------------------------------------
+
+export type AuditStream =
+  | "mcp_audit_events"
+  | "skill_audit_events"
+  | "identity_audit_events"
+  | "deploy_audit_events";
+
+export type AuditOutcome = "success" | "failure" | "denied";
+export type AuditActorKind = "user" | "ci" | "system";
+
+export interface AuditChainView {
+  /** Per-stream monotonic sequence; null for streams that don't carry one. */
+  seq: number | null;
+  prev_hash: string | null;
+  signature: string | null;
+  key_version: number | null;
+}
+
+export interface AuditEvent {
+  stream: AuditStream;
+  seq: number | null;
+  audit_id: string;
+  org_id: string;
+  actor_user_id: string | null;
+  actor_kind: AuditActorKind;
+  subject_user_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  outcome: AuditOutcome;
+  metadata: Record<string, unknown>;
+  chain: AuditChainView;
+  /** RFC 3339 timestamp (UTC). */
+  created_at: string;
+}
+
+export interface ListAuditEventsRequest {
+  /** Action substring filter (server compares as a prefix match). */
+  action?: string;
+  actor_user_id?: string;
+  resource_type?: string;
+  /** RFC 3339 inclusive lower bound. */
+  since?: string;
+  /** RFC 3339 inclusive upper bound. */
+  until?: string;
+  /** Opaque cursor returned by the previous page; absent on first page. */
+  cursor?: string;
+  /** 1..200, server clamps. */
+  limit?: number;
+}
+
+export interface ListAuditEventsResponse {
+  rows: AuditEvent[];
+  /** Cursor to pass back as ``cursor=`` for the next page; null at end. */
+  next_cursor: string | null;
+  has_more: boolean;
+  /** Streams whose underlying store was unavailable on this read. */
+  degraded_streams: string[];
 }

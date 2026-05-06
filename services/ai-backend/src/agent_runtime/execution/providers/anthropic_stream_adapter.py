@@ -1,19 +1,26 @@
-"""Anthropic citations stream adapter (PR 1.1 follow-up D scaffold).
+"""Anthropic citation stream adapter (PRD 01).
 
-Wraps a raw ``AsyncAnthropic.messages.stream`` iterator, intercepts
-``content_block_delta`` events whose ``delta.type == 'citations_delta'``,
-funnels them through :class:`CitationLedger`, and substitutes the
-resulting ``[c<id>]`` token into the immediately preceding text delta.
+Consumes LangChain ``AIMessageChunk`` objects produced by
+``langchain_anthropic.ChatAnthropic``. Anthropic's native citation
+primitives arrive interleaved with text content blocks: a
+``citations_delta`` block lands either alongside the text it grounds
+(same content-block ``index``) or as a follow-on chunk whose ``text``
+is empty and whose block carries a ``citations`` list.
 
-The adapter is opt-in and provider-scoped — the rest of the runtime is
-unchanged. When the active ledger is unbound (citations disabled, or no
-run context), the adapter is a passthrough.
+The adapter:
 
-This file ships as a scaffold: the public class shape + substitution
-helper are stable so swapping LangChain's chat-model invocation for a
-direct Anthropic stream becomes a small wiring change rather than a
-design discussion. The actual model-invocation swap is tracked separately
-because it touches the runtime factory's model construction path.
+1. Detects citation blocks in ``chunk.content`` (or
+   ``chunk.message.content``).
+2. Builds a :class:`SourceRef` per citation and registers it through
+   :meth:`CitationLedger.cite`.
+3. Returns a text delta that appends the resulting ``[c<id>]`` tokens
+   immediately after the cited prose, so the FE renders the chip at the
+   end of the run that grounds it.
+
+When the active ledger is unbound (citations disabled, or no run
+context), the adapter returns ``raw_delta`` unchanged. When a chunk has
+neither citation blocks nor text, the adapter returns ``None`` to skip
+emission.
 
 References:
 - https://docs.anthropic.com/en/docs/build-with-claude/citations
@@ -22,152 +29,104 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
 
-from agent_runtime.capabilities.citations import SourceRef
-from agent_runtime.execution.providers.citation_substitution import (
-    CitationCandidate,
-    CitationSubstitution,
+from agent_runtime.capabilities.citations import CitationLedger, SourceRef
+from agent_runtime.execution.providers.citation_extraction import (
+    ChunkContentReader,
 )
 
 
-class _AnthropicFields:
-    """Stable Anthropic stream-event field names."""
+class _Fields:
+    """Stable field names on Anthropic content blocks (post-LangChain)."""
 
     TYPE = "type"
-    DELTA = "delta"
-    INDEX = "index"
-    CITATION = "citation"
-    URL = "url"
-    TITLE = "title"
-    CITED_TEXT = "cited_text"
-    DOCUMENT_INDEX = "document_index"
-    DOCUMENT_TITLE = "document_title"
-    SOURCE = "source"
+    TEXT = "text"
+    CITATIONS = "citations"
 
-    EVENT_CONTENT_BLOCK_DELTA = "content_block_delta"
-    DELTA_TEXT = "text_delta"
-    DELTA_CITATION = "citations_delta"
-    DELTA_TEXT_FIELD = "text"
+    BLOCK_TEXT = "text"
+
+    CITATION_TYPE = "type"
+    CITATION_URL = "url"
+    CITATION_TITLE = "title"
+    CITATION_DOCUMENT_TITLE = "document_title"
+    CITATION_DOCUMENT_INDEX = "document_index"
+    CITATION_CITED_TEXT = "cited_text"
+
+
+class _CitationKinds:
+    """Recognised Anthropic citation kinds."""
+
+    CHAR_LOCATION = "char_location"
+    PAGE_LOCATION = "page_location"
+    CONTENT_BLOCK_LOCATION = "content_block_location"
+    WEB_SEARCH_RESULT_LOCATION = "web_search_result_location"
 
 
 class AnthropicCitationStreamAdapter:
-    """Iterate an Anthropic stream while lifting native citations through the ledger.
+    """Lift Anthropic native citations through :class:`CitationLedger`.
 
-    Per-turn state: a small text-delta accumulator keyed by content-block
-    index, so when a ``citations_delta`` arrives we know which span of
-    the output it grounds. Anthropic emits the citation alongside the
-    text it derived from, so the substitution span is the most recent
-    text delta on that block.
+    Stateless across chunks: each chunk is self-describing. The adapter
+    relies on the ledger's idempotency to dedupe the same source across
+    repeated chunks within a single run.
     """
 
     CONNECTOR = "anthropic"
 
-    def __init__(self) -> None:
-        self._block_text: dict[int, list[str]] = {}
+    async def adapt_chunk(self, *, chunk: object, raw_delta: str | None) -> str | None:
+        """See :class:`ProviderCitationAdapter.adapt_chunk`."""
 
-    async def aiter(
-        self,
-        raw_stream: AsyncIterator[Mapping[str, Any]],
-    ) -> AsyncIterator[Mapping[str, Any]]:
-        """Yield each upstream event, rewriting text deltas to embed citation tokens."""
+        if CitationLedger.active() is None:
+            return raw_delta
 
-        async for event in raw_stream:
-            if not isinstance(event, Mapping):
-                yield event
-                continue
-            if (
-                event.get(_AnthropicFields.TYPE)
-                != _AnthropicFields.EVENT_CONTENT_BLOCK_DELTA
-            ):
-                yield event
-                continue
-            delta = event.get(_AnthropicFields.DELTA)
-            if not isinstance(delta, Mapping):
-                yield event
-                continue
-            delta_type = delta.get(_AnthropicFields.TYPE)
-            block_index = self._coerce_int(event.get(_AnthropicFields.INDEX))
-            if delta_type == _AnthropicFields.DELTA_TEXT:
-                text = delta.get(_AnthropicFields.DELTA_TEXT_FIELD)
-                if isinstance(text, str) and block_index is not None:
-                    self._block_text.setdefault(block_index, []).append(text)
-                yield event
-                continue
-            if (
-                delta_type == _AnthropicFields.DELTA_CITATION
-                and block_index is not None
-            ):
-                rewritten = await self._handle_citation(
-                    block_index=block_index,
-                    citation=delta.get(_AnthropicFields.CITATION),
-                )
-                yield self._rewrite_block_text_delta(event, block_index, rewritten)
-                continue
-            yield event
+        blocks = ChunkContentReader.content_blocks(chunk)
+        if not blocks:
+            return raw_delta
 
-    async def _handle_citation(
-        self,
-        *,
-        block_index: int,
-        citation: object,
-    ) -> str | None:
-        """Register a single citation; return the substituted text or ``None``."""
+        chips: list[str] = []
+        for block in blocks:
+            block_chips = await self._chips_from_block(block)
+            chips.extend(block_chips)
 
-        if not isinstance(citation, Mapping):
-            return None
-        source = self._build_source(citation)
-        if source is None:
-            return None
-        accumulated = "".join(self._block_text.get(block_index, ()))
-        if not accumulated:
-            return None
-        candidate = CitationCandidate(source=source, span=(0, len(accumulated)))
-        rewritten = await CitationSubstitution.apply(
-            text=accumulated,
-            candidates=(candidate,),
-        )
-        if rewritten == accumulated:
-            return None
-        # Reset the accumulator so a follow-up citation on the same block
-        # only sees later text deltas. Anthropic emits citations after
-        # the text they ground; the substituted run is "consumed".
-        self._block_text[block_index] = [rewritten]
-        return rewritten
+        if not chips:
+            return raw_delta
 
-    def _rewrite_block_text_delta(
-        self,
-        event: Mapping[str, Any],
-        block_index: int,
-        rewritten_text: str | None,
-    ) -> Mapping[str, Any]:
-        """Return ``event`` unchanged when no rewrite is needed.
-
-        When a rewrite happened, the citation event is forwarded as-is
-        (it still carries the structured citation for any consumer that
-        wants it) and the text rewriting is reflected in our internal
-        block accumulator so subsequent text deltas re-emit the joined
-        run with the inline token.
-        """
-
-        del block_index, rewritten_text
-        return event
+        chip_text = "".join(chips)
+        if raw_delta is None or raw_delta == "":
+            return chip_text
+        return raw_delta + chip_text
 
     @classmethod
-    def _build_source(cls, citation: Mapping[str, Any]) -> SourceRef | None:
-        url = cls._coerce_text(citation.get(_AnthropicFields.URL))
+    async def _chips_from_block(cls, block: Mapping[str, object]) -> list[str]:
+        if block.get(_Fields.TYPE) != _Fields.BLOCK_TEXT:
+            return []
+        citations = block.get(_Fields.CITATIONS)
+        if not isinstance(citations, Sequence) or isinstance(citations, (str, bytes)):
+            return []
+        chips: list[str] = []
+        for citation in citations:
+            if not isinstance(citation, Mapping):
+                continue
+            source = cls._source_from_citation(citation)
+            if source is None:
+                continue
+            token = await CitationLedger.cite(source)
+            if token:
+                chips.append(token)
+        return chips
+
+    @classmethod
+    def _source_from_citation(cls, citation: Mapping[str, object]) -> SourceRef | None:
+        url = cls._coerce_text(citation.get(_Fields.CITATION_URL))
         title = cls._coerce_text(
-            citation.get(_AnthropicFields.TITLE)
-        ) or cls._coerce_text(citation.get(_AnthropicFields.DOCUMENT_TITLE))
-        cited = cls._coerce_text(citation.get(_AnthropicFields.CITED_TEXT))
-        document_index = citation.get(_AnthropicFields.DOCUMENT_INDEX)
-        doc_id = url or (
-            f"document_index:{document_index}"
-            if isinstance(document_index, int)
-            else None
-        )
-        if not doc_id or not title:
+            citation.get(_Fields.CITATION_TITLE)
+        ) or cls._coerce_text(citation.get(_Fields.CITATION_DOCUMENT_TITLE))
+        cited = cls._coerce_text(citation.get(_Fields.CITATION_CITED_TEXT))
+        document_index = citation.get(_Fields.CITATION_DOCUMENT_INDEX)
+        doc_id = url
+        if doc_id is None and isinstance(document_index, int):
+            doc_id = f"document_index:{document_index}"
+        if doc_id is None or title is None:
             return None
         return SourceRef(
             source_connector=cls.CONNECTOR,
@@ -184,6 +143,23 @@ class AnthropicCitationStreamAdapter:
         stripped = value.strip()
         return stripped or None
 
-    @staticmethod
-    def _coerce_int(value: object) -> int | None:
-        return value if isinstance(value, int) else None
+    @classmethod
+    def recognised_citation_kinds(cls) -> Iterable[str]:
+        """Test helper: surface the citation kinds the adapter handles.
+
+        Anthropic emits citations across several location kinds (char,
+        page, content_block, web search). The adapter doesn't switch on
+        kind today — it just reads ``url`` / ``title`` / ``cited_text``
+        which every kind carries — but tests assert that no recognised
+        kind regresses.
+        """
+
+        return (
+            _CitationKinds.CHAR_LOCATION,
+            _CitationKinds.PAGE_LOCATION,
+            _CitationKinds.CONTENT_BLOCK_LOCATION,
+            _CitationKinds.WEB_SEARCH_RESULT_LOCATION,
+        )
+
+
+__all__ = ("AnthropicCitationStreamAdapter",)

@@ -1,0 +1,224 @@
+/* PR 4.4 — MCP catalog wizard styles. Local to the feature; loaded
+   from McpOverlay.tsx so it's tree-shaken from anything that doesn't
+   use the wizard. */
+
+.mcp-wizard {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.mcp-wizard__error {
+  background: var(--color-bg-danger-subtle, rgba(217, 119, 119, 0.08));
+  border-radius: var(--radius-sm);
+  color: var(--color-text-danger, var(--color-text));
+  padding: var(--space-sm) var(--space-md);
+}
+
+.mcp-wizard__hint {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+  margin: 0 0 var(--space-sm);
+}
+
+.mcp-wizard__actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+.mcp-wizard__actions--split {
+  justify-content: space-between;
+}
+
+/* Step indicator — five pills, current is accented, completed are dim. */
+
+.mcp-wizard__steps {
+  display: flex;
+  gap: var(--space-xs);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mcp-wizard__steps-item {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: flex;
+  flex: 1;
+  font-size: 0.78rem;
+  gap: 0.4em;
+  opacity: 0.6;
+}
+
+.mcp-wizard__steps-item[data-active="true"],
+.mcp-wizard__steps-item[data-done="true"] {
+  opacity: 1;
+}
+
+.mcp-wizard__steps-item[data-active="true"] {
+  color: var(--color-accent, var(--color-text));
+  font-weight: 600;
+}
+
+.mcp-wizard__steps-num {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  height: 1.5em;
+  justify-content: center;
+  width: 1.5em;
+}
+
+.mcp-wizard__steps-item[data-active="true"] .mcp-wizard__steps-num {
+  background: var(--color-bg-accent-subtle, rgba(217, 119, 87, 0.18));
+  border-color: var(--color-accent, var(--color-border));
+  color: var(--color-accent, var(--color-text));
+}
+
+/* Browse step — catalog grid + custom URL card. */
+
+.mcp-catalog__grid {
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mcp-catalog__card {
+  align-items: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 0.4em;
+  padding: var(--space-md);
+  text-align: left;
+  width: 100%;
+}
+
+.mcp-catalog__card:hover,
+.mcp-catalog__card:focus-visible {
+  border-color: var(--color-accent, var(--color-border));
+  outline: none;
+}
+
+.mcp-catalog__icon {
+  align-items: center;
+  border-radius: 50%;
+  color: white;
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  height: 2em;
+  justify-content: center;
+  width: 2em;
+}
+
+.mcp-catalog__name {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.mcp-catalog__desc {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.mcp-wizard__custom-heading {
+  font-size: 1rem;
+  margin: 0 0 var(--space-xs);
+}
+
+.mcp-wizard__custom-hint {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+  margin: 0 0 var(--space-sm);
+}
+
+/* Auth step — choice rows (full width, hover-highlight). */
+
+.mcp-wizard__choices {
+  display: grid;
+  gap: var(--space-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mcp-wizard__choice {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 0.3em;
+  padding: var(--space-md);
+  text-align: left;
+  width: 100%;
+}
+
+.mcp-wizard__choice:hover,
+.mcp-wizard__choice:focus-visible {
+  border-color: var(--color-accent, var(--color-border));
+  outline: none;
+}
+
+.mcp-wizard__choice-head {
+  align-items: center;
+  color: var(--color-text);
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.mcp-wizard__choice-desc {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+}
+
+/* Scope step + Confirm step — code-style scope list. */
+
+.mcp-wizard__scopes {
+  display: grid;
+  gap: 0.3em;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mcp-wizard__scopes code,
+.mcp-wizard__summary code {
+  background: var(--color-surface-2, var(--color-surface));
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.1em 0.4em;
+}
+
+.mcp-wizard__summary {
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: 8em 1fr;
+  margin: 0;
+}
+
+.mcp-wizard__summary dt {
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcp-wizard__summary dd {
+  color: var(--color-text);
+  margin: 0;
+}

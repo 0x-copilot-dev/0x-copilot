@@ -27,6 +27,7 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
@@ -96,6 +97,14 @@ class InMemoryRuntimeApiStore:
             tuple[str, str, str, str, str], UsageDailyUserRow
         ] = {}
         self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
+        self.connector_daily_usage: dict[
+            tuple[str, str, str], UsageDailyConnectorRow
+        ] = {}
+        # PR 7.2 — minimal test seed for the connector attribution lookup.
+        # Production writes the real table via the runtime_events projection;
+        # tests append tuples directly so the lookup can find them.
+        # Each entry: (org_id, run_id, connector_slug, completed_at).
+        self.tool_invocation_completions: list[tuple[str, str, str, datetime]] = []
         # Compression events (B5 read-only path; no writer wired yet).
         self.compression_events: list[CompressionEventRecord] = []
         # Budgets (B7).
@@ -1008,6 +1017,10 @@ class InMemoryRuntimeApiStore:
         )
         self.org_daily_usage[key] = row
 
+    def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        key = (row.org_id, row.day.isoformat(), row.connector_slug)
+        self.connector_daily_usage[key] = row
+
     def query_user_daily_usage(
         self,
         *,
@@ -1048,6 +1061,115 @@ class InMemoryRuntimeApiStore:
                 reverse=True,
             )
         )
+
+    def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyConnectorRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.connector_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.model_call_usage
+                    if (org_id is None or row.org_id == org_id)
+                    and start <= row.created_at <= end
+                ),
+                key=lambda r: r.created_at,
+                reverse=True,
+            )
+        )
+
+    def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        """PR 7.1 — paginated read across the in-memory audit chain."""
+
+        rows: list[dict[str, object]] = []
+        for _event_type, record in self.audit_log:
+            if record.get("org_id") != org_id:
+                continue
+            seq = int(record.get("seq") or 0)
+            if seq <= after_seq:
+                continue
+            action = str(record.get("action") or "")
+            if action_prefix is not None and not action.startswith(action_prefix):
+                continue
+            actor = record.get("user_id")
+            if actor_user_id is not None and actor != actor_user_id:
+                continue
+            created_at_value = record.get("created_at")
+            if isinstance(created_at_value, str):
+                try:
+                    created_at_value = datetime.fromisoformat(created_at_value)
+                except ValueError:
+                    created_at_value = None
+            if since is not None and (
+                not isinstance(created_at_value, datetime) or created_at_value < since
+            ):
+                continue
+            if until is not None and (
+                not isinstance(created_at_value, datetime) or created_at_value >= until
+            ):
+                continue
+            rows.append(dict(record))
+        rows.sort(
+            key=lambda r: (
+                r.get("created_at") or "",
+                int(r.get("seq") or 0),
+            ),
+            reverse=True,
+        )
+        return tuple(rows[:limit])
+
+    def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ) -> str | None:
+        candidates = [
+            (slug, completed_at)
+            for inv_org, inv_run, slug, completed_at in self.tool_invocation_completions
+            if inv_org == org_id
+            and inv_run == run_id
+            and completed_at < before
+            and slug
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda pair: pair[1], reverse=True)
+        return candidates[0][0]
 
     def query_run_usage(
         self,

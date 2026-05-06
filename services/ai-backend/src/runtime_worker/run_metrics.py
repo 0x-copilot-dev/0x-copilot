@@ -142,12 +142,16 @@ class _PerCallSlot:
     Holds the latest provider-reported counts for a single LLM call. Counts
     are *replaced* (not summed) on each merge because providers stream
     cumulative usage across chunks of the same AIMessage and the final
-    chunk carries the authoritative total.
+    chunk carries the authoritative total. ``connector_slug`` (PR 7.2) is
+    stamped at ``mark_completed`` time by the streaming executor — it is
+    the most recent completed tool invocation's connector before this
+    call's emit time, ``None`` for cold-turn (planning) calls.
     """
 
     __slots__ = (
         "message_id",
         "task_id",
+        "connector_slug",
         "input_tokens",
         "output_tokens",
         "cached_input_tokens",
@@ -165,6 +169,7 @@ class _PerCallSlot:
     ) -> None:
         self.message_id = message_id
         self.task_id = task_id
+        self.connector_slug: str | None = None
         self.input_tokens: int = 0
         self.output_tokens: int = 0
         self.cached_input_tokens: int = 0
@@ -368,6 +373,7 @@ class AssistantRunMetrics:
                     subagent_id=None,
                     model_provider=run.model_provider,
                     model_name=run.model_name,
+                    connector_slug=slot.connector_slug,
                     input_tokens=slot.input_tokens,
                     output_tokens=slot.output_tokens,
                     cached_input_tokens=slot.cached_input_tokens,

@@ -15,6 +15,7 @@ import { AuthProvider, useAuth } from "./AuthContext";
 import { LoginScreen } from "./LoginScreen";
 import { MfaPrompt } from "./MfaPrompt";
 import * as authApi from "../../api/authApi";
+import { UnauthorizedError } from "../../api/http";
 
 function StatusProbe(): ReactElement {
   const auth = useAuth();
@@ -39,7 +40,7 @@ describe("AuthContext", () => {
 
   it("flips from loading to anonymous on a 401 from /v1/auth/session", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     render(
       <AuthProvider persistBearer={false}>
@@ -91,7 +92,7 @@ describe("AuthContext", () => {
 
   it("login() with requires_mfa=true transitions to mfa_pending", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     vi.spyOn(authApi, "loginWithPassword").mockResolvedValue({
       user_id: "usr_a",
@@ -150,7 +151,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
 
   it("renders the brand pane + autofocused email field", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     render(
       <AuthProvider persistBearer={false}>
@@ -165,7 +166,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
 
   it("submits an SSO email and routes to the OIDC start URL", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     vi.spyOn(authApi, "discoverAuth").mockResolvedValue({
       kind: "sso",
@@ -219,7 +220,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
 
   it("submits a personal email and shows the magic-link sent card", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     vi.spyOn(authApi, "discoverAuth").mockResolvedValue({
       kind: "personal",
@@ -264,7 +265,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
 
   it("renders the workspace picker rows when consume returns multiple workspaces", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     vi.spyOn(authApi, "consumeMagicLink").mockResolvedValue({
       outcome: "workspace_pick_required",
@@ -312,7 +313,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
 
   it("workspace pick → selectWorkspace exchanges the pick_token", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new Error("Request failed with 401"),
+      new UnauthorizedError("Missing bearer token"),
     );
     vi.spyOn(authApi, "consumeMagicLink").mockResolvedValue({
       outcome: "workspace_pick_required",

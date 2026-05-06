@@ -289,6 +289,32 @@ class InMemoryMcpStore:
         self.audit_events.append(signed)
         return signed
 
+    def list_audit_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[AuditEventRecord, ...]:
+        """PR 7.1 — paginated read across the chain, newest-first by seq."""
+
+        rows = [
+            event
+            for event in self.audit_events
+            if event.org_id == org_id
+            and (event.seq or 0) > after_seq
+            and (action_prefix is None or event.action.startswith(action_prefix))
+            and (actor_user_id is None or event.user_id == actor_user_id)
+            and (since is None or event.created_at >= since)
+            and (until is None or event.created_at < until)
+        ]
+        rows.sort(key=lambda e: (e.created_at, e.seq or 0), reverse=True)
+        return tuple(rows[:limit])
+
 
 def _take_audit_chain_lock(cur, *, table: str, org_id: str) -> None:  # type: ignore[no-untyped-def]
     """Serialize concurrent audit inserts within one (table, org) chain.
@@ -890,6 +916,32 @@ class InMemorySkillStore:
         self.audit_events.append(signed)
         return signed
 
+    def list_skill_audit_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[SkillAuditEventRecord, ...]:
+        """PR 7.1 — paginated read across the skill audit chain."""
+
+        rows = [
+            event
+            for event in self.audit_events
+            if event.org_id == org_id
+            and (event.seq or 0) > after_seq
+            and (action_prefix is None or event.action.startswith(action_prefix))
+            and (actor_user_id is None or event.user_id == actor_user_id)
+            and (since is None or event.created_at >= since)
+            and (until is None or event.created_at < until)
+        ]
+        rows.sort(key=lambda e: (e.created_at, e.seq or 0), reverse=True)
+        return tuple(rows[:limit])
+
 
 def _sign_skill_audit(
     record: SkillAuditEventRecord, chain: _AuditChain
@@ -1234,6 +1286,41 @@ class InMemoryDeployAuditStore:
         signed = _sign_deploy_audit(record, self._chain)
         self.audit_events.append(signed)
         return signed
+
+    def list_deploy_audit_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[DeployAuditEventRecord, ...]:
+        """PR 7.1 — paginated read across the deploy audit chain.
+
+        ``action_prefix`` matches against ``outcome`` since deploy events
+        don't carry a free-form action string; the conventional prefixes
+        are ``deploy.success`` / ``deploy.failed`` etc., which the
+        compositor maps onto the ``outcome`` column.
+        """
+
+        rows = [
+            event
+            for event in self.audit_events
+            if event.org_id == org_id
+            and (event.seq or 0) > after_seq
+            and (
+                action_prefix is None
+                or f"deploy.{event.outcome}".startswith(action_prefix)
+            )
+            and (actor_user_id is None or event.user_id == actor_user_id)
+            and (since is None or event.created_at >= since)
+            and (until is None or event.created_at < until)
+        ]
+        rows.sort(key=lambda e: (e.created_at, e.seq or 0), reverse=True)
+        return tuple(rows[:limit])
 
 
 def _sign_deploy_audit(

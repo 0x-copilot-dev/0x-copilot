@@ -1,0 +1,136 @@
+/* PR 6.1/6.2 — share recipient screen styles. Local to the feature so
+   the design-system layer doesn't carry recipient-specific rules. */
+
+.share-screen {
+  margin: 0 auto;
+  max-width: 880px;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.share-screen--loading,
+.share-screen--blocked,
+.share-screen--error {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+
+.share-screen__head {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+}
+
+.share-screen__head h1 {
+  font-size: 1.5rem;
+  margin: var(--space-xs) 0;
+}
+
+.share-screen__eyebrow {
+  display: flex;
+  gap: var(--space-xs);
+  margin: 0;
+}
+
+.share-screen__sub {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.share-screen__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-sm);
+}
+
+.share-screen__error {
+  background: var(--color-bg-danger-subtle, rgba(217, 119, 119, 0.08));
+  border-radius: var(--radius-sm);
+  color: var(--color-text-danger, var(--color-text));
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.share-screen__notice {
+  color: var(--color-text-subtle);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.share-screen__restricted-chip {
+  background: var(--color-bg-warn-subtle, rgba(217, 168, 87, 0.12));
+  border-radius: var(--radius-pill, 999px);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0 0.4em;
+}
+
+/* Message stack — read-only renderer. Mirrors the chat surface's
+   visual rhythm without depending on the assistant-ui runtime. */
+
+.share-screen__messages {
+  display: grid;
+  gap: var(--space-md);
+  list-style: none;
+  margin: var(--space-lg) 0 0;
+  padding: 0;
+}
+
+.share-screen__message {
+  margin: 0;
+}
+
+.shared-message {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.shared-message--user {
+  background: var(--color-surface-2, var(--color-surface));
+}
+
+.shared-message--assistant {
+  background: var(--color-surface);
+}
+
+.shared-message__head {
+  align-items: baseline;
+  color: var(--color-text-subtle);
+  display: flex;
+  font-size: 0.78rem;
+  gap: var(--space-sm);
+  justify-content: space-between;
+  margin-bottom: var(--space-xs);
+}
+
+.shared-message__role {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.shared-message__body {
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.shared-message__chip {
+  background: var(--color-bg-accent-subtle, rgba(217, 119, 87, 0.12));
+  border-radius: var(--radius-pill, 999px);
+  color: var(--color-accent, var(--color-text));
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  margin: 0 0.2em;
+  padding: 0 0.4em;
+  vertical-align: super;
+}
+
+.shared-message__chip--restricted {
+  background: var(--color-bg-warn-subtle, rgba(217, 168, 87, 0.12));
+  color: var(--color-text-subtle);
+}

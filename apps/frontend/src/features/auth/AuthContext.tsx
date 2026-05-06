@@ -42,7 +42,10 @@ import type {
   MagicLinkCallbackResponse,
   WorkspaceCandidate,
 } from "@enterprise-search/api-types";
-import { configureUnauthorizedHandler } from "../../api/http";
+import {
+  configureUnauthorizedHandler,
+  UnauthorizedError,
+} from "../../api/http";
 import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";
 
 const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
@@ -217,7 +220,12 @@ export function AuthProvider({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "auth probe failed";
-      const looksLike401 = /401|unauthor/i.test(message);
+      // Authoritative 401 detection: every API helper routes 401s through
+      // `assertOk` → `throw new UnauthorizedError(...)`. Sniffing message
+      // text was brittle (it broke when the facade started returning a
+      // structured `{"detail":"Missing bearer token"}` body that no longer
+      // contained the substring "401" or "unauthor").
+      const looksLike401 = err instanceof UnauthorizedError;
       // W0.1 — in dev, a 401 means there is no bearer. Mint one for the
       // active persona via the dev IdP and retry once. Production builds
       // tree-shake _devEnsureBearer; the catch above handles all real

@@ -8,6 +8,7 @@
 
 import { Badge, Card, classNames } from "@enterprise-search/design-system";
 import type {
+  UsageConnectorRow,
   UsageConversationRow,
   UsageMeResponse,
   UsagePeriod,
@@ -67,6 +68,7 @@ export function UsageConversationView({
     usage !== null &&
     (usage.total.cost_micro_usd !== null ||
       usage.by_model.some((row) => row.cost_micro_usd !== null) ||
+      (usage.by_connector ?? []).some((row) => row.cost_micro_usd !== null) ||
       (topConversations ?? []).some((row) => row.cost_micro_usd !== null));
 
   if (error) {
@@ -97,6 +99,7 @@ export function UsageConversationView({
     <div className="details-panel__body">
       <UsageTotalsCard usage={usage} showCosts={showCosts} />
       <ByModelTable usage={usage} showCosts={showCosts} />
+      <ByConnectorTable rows={usage.by_connector ?? []} showCosts={showCosts} />
       <TopConversationsTable
         rows={topConversations ?? []}
         showCosts={showCosts}
@@ -108,6 +111,54 @@ export function UsageConversationView({
       ) : null}
     </div>
   );
+}
+
+/**
+ * PR 7.2 — by-connector breakdown. Empty `connector_slug` = the
+ * "(unattributed)" bucket: LLM calls before any tool fired this turn.
+ */
+export function ByConnectorTable({
+  rows,
+  showCosts,
+}: {
+  rows: UsageConnectorRow[];
+  showCosts: boolean;
+}): ReactElement | null {
+  if (rows.length === 0) return null;
+  return (
+    <Card tone="muted" className="details-panel__section">
+      <h3>By connector</h3>
+      <table className="details-panel__table">
+        <thead>
+          <tr>
+            <th scope="col">Connector</th>
+            <th scope="col">Runs</th>
+            <th scope="col">Input</th>
+            <th scope="col">Output</th>
+            {showCosts ? <th scope="col">Cost</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.connector_slug || "(unattributed)"}>
+              <td>{formatConnectorLabel(row.connector_slug)}</td>
+              <td>{row.runs_count}</td>
+              <td>{formatTokens(row.input)}</td>
+              <td>{formatTokens(row.output)}</td>
+              {showCosts ? <td>{formatMicroUsd(row.cost_micro_usd)}</td> : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+export function formatConnectorLabel(slug: string): string {
+  if (!slug) return "Unattributed";
+  // Render slug verbatim — connectors are workspace-installed; no
+  // display-name registry on the FE yet. Title-case for readability.
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
 }
 
 function UsageTotalsCard({

@@ -65,6 +65,7 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
@@ -2018,12 +2019,14 @@ class PostgresRuntimeApiStore:
                 INSERT INTO runtime_model_call_usage (
                     id, org_id, run_id, conversation_id, parent_event_id,
                     trace_id, task_id, subagent_id, model_provider, model_name,
+                    connector_slug,
                     input_tokens, output_tokens, cached_input_tokens,
                     total_tokens, duration_ms, schema_version, cost_micro_usd,
                     pricing_id, pricing_version, created_at
                 ) VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
+                    %s,
                     %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s
@@ -2040,6 +2043,7 @@ class PostgresRuntimeApiStore:
                     record.subagent_id,
                     record.model_provider,
                     record.model_name,
+                    record.connector_slug,
                     record.input_tokens,
                     record.output_tokens,
                     record.cached_input_tokens,
@@ -2287,6 +2291,47 @@ class PostgresRuntimeApiStore:
                 ),
             )
 
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        async with self._tenant_connection(org_id=row.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_usage_daily_connector (
+                    org_id, day, connector_slug, runs_count,
+                    distinct_users, input_tokens, output_tokens,
+                    cached_input_tokens, total_tokens, cost_micro_usd,
+                    refreshed_at
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s
+                )
+                ON CONFLICT (org_id, day, connector_slug)
+                DO UPDATE SET
+                    runs_count = EXCLUDED.runs_count,
+                    distinct_users = EXCLUDED.distinct_users,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cost_micro_usd = EXCLUDED.cost_micro_usd,
+                    refreshed_at = EXCLUDED.refreshed_at
+                """,
+                (
+                    row.org_id,
+                    row.day.date(),
+                    row.connector_slug,
+                    row.runs_count,
+                    row.distinct_users,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.cached_input_tokens,
+                    row.total_tokens,
+                    row.cost_micro_usd,
+                    row.refreshed_at,
+                ),
+            )
+
     @reader
     async def query_user_daily_usage(
         self,
@@ -2330,6 +2375,139 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._org_daily_row(r) for r in rows)
+
+    @reader
+    async def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyConnectorRow]:
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_usage_daily_connector
+                 WHERE org_id = %s
+                   AND day BETWEEN %s AND %s
+                 ORDER BY day DESC
+                """,
+                (org_id, start_day.date(), end_day.date()),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._connector_daily_row(r) for r in rows)
+
+    async def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        # Cold-start fallback (per-tenant) AND rollup-loop scan (org_id=None).
+        # Caller bounds the window: API endpoints cap at 30d, rollup loop at
+        # the configured trailing window (default 2d).
+        if org_id is None:
+            sql = """
+                SELECT * FROM runtime_model_call_usage
+                 WHERE created_at BETWEEN %s AND %s
+                 ORDER BY created_at DESC
+            """
+            params: tuple[object, ...] = (start, end)
+            cm = self._role_connection("worker")
+        else:
+            sql = """
+                SELECT * FROM runtime_model_call_usage
+                 WHERE org_id = %s
+                   AND created_at BETWEEN %s AND %s
+                 ORDER BY created_at DESC
+            """
+            params = (org_id, start, end)
+            cm = self._tenant_connection(org_id=org_id)
+        async with cm as conn:
+            cur = await conn.execute(sql, params)
+            rows = await cur.fetchall()
+        return tuple(self._model_call_record(r) for r in rows)
+
+    @reader
+    async def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        clauses = ["org_id = %s", "(seq IS NULL OR seq > %s)"]
+        params: list[object] = [org_id, after_seq]
+        if action_prefix is not None:
+            clauses.append("action LIKE %s")
+            params.append(action_prefix + "%")
+        if actor_user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(actor_user_id)
+        if since is not None:
+            clauses.append("created_at >= %s")
+            params.append(since)
+        if until is not None:
+            clauses.append("created_at < %s")
+            params.append(until)
+        params.append(limit)
+        sql = (
+            "SELECT id AS audit_id, org_id, user_id, actor_type, action, "
+            "resource_type, resource_id, run_id, trace_id, outcome, "
+            "metadata_json_redacted AS metadata, created_at, seq, prev_hash, "
+            "signature, key_version "
+            "FROM runtime_audit_log "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY created_at DESC, seq DESC NULLS LAST "
+            "LIMIT %s"
+        )
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+        result: list[dict[str, object]] = []
+        for row in rows:
+            mapped = dict(row)
+            for key in ("prev_hash", "signature"):
+                value = mapped.get(key)
+                if isinstance(value, (bytes, bytearray, memoryview)):
+                    mapped[key] = bytes(value).hex()
+            result.append(mapped)
+        return tuple(result)
+
+    @reader
+    async def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ) -> str | None:
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT connector_slug
+                  FROM runtime_tool_invocations
+                 WHERE org_id = %s
+                   AND run_id = %s
+                   AND status = 'completed'
+                   AND completed_at IS NOT NULL
+                   AND completed_at < %s
+                   AND connector_slug IS NOT NULL
+                 ORDER BY completed_at DESC
+                 LIMIT 1
+                """,
+                (org_id, run_id, before),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        slug = row.get("connector_slug") if isinstance(row, dict) else row[0]
+        return str(slug) if slug is not None else None
 
     async def query_run_usage(
         self,
@@ -3234,6 +3412,11 @@ class PostgresRuntimeApiStore:
             ),
             model_provider=str(row["model_provider"]),
             model_name=str(row["model_name"]),
+            connector_slug=(
+                str(row["connector_slug"])
+                if row.get("connector_slug") is not None
+                else None
+            ),
             input_tokens=int(row.get("input_tokens") or 0),
             output_tokens=int(row.get("output_tokens") or 0),
             cached_input_tokens=int(row.get("cached_input_tokens") or 0),
@@ -3332,6 +3515,26 @@ class PostgresRuntimeApiStore:
             day=cls._coerce_date_to_datetime(row["day"]),
             model_provider=str(row["model_provider"]),
             model_name=str(row["model_name"]),
+            runs_count=int(row.get("runs_count") or 0),
+            distinct_users=int(row.get("distinct_users") or 0),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            refreshed_at=cls._coerce_datetime(row["refreshed_at"]),
+        )
+
+    @classmethod
+    def _connector_daily_row(cls, row: dict[str, object]) -> UsageDailyConnectorRow:
+        return UsageDailyConnectorRow(
+            org_id=str(row["org_id"]),
+            day=cls._coerce_date_to_datetime(row["day"]),
+            connector_slug=str(row.get("connector_slug") or ""),
             runs_count=int(row.get("runs_count") or 0),
             distinct_users=int(row.get("distinct_users") or 0),
             input_tokens=int(row.get("input_tokens") or 0),

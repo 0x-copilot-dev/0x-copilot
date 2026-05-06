@@ -28,6 +28,7 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
@@ -395,6 +396,9 @@ class AsyncPersistencePort(Protocol):
     async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
         """Idempotent UPSERT of one daily per-org rollup row (B4)."""
 
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        """Idempotent UPSERT of one daily per-connector rollup row (PR 7.2)."""
+
     async def query_user_daily_usage(
         self,
         *,
@@ -413,6 +417,68 @@ class AsyncPersistencePort(Protocol):
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
         """Read per-org rollup rows in ``[start_day, end_day]`` (B4)."""
+
+    async def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyConnectorRow]:
+        """Read per-connector rollup rows in ``[start_day, end_day]`` (PR 7.2)."""
+
+    async def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Scan per-LLM-call usage rows for the connector rollup loop +
+        cold-start fallback (PR 7.2).
+
+        ``org_id=None`` is the rollup-loop signal to scan across tenants;
+        adapter implementations must use the ``worker`` role for the
+        cross-tenant read, matching ``query_run_usage_for_range``.
+        """
+
+    async def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        """PR 7.1 — paginated read across ``runtime_audit_log``.
+
+        Returns dicts because the in-memory store stamps chain fields
+        onto an arbitrary record shape (see ``write_audit_log``); the
+        caller projects to a typed view. Each row carries ``audit_id``,
+        ``action``, ``user_id`` (actor), ``resource_type``, ``resource_id``,
+        ``outcome``, ``metadata``, ``created_at``, plus the chain fields
+        ``seq`` / ``prev_hash`` / ``signature`` / ``key_version``.
+        """
+
+    async def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ) -> str | None:
+        """Return the connector_slug of the most recent completed tool
+        invocation on ``run_id`` whose ``completed_at`` is strictly before
+        ``before`` (PR 7.2 attribution rule).
+
+        Returns ``None`` when no completed tool invocation matches —
+        i.e. the LLM call is "cold-turn" (planning before any tool fires).
+        Failed invocations are ignored; only ``status='completed'`` rows
+        contribute.
+        """
 
     async def query_run_usage(
         self,

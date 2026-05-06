@@ -7,7 +7,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from agent_runtime.api.service import RuntimeApiService
-from agent_runtime.persistence.records import RuntimeRunUsageRecord
+from agent_runtime.persistence.records import (
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
@@ -128,3 +131,122 @@ class TestUsageRun:
         )
         # Different tenant can't see org_a's run.
         assert response.status_code == 404
+
+
+class TestUsageByConnector:
+    """PR 7.2 — by_connector axis on /v1/usage/me + /v1/usage/conversations."""
+
+    def _seed_call(
+        self,
+        store: InMemoryRuntimeApiStore,
+        *,
+        org_id: str,
+        run_id: str,
+        conversation_id: str,
+        connector_slug: str | None,
+        created_at: datetime,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        store.model_call_usage.append(
+            RuntimeModelCallUsageRecord(
+                id=f"{run_id}-{len(store.model_call_usage)}",
+                org_id=org_id,
+                run_id=run_id,
+                conversation_id=conversation_id,
+                trace_id=f"trace-{run_id}",
+                model_provider="openai",
+                model_name="gpt-5.4-mini",
+                connector_slug=connector_slug,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=0,
+                total_tokens=input_tokens + output_tokens,
+                duration_ms=500,
+                created_at=created_at,
+            )
+        )
+
+    def test_by_connector_populated_on_me(self) -> None:
+        client, store = _client_with_seed_runs()
+        completed = datetime.now(timezone.utc) - timedelta(hours=1)
+        # Per-call rows for the seeded runs r1 and r2 (two connectors +
+        # one unattributed).
+        self._seed_call(
+            store,
+            org_id="org_a",
+            run_id="r1",
+            conversation_id="conv-1",
+            connector_slug=None,
+            created_at=completed,
+            input_tokens=10,
+            output_tokens=5,
+        )
+        self._seed_call(
+            store,
+            org_id="org_a",
+            run_id="r1",
+            conversation_id="conv-1",
+            connector_slug="slack",
+            created_at=completed,
+            input_tokens=20,
+            output_tokens=10,
+        )
+        self._seed_call(
+            store,
+            org_id="org_a",
+            run_id="r2",
+            conversation_id="conv-2",
+            connector_slug="notion",
+            created_at=completed,
+            input_tokens=15,
+            output_tokens=7,
+        )
+        response = client.get(
+            "/v1/usage/me",
+            params={"org_id": "org_a", "user_id": "user_1", "period": "30d"},
+        )
+        assert response.status_code == 200
+        by_connector = {
+            row["connector_slug"]: row for row in response.json()["by_connector"]
+        }
+        assert set(by_connector.keys()) == {"", "slack", "notion"}
+        assert by_connector["slack"]["input"] == 20
+        assert by_connector["notion"]["input"] == 15
+        assert by_connector[""]["input"] == 10
+
+    def test_by_connector_on_conversation(self) -> None:
+        client, store = _client_with_seed_runs()
+        completed = datetime.now(timezone.utc) - timedelta(hours=1)
+        self._seed_call(
+            store,
+            org_id="org_a",
+            run_id="r1",
+            conversation_id="conv-1",
+            connector_slug="slack",
+            created_at=completed,
+            input_tokens=20,
+            output_tokens=10,
+        )
+        # A second conv's calls must NOT leak into conv-1's breakdown.
+        self._seed_call(
+            store,
+            org_id="org_a",
+            run_id="r2",
+            conversation_id="conv-2",
+            connector_slug="notion",
+            created_at=completed,
+            input_tokens=15,
+            output_tokens=7,
+        )
+        response = client.get(
+            "/v1/usage/conversations/conv-1",
+            params={"org_id": "org_a", "user_id": "user_1", "period": "30d"},
+        )
+        assert response.status_code == 200
+        by_connector = {
+            row["connector_slug"]: row for row in response.json()["by_connector"]
+        }
+        assert set(by_connector.keys()) == {"slack"}
+        assert by_connector["slack"]["input"] == 20
+        assert by_connector["slack"]["output"] == 10

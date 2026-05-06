@@ -35,7 +35,9 @@ import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
 // PR 4.2 — "Workspace" group sections.
+import { AuditLogSettings } from "./AuditLogSettings";
 import { BillingSettings } from "./BillingSettings";
+import { McpOverlay } from "../connectors/mcp/McpOverlay";
 import { MembersSettings } from "./MembersSettings";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 import "./workspace.css";
@@ -68,6 +70,8 @@ export type SettingsSection =
   | "workspace"
   | "members"
   | "billing"
+  // PR 7.1 — admin-only audit log table under the Workspace group.
+  | "audit-log"
   // PR 4.3 — "AI & data" group (Model & behavior / Privacy & data; the
   // existing "connectors" slug also belongs to this group visually).
   | "model-and-behavior"
@@ -100,6 +104,7 @@ const sections: Array<RailEntry> = [
   { kind: "section", id: "workspace", label: "Workspace" },
   { kind: "section", id: "members", label: "Members" },
   { kind: "section", id: "billing", label: "Billing" },
+  { kind: "section", id: "audit-log", label: "Audit log" },
   { kind: "section", id: "general", label: "General" },
   { kind: "section", id: "account", label: "Account" },
   { kind: "section", id: "capabilities", label: "Capabilities" },
@@ -241,6 +246,9 @@ export function SettingsScreen({
         {activeSection === "billing" && identity ? (
           <BillingSettings identity={identity} />
         ) : null}
+        {activeSection === "audit-log" && identity ? (
+          <AuditLogSettings identity={identity} isAdmin={isAdmin} />
+        ) : null}
         {activeSection === "general" ? <GeneralSettings /> : null}
         {activeSection === "account" ? <AccountSettings /> : null}
         {activeSection === "capabilities" ? (
@@ -371,6 +379,10 @@ function ConnectorsSettings({
   const [tokenEndpoint, setTokenEndpoint] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // PR 4.4 — catalog wizard. Opens from the section header button; the
+  // existing custom-URL form below stays for power users who already
+  // know the endpoint they're connecting to.
+  const [mcpOverlayOpen, setMcpOverlayOpen] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -413,15 +425,30 @@ function ConnectorsSettings({
             explicit consent.
           </p>
         </div>
-        <Button
-          type="button"
-          variant="secondary"
-          title="Refresh connectors"
-          onClick={() => void connectors.refresh()}
-        >
-          Refresh
-        </Button>
+        <div className="settings-section__header-actions">
+          <Button
+            type="button"
+            variant="primary"
+            onClick={() => setMcpOverlayOpen(true)}
+          >
+            Browse catalog
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            title="Refresh connectors"
+            onClick={() => void connectors.refresh()}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
+
+      <McpOverlay
+        open={mcpOverlayOpen}
+        onClose={() => setMcpOverlayOpen(false)}
+        connectors={connectors}
+      />
 
       <Card>
         <form

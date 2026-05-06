@@ -11,6 +11,7 @@ import type { UsagePeriod } from "@enterprise-search/api-types";
 import type { ReactElement } from "react";
 
 import type { RequestIdentity } from "../../../../../api/config";
+import { ByConnectorTable } from "./UsageConversationView";
 import { UsageTopUsersTable } from "./UsageTopUsersTable";
 import { UsageWorkspaceChart } from "./UsageWorkspaceChart";
 import { useUsageOrg } from "./useUsageOrg";
@@ -65,10 +66,18 @@ export function UsageWorkspaceView({
     );
   }
 
+  const showCosts =
+    orgUsage.total.cost_micro_usd !== null ||
+    (orgUsage.by_connector ?? []).some((row) => row.cost_micro_usd !== null);
+
   return (
     <div className="details-panel__body">
       <UsageWorkspaceChart orgUsage={orgUsage} budgets={budgets} />
       <UsageTopUsersTable orgUsage={orgUsage} />
+      <ByConnectorTable
+        rows={orgUsage.by_connector ?? []}
+        showCosts={showCosts}
+      />
       {orgUsage.cold_start_fallback ? (
         <p className="details-panel__footnote">
           Aggregating live data — recent activity may take ~1 minute to appear.

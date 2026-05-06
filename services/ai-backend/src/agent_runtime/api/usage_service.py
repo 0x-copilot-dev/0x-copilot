@@ -18,6 +18,7 @@ from agent_runtime.persistence.records import (
     ModelPricingRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
+    UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
@@ -129,6 +130,53 @@ class UsageQueryService:
             )
             for key, bucket in buckets.items()
         )
+
+    @classmethod
+    def rollup_connector_rows(
+        cls,
+        rows: Iterable[RuntimeModelCallUsageRecord],
+        *,
+        run_user_lookup: Mapping[str, str],
+        refreshed_at: datetime,
+    ) -> tuple[UsageDailyConnectorRow, ...]:
+        """Aggregate per-LLM-call rows into per-org-per-connector-per-day
+        rollups (PR 7.2).
+
+        ``run_user_lookup`` maps ``run_id -> user_id`` for the rows in
+        scope so the rollup can compute ``distinct_users`` without
+        denormalising user_id onto every per-call row. ``connector_slug``
+        coalesces ``None`` to the empty string for the "(unattributed)"
+        bucket — the natural-key PK does not allow ``NULL``.
+        """
+
+        buckets: dict[
+            tuple[str, date, str],
+            _ConnectorRollupBucket,
+        ] = defaultdict(_ConnectorRollupBucket)
+        run_counts: dict[tuple[str, date, str], set[str]] = defaultdict(set)
+        for row in rows:
+            day = row.created_at.date()
+            slug = row.connector_slug or ""
+            key = (row.org_id, day, slug)
+            buckets[key].add(row, run_id=row.run_id)
+            run_counts[key].add(row.run_id)
+        result: list[UsageDailyConnectorRow] = []
+        for key, bucket in buckets.items():
+            user_ids = {
+                run_user_lookup[run_id]
+                for run_id in run_counts[key]
+                if run_id in run_user_lookup
+            }
+            result.append(
+                bucket.to_connector_row(
+                    org_id=key[0],
+                    day=key[1],
+                    connector_slug=key[2],
+                    distinct_users=len(user_ids),
+                    refreshed_at=refreshed_at,
+                )
+            )
+        return tuple(result)
 
     @classmethod
     def rollup_org_rows(
@@ -349,6 +397,56 @@ class _RollupBucket:
             model_provider=model_provider,
             model_name=model_name,
             runs_count=self.runs_count,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            total_tokens=self.total_tokens,
+            cost_micro_usd=self.cost_micro_usd,
+            refreshed_at=refreshed_at,
+        )
+
+
+class _ConnectorRollupBucket:
+    """Accumulator for per-org-per-connector-per-day rollups (PR 7.2).
+
+    Mirrors ``_RollupBucket`` but consumes per-LLM-call rows directly
+    (the run-level rollup buckets only see run-aggregates, which can't
+    be split by connector since one run typically spans connectors).
+    ``runs_count`` counts distinct runs in this bucket.
+    """
+
+    def __init__(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cached_input_tokens = 0
+        self.total_tokens = 0
+        self.cost_micro_usd: int | None = None
+        self._run_ids: set[str] = set()
+
+    def add(self, row: RuntimeModelCallUsageRecord, *, run_id: str) -> None:
+        self.input_tokens += row.input_tokens
+        self.output_tokens += row.output_tokens
+        self.cached_input_tokens += row.cached_input_tokens
+        self.total_tokens += row.total_tokens
+        if row.cost_micro_usd is not None:
+            self.cost_micro_usd = (self.cost_micro_usd or 0) + row.cost_micro_usd
+        self._run_ids.add(run_id)
+
+    def to_connector_row(
+        self,
+        *,
+        org_id: str,
+        day: date,
+        connector_slug: str,
+        distinct_users: int,
+        refreshed_at: datetime,
+    ) -> UsageDailyConnectorRow:
+        return UsageDailyConnectorRow(
+            org_id=org_id,
+            day=datetime.combine(day, time.min, tzinfo=timezone.utc),
+            connector_slug=connector_slug,
+            runs_count=len(self._run_ids),
+            distinct_users=distinct_users,
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             cached_input_tokens=self.cached_input_tokens,

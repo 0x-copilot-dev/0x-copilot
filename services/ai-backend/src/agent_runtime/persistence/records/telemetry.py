@@ -52,8 +52,12 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
 
     Written once per AIMessage that closes with usage. ``task_id`` and
     ``subagent_id`` are populated when the call ran inside a subagent so
-    queries can attribute tokens by feature / agent. Cost columns mirror
-    the run-level row and are populated by B3.
+    queries can attribute tokens by feature / agent. ``connector_slug``
+    (PR 7.2) carries the connector that prompted this call: the most
+    recent completed tool invocation on the same run with
+    ``completed_at`` strictly before this call's ``created_at``. ``None``
+    for cold-turn calls (planning before any tool fires). Cost columns
+    mirror the run-level row and are populated by B3.
     """
 
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -66,6 +70,7 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     subagent_id: str | None = None
     model_provider: str
     model_name: str
+    connector_slug: str | None = None
     input_tokens: NonNegativeInt = 0
     output_tokens: NonNegativeInt = 0
     cached_input_tokens: NonNegativeInt = 0
@@ -126,6 +131,28 @@ class UsageDailyOrgRow(RuntimeContract):
     day: datetime
     model_provider: str
     model_name: str
+    runs_count: NonNegativeInt
+    distinct_users: NonNegativeInt
+    input_tokens: NonNegativeInt
+    output_tokens: NonNegativeInt
+    cached_input_tokens: NonNegativeInt
+    total_tokens: NonNegativeInt
+    cost_micro_usd: int | None = None
+    refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UsageDailyConnectorRow(RuntimeContract):
+    """Daily per-org-per-connector rollup row (PR 7.2).
+
+    ``connector_slug`` is the empty string for the "(unattributed)"
+    bucket (LLM calls before any tool fired this turn). The base table
+    stores ``NULL``; the rollup loop coalesces to ``''`` so the row is
+    representable inside the natural-key PK.
+    """
+
+    org_id: str
+    day: datetime
+    connector_slug: str
     runs_count: NonNegativeInt
     distinct_users: NonNegativeInt
     input_tokens: NonNegativeInt

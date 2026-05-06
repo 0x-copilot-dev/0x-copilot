@@ -10,6 +10,7 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from runtime_adapters.async_wrappers import (
     adapt_event_store_to_async,
     adapt_persistence_to_async,
@@ -22,6 +23,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.settings import RuntimeSettings
@@ -234,7 +236,11 @@ class RuntimeApprovalHandler:
             event_store=self.event_store,
             event_producer=self.event_producer,
             stream_event_mapper=self.stream_event_mapper,
+            attribution=UsageAttributionResolver(self.persistence),
             track_subagents=False,
+            citation_pipeline=CitationStreamPipeline.for_provider(
+                run.runtime_context.model_profile.provider
+            ),
         )
         return StreamingExecutor.compose_final(result)
 

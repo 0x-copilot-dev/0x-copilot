@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 
 from enterprise_service_contracts.scopes import (
@@ -68,6 +69,7 @@ from backend_app.identity import (
     InvitationsService,
     LockoutService,
     LockoutStore,
+    LoggingEmailDispatcher,
     MagicLinkService,
     MagicLinkTokenStore,
     MeStore,
@@ -98,6 +100,7 @@ from backend_app.observability import (
 )
 from backend_app.dev_idp import register_dev_idp_routes
 from backend_app.routes.audit_export import register_audit_export_routes
+from backend_app.routes.audit_list import register_audit_list_routes
 from backend_app.routes.billing import register_billing_routes
 from backend_app.routes.health import register_health_routes
 from backend_app.routes.invitations import register_invitation_routes
@@ -169,6 +172,43 @@ def _default_token_vault(
         return TokenVaultFactory.create(profile=deployment)
     except Exception:
         return None
+
+
+def _assert_email_dispatcher_safe_for_environment(
+    dispatcher: EmailDispatcherPort,
+    *,
+    magic_link_enabled: bool,
+) -> None:
+    """Production fail-closed guard for the magic-link email dispatcher.
+
+    The ``LoggingEmailDispatcher`` writes the one-time URL to logs and
+    never sends mail. That's fine in dev (the URL still appears in the
+    operator's terminal). In production it means users silently never
+    receive the email we ask them to click, so we refuse to start.
+
+    The guard only fires when magic-link is enabled. Bank/strict-SSO
+    deploys turn magic-link off entirely; for them the
+    ``LoggingEmailDispatcher`` is unreachable and harmless.
+
+    Operators inject a real adapter (SES/SMTP/Postmark) at
+    ``create_app(...)`` construction; the same hook the ``TokenVault``
+    uses for KMS injection.
+    """
+
+    if not magic_link_enabled:
+        return
+    if not isinstance(dispatcher, LoggingEmailDispatcher):
+        return
+    environment = os.environ.get("BACKEND_ENVIRONMENT", "development").strip().lower()
+    if environment != "production":
+        return
+    raise RuntimeError(
+        "BACKEND_ENVIRONMENT=production but no email_dispatcher was "
+        "injected; magic-link login would log the URL to stdout instead "
+        "of sending mail. Inject an SES/SMTP/Postmark adapter at "
+        "create_app(...) construction or set "
+        "magic_link_globally_enabled=False."
+    )
 
 
 def _default_saml_verifier() -> SamlVerifier | None:
@@ -412,6 +452,10 @@ def create_app(
         )
         app.state.magic_link_token_store = resolved_magic_link_store
         resolved_email_dispatcher = email_dispatcher or build_default_email_dispatcher()
+        _assert_email_dispatcher_safe_for_environment(
+            resolved_email_dispatcher,
+            magic_link_enabled=magic_link_globally_enabled,
+        )
         app.state.email_dispatcher = resolved_email_dispatcher
         resolved_rate_limiter = InMemoryRateLimiter()
         app.state.login_email_first_rate_limiter = resolved_rate_limiter
@@ -959,6 +1003,7 @@ def create_app(
     register_billing_routes(app)
 
     register_audit_export_routes(app)
+    register_audit_list_routes(app)
     register_me_routes(app)
     register_siem_admin_routes(app)
     register_health_routes(app)

@@ -325,3 +325,75 @@
   gap: var(--space-md);
   justify-content: flex-end;
 }
+
+/* PR 4.4 — Connectors section header has two actions side by side
+   (Browse catalog + Refresh). */
+
+.settings-section__header-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+/* PR 7.1 — audit log table styles. The table reuses ``.settings-table``
+   from the Members panel; these rules add the filter form layout, the
+   action-cell mono treatment, and the load-more / empty / loading
+   surfaces. */
+
+.audit-log__filters {
+  display: grid;
+  gap: var(--space-sm) var(--space-md);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+}
+
+.audit-log__filter-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.audit-log__error,
+.audit-log__warning {
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  margin-bottom: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.audit-log__error {
+  background: var(--color-bg-danger-subtle, rgba(217, 119, 119, 0.08));
+  color: var(--color-text-danger, var(--color-text));
+}
+
+.audit-log__warning {
+  background: var(--color-bg-warn-subtle, rgba(217, 168, 87, 0.08));
+  color: var(--color-text-subtle);
+}
+
+.audit-log__action {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.audit-log__resource {
+  color: var(--color-text-subtle);
+  font-size: 0.85rem;
+}
+
+.audit-log__cell--muted {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.audit-log__empty,
+.audit-log__loading {
+  color: var(--color-text-subtle);
+  font-style: italic;
+  padding: var(--space-md);
+  text-align: center;
+}
+
+.audit-log__more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-sm);
+}

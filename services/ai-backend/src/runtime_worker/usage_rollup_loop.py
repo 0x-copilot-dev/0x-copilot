@@ -157,7 +157,8 @@ class UsageRollupLoop:
         Day-N is recomputed when ``now - day_end < late_arrival``; older
         days are skipped on subsequent ticks once they have been written.
         Idempotency is provided by ``upsert_user_daily_usage`` /
-        ``upsert_org_daily_usage`` (UPSERT keyed by the natural compound).
+        ``upsert_org_daily_usage`` / ``upsert_connector_daily_usage``
+        (UPSERT keyed by the natural compound).
         """
 
         now = datetime.now(timezone.utc)
@@ -201,6 +202,41 @@ class UsageRollupLoop:
                         "metadata": {
                             "org_id": row.org_id,
                             "day": row.day.date().isoformat(),
+                        }
+                    },
+                    exc_info=True,
+                )
+
+        # PR 7.2 — third rollup target: per-connector. Reads from
+        # ``runtime_model_call_usage`` (per-LLM-call) since one run
+        # typically spans connectors. Run-level rollup can't be split.
+        try:
+            call_rows = await self._persistence.query_model_call_usage_for_range(
+                org_id=None, start=start, end=end
+            )
+        except Exception:
+            _LOGGER.warning(
+                "usage_rollup_connector_scan_failed",
+                exc_info=True,
+            )
+            call_rows = ()
+        run_user_lookup = {row.run_id: row.user_id for row in run_rows}
+        connector_rows = UsageQueryService.rollup_connector_rows(
+            call_rows,
+            run_user_lookup=run_user_lookup,
+            refreshed_at=refreshed_at,
+        )
+        for row in connector_rows:
+            try:
+                await self._persistence.upsert_connector_daily_usage(row)
+            except Exception:
+                _LOGGER.warning(
+                    "usage_rollup_connector_upsert_failed",
+                    extra={
+                        "metadata": {
+                            "org_id": row.org_id,
+                            "day": row.day.date().isoformat(),
+                            "connector_slug": row.connector_slug,
                         }
                     },
                     exc_info=True,

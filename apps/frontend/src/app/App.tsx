@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from "../features/auth/AuthContext";
 import { LoginScreen } from "../features/auth/LoginScreen";
 import { MfaPrompt } from "../features/auth/MfaPrompt";
 import { ChatScreen } from "../features/chat/ChatScreen";
+import { ShareScreen } from "../features/share/ShareScreen";
 import {
   clearPendingMcpAuthAction,
   readPendingMcpAuthAction,
@@ -46,7 +47,11 @@ const DEFAULT_ORG_ID =
 
 type AppRoute =
   | { screen: "chat" }
-  | { screen: "settings"; section: SettingsSection };
+  | { screen: "settings"; section: SettingsSection }
+  // PR 6.1/6.2 — recipient view of a shared conversation. The token in
+  // the URL is the access grant; the AuthGate still requires a logged-in
+  // session because v1 keeps shares same-org-only.
+  | { screen: "share"; token: string };
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 // Superset of every Settings section slug in the design. Each wave 4 PR
@@ -65,6 +70,8 @@ const settingsSections = [
   "workspace",
   "members",
   "billing",
+  // PR 7.1 — admin audit log under the Workspace group.
+  "audit-log",
   // PR 4.3 — "AI & data" group.
   "model-and-behavior",
   "privacy-data",
@@ -193,6 +200,7 @@ function completeMcpOAuthOnce(
 // PR 4.3 — Settings is path + hash: ``/settings#<section>``. The legacy
 // ``/settings/<section>`` form is migrated once on mount via
 // ``migrateLegacySettingsPath``; old bookmarks survive without a 404.
+// PR 6.1 — ``/share/:token`` deep-links straight to the recipient view.
 function routeFromLocation(): AppRoute {
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
   if (path === "/settings") {
@@ -213,12 +221,25 @@ function routeFromLocation(): AppRoute {
       section: isSettingsSection(section) ? section : DEFAULT_SETTINGS_SECTION,
     };
   }
+  if (path.startsWith("/share/")) {
+    // Token in the URL is the access grant; we pass it through verbatim.
+    // The recipient endpoint validates it server-side. Empty path
+    // segment falls through to ``chat`` (defensive — should not happen
+    // because we always emit ``/share/<token>`` from the share popover).
+    const token = decodeURIComponent(path.slice("/share/".length));
+    if (token) {
+      return { screen: "share", token };
+    }
+  }
   return { screen: "chat" };
 }
 
 function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "chat") {
     return { path: "/", hash: "" };
+  }
+  if (route.screen === "share") {
+    return { path: `/share/${encodeURIComponent(route.token)}`, hash: "" };
   }
   return {
     path: "/settings",
@@ -384,6 +405,22 @@ function EnterpriseSearchApp({
         onSectionChange={(section) =>
           applyAppRoute({ screen: "settings", section }, setRoute)
         }
+      />
+    );
+  }
+
+  if (route.screen === "share") {
+    return (
+      <ShareScreen
+        token={route.token}
+        identity={identity}
+        onForked={(conversationId) => {
+          // After fork, navigate to the chat surface with the new
+          // conversation pre-selected. The chat screen reads
+          // ?conversationId= and opens that thread.
+          window.location.href = `/?conversationId=${encodeURIComponent(conversationId)}`;
+        }}
+        onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
       />
     );
   }

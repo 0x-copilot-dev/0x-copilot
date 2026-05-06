@@ -37,6 +37,8 @@ export const SETTINGS_SECTIONS = [
   "workspace",
   "members",
   "billing",
+  // PR 7.1 — admin audit log under the Workspace group
+  "audit-log",
   // PR 4.3 — "AI & data" group
   "model-and-behavior",
   "connectors",

@@ -31,6 +31,7 @@ function makeUsage(byUser: Array<Record<string, unknown>>): UsageOrgResponse {
     by_day: [],
     by_model: [],
     by_user: byUser as never,
+    by_connector: [],
     cold_start_fallback: false,
   };
 }

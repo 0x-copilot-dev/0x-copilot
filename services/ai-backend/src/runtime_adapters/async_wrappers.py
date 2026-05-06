@@ -435,17 +435,36 @@ class SyncToAsyncPersistence:
     async def upsert_org_daily_usage(self, row):  # type: ignore[no-untyped-def]
         await asyncio.to_thread(self._port.upsert_org_daily_usage, row)
 
+    async def upsert_connector_daily_usage(self, row):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(self._port.upsert_connector_daily_usage, row)
+
     async def query_user_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.query_user_daily_usage, **kwargs)
 
     async def query_org_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.query_org_daily_usage, **kwargs)
 
+    async def query_connector_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.query_connector_daily_usage, **kwargs)
+
     async def query_run_usage(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.query_run_usage, **kwargs)
 
     async def query_run_usage_for_range(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.query_run_usage_for_range, **kwargs)
+
+    async def query_model_call_usage_for_range(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.query_model_call_usage_for_range, **kwargs
+        )
+
+    async def query_last_completed_tool_connector_slug(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(
+            self._port.query_last_completed_tool_connector_slug, **kwargs
+        )
+
+    async def list_audit_log_events(self, **kwargs):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(self._port.list_audit_log_events, **kwargs)
 
     async def query_top_conversations(self, **kwargs):  # type: ignore[no-untyped-def]
         return await asyncio.to_thread(self._port.query_top_conversations, **kwargs)
