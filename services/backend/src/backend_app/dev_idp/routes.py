@@ -17,15 +17,18 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException, status
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from backend_app.contracts import OrganizationRecord, UserRecord
 from backend_app.dev_idp._sign import sign_identity_token
 from backend_app.dev_idp.personas import (
+    DevOrg,
     DevPersona,
     PersonaDirectory,
     PersonaLoader,
 )
+from backend_app.identity.store import IdentityStore
 
 
 _DEV_BEARER_TTL = timedelta(days=365)
@@ -96,7 +99,7 @@ def _build_router(loader: PersonaLoader) -> APIRouter:
         )
 
     @router.post("/identity/mint", response_model=DevMintResponse)
-    def mint_identity(payload: DevMintRequest) -> DevMintResponse:
+    def mint_identity(payload: DevMintRequest, request: Request) -> DevMintResponse:
         directory = loader.load()
         try:
             persona = directory.persona(payload.persona_slug)
@@ -111,6 +114,19 @@ def _build_router(loader: PersonaLoader) -> APIRouter:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ENTERPRISE_AUTH_SECRET is not configured",
             )
+        # First-mint side-effect: ensure the org and user records the
+        # bearer references actually exist in the identity store. Without
+        # this, every persona authenticates successfully but anything that
+        # reads from identity_store (profile, preferences, member chips,
+        # …) 404s with "user_not_found". Idempotent — a re-mint is a
+        # no-op once the records exist. Dev-only path; the route itself is
+        # only mounted when BACKEND_ENVIRONMENT=development.
+        identity_store: IdentityStore | None = getattr(
+            request.app.state, "identity_store", None
+        )
+        if identity_store is not None:
+            org = directory.org_by_id(persona.org_id)
+            _ensure_persona_seeded(identity_store, org=org, persona=persona)
         now = datetime.now(timezone.utc)
         expires_at = now + _DEV_BEARER_TTL
         token_payload = {
@@ -162,6 +178,49 @@ def register_dev_idp_routes(
     app.state.dev_persona_loader = loader
     app.include_router(_build_router(loader))
     return True
+
+
+def _ensure_persona_seeded(
+    identity_store: IdentityStore,
+    *,
+    org: DevOrg,
+    persona: DevPersona,
+) -> None:
+    """Idempotently insert the org + user the persona refers to.
+
+    The dev IdP signs bearers from a YAML fixture; the rest of the
+    backend assumes the corresponding identity rows exist. Without this
+    seed the bearer is valid but every read against identity_store 404s.
+    """
+
+    if identity_store.get_organization(org_id=org.id) is None:
+        try:
+            identity_store.create_organization(
+                OrganizationRecord(
+                    org_id=org.id,
+                    display_name=org.display_name,
+                    slug=org.slug,
+                )
+            )
+        except ValueError:
+            # Lost a race against a concurrent mint of the same persona;
+            # the row exists now, that's all we needed.
+            pass
+    if identity_store.get_user(org_id=persona.org_id, user_id=persona.user_id) is None:
+        try:
+            identity_store.create_user(
+                UserRecord(
+                    user_id=persona.user_id,
+                    org_id=persona.org_id,
+                    primary_email=persona.primary_email,
+                    display_name=persona.display_name,
+                )
+            )
+        except ValueError:
+            # Either a race against a concurrent mint, or the persona
+            # YAML re-used an email already taken by another user in the
+            # org. Idempotency is the goal; tolerate both.
+            pass
 
 
 def _default_persona_path() -> Path:

@@ -2,6 +2,7 @@ import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
 
 const REQUEST_ID_HEADER = "x-request-id";
+const AUTHORIZATION_HEADER = "authorization";
 
 // AuthContext registers a callback so a 401 anywhere in the API surface
 // flows back to "anonymous" + login redirect — without prop-threading
@@ -14,6 +15,19 @@ export function configureUnauthorizedHandler(
   handler: UnauthorizedHandler | null,
 ): void {
   _onUnauthorized = handler ?? (() => {});
+}
+
+// Bearer plumbing lives at the HTTP layer (not in authApi) so every API
+// helper attaches `Authorization: Bearer …` automatically when a session
+// is active. Previously this was private to authApi.ts and most modules
+// shipped requests with no bearer at all — the facade tolerated that
+// while DEV_AUTH_BYPASS existed (W0.1 removed it). AuthProvider wires
+// this up once on mount via configureAuthBearerProvider.
+type BearerProvider = () => string | null;
+let _bearerProvider: BearerProvider = () => null;
+
+export function configureAuthBearerProvider(provider: BearerProvider): void {
+  _bearerProvider = provider;
 }
 
 export class UnauthorizedError extends Error {
@@ -52,8 +66,21 @@ export function newRequestId(): string {
   return `req_${random}`;
 }
 
+// Default headers attached to every same-origin /v1/* request: a fresh
+// request-id for tracing plus the bearer when a session is active.
+// Public endpoints (e.g. /v1/auth/discover) ignore the bearer; protected
+// endpoints reject the call without it. Consumers should not branch on
+// auth state — just call this and let the bearer ride along when it
+// exists.
 export function correlationHeaders(): Record<string, string> {
-  return { [REQUEST_ID_HEADER]: newRequestId() };
+  const headers: Record<string, string> = {
+    [REQUEST_ID_HEADER]: newRequestId(),
+  };
+  const bearer = _bearerProvider();
+  if (bearer) {
+    headers[AUTHORIZATION_HEADER] = `Bearer ${bearer}`;
+  }
+  return headers;
 }
 
 export function jsonHeaders(): HeadersInit {

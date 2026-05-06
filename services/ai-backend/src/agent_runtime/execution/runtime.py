@@ -9,7 +9,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from agent_runtime.execution.contracts import RuntimeErrorCode, RuntimeRunHandle
+from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.observability.logging import (
@@ -41,12 +41,6 @@ class RuntimeStreamOptions:
             "subgraphs": True,
             "version": "v2",
         }
-
-
-def runtime_run_handle(harness: RuntimeHarness) -> RuntimeRunHandle:
-    """Return the product-owned run handle before graph execution completes."""
-
-    return RuntimeRunHandle.from_context(harness.context)
 
 
 def runtime_config(harness: RuntimeHarness) -> dict[str, object]:

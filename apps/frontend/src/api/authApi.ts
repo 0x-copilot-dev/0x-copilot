@@ -34,34 +34,13 @@ import type {
 
 import { assertOk, correlationHeaders, jsonHeaders } from "./http";
 
-const REQUEST_BEARER_HEADER = "authorization";
-
-let _bearerProvider: () => string | null = () => null;
-
-/**
- * Wire the AuthContext into the API client so every protected request
- * picks up the current bearer without prop-threading. Called once by
- * ``AuthProvider`` after it boots.
- */
-export function configureAuthBearerProvider(
-  provider: () => string | null,
-): void {
-  _bearerProvider = provider;
-}
-
-function authHeaders(): HeadersInit {
-  const bearer = _bearerProvider();
-  return bearer
-    ? { ...correlationHeaders(), [REQUEST_BEARER_HEADER]: `Bearer ${bearer}` }
-    : correlationHeaders();
-}
-
-function authJsonHeaders(): HeadersInit {
-  return { "content-type": "application/json", ...authHeaders() };
-}
+// Bearer attachment lives in `./http` (configureAuthBearerProvider) so
+// every API helper picks up the active session, not just authApi. The
+// re-export keeps AuthProvider's existing import surface stable.
+export { configureAuthBearerProvider } from "./http";
 
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: authHeaders() });
+  const response = await fetch(path, { headers: correlationHeaders() });
   await assertOk(response);
   return (await response.json()) as T;
 }
@@ -69,7 +48,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
-    headers: authJsonHeaders(),
+    headers: jsonHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   await assertOk(response);
@@ -83,7 +62,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 async function del(path: string): Promise<void> {
   const response = await fetch(path, {
     method: "DELETE",
-    headers: authHeaders(),
+    headers: correlationHeaders(),
   });
   await assertOk(response);
 }

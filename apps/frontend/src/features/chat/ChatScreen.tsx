@@ -37,6 +37,7 @@ import {
   replayRunEvents,
   streamRunEvents,
   updateConversation,
+  type AgentEventStream,
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
@@ -172,7 +173,7 @@ export function ChatScreen({
     DEFAULT_THINKING_DEPTH,
     isThinkingDepth,
   );
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<AgentEventStream | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());

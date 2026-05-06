@@ -524,6 +524,17 @@ export function replayRunEvents(
   );
 }
 
+/**
+ * Closeable handle for a running SSE subscription. Replaces the bare
+ * EventSource the FE used pre-W0.1: the browser's EventSource cannot
+ * carry an Authorization header, so the bearer never reached the
+ * facade and every stream 401'd. The fetch-based implementation in
+ * `_streamSseEvents` ships the bearer like any other API call.
+ */
+export interface AgentEventStream {
+  close(): void;
+}
+
 export function streamRunEvents({
   runId,
   afterSequence = 0,
@@ -540,30 +551,33 @@ export function streamRunEvents({
   onError: (error: Event) => void;
   onProtocolError?: (error: RuntimeStreamProtocolError) => void;
   onOpen?: () => void;
-}): EventSource {
+}): AgentEventStream {
   const params = identityParams(identity);
   params.set("after_sequence", String(afterSequence));
-  const eventSource = new EventSource(
-    `/v1/agent/runs/${runId}/stream?${params}`,
-  );
-  eventSource.addEventListener("open", () => onOpen?.());
-  eventSource.addEventListener(SSE_EVENT_NAME, (message) => {
-    const data = String((message as MessageEvent).data);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(data) as unknown;
-    } catch {
-      onProtocolError?.(new RuntimeStreamProtocolError("malformed_json", data));
-      return;
-    }
-    if (isRuntimeEventEnvelope(parsed)) {
-      onEvent(parsed);
-      return;
-    }
-    onProtocolError?.(new RuntimeStreamProtocolError("invalid_envelope", data));
+  return _streamSseEvents({
+    url: `/v1/agent/runs/${runId}/stream?${params}`,
+    eventName: SSE_EVENT_NAME,
+    onOpen,
+    onError,
+    onMessage: (data) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data) as unknown;
+      } catch {
+        onProtocolError?.(
+          new RuntimeStreamProtocolError("malformed_json", data),
+        );
+        return;
+      }
+      if (isRuntimeEventEnvelope(parsed)) {
+        onEvent(parsed);
+        return;
+      }
+      onProtocolError?.(
+        new RuntimeStreamProtocolError("invalid_envelope", data),
+      );
+    },
   });
-  eventSource.addEventListener("error", onError);
-  return eventSource;
 }
 
 // PR 1.4.1 Gap #6 — recipient inbox endpoint. Filters approvals where the
@@ -606,28 +620,156 @@ export function streamInboxEvents({
   onEvent: (event: InboxEventEnvelope) => void;
   onError: (event: Event) => void;
   onOpen?: () => void;
-}): EventSource {
+}): AgentEventStream {
   const params = identityParams(identity);
   params.set("after_sequence", String(afterSequence));
-  const eventSource = new EventSource(`/v1/agent/me/inbox/stream?${params}`);
-  eventSource.addEventListener("open", () => onOpen?.());
-  eventSource.addEventListener(SSE_EVENT_NAME, (message) => {
-    const data = String((message as MessageEvent).data);
-    try {
-      const parsed = JSON.parse(data) as InboxEventEnvelope;
-      if (
-        typeof parsed.sequence_no === "number" &&
-        typeof parsed.event_type === "string" &&
-        typeof parsed.approval_id === "string"
-      ) {
-        onEvent(parsed);
+  return _streamSseEvents({
+    url: `/v1/agent/me/inbox/stream?${params}`,
+    eventName: SSE_EVENT_NAME,
+    onOpen,
+    onError,
+    onMessage: (data) => {
+      try {
+        const parsed = JSON.parse(data) as InboxEventEnvelope;
+        if (
+          typeof parsed.sequence_no === "number" &&
+          typeof parsed.event_type === "string" &&
+          typeof parsed.approval_id === "string"
+        ) {
+          onEvent(parsed);
+        }
+      } catch {
+        // Malformed payload; FE caller can wire onError if needed.
       }
-    } catch {
-      // Malformed payload; FE caller can wire onError if needed.
-    }
+    },
   });
-  eventSource.addEventListener("error", onError);
-  return eventSource;
+}
+
+/**
+ * Authenticated SSE reader.
+ *
+ * Why not EventSource? The browser's `EventSource` cannot send custom
+ * headers, so the bearer never reaches the facade and the stream 401s.
+ * Workarounds (cookie sessions, `?token=…` URL params) either invent a
+ * second auth scheme or write bearer-equivalents to access logs / proxy
+ * logs — bad fit for the bearer-only model the codebase committed to in
+ * W0.1. Streaming `fetch` carries the standard `Authorization` header
+ * via `correlationHeaders()`, no new server surface, no logged
+ * credentials.
+ *
+ * Reconnect semantics intentionally live with the caller — the chat
+ * screen knows the right `?after_sequence=N` to resume with based on
+ * the highest event it has actually rendered.
+ */
+function _streamSseEvents({
+  url,
+  eventName,
+  onOpen,
+  onError,
+  onMessage,
+}: {
+  url: string;
+  eventName: string;
+  onOpen?: () => void;
+  onError: (event: Event) => void;
+  onMessage: (data: string) => void;
+}): AgentEventStream {
+  const controller = new AbortController();
+  const stream: AgentEventStream = {
+    close: () => controller.abort(),
+  };
+
+  void (async () => {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: { ...correlationHeaders(), accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      onError(_streamErrorEvent(err));
+      return;
+    }
+    if (!response.ok || response.body === null) {
+      onError(_streamErrorEvent(`stream returned ${response.status}`));
+      return;
+    }
+    onOpen?.();
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      // SSE frames are separated by a blank line. We accumulate text
+      // across chunks, split on the frame boundary, and dispatch each
+      // completed frame. A frame's `event:` and `data:` lines are
+      // collected and the buffered data is passed to onMessage when the
+      // event name matches.
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          _dispatchFrame(frame, eventName, onMessage);
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      onError(_streamErrorEvent(err));
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+
+  return stream;
+}
+
+function _dispatchFrame(
+  frame: string,
+  expectedEvent: string,
+  onMessage: (data: string) => void,
+): void {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (line === "" || line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+    // Other SSE fields (id:, retry:) intentionally ignored — the chat
+    // screen owns reconnect cursoring via after_sequence.
+  }
+  if (event !== expectedEvent || dataLines.length === 0) {
+    return;
+  }
+  onMessage(dataLines.join("\n"));
+}
+
+function _streamErrorEvent(detail: unknown): Event {
+  // The legacy callers were typed against EventSource's onerror, which
+  // hands them a bare Event. Mirror that — the only handler we have on
+  // the chat screen reacts to "stream broken" and reconnects; the
+  // detail is logged elsewhere.
+  if (typeof Event === "function") {
+    return new Event("error");
+  }
+  return { type: "error", detail } as unknown as Event;
 }
 
 // PR 6.1 — Conversation sharing. Six endpoints; the bearer ``share_token``

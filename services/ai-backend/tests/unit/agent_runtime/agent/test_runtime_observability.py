@@ -6,14 +6,17 @@ from typing import Any
 
 import pytest
 
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    RuntimeDependencies,
+    RuntimeRunHandle,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.execution.graph import ConfiguredRuntimeGraph
 from agent_runtime.execution.runtime import (
     invoke_runtime,
     runtime_config,
-    runtime_run_handle,
 )
 from agent_runtime.observability.tracing import TraceNames
 
@@ -85,7 +88,7 @@ def test_runtime_config_uses_product_run_id_without_raw_identity(
     )
 
     config = runtime_config(harness)
-    handle = runtime_run_handle(harness)
+    handle = RuntimeRunHandle.from_context(harness.context)
 
     assert handle.run_id == "run_123"
     assert config["configurable"]["thread_id"] == "run_123"  # type: ignore[index]
