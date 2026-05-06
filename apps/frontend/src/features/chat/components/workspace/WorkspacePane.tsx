@@ -19,7 +19,10 @@ import { useId, type ReactElement } from "react";
 
 import type { SourceEntryMap } from "../../chatModel/sourcesReducer";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
-import type { SubagentActivitiesByTask } from "./useSubagentActivities";
+import type {
+  SubagentActivitiesByTask,
+  SubagentHistoryGroup,
+} from "./useSubagentActivities";
 import { ApprovalsTab } from "./ApprovalsTab";
 import { AgentsTab } from "./AgentsTab";
 import { DraftTab, type DraftTabProps } from "./DraftTab";
@@ -52,6 +55,7 @@ export interface WorkspacePaneProps {
    *  `ChatScreen` from `useSubagentActivities(items)` so the pane and
    *  the in-thread `SubagentTool` share one source of truth. */
   subagentActivitiesByTask?: SubagentActivitiesByTask;
+  subagentHistoryGroups?: readonly SubagentHistoryGroup[];
   /** Draft tab inputs (PR 1.3 + PR 3.2 mutations). */
   draft: DraftTabProps["draft"];
   draftLoading?: boolean;
@@ -85,6 +89,7 @@ export function WorkspacePane({
   subagentsError,
   onJumpToSubagent,
   subagentActivitiesByTask,
+  subagentHistoryGroups,
   draft,
   draftLoading,
   draftError,
@@ -197,6 +202,7 @@ export function WorkspacePane({
             focusTaskId={state.focus.subagentTaskId ?? null}
             onJumpToSubagent={onJumpToSubagent}
             activitiesByTask={subagentActivitiesByTask}
+            historyGroups={subagentHistoryGroups}
           />
         ) : null}
         {state.activeTab === "draft" ? (

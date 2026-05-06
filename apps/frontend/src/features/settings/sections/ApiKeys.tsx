@@ -1,13 +1,16 @@
 // PR B3 / 8.0.3g — personal API keys settings panel.
+// PR 8.2 — Personal | Workspace tab strip.
+// PR 8.3 — Workspace tab now wires to real workspace-issued admin tokens.
 //
-// Lists active keys, mints new ones (showing the plaintext exactly
-// once), revokes, and rotates. The plaintext returned by POST /
-// rotate is stored only in transient component state and cleared
-// when the dismiss-revealed-secret button fires.
+// Both tabs share a single body component (`ApiKeysBody`) that takes the
+// API surface as a prop. Each tab instance owns its own keys / draft /
+// revealed state so switching tabs doesn't blow away in-flight UI state.
 
 import type {
+  ApiKeyKind,
   ApiKeyListResponse,
   ApiKeySummary,
+  CreateApiKeyRequest,
   CreateApiKeyResponse,
 } from "@enterprise-search/api-types";
 import {
@@ -20,11 +23,37 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import {
   createMyApiKey,
+  createWorkspaceApiKey,
   listMyApiKeys,
+  listWorkspaceApiKeys,
   revokeMyApiKey,
+  revokeWorkspaceApiKey,
   rotateMyApiKey,
+  rotateWorkspaceApiKey,
 } from "../../../api/meApi";
 import { useAuth } from "../../auth/AuthContext";
+
+/** API surface for one scope. Lets the body stay scope-agnostic. */
+interface ApiKeysOps {
+  list: () => Promise<ApiKeyListResponse>;
+  create: (request: CreateApiKeyRequest) => Promise<CreateApiKeyResponse>;
+  revoke: (apiKeyId: string) => Promise<void>;
+  rotate: (apiKeyId: string) => Promise<CreateApiKeyResponse>;
+}
+
+const PERSONAL_OPS: ApiKeysOps = {
+  list: listMyApiKeys,
+  create: createMyApiKey,
+  revoke: revokeMyApiKey,
+  rotate: rotateMyApiKey,
+};
+
+const WORKSPACE_OPS: ApiKeysOps = {
+  list: listWorkspaceApiKeys,
+  create: createWorkspaceApiKey,
+  revoke: revokeWorkspaceApiKey,
+  rotate: rotateWorkspaceApiKey,
+};
 
 interface RevealedKey {
   api_key_id: string;
@@ -32,93 +61,19 @@ interface RevealedKey {
   plaintext: string;
 }
 
-type ApiKeyTab = "personal" | "workspace";
-
 export function ApiKeys(): ReactElement {
   const auth = useAuth();
   const isAdmin =
     auth.identity?.permission_scopes?.includes("admin:users") ?? false;
-  // PR 8.2 — split Personal / Workspace tabs in the rail. Workspace-issued
-  // tokens are not yet implemented; the tab renders an honest empty state.
-  // Non-admins still see the tab strip but the Workspace pill is disabled.
-  const [tab, setTab] = useState<ApiKeyTab>("personal");
-  const [keys, setKeys] = useState<readonly ApiKeySummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [draftLabel, setDraftLabel] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [revealed, setRevealed] = useState<RevealedKey | null>(null);
+  const [tab, setTab] = useState<ApiKeyKind>("personal");
 
-  const refresh = useCallback(() => {
-    listMyApiKeys()
-      .then((response: ApiKeyListResponse) => {
-        setKeys(response.keys);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not load keys.");
-      });
-  }, []);
-
+  // Force-back to personal if a non-admin somehow lands on workspace
+  // (shouldn't happen — the tab is disabled — but defensive).
   useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const onCreate = useCallback(() => {
-    const label = draftLabel.trim();
-    if (!label) {
-      setError("Label is required.");
-      return;
+    if (tab === "workspace" && !isAdmin) {
+      setTab("personal");
     }
-    setBusy(true);
-    setError(null);
-    createMyApiKey({ label })
-      .then((response: CreateApiKeyResponse) => {
-        setRevealed({
-          api_key_id: response.key.id,
-          label: response.key.label,
-          plaintext: response.plaintext,
-        });
-        setDraftLabel("");
-        refresh();
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not create key.");
-      })
-      .finally(() => setBusy(false));
-  }, [draftLabel, refresh]);
-
-  const onRevoke = useCallback(
-    (api_key_id: string) => {
-      revokeMyApiKey(api_key_id)
-        .then(() => refresh())
-        .catch((err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not revoke key.",
-          ),
-        );
-    },
-    [refresh],
-  );
-
-  const onRotate = useCallback(
-    (api_key_id: string) => {
-      rotateMyApiKey(api_key_id)
-        .then((response) => {
-          setRevealed({
-            api_key_id: response.key.id,
-            label: response.key.label,
-            plaintext: response.plaintext,
-          });
-          refresh();
-        })
-        .catch((err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not rotate key.",
-          ),
-        );
-    },
-    [refresh],
-  );
+  }, [tab, isAdmin]);
 
   return (
     <div className="settings-section">
@@ -161,68 +116,123 @@ export function ApiKeys(): ReactElement {
         </button>
       </div>
 
-      {tab === "workspace" ? (
-        <Card>
-          <h3 className="me-form__card-title">Workspace-issued tokens</h3>
-          <p className="settings-meta">
-            Admin-issued tokens with workspace-wide scopes are coming soon. For
-            now, use a personal key with elevated scopes — the agent inherits
-            the same permissions either way.
-          </p>
-        </Card>
+      {tab === "personal" ? (
+        <ApiKeysBody
+          scope="personal"
+          ops={PERSONAL_OPS}
+          intro="Personal bearer tokens for CI / scripts. The full secret is shown only once at creation — copy it now or rotate the key."
+        />
       ) : null}
 
-      {tab === "personal" ? (
-        <PersonalApiKeysBody
-          keys={keys}
-          error={error}
-          revealed={revealed}
-          draftLabel={draftLabel}
-          busy={busy}
-          onChangeLabel={setDraftLabel}
-          onCreate={onCreate}
-          onClearRevealed={() => setRevealed(null)}
-          onRotate={onRotate}
-          onRevoke={onRevoke}
+      {tab === "workspace" ? (
+        <ApiKeysBody
+          scope="workspace"
+          ops={WORKSPACE_OPS}
+          intro="Workspace-issued tokens for shared automations. Any admin can revoke. Audit attribution stays with the admin who minted the key."
         />
       ) : null}
     </div>
   );
 }
 
-function PersonalApiKeysBody({
-  keys,
-  error,
-  revealed,
-  draftLabel,
-  busy,
-  onChangeLabel,
-  onCreate,
-  onClearRevealed,
-  onRotate,
-  onRevoke,
+function ApiKeysBody({
+  scope,
+  ops,
+  intro,
 }: {
-  keys: readonly ApiKeySummary[] | null;
-  error: string | null;
-  revealed: RevealedKey | null;
-  draftLabel: string;
-  busy: boolean;
-  onChangeLabel: (next: string) => void;
-  onCreate: () => void;
-  onClearRevealed: () => void;
-  onRotate: (apiKeyId: string) => void;
-  onRevoke: (apiKeyId: string) => void;
+  scope: ApiKeyKind;
+  ops: ApiKeysOps;
+  intro: string;
 }): ReactElement {
+  const [keys, setKeys] = useState<readonly ApiKeySummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [draftLabel, setDraftLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [revealed, setRevealed] = useState<RevealedKey | null>(null);
+
+  const refresh = useCallback(() => {
+    ops
+      .list()
+      .then((response: ApiKeyListResponse) => {
+        setKeys(response.keys);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not load keys.");
+      });
+  }, [ops]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const onCreate = useCallback(() => {
+    const label = draftLabel.trim();
+    if (!label) {
+      setError("Label is required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    ops
+      .create({ label })
+      .then((response: CreateApiKeyResponse) => {
+        setRevealed({
+          api_key_id: response.key.id,
+          label: response.key.label,
+          plaintext: response.plaintext,
+        });
+        setDraftLabel("");
+        refresh();
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not create key.");
+      })
+      .finally(() => setBusy(false));
+  }, [draftLabel, ops, refresh]);
+
+  const onRevoke = useCallback(
+    (api_key_id: string) => {
+      ops
+        .revoke(api_key_id)
+        .then(() => refresh())
+        .catch((err: unknown) =>
+          setError(
+            err instanceof Error ? err.message : "Could not revoke key.",
+          ),
+        );
+    },
+    [ops, refresh],
+  );
+
+  const onRotate = useCallback(
+    (api_key_id: string) => {
+      ops
+        .rotate(api_key_id)
+        .then((response) => {
+          setRevealed({
+            api_key_id: response.key.id,
+            label: response.key.label,
+            plaintext: response.plaintext,
+          });
+          refresh();
+        })
+        .catch((err: unknown) =>
+          setError(
+            err instanceof Error ? err.message : "Could not rotate key.",
+          ),
+        );
+    },
+    [ops, refresh],
+  );
+
   return (
     <>
-      <p>
-        Personal bearer tokens for CI / scripts. The full secret is shown only
-        once at creation — copy it now or rotate the key.
-      </p>
+      <p>{intro}</p>
 
       <Card>
         <Field
-          label="New API key"
+          label={scope === "personal" ? "New API key" : "New workspace key"}
           hint="Choose a memorable label. Keys inherit your account scopes."
         >
           <div className="settings-row">
@@ -231,7 +241,7 @@ function PersonalApiKeysBody({
               value={draftLabel}
               maxLength={128}
               placeholder="e.g. ci-bot, deploy-prod"
-              onChange={(event) => onChangeLabel(event.target.value)}
+              onChange={(event) => setDraftLabel(event.target.value)}
             />
             <Button
               variant="primary"
@@ -251,7 +261,7 @@ function PersonalApiKeysBody({
             hint="Copy this now. The server stores only the hash; you cannot retrieve it again."
           >
             <code className="settings-code-block">{revealed.plaintext}</code>
-            <Button variant="secondary" onClick={onClearRevealed}>
+            <Button variant="secondary" onClick={() => setRevealed(null)}>
               I've saved it
             </Button>
           </Field>
@@ -259,21 +269,21 @@ function PersonalApiKeysBody({
       )}
 
       <Card>
-        <Field
-          label="Active keys"
-          hint={keys === null ? "Loading…" : `${keys.length} active`}
-        >
-          {keys === null ? null : keys.length === 0 ? (
-            <p>No active keys yet. Create one above.</p>
+        <Field label="Active keys">
+          {keys === null ? (
+            <p>Loading…</p>
+          ) : keys.length === 0 ? (
+            <p className="settings-meta">No keys yet.</p>
           ) : (
             <ul className="settings-key-list">
               {keys.map((key) => (
                 <li key={key.id} className="settings-key-row">
                   <div>
                     <strong>{key.label}</strong>
-                    <code>atlas_pk_{key.key_prefix}_…</code>
                     <small>
-                      Created {key.created_at}
+                      {" "}
+                      · prefix <code>{key.key_prefix}</code> · created{" "}
+                      {new Date(key.created_at).toLocaleDateString()}
                       {key.last_used_at
                         ? ` · last used ${key.last_used_at}`
                         : " · never used"}

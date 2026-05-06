@@ -2,6 +2,8 @@
 #   cd services/backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
 cryptography>=44.0.0
 fastapi==0.136.1
+# PR 8.3 — UploadFile / multipart parsing on the avatar route.
+python-multipart>=0.0.20
 httpx==0.28.1
 psycopg[binary]==3.3.3
 psycopg_pool>=3.2.0

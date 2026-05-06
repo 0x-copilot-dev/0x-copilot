@@ -38,8 +38,10 @@ The facade intentionally does not expose backend `/internal/v1/*` routes.
 
 JSON routes use an `httpx.AsyncClient` with a 30 second timeout. Upstream
 non-2xx responses are returned as `HTTPException` with the upstream status and
-body text. For routes that expect JSON, the facade requires the upstream payload
-to be a JSON object; non-object JSON becomes `502 Bad Gateway`.
+body text. For routes that expect JSON objects, the facade requires the upstream
+payload to be a JSON object; non-object JSON becomes `502 Bad Gateway`. Routes
+whose public contract is a top-level array opt out explicitly at the forwarding
+call site.
 
 The current facade uses `dict[str, object]` payloads and relies on upstream
 services for validation. If response shaping or app-specific validation becomes

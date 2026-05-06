@@ -1,5 +1,6 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { ChatItem } from "./chatModel";
+import { hasPendingActionForRun } from "./chatModel/status";
 
 export type RunUiPhase =
   | "idle"
@@ -39,7 +40,7 @@ export function deriveRunUiState({
 
   const event = latestEvent?.run_id === activeRunId ? latestEvent : null;
   const eventPhase = phaseForEvent(event);
-  if (eventPhase !== "terminal" && runHasPendingAction(items, activeRunId)) {
+  if (eventPhase !== "terminal" && hasPendingActionForRun(items, activeRunId)) {
     return {
       phase: "waiting_for_permission",
       headerStatus: "Waiting for permission...",
@@ -126,25 +127,6 @@ function headerStatusForPhase(
       }
       return "Stopped";
   }
-}
-
-function runHasPendingAction(
-  items: readonly ChatItem[],
-  runId: string,
-): boolean {
-  return items.some(
-    (item) =>
-      item.kind === "message" &&
-      item.role === "assistant" &&
-      item.runId === runId &&
-      item.content.some(
-        (part) =>
-          part.type === "tool-call" &&
-          (part.toolName === "approval_request" ||
-            part.toolName === "mcp_auth_required") &&
-          part.result === undefined,
-      ),
-  );
 }
 
 function isCompletedActionEvent(event: RuntimeEventEnvelope): boolean {

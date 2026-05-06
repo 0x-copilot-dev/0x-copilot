@@ -47,6 +47,8 @@ export function SubagentFleetCard({
     running > 0
       ? `${running} running · ${done}/${total} done`
       : `${done}/${total} done`;
+  const displayTitle =
+    total > 0 ? `Dispatched ${total} subagents in parallel` : title;
   return (
     <section
       className="aui-fleet-card"
@@ -55,13 +57,16 @@ export function SubagentFleetCard({
     >
       <header className="aui-fleet-card__head">
         <span className="aui-fleet-card__icon" aria-hidden="true">
-          ✦
+          ⌘
         </span>
-        <span className="aui-fleet-card__title">{title}</span>
+        <span className="aui-fleet-card__title">{displayTitle}</span>
         <span className="aui-fleet-card__count">{headStatus}</span>
       </header>
-      {sub ? <p className="aui-fleet-card__sub">{sub}</p> : null}
-      <div className="aui-fleet-card__rows">{children}</div>
+      <p className="aui-fleet-card__sub">
+        {sub ??
+          "They'll keep working while we draft. Live status in the Agents tab."}
+      </p>
+      {children ? <div className="aui-fleet-card__rows">{children}</div> : null}
       <footer className="aui-fleet-card__foot">
         <span>
           Subagents run in parallel — keep chatting and they'll report back.

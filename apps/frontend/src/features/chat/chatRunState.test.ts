@@ -35,6 +35,45 @@ function pendingApprovalItem(runId = "run_123"): ChatItem {
   } as ChatItem;
 }
 
+function pendingMcpDiscoveryItem(runId = "run_123"): ChatItem {
+  return {
+    id: `assistant-${runId}`,
+    kind: "message",
+    role: "assistant",
+    runId,
+    content: [
+      {
+        type: "tool-call",
+        toolCallId: "mcp_discovery_123",
+        toolName: "mcp_auth_required",
+        args: {
+          approval_id: "mcp_discovery_123",
+          discovery_reason: "tool_may_help",
+          server_id: "linear",
+          status: "waiting",
+        },
+      },
+    ],
+  } as ChatItem;
+}
+
+function resolvedApprovalItemWithoutResult(runId = "run_123"): ChatItem {
+  return {
+    id: `assistant-${runId}`,
+    kind: "message",
+    role: "assistant",
+    runId,
+    content: [
+      {
+        type: "tool-call",
+        toolCallId: "approval_123",
+        toolName: "approval_request",
+        args: { approval_id: "approval_123", status: "answered" },
+      },
+    ],
+  } as ChatItem;
+}
+
 describe("deriveRunUiState", () => {
   it("shows planning while an active run is starting", () => {
     const state = deriveRunUiState({
@@ -66,6 +105,44 @@ describe("deriveRunUiState", () => {
       phase: "waiting_for_permission",
       headerStatus: "Waiting for permission...",
       showPlanningIndicator: false,
+    });
+  });
+
+  it("keeps planning visible for unresolved optional MCP discovery suggestions", () => {
+    const state = deriveRunUiState({
+      activeRunId: "run_123",
+      items: [pendingMcpDiscoveryItem()],
+      latestEvent: event({
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        status: "completed",
+        payload: { status: "completed" },
+      }),
+    });
+
+    expect(state).toMatchObject({
+      phase: "working",
+      headerStatus: "Working...",
+      showPlanningIndicator: true,
+    });
+  });
+
+  it("keeps planning visible when an action has a resolved status but no result", () => {
+    const state = deriveRunUiState({
+      activeRunId: "run_123",
+      items: [resolvedApprovalItemWithoutResult()],
+      latestEvent: event({
+        event_type: "tool_call_completed",
+        activity_kind: "tool",
+        status: "completed",
+        payload: { status: "completed" },
+      }),
+    });
+
+    expect(state).toMatchObject({
+      phase: "working",
+      headerStatus: "Working...",
+      showPlanningIndicator: true,
     });
   });
 

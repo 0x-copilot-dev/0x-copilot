@@ -91,7 +91,8 @@ dev: check-local-env check-provider-key
 		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		MCP_TOKEN_VAULT_PROVIDER=local \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn backend_app.app:app --host $(BIND_HOST) --port $(BACKEND_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn backend_app.app:app --host $(BIND_HOST) --port $(BACKEND_PORT) \
+			--reload --reload-dir src) & pids="$$pids $$!"; \
 	(cd services/ai-backend && \
 		RUNTIME_ENVIRONMENT=development \
 		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
@@ -100,7 +101,8 @@ dev: check-local-env check-provider-key
 		MCP_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		SKILLS_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn runtime_api.app:app --host $(BIND_HOST) --port $(AI_BACKEND_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn runtime_api.app:app --host $(BIND_HOST) --port $(AI_BACKEND_PORT) \
+			--reload --reload-dir src) & pids="$$pids $$!"; \
 	(cd services/backend-facade && \
 		FACADE_ENVIRONMENT=development \
 		ENTERPRISE_AUTH_SECRET=$(DEV_AUTH_SECRET) \
@@ -108,7 +110,8 @@ dev: check-local-env check-provider-key
 		BACKEND_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		AI_BACKEND_URL=http://$(BIND_HOST):$(AI_BACKEND_PORT) \
 		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
-		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
+		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT) \
+			--reload --reload-dir src) & pids="$$pids $$!"; \
 	(npm run dev --workspace @enterprise-search/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
 	wait $$pids
 

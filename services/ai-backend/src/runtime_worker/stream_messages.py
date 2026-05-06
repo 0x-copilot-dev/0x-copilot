@@ -384,12 +384,32 @@ class StreamMessageParser:
                 if isinstance(item, str):
                     parts.append(item)
                 elif isinstance(item, Mapping):
+                    # Skip reasoning content blocks here — they are
+                    # extracted independently by ``reasoning_delta`` and
+                    # would otherwise double-fire as visible MODEL_DELTA
+                    # text. OpenAI Responses' ``reasoning_summary_text_delta``
+                    # block carries a ``text`` field that would match the
+                    # generic extractor below; Anthropic's ``thinking``
+                    # block uses a ``thinking`` key (so it's already
+                    # invisible to the generic path) but we filter on
+                    # ``type`` for symmetry.
+                    if cls._is_reasoning_block(item):
+                        continue
                     text = item.get(_Fields.TEXT) or item.get(_Fields.CONTENT)
                     if isinstance(text, str):
                         parts.append(text)
             text = "".join(parts)
             return text or None
         return None
+
+    @classmethod
+    def _is_reasoning_block(cls, block: Mapping[str, object]) -> bool:
+        block_type = block.get(_Fields.TYPE)
+        return block_type in {
+            _ReasoningBlock.ANTHROPIC_THINKING,
+            _ReasoningBlock.OPENAI_DELTA,
+            _ReasoningBlock.OPENAI_DONE,
+        }
 
     @classmethod
     def text(cls, value: object) -> str | None:

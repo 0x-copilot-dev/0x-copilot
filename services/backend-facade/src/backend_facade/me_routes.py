@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.settings import FacadeSettings
@@ -116,6 +116,71 @@ def register_me_routes(app: FastAPI) -> None:
     async def confirm_totp_factor(request: Request) -> dict[str, object]:
         return await _forward_me(request, "POST", "mfa/factors/totp/confirm")
 
+    # PR 8.3 — server-stored avatar. POST is multipart, GET streams the
+    # bytes verbatim with the upstream Content-Type / ETag / Cache-
+    # Control headers preserved. We don't bake content-type sniffing
+    # into the facade — that's the backend's job.
+    @app.post("/v1/me/avatar")
+    async def upload_my_avatar(request: Request) -> dict[str, object]:
+        backend_url = settings_for(request.app).backend_url
+        body = await request.body()
+        async with httpx.AsyncClient(timeout=30) as client:
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request, backend_url=backend_url, http_client=client
+            )
+            headers = FacadeAuthenticator.service_headers(identity)
+            # Preserve the multipart boundary the browser sent.
+            ct = request.headers.get("content-type")
+            if ct:
+                headers = {**headers, "content-type": ct}
+            response = await client.post(
+                f"{backend_url}/internal/v1/me/avatar",
+                params={
+                    "org_id": identity.org_id,
+                    "user_id": identity.user_id,
+                },
+                content=body,
+                headers=headers,
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
+    @app.delete("/v1/me/avatar", status_code=204)
+    async def delete_my_avatar(request: Request) -> None:
+        await _forward_me(request, "DELETE", "avatar", expect_json=False)
+
+    @app.get("/v1/me/avatar/{user_id}")
+    async def get_avatar(request: Request, user_id: str) -> Response:
+        backend_url = settings_for(request.app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            identity = await FacadeAuthenticator.verify_with_touch(
+                request, backend_url=backend_url, http_client=client
+            )
+            headers = FacadeAuthenticator.service_headers(identity)
+            if_none_match = request.headers.get("if-none-match")
+            if if_none_match:
+                headers = {**headers, "if-none-match": if_none_match}
+            response = await client.get(
+                f"{backend_url}/internal/v1/me/avatar/{user_id}",
+                params={
+                    "org_id": identity.org_id,
+                    "user_id": identity.user_id,
+                },
+                headers=headers,
+            )
+        if response.status_code == 304:
+            return Response(status_code=304)
+        _raise_for_upstream(response)
+        passthrough_headers = {}
+        for key in ("content-type", "etag", "cache-control"):
+            if key in response.headers:
+                passthrough_headers[key] = response.headers[key]
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            headers=passthrough_headers,
+        )
+
     @app.delete("/v1/me/mfa/factors/{factor_id}", status_code=204)
     async def disable_mfa_factor(request: Request, factor_id: str) -> None:
         await _forward_me(
@@ -159,6 +224,43 @@ def register_me_routes(app: FastAPI) -> None:
     @app.put("/v1/me/policies/privacy")
     async def put_my_privacy_settings(request: Request) -> dict[str, object]:
         return await _forward_policy(request, "PUT", "privacy", scope="user")
+
+    # PR 8.3 — workspace-issued admin API keys. Backend enforces
+    # ADMIN_USERS; the facade just routes through.
+    @app.get("/v1/workspace/api-keys")
+    async def list_workspace_api_keys(request: Request) -> dict[str, object]:
+        return await _forward_workspace(request, "GET", "api-keys")
+
+    @app.post("/v1/workspace/api-keys", status_code=201)
+    async def create_workspace_api_key(request: Request) -> dict[str, object]:
+        return await _forward_workspace(request, "POST", "api-keys")
+
+    @app.delete("/v1/workspace/api-keys/{api_key_id}", status_code=204)
+    async def revoke_workspace_api_key(request: Request, api_key_id: str) -> None:
+        await _forward_workspace(
+            request, "DELETE", f"api-keys/{api_key_id}", expect_json=False
+        )
+
+    @app.post("/v1/workspace/api-keys/{api_key_id}/rotate", status_code=201)
+    async def rotate_workspace_api_key(
+        request: Request, api_key_id: str
+    ) -> dict[str, object]:
+        return await _forward_workspace(
+            request, "POST", f"api-keys/{api_key_id}/rotate"
+        )
+
+    # PR 8.3 — admin editor for the workspace's MFA enforcement.
+    @app.get("/v1/workspace/mfa-policy")
+    async def get_workspace_mfa_policy(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_workspace(request, "GET", "mfa-policy")
+
+    @app.put("/v1/workspace/mfa-policy")
+    async def put_workspace_mfa_policy(
+        request: Request,
+    ) -> dict[str, object]:
+        return await _forward_workspace(request, "PUT", "mfa-policy")
 
     # Workspace-default mutations require ADMIN_USERS — the backend
     # enforces the scope check; the facade just routes the request.
@@ -215,6 +317,48 @@ async def _forward_me(
         response = await client.request(
             method,
             f"{backend_url}/internal/v1/me/{slug}",
+            params=params,
+            content=body,
+            headers=headers,
+        )
+    _raise_for_upstream(response)
+    if not expect_json:
+        return {}
+    if not response.content:
+        return {}
+    return response.json()
+
+
+async def _forward_workspace(
+    request: Request,
+    method: str,
+    slug: str,
+    *,
+    expect_json: bool = True,
+) -> dict[str, object]:
+    """Mirror of ``_forward_me`` against ``/internal/v1/workspace/...``.
+
+    Identity still comes from the verified session (so the backend can
+    audit-attribute the call). The backend's admin-scope gate enforces
+    that the caller has ``admin:users`` — the facade is intentionally
+    dumb about authorisation and lets the backend say no.
+    """
+
+    backend_url = settings_for(request.app).backend_url
+    body: bytes | None = None
+    if method != "GET":
+        body = await request.body()
+    async with httpx.AsyncClient(timeout=10) as client:
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        headers = FacadeAuthenticator.service_headers(identity)
+        if method != "GET":
+            headers = {**headers, "content-type": "application/json"}
+        params = {"org_id": identity.org_id, "user_id": identity.user_id}
+        response = await client.request(
+            method,
+            f"{backend_url}/internal/v1/workspace/{slug}",
             params=params,
             content=body,
             headers=headers,

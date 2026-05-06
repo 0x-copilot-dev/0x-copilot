@@ -107,7 +107,9 @@ export async function completeMcpOAuth(
   if (errorDescription) {
     params.set("error_description", errorDescription);
   }
-  const response = await fetch(`/v1/mcp/oauth/callback?${params}`);
+  const response = await fetch(`/v1/mcp/oauth/callback?${params}`, {
+    headers: correlationHeaders(),
+  });
   await assertOk(response);
   return (await response.json()) as McpServer;
 }

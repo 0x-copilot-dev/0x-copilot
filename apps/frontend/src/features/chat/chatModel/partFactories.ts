@@ -114,6 +114,13 @@ export function subagentPart(
   const startedAt =
     stringValue(existingArgs.started_at) ??
     (event.event_type === "subagent_started" ? event.created_at : null);
+  const completedAt =
+    stringValue(existingArgs.completed_at) ??
+    (event.event_type === "subagent_completed" ? event.created_at : null);
+  const durationMs =
+    numberValue(existingArgs.duration_ms) ??
+    payloadNumber(event.payload, "duration_ms") ??
+    durationFromStarted(startedAt, completedAt);
   const args = {
     ...existingArgs,
     subagent_name: name,
@@ -124,6 +131,8 @@ export function subagentPart(
     short_summary: shortSummary ?? null,
     task_summary: taskSummary ?? null,
     started_at: startedAt,
+    completed_at: completedAt,
+    duration_ms: durationMs,
     parent_fleet_id: parentFleetId ?? null,
   };
   return {
@@ -135,6 +144,30 @@ export function subagentPart(
     result: status === "completed" ? summary : existing?.result,
     isError: status === "failed",
   };
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function payloadNumber(payload: unknown, key: string): number | null {
+  const data = asRecord(payload);
+  return numberValue(data[key]);
+}
+
+function durationFromStarted(
+  startedAt: string | null,
+  completedAt: string | null,
+): number | null {
+  if (startedAt === null || completedAt === null) {
+    return null;
+  }
+  const started = Date.parse(startedAt);
+  const completed = Date.parse(completedAt);
+  if (Number.isNaN(started) || Number.isNaN(completed)) {
+    return null;
+  }
+  return Math.max(0, completed - started);
 }
 
 // PR A2 — fleet bookend part. Emitted on `subagent_fleet_started` and

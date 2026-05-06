@@ -2349,6 +2349,23 @@ export interface TotpEnrollRequestBody {
 }
 
 /**
+ * PR 8.3 — admin editor for the workspace's `identity_policies` MFA
+ * fields. The same `mfa_required` row already gates sign-in via the
+ * OIDC mint, so a flip takes effect on the next login.
+ */
+export interface WorkspaceMfaPolicy {
+  mfa_required: boolean;
+  step_up_window_seconds: number;
+  /** Empty when the row hasn't been written yet (defaults are surfaced). */
+  updated_at: string;
+}
+
+export interface UpdateWorkspaceMfaPolicyRequest {
+  mfa_required?: boolean;
+  step_up_window_seconds?: number;
+}
+
+/**
  * PR 8.3 — WebAuthn enrollment ceremony.
  *
  * `options` is a `PublicKeyCredentialCreationOptionsJSON` — every binary
@@ -2600,6 +2617,8 @@ export interface UpdatePrivacySettingsRequest {
 // PR B3 — personal API keys (atlas_pk_… bearer for CI / scripts).
 // =====================================================================
 
+export type ApiKeyKind = "personal" | "workspace";
+
 export interface ApiKeySummary {
   id: string;
   label: string;
@@ -2608,6 +2627,8 @@ export interface ApiKeySummary {
   last_used_at: string | null;
   created_at: string;
   rotated_from_id: string | null;
+  /** PR 8.3 — drives the FE tab strip; legacy rows default to `personal`. */
+  kind: ApiKeyKind;
 }
 
 export interface ApiKeyListResponse {

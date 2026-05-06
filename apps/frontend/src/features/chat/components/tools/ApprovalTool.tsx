@@ -76,6 +76,11 @@ export function ApprovalTool({
   // approval_forwarded reducer branch). When present, we render a
   // "Waiting on @marcus" pill instead of the resolved record.
   const resultRecord = asRecord(result);
+  // Run-cancelled / failed: the reducer's
+  // `markPendingInteractionsCancelled` settles unresolved approval parts
+  // with `decision: "cancelled"`. Render as a quiet "Cancelled" pill so
+  // the card stops looking actionable.
+  const isCancelled = stringValue(resultRecord.decision) === "cancelled";
   const isForwarded =
     stringValue(resultRecord.status) === "forwarded" ||
     stringValue(resultRecord.forwarded_to_user_id) !== null;
@@ -151,27 +156,31 @@ export function ApprovalTool({
         ? "Rejected by"
         : null;
   const approvalStatus = resolved
-    ? isChainFinal && chainLeafLabel !== null
-      ? chainLeafDecidedByUserId
-        ? `${chainLeafLabel} @${chainLeafDecidedByUserId}`
-        : chainLeafLabel
-      : isForwarded
-        ? forwardedToUserId
-          ? `Waiting on @${forwardedToUserId}`
-          : "Forwarded"
-        : "Done"
+    ? isCancelled
+      ? "Cancelled"
+      : isChainFinal && chainLeafLabel !== null
+        ? chainLeafDecidedByUserId
+          ? `${chainLeafLabel} @${chainLeafDecidedByUserId}`
+          : chainLeafLabel
+        : isForwarded
+          ? forwardedToUserId
+            ? `Waiting on @${forwardedToUserId}`
+            : "Forwarded"
+          : "Done"
     : "Waiting for permission";
   const actionName = toolActionName(toolName);
   const approvalTitle = resolved
-    ? isChainFinal && chainLeafDecision === "approved"
-      ? "Approved"
-      : isChainFinal && chainLeafDecision === "rejected"
-        ? "Rejected"
-        : isForwarded
-          ? "Forwarded for sign-off"
-          : isMcpApproval
-            ? "Permission approved"
-            : "Approval resolved"
+    ? isCancelled
+      ? "Approval cancelled"
+      : isChainFinal && chainLeafDecision === "approved"
+        ? "Approved"
+        : isChainFinal && chainLeafDecision === "rejected"
+          ? "Rejected"
+          : isForwarded
+            ? "Forwarded for sign-off"
+            : isMcpApproval
+              ? "Permission approved"
+              : "Approval resolved"
     : isMcpApproval
       ? `Allow ${displayName ?? "connector"} ${actionName}?`
       : "Approval requested";

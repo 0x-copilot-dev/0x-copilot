@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,6 +59,10 @@ class ApiKeySummary(BaseModel):
     last_used_at: str | None
     created_at: str
     rotated_from_id: str | None
+    # PR 8.3 — drives the FE tab strip. Default keeps existing rows on
+    # the personal track; the field is required on the wire so old
+    # clients that ignore unknown fields still get the truth.
+    kind: str = "personal"
 
 
 class ApiKeyListResponse(BaseModel):
@@ -307,6 +311,198 @@ def register_api_key_routes(
             plaintext=render_bearer(prefix, plaintext),
         )
 
+    # ---------------------------------------------------------------
+    # PR 8.3 — workspace-issued admin tokens. Same store, ``kind`` flag
+    # set on insert; the bearer-verify path is unchanged because the
+    # row's identity is its mint user (the admin). Admin scope is
+    # required at this surface; the personal routes above are caller-
+    # scoped to the user's own row.
+    # ---------------------------------------------------------------
+
+    @app.get(
+        "/internal/v1/workspace/api-keys",
+        response_model=ApiKeyListResponse,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
+    )
+    def list_workspace_api_keys(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> ApiKeyListResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        rows = api_key_store.list_for_workspace(org_id=identity.org_id)
+        return ApiKeyListResponse(keys=tuple(_to_summary(row) for row in rows))
+
+    @app.post(
+        "/internal/v1/workspace/api-keys",
+        response_model=CreateApiKeyResponse,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
+    )
+    def create_workspace_api_key(
+        request: Request,
+        payload: CreateApiKeyRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> CreateApiKeyResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        # The workspace key is owned by the calling admin (audit
+        # attribution). Scope-narrowing rule mirrors the personal flow:
+        # requested scopes ⊆ caller's scopes.
+        caller_scopes = (
+            request.state.scopes
+            if hasattr(request.state, "scopes") and request.state.scopes
+            else set()
+        )
+        requested = set(payload.scopes)
+        if caller_scopes and not requested.issubset(caller_scopes):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "scope_widens_caller")
+        prefix, plaintext = api_key_hasher.mint()
+        row = ApiKeyRow(
+            org_id=identity.org_id,
+            user_id=identity.user_id,
+            label=payload.label.strip(),
+            key_prefix=prefix,
+            secret_hash=api_key_hasher.hash(plaintext),
+            scopes=tuple(payload.scopes),
+            kind="workspace",
+        )
+        with api_key_store.transaction() as conn:
+            saved = api_key_store.insert(row, conn=conn)
+            identity_store.append_identity_audit(
+                IdentityAuditEventRecord(
+                    org_id=identity.org_id,
+                    actor_user_id=identity.user_id,
+                    subject_user_id=identity.user_id,
+                    action="api_key.workspace.create",
+                    metadata={
+                        "api_key_id": saved.id,
+                        "key_prefix": saved.key_prefix,
+                        "label": saved.label,
+                        "scopes": list(saved.scopes),
+                    },
+                    request_ip=_request_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                ),
+                conn=conn,
+            )
+        return CreateApiKeyResponse(
+            key=_to_summary(saved),
+            plaintext=render_bearer(prefix, plaintext),
+        )
+
+    @app.delete(
+        "/internal/v1/workspace/api-keys/{api_key_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
+    )
+    def revoke_workspace_api_key(
+        request: Request,
+        api_key_id: str = Path(..., min_length=1, max_length=128),
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> None:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        # We allow any admin to revoke any workspace-kind key; that's
+        # the point of admin scope. The store's revoke() requires
+        # user_id to match — we look up the row first to recover the
+        # original mint user, then delegate.
+        rows = api_key_store.list_for_workspace(
+            org_id=identity.org_id, include_revoked=True
+        )
+        target = next((r for r in rows if r.id == api_key_id), None)
+        if target is None or target.revoked_at is not None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "api_key_not_found")
+        with api_key_store.transaction() as conn:
+            ok = api_key_store.revoke(
+                org_id=identity.org_id,
+                user_id=target.user_id,
+                api_key_id=api_key_id,
+                conn=conn,
+            )
+            if not ok:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "api_key_not_found")
+            identity_store.append_identity_audit(
+                IdentityAuditEventRecord(
+                    org_id=identity.org_id,
+                    actor_user_id=identity.user_id,
+                    subject_user_id=target.user_id,
+                    action="api_key.workspace.revoke",
+                    metadata={"api_key_id": api_key_id},
+                    request_ip=_request_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                ),
+                conn=conn,
+            )
+
+    @app.post(
+        "/internal/v1/workspace/api-keys/{api_key_id}/rotate",
+        response_model=CreateApiKeyResponse,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(ADMIN_USERS))],
+    )
+    def rotate_workspace_api_key(
+        request: Request,
+        api_key_id: str = Path(..., min_length=1, max_length=128),
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> CreateApiKeyResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        rows = api_key_store.list_for_workspace(
+            org_id=identity.org_id, include_revoked=True
+        )
+        old = next((r for r in rows if r.id == api_key_id), None)
+        if old is None or old.revoked_at is not None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "api_key_not_found")
+        prefix, plaintext = api_key_hasher.mint()
+        new = ApiKeyRow(
+            org_id=identity.org_id,
+            # Carry forward the original mint-user attribution.
+            user_id=old.user_id,
+            label=old.label,
+            key_prefix=prefix,
+            secret_hash=api_key_hasher.hash(plaintext),
+            scopes=old.scopes,
+            rotated_from_id=old.id,
+            kind="workspace",
+        )
+        with api_key_store.transaction() as conn:
+            saved = api_key_store.insert(new, conn=conn)
+            api_key_store.revoke(
+                org_id=identity.org_id,
+                user_id=old.user_id,
+                api_key_id=old.id,
+                conn=conn,
+            )
+            identity_store.append_identity_audit(
+                IdentityAuditEventRecord(
+                    org_id=identity.org_id,
+                    actor_user_id=identity.user_id,
+                    subject_user_id=old.user_id,
+                    action="api_key.workspace.rotate",
+                    metadata={
+                        "old_api_key_id": old.id,
+                        "new_api_key_id": saved.id,
+                        "key_prefix": saved.key_prefix,
+                    },
+                    request_ip=_request_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                ),
+                conn=conn,
+            )
+        return CreateApiKeyResponse(
+            key=_to_summary(saved),
+            plaintext=render_bearer(prefix, plaintext),
+        )
+
     @app.post(
         "/internal/v1/auth/api-keys/verify",
         response_model=VerifyApiKeyResponse,
@@ -377,6 +573,7 @@ def _to_summary(row: ApiKeyRow) -> ApiKeySummary:
         last_used_at=row.last_used_at.isoformat() if row.last_used_at else None,
         created_at=row.created_at.isoformat(),
         rotated_from_id=row.rotated_from_id,
+        kind=row.kind,
     )
 
 

@@ -33,7 +33,10 @@ import {
   disableMfaFactor,
   enrollTotpFactor,
   listMyMfaFactors,
+  webauthnRegisterFinish,
+  webauthnRegisterStart,
 } from "../../../api/mfaApi";
+import { decodeCreationOptions, encodeAttestation } from "./webauthnCodec";
 
 type Phase =
   | { kind: "idle" }
@@ -118,6 +121,54 @@ export function MfaPanel(): ReactElement {
     }
   }
 
+  /**
+   * Drive the WebAuthn enrollment ceremony end-to-end. The browser API
+   * is gated behind a user gesture, so we run the whole thing on a
+   * single click — no two-step "preview the QR" UI like TOTP needs.
+   */
+  async function onEnrollWebauthn(): Promise<void> {
+    if (typeof window === "undefined" || !window.PublicKeyCredential) {
+      setError("This browser does not support security keys (WebAuthn).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const start = await webauthnRegisterStart({
+        display_name: displayName.trim() || "Security key",
+        rp_id: window.location.hostname,
+        rp_name: "Enterprise Search",
+        user_name: factors[0]?.display_name ?? displayName.trim() ?? "user",
+        user_display_name: displayName.trim() || null,
+      });
+      const publicKey = decodeCreationOptions(start.options);
+      const credential = (await navigator.credentials.create({
+        publicKey,
+      })) as PublicKeyCredential | null;
+      if (credential === null) {
+        throw new Error("No credential returned by the authenticator.");
+      }
+      await webauthnRegisterFinish({
+        factor_id: start.factor_id,
+        challenge_id: start.challenge_id,
+        rp_id: window.location.hostname,
+        expected_origin: window.location.origin,
+        attestation: encodeAttestation(credential),
+      });
+      setPhase({ kind: "idle" });
+      await refresh();
+    } catch (err) {
+      // ``DOMException`` covers user-cancel, timeout, security errors.
+      const message =
+        err instanceof DOMException || err instanceof Error
+          ? err.message
+          : "Security key enrollment failed.";
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card>
       <div className="me-form__mfa-head">
@@ -175,8 +226,19 @@ export function MfaPanel(): ReactElement {
               size="sm"
               onClick={() => void onEnroll()}
               disabled={busy}
+              title="Use a TOTP authenticator app"
             >
-              {busy ? "Generating…" : "Continue"}
+              {busy ? "Generating…" : "Use authenticator app"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void onEnrollWebauthn()}
+              disabled={busy}
+              title="Use a hardware security key (WebAuthn)"
+            >
+              {busy ? "Waiting for key…" : "Use a security key"}
             </Button>
             <Button
               type="button"

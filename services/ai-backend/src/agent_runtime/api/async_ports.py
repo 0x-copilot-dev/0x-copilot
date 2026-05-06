@@ -29,6 +29,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
     ToolBudgetRecord,
+    UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -513,11 +514,8 @@ class AsyncPersistencePort(Protocol):
         start: datetime,
         end: datetime,
         limit: int,
-    ) -> Sequence[tuple[str, int]]:
-        """Return top conversations by total tokens for the range (B4).
-
-        Each tuple is ``(conversation_id, total_tokens)``.
-        """
+    ) -> Sequence[UsageConversationAggregateRecord]:
+        """Return top conversation aggregates by total tokens for the range."""
 
     async def query_model_call_usage_for_run(
         self,

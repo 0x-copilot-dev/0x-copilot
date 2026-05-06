@@ -9,6 +9,7 @@ import { forwardActionFromPayload, resolveActionFromPayload } from "./approval";
 import {
   appendReasoning,
   appendTextDelta,
+  markPendingInteractionsCancelled,
   reconcileFinalText,
   settleAssistantRun,
   updateAssistantContent,
@@ -27,9 +28,9 @@ import {
   isInternalCheckpointDelta,
   patchToolPartPresentation,
 } from "./presentation";
-import { assistantMessageId, textFromPayload } from "./recordHelpers";
+import { textFromPayload } from "./recordHelpers";
 import {
-  hasPendingAction,
+  hasPendingActionForRun,
   isTerminalRunEvent,
   isVisibleProgressEvent,
   statusFromRuntimeEvent,
@@ -87,14 +88,22 @@ export function applyRuntimeEvent(
           statusFromRuntimeEvent(event),
         )
       : items;
+    // A run can terminate with approval / mcp_auth tool parts still
+    // unresolved (user hit Stop, run failed, queue timed out). Settle
+    // them locally so the cards render as "Cancelled" and the auto-
+    // resume effect doesn't re-bind activeRunId to a dead run.
+    const withCancelledInteractions =
+      event.event_type === "run_completed"
+        ? withProgress
+        : markPendingInteractionsCancelled(withProgress, event.run_id);
     return settleAssistantRun(
-      withProgress,
+      withCancelledInteractions,
       event,
       statusFromRuntimeEvent(event),
       metadataFromRuntimeEvent(event),
     );
   }
-  if (hasPendingActionForRun(items, event)) {
+  if (hasPendingActionForRun(items, event.run_id)) {
     return items;
   }
   if (event.activity_kind === "tool" && isLargeResultArtifactToolEvent(event)) {
@@ -189,16 +198,4 @@ function eventCreatedAtToMs(value: string | undefined): number | undefined {
   }
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : undefined;
-}
-
-function hasPendingActionForRun(
-  items: ChatItem[],
-  event: RuntimeEventEnvelope,
-): boolean {
-  const id = assistantMessageId(event.run_id);
-  const assistant = items.find(
-    (item): item is Extract<ChatItem, { kind: "message" }> =>
-      item.kind === "message" && item.id === id,
-  );
-  return assistant ? hasPendingAction(assistant.content) : false;
 }

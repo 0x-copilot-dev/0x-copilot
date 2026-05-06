@@ -3,23 +3,21 @@
 // Pure presentational. Receives the SubagentSnapshotMap that
 // `useSubagents` (PR 3.2 archive seed) and the live event reducer
 // (PR 1.5 `applySubagentEvent`) feed into. Click-to-jump scrolls the
-// thread to the matching <SubagentTool> block (existing). The thread
+// thread to the matching <SubagentCard> block (existing). The thread
 // jump target is identified by `data-task-id={task_id}` on the
-// SubagentTool block; a lightweight scroll helper here keeps the
+// SubagentCard block; a lightweight scroll helper here keeps the
 // integration shallow.
 //
 // PR 3.2.1 — each card body wraps in a native `<details>` disclosure
 // that reveals the per-subagent step timeline (the same activities the
 // in-thread `SubagentTool` shows, projected from the chat tree by
-// `useSubagentActivities`). Reuses `SubagentActivityList` verbatim with
-// a pane-narrow class composed on top of `aui-tool-card__timeline`.
+// `useSubagentActivities`).
+//
+// PR 3.2.2 — both surfaces (in-thread + this pane) now render via the
+// shared `<SubagentCard>` primitive. The pane composes the narrow
+// timeline variant on top of the in-thread base styling.
 
-import {
-  Badge,
-  Card,
-  IconButton,
-  classNames,
-} from "@enterprise-search/design-system";
+import { classNames } from "@enterprise-search/design-system";
 import type { SubagentEntry } from "@enterprise-search/api-types";
 import { useEffect, useRef, type ReactElement } from "react";
 
@@ -28,8 +26,12 @@ import {
   subagentsByRecency,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
-import { SubagentActivityList } from "../tools/SubagentActivityList";
-import type { SubagentActivitiesByTask } from "./useSubagentActivities";
+import { SubagentCard } from "../subagents/SubagentCard";
+import { subagentCardFromEntry } from "../subagents/subagentCardViewModel";
+import type {
+  SubagentActivitiesByTask,
+  SubagentHistoryGroup,
+} from "./useSubagentActivities";
 
 export interface AgentsTabProps {
   subagents: SubagentSnapshotMap;
@@ -40,9 +42,13 @@ export interface AgentsTabProps {
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
   /** PR 3.2.1 — `task_id → activities[]` projected from the chat tree
    *  by `useSubagentActivities`. Hoisted in `ChatScreen` so the pane
-   *  and the in-thread `SubagentTool` share one source of truth. */
+   *  and the in-thread `SubagentCard` share one source of truth. */
   activitiesByTask?: SubagentActivitiesByTask;
+  historyGroups?: readonly SubagentHistoryGroup[];
 }
+
+const PANE_TIMELINE_CLASS =
+  "atlas-workspace-agent__timeline aui-tool-card__timeline";
 
 export function AgentsTab({
   subagents,
@@ -51,8 +57,9 @@ export function AgentsTab({
   focusTaskId,
   onJumpToSubagent,
   activitiesByTask,
+  historyGroups,
 }: AgentsTabProps): ReactElement {
-  const ordered = subagentsByRecency(subagents);
+  const ordered = mergeOrderedSubagents(subagents, historyGroups ?? []);
   const focusRef = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => {
@@ -102,140 +109,150 @@ export function AgentsTab({
             : "Subagents in this conversation"
         }
       >
-        {ordered.map((entry) => {
-          const isFocused = entry.task_id === focusTaskId;
-          const running = isRunningStatus(entry.status);
-          const activities = activitiesByTask?.get(entry.task_id) ?? [];
-          const metaText = running
-            ? "working…"
-            : entry.duration_ms !== null
-              ? `Completed in ${formatDuration(entry.duration_ms)}`
-              : null;
-          return (
-            <li
-              key={entry.task_id}
-              ref={isFocused ? focusRef : undefined}
-              className={classNames(
-                "atlas-workspace-tab__item",
-                isFocused && "atlas-workspace-tab__item--focused",
-              )}
-              data-task-id={entry.task_id}
-              data-status={entry.status}
-            >
-              <Card>
-                <div className="atlas-workspace-agent">
-                  <div className="atlas-workspace-agent__header">
-                    <Badge tone={badgeToneFor(entry.status)}>
-                      {statusLabel(entry.status)}
-                    </Badge>
-                    <span className="atlas-workspace-agent__name">
-                      {entry.display_title ?? entry.subagent_name}
-                    </span>
-                    {onJumpToSubagent !== undefined ? (
-                      <IconButton
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Open ${entry.subagent_name} in thread`}
-                        onClick={() => onJumpToSubagent(entry)}
-                      >
-                        ↗
-                      </IconButton>
-                    ) : null}
-                  </div>
-                  {entry.objective_summary ? (
-                    <p className="atlas-workspace-agent__objective">
-                      {entry.objective_summary}
-                    </p>
-                  ) : null}
-                  {entry.result_summary ? (
-                    <p className="atlas-workspace-agent__result">
-                      {entry.result_summary}
-                    </p>
-                  ) : null}
-                  <details
-                    className="atlas-workspace-agent__details"
-                    open={isFocused || undefined}
-                    data-testid={`workspace-agent-details-${entry.task_id}`}
-                  >
-                    <summary className="atlas-workspace-agent__details-summary">
-                      <span
-                        className={classNames(
-                          "atlas-workspace-agent__meta",
-                          running && "atlas-workspace-agent__working",
-                        )}
-                      >
-                        {metaText ?? <span aria-hidden="true">&nbsp;</span>}
-                      </span>
-                      <span
-                        className="atlas-workspace-agent__disclosure-hint"
-                        aria-hidden="true"
-                      >
-                        ▾
-                      </span>
-                    </summary>
-                    <SubagentActivityList
-                      className="atlas-workspace-agent__timeline aui-tool-card__timeline"
-                      activities={[...activities]}
-                    />
-                  </details>
-                </div>
-              </Card>
-            </li>
-          );
+        {renderHistoryGroups({
+          ordered,
+          groups: historyGroups ?? [],
+          focusTaskId,
+          focusRef,
+          activitiesByTask,
+          onJumpToSubagent,
         })}
       </ul>
     </div>
   );
 }
 
-function statusLabel(status: SubagentEntry["status"]): string {
-  switch (status) {
-    case "queued":
-      return "Queued";
-    case "running":
-      return "Running";
-    case "completed":
-      return "Done";
-    case "cancelled":
-      return "Cancelled";
-    case "failed":
-      return "Failed";
-    case "timed_out":
-      return "Timed out";
-    default:
-      return status;
+function renderHistoryGroups({
+  ordered,
+  groups,
+  focusTaskId,
+  focusRef,
+  activitiesByTask,
+  onJumpToSubagent,
+}: {
+  ordered: readonly SubagentEntry[];
+  groups: readonly SubagentHistoryGroup[];
+  focusTaskId?: string | null;
+  focusRef: React.MutableRefObject<HTMLLIElement | null>;
+  activitiesByTask?: SubagentActivitiesByTask;
+  onJumpToSubagent?: (subagent: SubagentEntry) => void;
+}): ReactElement[] {
+  const groupedTaskIds = new Set(
+    groups.flatMap((group) => group.entries.map((entry) => entry.task_id)),
+  );
+  const byTask = new Map(ordered.map((entry) => [entry.task_id, entry]));
+  const rendered: ReactElement[] = [];
+  for (const group of groups) {
+    const entries = group.entries
+      .map((entry) => byTask.get(entry.task_id) ?? entry)
+      .filter((entry, index, arr) => {
+        return (
+          arr.findIndex((item) => item.task_id === entry.task_id) === index
+        );
+      });
+    if (entries.length === 0) continue;
+    const first = entries[0];
+    rendered.push(
+      <li key={`group-${group.id}`} className="atlas-workspace-agent-group">
+        <button
+          type="button"
+          className="atlas-workspace-agent-group__header"
+          onClick={() => onJumpToSubagent?.(first)}
+        >
+          <span>{group.label}</span>
+          <time>{formatGroupTime(group.timestamp)}</time>
+        </button>
+        <ul className="atlas-workspace-agent-group__list">
+          {entries.map((entry) =>
+            renderEntry({
+              entry,
+              focusTaskId,
+              focusRef,
+              activitiesByTask,
+              onJumpToSubagent,
+            }),
+          )}
+        </ul>
+      </li>,
+    );
   }
+  for (const entry of ordered) {
+    if (groupedTaskIds.has(entry.task_id)) continue;
+    rendered.push(
+      renderEntry({
+        entry,
+        focusTaskId,
+        focusRef,
+        activitiesByTask,
+        onJumpToSubagent,
+      }),
+    );
+  }
+  return rendered;
 }
 
-function badgeToneFor(
-  status: SubagentEntry["status"],
-): "neutral" | "accent" | "success" | "warning" | "danger" {
-  switch (status) {
-    case "running":
-    case "queued":
-      return "accent";
-    case "completed":
-      return "success";
-    case "failed":
-    case "timed_out":
-      return "danger";
-    case "cancelled":
-      return "warning";
-    default:
-      return "neutral";
-  }
+function renderEntry({
+  entry,
+  focusTaskId,
+  focusRef,
+  activitiesByTask,
+  onJumpToSubagent,
+}: {
+  entry: SubagentEntry;
+  focusTaskId?: string | null;
+  focusRef: React.MutableRefObject<HTMLLIElement | null>;
+  activitiesByTask?: SubagentActivitiesByTask;
+  onJumpToSubagent?: (subagent: SubagentEntry) => void;
+}): ReactElement {
+  const isFocused = entry.task_id === focusTaskId;
+  const view = subagentCardFromEntry(entry);
+  const activities = activitiesByTask?.get(entry.task_id) ?? [];
+  return (
+    <li
+      key={entry.task_id}
+      ref={isFocused ? focusRef : undefined}
+      className={classNames(
+        "atlas-workspace-tab__item",
+        isFocused && "atlas-workspace-tab__item--focused",
+      )}
+      data-task-id={entry.task_id}
+      data-status={entry.status}
+    >
+      <SubagentCard
+        view={view}
+        activities={activities}
+        timelineClassName={PANE_TIMELINE_CLASS}
+        onJumpToThread={
+          onJumpToSubagent ? () => onJumpToSubagent(entry) : undefined
+        }
+        defaultOpen={isFocused}
+        compact
+      />
+    </li>
+  );
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`;
+function mergeOrderedSubagents(
+  subagents: SubagentSnapshotMap,
+  groups: readonly SubagentHistoryGroup[],
+): readonly SubagentEntry[] {
+  const merged = new Map(subagents);
+  for (const group of groups) {
+    for (const entry of group.entries) {
+      if (!merged.has(entry.task_id)) {
+        merged.set(entry.task_id, entry);
+      }
+    }
   }
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds - minutes * 60);
-  return `${minutes}m ${remainder}s`;
+  return subagentsByRecency(merged);
+}
+
+function formatGroupTime(value: string | null): string {
+  if (value === null) return "Earlier";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Earlier";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }

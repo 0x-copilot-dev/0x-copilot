@@ -73,6 +73,58 @@ export function updateAssistantContent(
   });
 }
 
+// Tool kinds that block the run waiting on a user decision. When the run
+// terminates without a decision (user hits Stop, run fails, etc.) these
+// parts are stranded with `result === undefined` — both the auto-resume
+// effect and the renderers treat that as "still pending". This helper
+// settles them with a uniform cancelled `result` so the cards flip to a
+// resolved-cancelled state and the auto-resume effect leaves them alone.
+const PENDING_INTERACTION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "approval_request",
+  "mcp_auth_required",
+]);
+
+export function markPendingInteractionsCancelled(
+  items: ChatItem[],
+  runId: string,
+): ChatItem[] {
+  return items.map((item) => {
+    if (
+      item.kind !== "message" ||
+      item.role !== "assistant" ||
+      item.runId !== runId
+    ) {
+      return item;
+    }
+    let changed = false;
+    const content = item.content.map((part) => {
+      if (
+        !isToolCallPart(part) ||
+        part.result !== undefined ||
+        !PENDING_INTERACTION_TOOL_NAMES.has(part.toolName)
+      ) {
+        return part;
+      }
+      changed = true;
+      const args = asRecord(part.args);
+      const approvalId =
+        stringValue(args.approval_id) ??
+        stringValue(args.action_id) ??
+        part.toolCallId;
+      const result: Record<string, unknown> = {
+        approval_id: approvalId,
+        decision: "cancelled",
+      };
+      const serverId = stringValue(args.server_id);
+      if (serverId !== null) {
+        result.server_id = serverId;
+      }
+      return { ...part, result };
+    });
+    return changed ? { ...item, content } : item;
+  });
+}
+
 export function settleAssistantRun(
   items: ChatItem[],
   event: RuntimeEventEnvelope,

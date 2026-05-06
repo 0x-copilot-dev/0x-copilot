@@ -101,7 +101,9 @@ export const hiddenApprovalArgKeys = new Set([
 export const hiddenSubagentArgKeys = new Set([
   ...hiddenToolArgKeys,
   "activities",
+  "completed_at",
   "display_title",
+  "duration_ms",
   "short_summary",
   "started_at",
   "subagent_name",

@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from agent_runtime.capabilities.citation_capturing_tool import (
+    CitationCapturingRegistry,
+)
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
@@ -84,7 +87,12 @@ class DefaultRuntimeDependenciesFactory:
         # ``BaseTool`` goes through the per-run :class:`ToolBudgetGuard`.
         # The wrapper is a no-op when no guard is bound (unit tests of
         # tools in isolation), so this is safe to apply unconditionally.
-        tool_registry = ToolBudgetGuardedRegistry(inner=WebSearchToolRegistry())
+        # Inner :class:`CitationCapturingRegistry` lifts URLs out of each
+        # tool result into the per-run :class:`CitationLedger`, so the
+        # frontend Sources tab populates without per-tool wiring.
+        tool_registry = ToolBudgetGuardedRegistry(
+            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
+        )
         return RuntimeDependencies(
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,

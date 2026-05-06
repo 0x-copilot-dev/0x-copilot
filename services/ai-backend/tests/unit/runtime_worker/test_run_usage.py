@@ -9,6 +9,7 @@ from agent_runtime.persistence.records import (
     ModelPricingRecord,
     RuntimeRunUsageRecord,
 )
+from runtime_api.schemas import ConversationRecord
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 
 
@@ -24,12 +25,18 @@ def _pricing() -> ModelPricingRecord:
     )
 
 
-def _usage(*, run_id: str, org_id: str = "org_a") -> RuntimeRunUsageRecord:
+def _usage(
+    *,
+    run_id: str,
+    org_id: str = "org_a",
+    conversation_id: str = "conv_1",
+    cost_micro_usd: int | None = None,
+) -> RuntimeRunUsageRecord:
     return RuntimeRunUsageRecord(
         id=run_id,
         org_id=org_id,
         user_id="user_1",
-        conversation_id="conv_1",
+        conversation_id=conversation_id,
         run_id=run_id,
         model_provider="openai",
         model_name="gpt-5.4-mini",
@@ -42,6 +49,7 @@ def _usage(*, run_id: str, org_id: str = "org_a") -> RuntimeRunUsageRecord:
         started_at=datetime(2026, 5, 4, 10, 0, tzinfo=timezone.utc),
         completed_at=datetime(2026, 5, 4, 10, 0, 4, tzinfo=timezone.utc),
         status="completed",
+        cost_micro_usd=cost_micro_usd,
     )
 
 
@@ -99,7 +107,17 @@ class TestRunUsageInMemoryStore:
 
     def test_query_top_conversations_excludes_pii_purged(self) -> None:
         store = InMemoryRuntimeApiStore()
+        store.insert_forked_conversation(
+            ConversationRecord(
+                conversation_id="conv_1",
+                org_id="org_a",
+                user_id="user_1",
+                assistant_id="assistant_default",
+                title="Quarterly planning",
+            )
+        )
         store.record_run_usage(_usage(run_id="run_1"))
+        store.record_run_usage(_usage(run_id="run_3", cost_micro_usd=4_500))
         purged = _usage(run_id="run_2").model_copy(
             update={"pii_purged_at": datetime(2026, 6, 1, tzinfo=timezone.utc)}
         )
@@ -113,6 +131,15 @@ class TestRunUsageInMemoryStore:
         )
         # run_2 was purged so its tokens are excluded.
         assert len(rows) == 1
+        row = rows[0]
+        assert row.conversation_id == "conv_1"
+        assert row.title == "Quarterly planning"
+        assert row.input_tokens == 2_000
+        assert row.output_tokens == 1_000
+        assert row.cached_input_tokens == 400
+        assert row.total_tokens == 3_000
+        assert row.runs_count == 2
+        assert row.cost_micro_usd == 4_500
 
 
 class TestPricingUpsertReplacesActiveRow:

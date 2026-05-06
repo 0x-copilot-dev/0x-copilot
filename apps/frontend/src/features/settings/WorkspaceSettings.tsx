@@ -19,6 +19,7 @@ import {
 import { type FormEvent, type ReactElement, useEffect, useState } from "react";
 import type { RequestIdentity } from "../../api/config";
 import { useWorkspace } from "./useWorkspace";
+import { WorkspaceMfaSettings } from "./WorkspaceMfaSettings";
 
 export function WorkspaceSettings({
   identity,
@@ -186,6 +187,8 @@ export function WorkspaceSettings({
           </Button>
         </Card>
       ) : null}
+
+      <WorkspaceMfaSettings isAdmin={isAdmin} />
     </div>
   );
 }

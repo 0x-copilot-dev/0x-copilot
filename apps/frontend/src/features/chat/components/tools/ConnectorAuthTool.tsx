@@ -1,7 +1,7 @@
 import type { ToolCallMessagePartProps } from "../../runtime/types";
 import { Button } from "@enterprise-search/design-system";
 import { useState, type ReactElement } from "react";
-import { formatDateTime, stringValue } from "../../utils/jsonUtils";
+import { asRecord, formatDateTime, stringValue } from "../../utils/jsonUtils";
 import { safeConnectorDisplayName } from "../../utils/toolLabels";
 import { ActivityCard } from "../activity/ActivityCard";
 import { presentationFromArgs } from "../activity/presentationHelpers";
@@ -50,6 +50,9 @@ export function ConnectorAuthTool({
       `Enterprise Search needs permission to use ${displayName}.`);
   const expiresAt = stringValue(args.expires_at);
   const resolved = result !== undefined;
+  // Run terminated without a user decision: reducer settles the part
+  // with `decision: "cancelled"` so the card stops looking actionable.
+  const isCancelled = stringValue(asRecord(result).decision) === "cancelled";
 
   async function submit(action: "connect" | "skip"): Promise<void> {
     if (!serverId || !approvalId || resolved || pendingAction !== null) {
@@ -86,17 +89,25 @@ export function ConnectorAuthTool({
   // implies the run is paused, which would mislead users.
   const fallbackTitle = isDiscovery
     ? resolved
-      ? `${displayName} connected`
+      ? isCancelled
+        ? `${displayName} cancelled`
+        : `${displayName} connected`
       : `Connect ${displayName}?`
     : resolved
-      ? `${displayName} connected`
+      ? isCancelled
+        ? `${displayName} cancelled`
+        : `${displayName} connected`
       : `Connect ${displayName}`;
   const fallbackStatus = isDiscovery
     ? resolved
-      ? "Resolved"
+      ? isCancelled
+        ? "Cancelled"
+        : "Resolved"
       : "Suggested"
     : resolved
-      ? "Done"
+      ? isCancelled
+        ? "Cancelled"
+        : "Done"
       : "Waiting for permission";
   const skipLabel = isDiscovery ? "Skip" : "Not now";
   const skipPendingLabel = isDiscovery ? "Skipping..." : "Skipping...";

@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from "react";
 import type { UserProfileState } from "../../me/useUserProfile";
 import { AccountSessionsPanel } from "../AccountSessionsPanel";
 import { useAuth } from "../../auth/AuthContext";
-import { AvatarUploadError, fileToAvatarDataUrl } from "./avatarPipeline";
+import { AvatarUploadError, fileToAvatarBlob } from "./avatarPipeline";
+import { deleteMyAvatar, uploadMyAvatar } from "../../../api/avatarApi";
 import { MfaPanel } from "./MfaPanel";
 
 /** Mirrors the server-side cap in `me_profile.py::_BIO_MAX_LEN`. */
@@ -92,10 +93,11 @@ export function Profile({
   }
 
   /**
-   * Resize → base64 → write to the same `avatarUrl` slot the form
-   * already submits. The data-URL representation is server-validated on
-   * save, so a missed cap or a wrong content-type rejects with a 422
-   * and the user sees the message in the same place as any other error.
+   * Resize client-side → multipart-upload to ``/v1/me/avatar``. The
+   * server stores the bytes and returns the cache-busted URL; we
+   * preview from the data URL while the upload is in flight so the
+   * new photo appears instantly. On success we re-fetch the profile
+   * so ``avatar_url`` reflects the server-stored row.
    */
   async function handleFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) {
@@ -104,13 +106,21 @@ export function Profile({
     setAvatarError(null);
     setAvatarBusy(true);
     try {
-      const dataUrl = await fileToAvatarDataUrl(files[0]);
-      setAvatarUrl(dataUrl);
+      const { blob, previewDataUrl } = await fileToAvatarBlob(files[0]);
+      setAvatarUrl(previewDataUrl);
+      const result = await uploadMyAvatar(blob);
+      setAvatarUrl(result.avatar_url);
+      // The server also wrote ``avatar_url`` on the profile sidecar;
+      // refresh so the rest of the form (and any cross-tab listeners)
+      // see the canonical value.
+      await profile.refresh().catch(() => undefined);
     } catch (err) {
       setAvatarError(
         err instanceof AvatarUploadError
           ? err.message
-          : "Could not load that image.",
+          : err instanceof Error
+            ? err.message
+            : "Could not upload that image.",
       );
     } finally {
       setAvatarBusy(false);
@@ -141,9 +151,25 @@ export function Profile({
     void handleFiles(event.target.files);
   }
 
-  function onRemoveAvatar(): void {
+  async function onRemoveAvatar(): Promise<void> {
     setAvatarError(null);
-    setAvatarUrl("");
+    setAvatarBusy(true);
+    try {
+      // Server-stored avatars: clear the row + null the URL atomically.
+      // Legacy data: URLs predate this endpoint — fall back to clearing
+      // the local form field; the next save will null the column.
+      if (avatarUrl.startsWith("/v1/me/avatar/")) {
+        await deleteMyAvatar();
+      }
+      setAvatarUrl("");
+      await profile.refresh().catch(() => undefined);
+    } catch (err) {
+      setAvatarError(
+        err instanceof Error ? err.message : "Could not remove the photo.",
+      );
+    } finally {
+      setAvatarBusy(false);
+    }
   }
 
   if (profile.loading && data === null) {
@@ -225,7 +251,7 @@ export function Profile({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={onRemoveAvatar}
+                    onClick={() => void onRemoveAvatar()}
                     disabled={avatarBusy}
                     title="Remove the current photo"
                   >

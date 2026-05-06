@@ -75,11 +75,33 @@ describe("AgentsTab disclosure", () => {
   it("renders one details disclosure per subagent, closed by default", () => {
     const subagents = seedSubagentMap([entry()]);
     render(<AgentsTab subagents={subagents} />);
-    const details = screen.getByTestId(
-      "workspace-agent-details-task_doc_reader",
-    );
+    const details = screen.getByTestId("subagent-card-details-task_doc_reader");
     expect(details).toBeInstanceOf(HTMLDetailsElement);
     expect((details as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("renders thread-derived history groups even when the snapshot is empty", async () => {
+    const onJumpToSubagent = vi.fn();
+    render(
+      <AgentsTab
+        subagents={emptySubagentMap()}
+        onJumpToSubagent={onJumpToSubagent}
+        historyGroups={[
+          {
+            id: "run_1",
+            label: "1 subagent dispatched",
+            timestamp: "2026-05-06T10:00:00Z",
+            entries: [entry()],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("1 subagent dispatched")).toBeInTheDocument();
+    expect(screen.getByText("Doc Reader")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByText("1 subagent dispatched"));
+    expect(onJumpToSubagent).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: "task_doc_reader" }),
+    );
   });
 
   it("renders the timeline rows when the disclosure is opened", async () => {
@@ -110,7 +132,7 @@ describe("AgentsTab disclosure", () => {
     const summary = screen.getByText(/Completed in 18s/);
     await user.click(summary);
     const details = screen.getByTestId(
-      "workspace-agent-details-task_doc_reader",
+      "subagent-card-details-task_doc_reader",
     ) as HTMLDetailsElement;
     expect(details.open).toBe(true);
     expect(
@@ -132,14 +154,17 @@ describe("AgentsTab disclosure", () => {
       />,
     );
     const details = screen.getByTestId(
-      "workspace-agent-details-task_doc_reader",
+      "subagent-card-details-task_doc_reader",
     ) as HTMLDetailsElement;
     expect(details.open).toBe(true);
   });
 
-  it("falls back to the empty-activity message when the subagent has no inner steps", async () => {
+  it("falls back to the empty-activity message when the subagent has no inner steps and no result text", async () => {
     const user = userEvent.setup();
-    const subagents = seedSubagentMap([entry()]);
+    // PR 3.2.2 AC-5 — empty disclosure body needs activities=[] AND
+    // result_summary=null. With result_summary set the disclosure shows
+    // the full result instead (AC-4 — covered in SubagentCard.test).
+    const subagents = seedSubagentMap([entry({ result_summary: null })]);
     render(
       <AgentsTab
         subagents={subagents}
@@ -148,7 +173,7 @@ describe("AgentsTab disclosure", () => {
     );
     await user.click(screen.getByText(/Completed in 18s/));
     expect(
-      screen.getByText(/No detailed activity was reported\./),
+      screen.getByText(/Single-shot response — no inner tool calls\./),
     ).toBeInTheDocument();
   });
 
@@ -183,7 +208,9 @@ describe("AgentsTab disclosure", () => {
     );
     const user = userEvent.setup();
     await user.click(
-      screen.getByRole("button", { name: /Open doc_reader in thread/ }),
+      // PR 3.2.2 — `subagentCardFromEntry` runs the subagent_name through
+      // `formatAgentName`, so "doc_reader" → "Doc reader" in the aria-label.
+      screen.getByRole("button", { name: /Open Doc Reader in thread/ }),
     );
     expect(onJumpToSubagent).toHaveBeenCalledOnce();
   });

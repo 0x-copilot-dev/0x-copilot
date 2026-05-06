@@ -108,10 +108,10 @@ def create_app(
         cannot be abused as an open relay.
         """
 
-        identity = FacadeAuthenticator.authenticate_request(request)
         endpoint = settings_for(app).otel_collector_url
         if not endpoint:
             return Response(status_code=status.HTTP_204_NO_CONTENT)
+        identity = FacadeAuthenticator.authenticate_request(request)
         body = await request.body()
         outbound_headers = _outbound_headers(identity)
         ct = request.headers.get("content-type")
@@ -1045,6 +1045,7 @@ def create_app(
             target="ai_backend",
             params=identity.scoped_params({"period": period, "limit": limit}),
             identity=identity,
+            expect_object=False,
         )
 
     @app.get("/v1/usage/runs/{run_id}")
@@ -1186,8 +1187,9 @@ async def forward_json(
     params: dict[str, object] | None = None,
     json: dict[str, object] | None = None,
     expect_json: bool = True,
+    expect_object: bool = True,
     identity: AuthenticatedIdentity,
-) -> dict[str, object]:
+) -> object:
     """Forward an authenticated request to the named upstream service.
 
     ``target="backend"`` routes to ``services/backend`` (MCP / skills / OAuth /
@@ -1211,6 +1213,7 @@ async def forward_json(
         params=params,
         json=json,
         expect_json=expect_json,
+        expect_object=expect_object,
         headers=_outbound_headers(identity),
     )
 
@@ -1295,8 +1298,9 @@ async def _forward_json(
     params: dict[str, object] | None = None,
     json: dict[str, object] | None = None,
     expect_json: bool = True,
+    expect_object: bool = True,
     headers: dict[str, str] | None = None,
-) -> dict[str, object]:
+) -> object:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.request(
             method,
@@ -1319,7 +1323,7 @@ async def _forward_json(
     if not expect_json:
         return {}
     payload = response.json()
-    if not isinstance(payload, dict):
+    if expect_object and not isinstance(payload, dict):
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Upstream response was not an object"
         )

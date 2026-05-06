@@ -57,3 +57,27 @@ export async function disableMfaFactor(factorId: string): Promise<void> {
   );
   await assertOk(response);
 }
+
+export async function webauthnRegisterStart(
+  body: MfaWebAuthnStartRequestBody,
+): Promise<MfaWebAuthnStartResponse> {
+  const response = await fetch("/v1/me/mfa/factors/webauthn/register/start", {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  await assertOk(response);
+  return (await response.json()) as MfaWebAuthnStartResponse;
+}
+
+export async function webauthnRegisterFinish(
+  body: MfaWebAuthnFinishRequestBody,
+): Promise<MfaWebAuthnFinishResponse> {
+  const response = await fetch("/v1/me/mfa/factors/webauthn/register/finish", {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  await assertOk(response);
+  return (await response.json()) as MfaWebAuthnFinishResponse;
+}

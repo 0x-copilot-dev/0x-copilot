@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,6 +51,13 @@ class ApiKeyRow(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     rotated_from_id: str | None = None
     revoked_at: datetime | None = None
+    # PR 8.3 — ``personal`` keys belong to a single user; ``workspace``
+    # keys are admin-issued tokens that target the org. The mint user is
+    # still recorded on ``user_id`` for audit attribution; the ``kind``
+    # flag drives which Settings tab they appear under and which list
+    # endpoint surfaces them. Default keeps existing rows on the
+    # personal track.
+    kind: Literal["personal", "workspace"] = "personal"
 
 
 @dataclass(frozen=True)
@@ -78,8 +85,17 @@ class ApiKeyStore(Protocol):
         org_id: str,
         user_id: str,
         include_revoked: bool = False,
+        kind: Literal["personal", "workspace"] = "personal",
     ) -> tuple[ApiKeyRow, ...]:
-        """Return the user's API-key rows (newest first)."""
+        """Return the caller's keys of the given kind (newest first)."""
+
+    def list_for_workspace(
+        self,
+        *,
+        org_id: str,
+        include_revoked: bool = False,
+    ) -> tuple[ApiKeyRow, ...]:
+        """Admin-only — list every workspace-kind key in the org."""
 
     def insert(
         self,
@@ -140,12 +156,30 @@ class InMemoryApiKeyStore:
         org_id: str,
         user_id: str,
         include_revoked: bool = False,
+        kind: Literal["personal", "workspace"] = "personal",
     ) -> tuple[ApiKeyRow, ...]:
         out = [
             row
             for row in self.rows.values()
             if row.org_id == org_id
             and row.user_id == user_id
+            and row.kind == kind
+            and (include_revoked or row.revoked_at is None)
+        ]
+        out.sort(key=lambda r: r.created_at, reverse=True)
+        return tuple(out)
+
+    def list_for_workspace(
+        self,
+        *,
+        org_id: str,
+        include_revoked: bool = False,
+    ) -> tuple[ApiKeyRow, ...]:
+        out = [
+            row
+            for row in self.rows.values()
+            if row.org_id == org_id
+            and row.kind == "workspace"
             and (include_revoked or row.revoked_at is None)
         ]
         out.sort(key=lambda r: r.created_at, reverse=True)
@@ -246,15 +280,38 @@ class PostgresApiKeyStore:
         org_id: str,
         user_id: str,
         include_revoked: bool = False,
+        kind: Literal["personal", "workspace"] = "personal",
     ) -> tuple[ApiKeyRow, ...]:
         sql = """
             SELECT id, org_id, user_id, label, key_prefix, secret_hash,
                    scopes, last_used_at, last_used_ip, created_at,
-                   rotated_from_id, revoked_at
+                   rotated_from_id, revoked_at, kind
             FROM api_keys
-            WHERE org_id = %s AND user_id = %s
+            WHERE org_id = %s AND user_id = %s AND kind = %s
         """
-        params: list[Any] = [org_id, user_id]
+        params: list[Any] = [org_id, user_id, kind]
+        if not include_revoked:
+            sql += " AND revoked_at IS NULL"
+        sql += " ORDER BY created_at DESC"
+        with self._cursor(None) as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        return tuple(_row_to_api_key(row) for row in rows)
+
+    def list_for_workspace(
+        self,
+        *,
+        org_id: str,
+        include_revoked: bool = False,
+    ) -> tuple[ApiKeyRow, ...]:
+        sql = """
+            SELECT id, org_id, user_id, label, key_prefix, secret_hash,
+                   scopes, last_used_at, last_used_ip, created_at,
+                   rotated_from_id, revoked_at, kind
+            FROM api_keys
+            WHERE org_id = %s AND kind = 'workspace'
+        """
+        params: list[Any] = [org_id]
         if not include_revoked:
             sql += " AND revoked_at IS NULL"
         sql += " ORDER BY created_at DESC"
@@ -270,8 +327,8 @@ class PostgresApiKeyStore:
                 INSERT INTO api_keys (
                     id, org_id, user_id, label, key_prefix, secret_hash,
                     scopes, last_used_at, last_used_ip, created_at,
-                    rotated_from_id, revoked_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                    rotated_from_id, revoked_at, kind
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     row.id,
@@ -286,6 +343,7 @@ class PostgresApiKeyStore:
                     row.created_at,
                     row.rotated_from_id,
                     row.revoked_at,
+                    row.kind,
                 ),
             )
         return row
@@ -296,7 +354,7 @@ class PostgresApiKeyStore:
                 """
                 SELECT id, org_id, user_id, label, key_prefix, secret_hash,
                        scopes, last_used_at, last_used_ip, created_at,
-                       rotated_from_id, revoked_at
+                       rotated_from_id, revoked_at, kind
                 FROM api_keys
                 WHERE key_prefix = %s AND revoked_at IS NULL
                 """,

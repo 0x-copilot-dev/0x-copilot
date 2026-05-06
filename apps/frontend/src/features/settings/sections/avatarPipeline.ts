@@ -1,16 +1,13 @@
 /**
- * Phase 2 (PR 8.2) — avatar upload helper.
+ * PR 8.3 — client-side avatar resize. Returns a 256×256 cover-cropped
+ * JPEG `Blob` ready to multipart-upload to `/v1/me/avatar`. The server
+ * caps the upload at 200 KB; with a JPEG quality of 0.9 we typically
+ * land at 30–60 KB.
  *
- * The repo doesn't ship object storage today and adding S3-isms purely
- * for an avatar slot is premature. Instead we resize the user's pick to
- * 256×256 in a canvas and store the result as a `data:image/jpeg`
- * base64 URL inline in the existing `user_profiles.avatar_url` column.
- *
- * Server-side validators (`me_profile.py::_validate_avatar`) refuse
- * any blob over 200 KB and any content-type outside the PNG/JPEG/WEBP
- * allowlist, so the contract stays narrow even though the column type
- * is permissive. Swapping to S3 later means changing what gets stored
- * here — the contract and the FE rendering don't move.
+ * Replaces the Phase-2 data-URL pipeline. The legacy `data:` URL
+ * acceptor on the backend stays for rows already in the database, but
+ * fresh uploads now go through the multipart route so the bytes never
+ * round-trip via the profile JSON.
  */
 
 const TARGET_SIZE = 256;
@@ -18,8 +15,8 @@ const JPEG_QUALITY = 0.9;
 const ACCEPTED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 /** Hard ceiling on the original file size before we even attempt a resize. */
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
-/** Mirrors `me_profile.py::_AVATAR_DATA_URL_MAX_LEN`. */
-export const MAX_AVATAR_DATA_URL_LEN = 200_000;
+/** Mirrors the server's ``_MAX_BYTES`` in ``me_avatar.py``. */
+export const MAX_AVATAR_BLOB_BYTES = 200_000;
 
 export class AvatarUploadError extends Error {
   constructor(message: string) {
@@ -29,10 +26,19 @@ export class AvatarUploadError extends Error {
 }
 
 /**
- * Resize an image File to a 256×256 cover-cropped JPEG and return the
- * `data:image/jpeg;base64,…` form ready to write to `avatar_url`.
+ * Resize an image File to a 256×256 cover-cropped JPEG `Blob`.
+ *
+ * Returns the Blob + a dataURL preview. Callers can render the preview
+ * immediately (so the user sees the new avatar before the network call)
+ * and POST the Blob to ``/v1/me/avatar`` in the same handler.
  */
-export async function fileToAvatarDataUrl(file: File): Promise<string> {
+export interface AvatarPickResult {
+  blob: Blob;
+  /** `data:image/jpeg;base64,…` — for the immediate preview only. */
+  previewDataUrl: string;
+}
+
+export async function fileToAvatarBlob(file: File): Promise<AvatarPickResult> {
   if (!ACCEPTED_TYPES.has(file.type)) {
     throw new AvatarUploadError(
       `Unsupported image type. Use PNG, JPEG, or WEBP.`,
@@ -52,13 +58,19 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
       throw new AvatarUploadError("This browser cannot resize images.");
     }
     drawCover(ctx, bitmap, TARGET_SIZE);
-    const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
-    if (dataUrl.length > MAX_AVATAR_DATA_URL_LEN) {
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY),
+    );
+    if (!blob) {
+      throw new AvatarUploadError("Couldn't encode the resized image.");
+    }
+    if (blob.size > MAX_AVATAR_BLOB_BYTES) {
       throw new AvatarUploadError(
         "Couldn't compress this image enough. Try a different photo.",
       );
     }
-    return dataUrl;
+    const previewDataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
+    return { blob, previewDataUrl };
   } finally {
     bitmap.close?.();
   }

@@ -87,6 +87,11 @@ export const ThreadBody = forwardRef<
     onOpenSkillsSettings: () => void;
     onShowConnectors: () => void;
     onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+    onOpenSkillsPanel?: () => void;
+    selectedSkills?: readonly Skill[];
+    onAttachSkill?: (skill: Skill) => void;
+    onRemoveSkill?: (skillId: string) => void;
+    onClearSkills?: () => void;
     onOpenSources?: (citationId: string) => void;
     connectorsTrigger?: ReactNode;
     activeModelLabel?: string;
@@ -122,6 +127,11 @@ export const ThreadBody = forwardRef<
     onOpenSkillsSettings,
     onShowConnectors,
     onOpenDetailsPanel,
+    onOpenSkillsPanel,
+    selectedSkills,
+    onAttachSkill,
+    onRemoveSkill,
+    onClearSkills,
     onOpenSources,
     connectorsTrigger,
     activeModelLabel,
@@ -234,6 +244,11 @@ export const ThreadBody = forwardRef<
           onOpenSkillsSettings={onOpenSkillsSettings}
           onShowConnectors={onShowConnectors}
           onOpenDetailsPanel={onOpenDetailsPanel}
+          onOpenSkillsPanel={onOpenSkillsPanel}
+          selectedSkills={selectedSkills}
+          onAttachSkill={onAttachSkill}
+          onRemoveSkill={onRemoveSkill}
+          onClearSkills={onClearSkills}
           connectorsTrigger={connectorsTrigger}
           activeModelLabel={activeModelLabel}
           models={models}

@@ -163,6 +163,19 @@ class UsageDailyConnectorRow(RuntimeContract):
     refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class UsageConversationAggregateRecord(RuntimeContract):
+    """Per-conversation aggregate returned by top-conversation usage queries."""
+
+    conversation_id: str
+    title: str | None = None
+    input_tokens: NonNegativeInt = 0
+    output_tokens: NonNegativeInt = 0
+    cached_input_tokens: NonNegativeInt = 0
+    total_tokens: NonNegativeInt = 0
+    runs_count: NonNegativeInt = 0
+    cost_micro_usd: int | None = None
+
+
 class CompressionEventRecord(RuntimeContract):
     """Redacted context compression telemetry."""
 

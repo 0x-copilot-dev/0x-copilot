@@ -180,3 +180,45 @@ export async function rotateMyApiKey(
   await assertOk(response);
   return (await response.json()) as CreateApiKeyResponse;
 }
+
+// PR 8.3 — workspace-issued admin tokens. Same wire shape as the
+// personal endpoints; backend gates on ``admin:users``.
+
+export async function listWorkspaceApiKeys(): Promise<ApiKeyListResponse> {
+  const response = await fetch("/v1/workspace/api-keys", {
+    headers: correlationHeaders(),
+  });
+  await assertOk(response);
+  return (await response.json()) as ApiKeyListResponse;
+}
+
+export async function createWorkspaceApiKey(
+  request: CreateApiKeyRequest,
+): Promise<CreateApiKeyResponse> {
+  const response = await fetch("/v1/workspace/api-keys", {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(request),
+  });
+  await assertOk(response);
+  return (await response.json()) as CreateApiKeyResponse;
+}
+
+export async function revokeWorkspaceApiKey(apiKeyId: string): Promise<void> {
+  const response = await fetch(
+    `/v1/workspace/api-keys/${encodeURIComponent(apiKeyId)}`,
+    { method: "DELETE", headers: correlationHeaders() },
+  );
+  await assertOk(response);
+}
+
+export async function rotateWorkspaceApiKey(
+  apiKeyId: string,
+): Promise<CreateApiKeyResponse> {
+  const response = await fetch(
+    `/v1/workspace/api-keys/${encodeURIComponent(apiKeyId)}/rotate`,
+    { method: "POST", headers: correlationHeaders() },
+  );
+  await assertOk(response);
+  return (await response.json()) as CreateApiKeyResponse;
+}

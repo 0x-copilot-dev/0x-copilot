@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -140,7 +141,11 @@ class AskAQuestionTool:
         return await self.ainvoke(raw_input)
 
     def _approval_id(self) -> str:
-        return f"ask_a_question:{self.runtime_context.run_id}:{self.runtime_context.trace_id}"
+        # Per-invocation suffix: trace_id is stable across multiple ask_a_question
+        # calls inside the same run/trace, which would collapse them to a single
+        # approval row + UI card. token_hex makes each request its own entity in
+        # the approvals table and the message stream.
+        return f"ask_a_question:{self.runtime_context.run_id}:{secrets.token_hex(8)}"
 
     @classmethod
     def _resume_result(cls, resume: object) -> dict[str, Any]:

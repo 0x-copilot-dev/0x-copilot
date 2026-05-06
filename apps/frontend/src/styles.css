@@ -669,6 +669,7 @@ p {
   display: grid;
   gap: var(--space-xs);
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-top: var(--space-xs);
 }
@@ -752,6 +753,8 @@ p {
 }
 
 .aui-thread-list-item__trigger {
+  box-sizing: border-box;
+  max-width: 100%;
   overflow: hidden;
   padding: 0.55rem 0.625rem;
   text-align: left;
@@ -759,32 +762,34 @@ p {
   white-space: nowrap;
 }
 
-/* Conversation row — two-line: title (top) + meta (timestamp or live pill).
- * Active row highlights via the parent .aui-thread-list-item[data-active].
- *
- * Layout: title uses the full row width by default. The `⋯`
- * overflow menu (`.aui-conversation-row__menu`) is absolutely
- * positioned over the row on hover. We do NOT shift padding on
- * hover — the title's shape never changes. With the smaller
- * title font (`0.78rem`) most titles fit without truncation and
- * the `⋯` lands in the natural whitespace at the end of the row.
- * If a title does happen to fill the row, the button's opaque
- * surface covers the truncated tail cleanly. */
+/* Conversation row — single line: status dot + ellipsized title + time.
+ * Hover/focus swaps the fixed-width time slot for the action trigger. */
 .aui-conversation-row {
-  display: grid;
-  gap: 2px;
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  gap: 0.75rem;
+  min-height: 2.25rem;
+  min-width: 0;
   width: 100%;
+}
+
+.aui-conversation-row[data-active],
+.aui-conversation-row-host:hover .aui-conversation-row {
+  background: var(--color-surface-muted);
+}
+
+.aui-conversation-row[data-active] {
+  border-color: color-mix(in srgb, var(--color-border) 70%, transparent);
 }
 
 .aui-conversation-row__title {
   color: var(--color-text);
+  flex: 1 1 auto;
   font-size: 0.78rem;
   font-weight: 500;
+  min-width: 0;
   overflow: hidden;
-  /* Reserve a hover-gutter on the right so the `⋯` button always
-   * lands in empty space; the title ellipsizes a bit earlier
-   * instead of being covered by the menu trigger on hover. */
-  padding-right: 1.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -794,76 +799,47 @@ p {
   color: var(--color-text);
 }
 
-.aui-conversation-row__meta {
-  align-items: center;
-  color: var(--color-text-subtle);
-  display: flex;
-  font-size: 0.72rem;
-  gap: 0.4rem;
-  justify-content: flex-end;
-}
-
-.aui-conversation-row__folder {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aui-conversation-row__time {
-  flex: none;
-}
-
-/* Live thread — amber left rail makes it impossible to miss
- * which conversation has an in-flight run. Mirrors the design's
- * `.thread-item[data-running="true"]::before` accent stripe. */
-.aui-conversation-row[data-live="true"] {
-  position: relative;
-}
-
-.aui-conversation-row[data-live="true"]::before {
-  background: var(--color-accent);
-  border-radius: 999px;
-  bottom: 22%;
-  content: "";
-  left: 0;
-  position: absolute;
-  top: 22%;
-  width: 2px;
-}
-
-/* PR 2.2.1 — single signal, dot only.
- *
- * The lowercase "live" text duplicated the left amber rail
- * (`[data-live="true"]::before`) that already calls out a row with an
- * in-flight run. Drop the word, keep a single pulsing dot sized to the
- * footprint of the timestamp (`10:37`) it replaces so the row's
- * vertical rhythm doesn't shift when a run starts. The aria-label on
- * the span carries the screen-reader semantics. */
-.aui-conversation-row__live {
+.aui-conversation-row__status {
   align-items: center;
   display: inline-flex;
-  flex: none;
-  height: 1lh;
+  flex: 0 0 0.5rem;
+  height: 0.5rem;
   justify-content: center;
-  width: 0.95rem;
+  width: 0.5rem;
 }
 
-.aui-conversation-row__live::before {
-  animation: aui-live-pulse 1.6s ease-out infinite;
-  background: var(--color-accent);
+.aui-conversation-row__status::before {
+  background: color-mix(in srgb, var(--color-text-subtle) 70%, transparent);
   border-radius: 999px;
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 40%, transparent);
   content: "";
   height: 6px;
   width: 6px;
 }
 
+.aui-conversation-row__status[data-live="true"]::before {
+  animation: aui-live-pulse 1.6s ease-out infinite;
+  background: var(--color-success, #3fb950);
+  box-shadow: 0 0 0 0
+    color-mix(in srgb, var(--color-success, #3fb950) 40%, transparent);
+}
+
+.aui-conversation-row__time {
+  color: var(--color-text-subtle);
+  flex: 0 0 1.5rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-align: right;
+}
+
+.aui-conversation-row-host:hover .aui-conversation-row__time,
+.aui-conversation-row-host:focus-within .aui-conversation-row__time {
+  visibility: hidden;
+}
+
 @keyframes aui-live-pulse {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 40%, transparent);
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-success, #3fb950) 40%, transparent);
   }
   70% {
     box-shadow: 0 0 0 6px transparent;
@@ -875,6 +851,9 @@ p {
 
 /* PR F3 — sidebar pin / overflow menu. */
 .aui-conversation-row-host {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   position: relative;
 }
 
@@ -889,13 +868,8 @@ p {
   display: none;
   position: absolute;
   right: 0.4rem;
-  /* Aligned with the title row, not vertically centred against
-   * the whole two-line row. The button-host has 0.55rem of
-   * padding-top from `.aui-thread-list-item__trigger`, and the
-   * title's line-height puts the visual centre at roughly
-   * 0.95rem from the top — `top: 0.4rem` lands the 1.4rem-tall
-   * button right next to the title. */
-  top: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .aui-conversation-row-host:hover .aui-conversation-row__menu,
@@ -1304,12 +1278,15 @@ p {
   display: grid;
   gap: var(--space-md);
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
 .aui-conversation-group {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
 .aui-conversation-group__heading {
@@ -1327,11 +1304,14 @@ p {
   gap: 1px;
   list-style: none;
   margin: 0;
+  min-width: 0;
   padding: 0;
 }
 
 .aui-conversation-group__list > li {
   list-style: none;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .aui-chat-panel {
@@ -1915,6 +1895,8 @@ p {
 .aui-composer {
   --composer-padding: 0.5rem;
   --composer-radius: 1.5rem;
+  --composer-shell-height: 8.7rem;
+  --composer-input-height: 2.7rem;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--composer-radius);
@@ -1924,12 +1906,36 @@ p {
   gap: 0.5rem;
   margin: var(--space-lg) auto 0;
   max-width: 48rem;
+  box-sizing: border-box;
+  height: var(--composer-shell-height);
+  overflow: hidden;
   padding: var(--composer-padding);
   position: relative;
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
   width: 100%;
+}
+
+.aui-composer[data-focused="true"] {
+  --composer-input-height: 5.15rem;
+}
+
+.aui-composer[data-has-topbar="true"] {
+  --composer-shell-height: 10.6rem;
+}
+
+.aui-composer[data-focused="true"][data-has-topbar="true"] {
+  --composer-input-height: 4.25rem;
+}
+
+.aui-composer[data-focused="true"] .atlas-depth {
+  max-width: 14rem;
+}
+
+.aui-composer[data-focused="true"] .atlas-depth__chip {
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .aui-composer:focus-within {
@@ -1953,7 +1959,10 @@ p {
   display: flex;
   flex-direction: row;
   gap: 0.5rem;
+  min-height: 1.9rem;
   overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.05rem 0.1rem;
   width: 100%;
 }
 
@@ -1966,16 +1975,77 @@ p {
   display: flex;
   gap: var(--space-sm);
   justify-content: space-between;
+  min-height: 2rem;
+  min-width: 0;
   position: relative;
+}
+
+.aui-composer-focus-meta {
+  color: var(--color-text-muted);
+  flex: 0 1 auto;
+  font-size: 0.72rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-composer-action-wrapper__right {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.aui-composer-slash-cue {
+  align-items: center;
+  animation: aui-slash-cue-enter 160ms ease-out;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border-radius: var(--radius-full);
+  bottom: calc(100% + 0.25rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 600;
+  gap: 0.3rem;
+  left: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  position: absolute;
+}
+
+.aui-composer-slash-cue kbd {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  border-radius: 4px;
+  color: var(--color-accent-strong);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 0.7rem;
+  padding: 0 0.28rem;
+}
+
+@keyframes aui-slash-cue-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .aui-composer-tools {
   align-items: center;
   display: flex;
   flex: 1 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--space-sm);
   min-width: 0;
+  overflow: hidden;
 }
 
 .atlas-composer-mic {
@@ -2043,14 +2113,17 @@ p {
   border: 0;
   color: var(--color-text);
   display: block;
+  flex: 0 0 var(--composer-input-height);
   font-size: 0.875rem;
+  height: var(--composer-input-height);
   line-height: 1.25rem;
   max-height: 8rem;
-  min-height: 2.5rem;
+  min-height: var(--composer-input-height);
   outline: none;
   padding: 0.25rem 0.4375rem;
   position: relative;
   resize: none;
+  transition: height 180ms ease;
   width: 100%;
 }
 
@@ -2084,7 +2157,23 @@ p {
   font-size: 0.72rem;
   gap: 0.5rem;
   line-height: 1.2;
+  max-height: 2.25rem;
+  overflow: hidden;
   padding: 0.45rem 0.75rem;
+  transition:
+    border-color 160ms ease,
+    max-height 160ms ease,
+    opacity 120ms ease,
+    padding 160ms ease;
+}
+
+.aui-composer[data-focused="true"] .aui-composer__hint {
+  border-top-color: transparent;
+  max-height: 0;
+  opacity: 0;
+  padding-bottom: 0;
+  padding-top: 0;
+  pointer-events: none;
 }
 
 .aui-composer__hint kbd {
@@ -2202,6 +2291,60 @@ p {
 .aui-attachment-pill small {
   color: var(--color-text-subtle);
   font-size: 0.72rem;
+}
+
+.aui-skill-pill {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 42%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--color-text);
+  display: inline-flex;
+  gap: var(--space-xs);
+  margin-right: var(--space-xs);
+  max-width: 100%;
+  padding: 0.32rem 0.55rem;
+}
+
+.aui-skill-pill code {
+  color: var(--color-accent-strong);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.aui-skill-pill span {
+  font-size: 0.78rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-attachment-pill__remove,
+.aui-skill-pill__remove {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  height: 1.1rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.1rem;
+}
+
+.aui-attachment-pill__remove:hover,
+.aui-skill-pill__remove:hover,
+.aui-attachment-pill__remove:focus-visible,
+.aui-skill-pill__remove:focus-visible {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  outline: none;
 }
 
 .aui-trigger-popover {
@@ -4370,6 +4513,46 @@ p {
   padding: 0;
 }
 
+.atlas-workspace-agent-group {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+}
+
+.atlas-workspace-agent-group__header {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: flex;
+  font: 600 0.72rem/1.2 var(--font-sans);
+  justify-content: space-between;
+  margin-bottom: var(--space-xs);
+  padding: 0.25rem 0.125rem;
+  text-align: left;
+  width: 100%;
+}
+
+.atlas-workspace-agent-group__header:hover,
+.atlas-workspace-agent-group__header:focus-visible {
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+}
+
+.atlas-workspace-agent-group__header time {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.atlas-workspace-agent-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 .atlas-workspace-tab__stale {
   margin: 0;
   padding: 6px 8px;
@@ -4613,6 +4796,524 @@ p {
 .atlas-workspace-agent__timeline.aui-tool-card__timeline
   > .aui-tool-card__timeline-item {
   padding: 6px 0;
+}
+
+/* Parallel subagent fleet — in-thread card inspired by the design target. */
+.aui-fleet-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+}
+
+.aui-fleet-card__head {
+  align-items: center;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.aui-fleet-card__icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: 0.9rem;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.aui-fleet-card__title {
+  color: var(--color-text);
+  font-size: 1rem;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-fleet-card__count,
+.aui-fleet-card__elapsed {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.aui-fleet-card__sub {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.aui-fleet-card__rows {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.aui-fleet-card__foot {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  gap: var(--space-sm);
+}
+
+.aui-fleet-card__foot > span:first-child {
+  flex: 1 1 auto;
+  min-width: min(16rem, 100%);
+}
+
+.aui-fleet-card__link {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+}
+
+.aui-fleet-card__link:hover {
+  color: var(--color-accent);
+}
+
+.aui-fleet-card .subagent-card {
+  background: color-mix(in srgb, var(--color-bg) 35%, transparent);
+  border-color: var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 0.25rem var(--space-sm);
+  grid-template-columns: 1.25rem minmax(0, 1fr) minmax(5rem, 9rem) auto auto;
+  padding: var(--space-sm);
+}
+
+.aui-fleet-card .subagent-card__head {
+  display: contents;
+}
+
+.aui-fleet-card .subagent-card__icon {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  place-self: center;
+}
+
+.aui-fleet-card .subagent-card__name {
+  font-size: 0.92rem;
+  grid-column: 2;
+  grid-row: 1;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.aui-fleet-card .subagent-card__status-badge {
+  justify-self: end;
+}
+
+.aui-fleet-card .subagent-card__jump {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+}
+
+.aui-fleet-card .subagent-card__task,
+.aui-fleet-card .subagent-card__finding {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  grid-column: 2;
+  grid-row: 2;
+  line-clamp: 1;
+  -webkit-line-clamp: 1;
+}
+
+.aui-fleet-card .subagent-card__finding {
+  display: none;
+}
+
+.aui-fleet-card .subagent-card__details {
+  display: contents;
+}
+
+.aui-fleet-card .subagent-card__details-summary {
+  display: contents;
+}
+
+.aui-fleet-card .subagent-card__details-summary::before {
+  align-self: center;
+  background: var(--color-success, #6ee7a8);
+  border-radius: 999px;
+  content: "";
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  height: 5px;
+  justify-self: stretch;
+}
+
+.aui-fleet-card .subagent-card__meta {
+  align-self: center;
+  color: var(--color-text-muted);
+  flex: initial;
+  font-size: 0.85rem;
+  grid-column: 4;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  max-width: 4rem;
+}
+
+.aui-fleet-card .subagent-card__meta::first-letter {
+  text-transform: uppercase;
+}
+
+.aui-fleet-card .subagent-card__disclosure-hint {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+  place-self: center;
+}
+
+.aui-fleet-card .subagent-card__details-body {
+  grid-column: 2 / -1;
+  grid-row: 3;
+}
+
+/* PR 3.2.2 — shared <SubagentCard> primitive (in-thread + workspace pane). */
+.subagent-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subagent-card__head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.subagent-card__status-badge {
+  font-size: 0.62rem;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.subagent-card[data-compact="true"] .subagent-card__status-badge {
+  font-size: 0.58rem;
+  padding: 1px 5px;
+}
+
+.subagent-card__icon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+
+.subagent-card__name {
+  flex: 1 1 auto;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-card__jump {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.subagent-card__jump:hover,
+.subagent-card__jump:focus-visible {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  outline: none;
+}
+
+.subagent-card__task {
+  color: var(--color-text);
+  display: -webkit-box;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  overflow: hidden;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.subagent-card__finding {
+  color: var(--color-text-muted);
+  display: -webkit-box;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+  overflow: hidden;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.subagent-card__details {
+  margin-top: 2px;
+}
+
+.subagent-card__details-summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 11px;
+  color: var(--color-text-subtle);
+  gap: 6px;
+  justify-content: space-between;
+  list-style: none;
+  margin: -2px -4px;
+  min-height: 1.75rem;
+  padding: 2px 4px;
+  user-select: none;
+}
+
+.subagent-card__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-card__details-summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.subagent-card__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-card__disclosure-hint {
+  align-items: center;
+  border-radius: 4px;
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 16px;
+  height: 1.45rem;
+  justify-content: center;
+  line-height: 1;
+  transition: transform 120ms ease;
+  width: 1.45rem;
+}
+
+.subagent-card__details-summary:hover .subagent-card__disclosure-hint {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.subagent-card__details[open]
+  > .subagent-card__details-summary
+  .subagent-card__disclosure-hint {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-card__disclosure-hint {
+    transition: none;
+  }
+}
+
+.subagent-card__details-body {
+  margin-top: 4px;
+}
+
+.subagent-card__empty {
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  font-style: italic;
+  margin: 0;
+}
+
+.subagent-card__full-result {
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11.5px;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* PR 3.2.4 — compact subagent row inside the parallel-fleet card. */
+.subagent-fleet-row {
+  align-items: center;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 96px 64px;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.subagent-fleet-row + .subagent-fleet-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.subagent-fleet-row__indicator {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  width: 16px;
+}
+
+.subagent-fleet-row__indicator[data-status="completed"] {
+  color: var(--color-success);
+}
+.subagent-fleet-row__indicator[data-status="failed"],
+.subagent-fleet-row__indicator[data-status="timed_out"] {
+  color: var(--color-danger);
+}
+.subagent-fleet-row__indicator[data-status="cancelled"] {
+  color: var(--color-warning);
+}
+.subagent-fleet-row__indicator[data-status="running"],
+.subagent-fleet-row__indicator[data-status="queued"] {
+  color: var(--color-accent-strong);
+  animation: subagent-fleet-row-pulse 1.4s ease-in-out infinite;
+}
+
+.subagent-fleet-row__text {
+  min-width: 0;
+}
+
+.subagent-fleet-row__name {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-fleet-row__task {
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-fleet-row__progress {
+  background: var(--color-surface-raised);
+  border-radius: 999px;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.subagent-fleet-row__progress-fill {
+  background: var(--color-accent-strong);
+  display: block;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms ease;
+}
+
+.subagent-fleet-row[data-status="running"] .subagent-fleet-row__progress-fill,
+.subagent-fleet-row[data-status="queued"] .subagent-fleet-row__progress-fill {
+  animation: subagent-fleet-row-progress 2.4s ease-in-out infinite;
+}
+
+.subagent-fleet-row[data-status="completed"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-success);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row[data-status="failed"] .subagent-fleet-row__progress-fill,
+.subagent-fleet-row[data-status="timed_out"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-danger);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row[data-status="cancelled"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-warning);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row__elapsed {
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@keyframes subagent-fleet-row-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes subagent-fleet-row-progress {
+  0% {
+    transform: scaleX(0.05);
+  }
+  50% {
+    transform: scaleX(0.55);
+  }
+  100% {
+    transform: scaleX(0.85);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-fleet-row__indicator[data-status="running"],
+  .subagent-fleet-row__indicator[data-status="queued"] {
+    animation: none;
+  }
+  .subagent-fleet-row[data-status="running"] .subagent-fleet-row__progress-fill,
+  .subagent-fleet-row[data-status="queued"] .subagent-fleet-row__progress-fill {
+    animation: none;
+    transform: scaleX(0.45);
+  }
+}
+
+@media (max-width: 600px) {
+  .subagent-fleet-row {
+    grid-template-columns: 16px minmax(0, 1fr) 56px 48px;
+    gap: 8px;
+  }
 }
 
 /* PR 3.2 — Draft tab. */
@@ -5176,6 +5877,8 @@ p {
 
 /* Model pill */
 .atlas-model-pill__root {
+  flex: 0 1 auto;
+  min-width: 0;
   position: relative;
 }
 
@@ -5195,6 +5898,7 @@ p {
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
+  max-width: 100%;
 }
 
 .atlas-model-pill:hover:not([disabled]) {
@@ -5227,6 +5931,10 @@ p {
 .atlas-model-pill__name {
   font-weight: 500;
   line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .atlas-model-pill__caret {
@@ -5316,11 +6024,13 @@ p {
 /* Thinking-depth radiogroup */
 .atlas-depth {
   display: inline-flex;
+  flex: 0 1 auto;
   border: 1px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-surface);
   padding: 2px;
   gap: 2px;
+  min-width: 0;
 }
 
 .atlas-depth__chip {

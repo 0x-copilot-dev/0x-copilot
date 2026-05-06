@@ -246,6 +246,20 @@ class StreamUpdateProcessor:
 
         emitted = False
         start_payloads = self.task_tool_call_payloads(data)
+        # PR 3.2.4 debug — log how many task tool calls landed in this
+        # tick. The fleet bookend only fires when >= 2.
+        if start_payloads:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "[PR 3.2.4] task_tool_call_payloads tick: count=%d names=%s run_id=%s",
+                len(start_payloads),
+                [
+                    StreamTextHelper.extract(p.get(self._Fields.SUBAGENT_NAME))
+                    for p in start_payloads
+                ],
+                run.run_id,
+            )
         # PR A2 — when the supervisor dispatches >1 task tool call in the
         # same update tick, emit a SUBAGENT_FLEET_STARTED bookend first and
         # stamp `parent_fleet_id` on each child SUBAGENT_STARTED payload so

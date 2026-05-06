@@ -1,11 +1,22 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { MessageStatus as AssistantMessageStatus } from "../runtime/types";
+import { asRecord, stringValue } from "../utils/jsonUtils";
 import { isToolCallPart, payloadString } from "./recordHelpers";
 import type {
   ChatItem,
   RuntimePartStatus,
   ThreadMessageContent,
+  ThreadMessageContentPart,
 } from "./types";
+
+const RESOLVED_ACTION_STATUSES = new Set([
+  "answered",
+  "approved",
+  "cancelled",
+  "forwarded",
+  "rejected",
+  "skipped",
+]);
 
 export function isVisibleProgressEvent(event: RuntimeEventEnvelope): boolean {
   return (
@@ -72,16 +83,44 @@ export function statusFromRuntimeEvent(
 }
 
 export function hasPendingAction(content: ThreadMessageContent): boolean {
-  return content.some((part) => {
-    if (!isToolCallPart(part)) {
-      return false;
-    }
-    return (
-      (part.toolName === "approval_request" ||
-        part.toolName === "mcp_auth_required") &&
-      part.result === undefined
-    );
-  });
+  return content.some(isPendingActionPart);
+}
+
+export function hasPendingActionForRun(
+  items: readonly ChatItem[],
+  runId: string,
+): boolean {
+  return items.some(
+    (item) =>
+      item.kind === "message" &&
+      item.role === "assistant" &&
+      item.runId === runId &&
+      hasPendingAction(item.content),
+  );
+}
+
+export function isPendingActionPart(part: ThreadMessageContentPart): boolean {
+  if (
+    !isToolCallPart(part) ||
+    (part.toolName !== "approval_request" &&
+      part.toolName !== "mcp_auth_required") ||
+    part.result !== undefined
+  ) {
+    return false;
+  }
+
+  const args = asRecord(part.args);
+  const status = stringValue(args.status)?.toLowerCase();
+  if (status !== undefined && RESOLVED_ACTION_STATUSES.has(status)) {
+    return false;
+  }
+
+  // Discovery cards are optional connector suggestions. They can remain
+  // unresolved without pausing the run, so they must not suppress planning UI.
+  return (
+    part.toolName !== "mcp_auth_required" ||
+    stringValue(args.discovery_reason) === null
+  );
 }
 
 export function statusFromEvent(

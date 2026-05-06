@@ -108,6 +108,28 @@ def test_normal_json_path_unchanged(monkeypatch, mock_transport_factory) -> None
     assert result == {"hello": "world"}
 
 
+def test_json_array_allowed_when_object_check_disabled(
+    monkeypatch, mock_transport_factory
+) -> None:
+    transport = mock_transport_factory(
+        200,
+        b'[{"conversation_id":"conv_1","total":42}]',
+        {"content-type": "application/json"},
+    )
+    _patched_forward(monkeypatch, transport)
+
+    result = asyncio.run(
+        _forward_json(
+            base_url="http://upstream.test",
+            method="GET",
+            path="/v1/anything",
+            expect_object=False,
+        )
+    )
+
+    assert result == [{"conversation_id": "conv_1", "total": 42}]
+
+
 def test_upstream_error_still_raises(monkeypatch, mock_transport_factory) -> None:
     transport = mock_transport_factory(404, b'{"detail":"missing"}')
     _patched_forward(monkeypatch, transport)

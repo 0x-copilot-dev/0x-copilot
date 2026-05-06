@@ -6,6 +6,7 @@ export {
   threadMessagesToChatItems,
 } from "./chatModel/conversion";
 export { applyRuntimeEvent } from "./chatModel/eventReducer";
+export { markPendingInteractionsCancelled } from "./chatModel/contentBuilders";
 export { resolveApprovalDecision } from "./chatModel/approval";
 export {
   resolveAuthenticatedMcpServers,

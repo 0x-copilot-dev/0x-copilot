@@ -83,6 +83,27 @@ export function correlationHeaders(): Record<string, string> {
   return headers;
 }
 
+export function dynamicCorrelationHeaders(): Record<string, string> {
+  return new Proxy({} as Record<string, string>, {
+    get(_target, property) {
+      return typeof property === "string"
+        ? correlationHeaders()[property]
+        : undefined;
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      if (typeof property !== "string") {
+        return undefined;
+      }
+      return property in correlationHeaders()
+        ? { configurable: true, enumerable: true }
+        : undefined;
+    },
+    ownKeys() {
+      return Object.keys(correlationHeaders());
+    },
+  });
+}
+
 export function jsonHeaders(): HeadersInit {
   return { "content-type": "application/json", ...correlationHeaders() };
 }

@@ -29,6 +29,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerResult,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
+    UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -1230,8 +1231,8 @@ class InMemoryRuntimeApiStore:
         start: datetime,
         end: datetime,
         limit: int,
-    ) -> Sequence[tuple[str, int]]:
-        totals: dict[str, int] = {}
+    ) -> Sequence[UsageConversationAggregateRecord]:
+        aggregates: dict[str, UsageConversationAggregateRecord] = {}
         for row in self.run_usage.values():
             if (
                 row.org_id != org_id
@@ -1240,11 +1241,46 @@ class InMemoryRuntimeApiStore:
                 or row.pii_purged_at is not None
             ):
                 continue
-            totals[row.conversation_id] = (
-                totals.get(row.conversation_id, 0) + row.total_tokens
+            current = aggregates.get(row.conversation_id)
+            cost_micro_usd = row.cost_micro_usd
+            if current is None:
+                conversation = self.conversations.get(row.conversation_id)
+                aggregates[row.conversation_id] = UsageConversationAggregateRecord(
+                    conversation_id=row.conversation_id,
+                    title=conversation.title if conversation is not None else None,
+                    input_tokens=row.input_tokens,
+                    output_tokens=row.output_tokens,
+                    cached_input_tokens=row.cached_input_tokens,
+                    total_tokens=row.total_tokens,
+                    runs_count=1,
+                    cost_micro_usd=cost_micro_usd,
+                )
+                continue
+            aggregates[row.conversation_id] = current.model_copy(
+                update={
+                    "input_tokens": current.input_tokens + row.input_tokens,
+                    "output_tokens": current.output_tokens + row.output_tokens,
+                    "cached_input_tokens": current.cached_input_tokens
+                    + row.cached_input_tokens,
+                    "total_tokens": current.total_tokens + row.total_tokens,
+                    "runs_count": current.runs_count + 1,
+                    "cost_micro_usd": self._sum_optional_cost(
+                        current.cost_micro_usd, cost_micro_usd
+                    ),
+                }
             )
-        ranked = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+        ranked = sorted(
+            aggregates.values(), key=lambda item: item.total_tokens, reverse=True
+        )
         return tuple(ranked[:limit])
+
+    @staticmethod
+    def _sum_optional_cost(left: int | None, right: int | None) -> int | None:
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return left + right
 
     def query_model_call_usage_for_run(
         self,

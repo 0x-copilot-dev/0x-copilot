@@ -67,6 +67,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerResult,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
+    UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
     UsageDailyUserRow,
@@ -2585,23 +2586,52 @@ class PostgresRuntimeApiStore:
         start: datetime,
         end: datetime,
         limit: int,
-    ) -> Sequence[tuple[str, int]]:
+    ) -> Sequence[UsageConversationAggregateRecord]:
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
-                SELECT conversation_id, SUM(total_tokens) AS total
-                  FROM runtime_run_usage
-                 WHERE org_id = %s AND user_id = %s
-                   AND completed_at BETWEEN %s AND %s
-                   AND pii_purged_at IS NULL
-                 GROUP BY conversation_id
-                 ORDER BY total DESC
+                SELECT
+                    u.conversation_id,
+                    c.title,
+                    SUM(u.input_tokens) AS input_tokens,
+                    SUM(u.output_tokens) AS output_tokens,
+                    SUM(u.cached_input_tokens) AS cached_input_tokens,
+                    SUM(u.total_tokens) AS total_tokens,
+                    COUNT(*) AS runs_count,
+                    CASE
+                        WHEN COUNT(u.cost_micro_usd) = 0 THEN NULL
+                        ELSE SUM(u.cost_micro_usd)
+                    END AS cost_micro_usd
+                  FROM runtime_run_usage AS u
+                  LEFT JOIN agent_conversations AS c
+                    ON c.org_id = u.org_id AND c.id = u.conversation_id
+                 WHERE u.org_id = %s AND u.user_id = %s
+                   AND u.completed_at BETWEEN %s AND %s
+                   AND u.pii_purged_at IS NULL
+                 GROUP BY u.conversation_id, c.title
+                 ORDER BY total_tokens DESC
                  LIMIT %s
                 """,
                 (org_id, user_id, start, end, limit),
             )
             rows = await cur.fetchall()
-        return tuple((str(r["conversation_id"]), int(r["total"] or 0)) for r in rows)
+        return tuple(
+            UsageConversationAggregateRecord(
+                conversation_id=str(r["conversation_id"]),
+                title=r["title"],
+                input_tokens=int(r["input_tokens"] or 0),
+                output_tokens=int(r["output_tokens"] or 0),
+                cached_input_tokens=int(r["cached_input_tokens"] or 0),
+                total_tokens=int(r["total_tokens"] or 0),
+                runs_count=int(r["runs_count"] or 0),
+                cost_micro_usd=(
+                    int(r["cost_micro_usd"])
+                    if r["cost_micro_usd"] is not None
+                    else None
+                ),
+            )
+            for r in rows
+        )
 
     @reader
     async def query_model_call_usage_for_run(

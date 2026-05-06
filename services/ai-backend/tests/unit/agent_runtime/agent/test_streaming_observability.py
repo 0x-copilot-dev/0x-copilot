@@ -65,17 +65,61 @@ class TestObservabilityRedactorUserContent:
             Defaults.TRUNCATED
         )
 
-    def test_sensitive_value_inside_user_content_key_still_redacted(self) -> None:
+    def test_sensitive_value_pattern_inside_user_content_key_is_preserved(
+        self,
+    ) -> None:
+        # Regression for the "[redacted]" assistant message bug: the
+        # SENSITIVE_VALUE regex is heuristic and over-fires on any user
+        # content (prose, code) containing `key = value` patterns where
+        # the key looks credential-shaped. The whole streamed model
+        # response was being destroyed when the model wrote even one
+        # illustrative `api_key = "..."` line. User-content keys
+        # (message/delta/output/etc) now bypass the value-regex entirely;
+        # the structural SENSITIVE_KEY scan still protects nested dicts.
         result = ObservabilityRedactor.redact_json_object(
-            {"message": "api_key=sk-leaked-1234"}
+            {"message": "Here is a snippet: api_key = 'placeholder'"}
         )
 
-        assert result["message"] == Defaults.REDACTED
+        assert result["message"] == "Here is a snippet: api_key = 'placeholder'"
+
+    def test_sensitive_value_outside_user_content_key_still_redacted(self) -> None:
+        # The fix narrows scope to user-visible content only; structural
+        # diagnostic / metadata fields keep the existing redaction
+        # behaviour so a misbehaving tool can't leak via, say, a
+        # `diagnostic_blob` field.
+        result = ObservabilityRedactor.redact_json_object(
+            {"diagnostic_blob": "api_key=sk-leaked-1234"}
+        )
+
+        assert result["diagnostic_blob"] == Defaults.REDACTED
 
     def test_sensitive_key_nested_inside_user_content_key_still_redacted(self) -> None:
+        # Structural SENSITIVE_KEY scrub still applies inside user
+        # content — a tool that emits `{"api_key": "..."}` inside a
+        # message payload still gets that key dropped. Free-form prose
+        # under a non-credential key in the same subtree is preserved.
         result = ObservabilityRedactor.redact_json_object(
             {"message": {"api_key": "sk-leaked-1234", "body": self.LONG_TEXT}}
         )
 
         assert result["message"]["api_key"] == Defaults.REDACTED
         assert result["message"]["body"] == self.LONG_TEXT
+
+    def test_sensitive_value_pattern_inside_nested_user_content_is_preserved(
+        self,
+    ) -> None:
+        # User-content territory propagates through nested structures
+        # so model output framed as Anthropic content blocks
+        # (`output.content[*].text` etc.) is not destroyed by the
+        # heuristic regex on inner string leaves.
+        result = ObservabilityRedactor.redact_json_object(
+            {
+                "output": {
+                    "items": [
+                        {"text": "the secret = my-secret was set"},
+                    ]
+                }
+            }
+        )
+
+        assert result["output"]["items"][0]["text"] == "the secret = my-secret was set"

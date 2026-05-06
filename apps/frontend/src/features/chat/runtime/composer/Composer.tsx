@@ -7,6 +7,7 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
@@ -83,6 +84,7 @@ export interface ComposerProps {
     running: boolean;
     disabled: boolean;
     attachmentsCount: number;
+    focused: boolean;
   }) => ReactNode;
   /**
    * Free render slot above the textarea. Caller uses it for the
@@ -95,6 +97,10 @@ export interface ComposerProps {
   }) => ReactNode;
   /** Hint row shown beneath the bottom bar. */
   hint?: ReactNode;
+  /** Whether caller-rendered topBar content is present outside attachments. */
+  hasTopBarContent?: boolean;
+  /** Optional key hook for feature-specific shortcuts such as slash commands. */
+  onInputKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   /** Additional className on the outer wrapper. */
   className?: string;
 }
@@ -120,6 +126,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
       bottomBar,
       topBar,
       hint,
+      hasTopBarContent,
+      onInputKeyDown,
       className,
     },
     handleRef,
@@ -130,12 +138,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
       Array<PendingAttachment | CompleteAttachment>
     >([]);
     const [dragOver, setDragOver] = useState(false);
+    const [focused, setFocused] = useState(false);
     const submittingRef = useRef(false);
 
-    // Auto-resize textarea between minRows and maxRows.
+    // Auto-resize textarea between minRows and maxRows. Focus mode owns
+    // the textarea height in CSS, so avoid writing competing inline
+    // heights while focused.
     useEffect(() => {
       const el = textareaRef.current;
       if (!el) return;
+      if (focused) {
+        el.style.height = "";
+        return;
+      }
       el.style.height = "auto";
       const lineHeight =
         parseFloat(window.getComputedStyle(el).lineHeight || "20") || 20;
@@ -143,7 +158,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
       const max = lineHeight * maxRows + 16;
       const next = Math.min(max, Math.max(min, el.scrollHeight));
       el.style.height = `${next}px`;
-    }, [text, minRows, maxRows]);
+    }, [text, minRows, maxRows, focused]);
 
     const removeAttachment = useCallback(
       async (id: string): Promise<void> => {
@@ -252,6 +267,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
 
     const handleKey = useCallback(
       (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+        onInputKeyDown?.(event);
+        if (event.defaultPrevented) {
+          return;
+        }
         if (
           event.key === "Enter" &&
           !event.shiftKey &&
@@ -262,12 +281,25 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
           void submit();
         }
       },
-      [disabled, running, submit],
+      [disabled, onInputKeyDown, running, submit],
     );
 
     const handleChange = useCallback(
       (event: ChangeEvent<HTMLTextAreaElement>): void => {
         setText(event.target.value);
+      },
+      [],
+    );
+
+    const handleFocus = useCallback((): void => {
+      setFocused(true);
+    }, []);
+
+    const handleBlur = useCallback(
+      (event: FocusEvent<HTMLDivElement>): void => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setFocused(false);
+        }
       },
       [],
     );
@@ -309,7 +341,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        onBlur={handleBlur}
         data-composer-dragover={dragOver || undefined}
+        data-focused={focused ? "true" : undefined}
+        data-has-topbar={
+          attachments.length > 0 || hasTopBarContent ? "true" : undefined
+        }
       >
         {topBar?.({ attachments, onRemove: (id) => void removeAttachment(id) })}
         <textarea
@@ -320,6 +357,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
           value={text}
           onChange={handleChange}
           onKeyDown={handleKey}
+          onFocus={handleFocus}
           rows={minRows}
           disabled={disabled}
         />
@@ -328,6 +366,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
           running,
           disabled,
           attachmentsCount: attachments.length,
+          focused,
         })}
         {hint}
       </div>

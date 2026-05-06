@@ -5,6 +5,8 @@ import type {
   Message,
   ModelCatalogModel,
   RuntimeEventEnvelope,
+  Skill,
+  SubagentEntry,
 } from "@enterprise-search/api-types";
 import type {
   AppendMessage,
@@ -66,6 +68,7 @@ type ChatSettingsTarget = "profile" | "connectors" | "skills";
 import {
   applyRuntimeEvent,
   chatItemsToThreadMessages,
+  markPendingInteractionsCancelled,
   messagesToChatItems,
   optimisticUserMessage,
   resolveApprovalDecision,
@@ -98,7 +101,10 @@ import { WorkspacePane } from "./components/workspace/WorkspacePane";
 import { useWorkspacePaneState } from "./components/workspace/useWorkspacePaneState";
 import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
 import { useSubagents } from "./components/workspace/useSubagents";
-import { useSubagentActivities } from "./components/workspace/useSubagentActivities";
+import {
+  useSubagentActivities,
+  useSubagentHistory,
+} from "./components/workspace/useSubagentActivities";
 import { useDrafts } from "./components/workspace/useDrafts";
 import { useApprovalsQueue } from "./components/workspace/useApprovalsQueue";
 import {
@@ -112,6 +118,7 @@ import {
   type CompletedMcpAuthAction,
 } from "./mcpAuthAction";
 import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
+import { hasPendingAction } from "./chatModel/status";
 import { useAuth } from "../auth/AuthContext";
 import { usePinnedConversations } from "./sidebar/usePinnedConversations";
 import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
@@ -221,6 +228,13 @@ export function ChatScreen({
   const draftsState = useDrafts(conversationId, identity);
   const { setSubagents } = subagentsState;
   const { setRegistry: setDraftRegistry } = draftsState;
+  const [selectedComposerSkills, setSelectedComposerSkills] = useState<Skill[]>(
+    [],
+  );
+
+  useEffect(() => {
+    setSelectedComposerSkills([]);
+  }, [conversationId]);
 
   const suggestedServers = useMemo(
     () =>
@@ -874,14 +888,15 @@ export function ChatScreen({
       return;
     }
     const cancelledRunId = activeRunId;
-    // Optimistically settle the assistant message so the auto-resume
-    // effect (which scans `items` for unresolved approval / mcp_auth tool
-    // parts) treats the run as terminated and stops re-binding activeRunId
-    // to it. Without this, clicking Stop while an mcp_auth_required card
-    // is pending re-engages the same run within a render — the button
-    // reappears and looks like the click did nothing.
+    // Optimistic settle. Same primitive the reducer applies on
+    // `run_cancelled` (`markPendingInteractionsCancelled` flips pending
+    // approval / mcp_auth parts to a resolved-cancelled `result`) plus an
+    // incomplete-cancelled message status. Without this the auto-resume
+    // effect scans items for unresolved interaction parts and re-binds
+    // activeRunId within a render — the Stop button reappears and looks
+    // like the click did nothing.
     setItems((current) =>
-      current.map((item) =>
+      markPendingInteractionsCancelled(current, cancelledRunId).map((item) =>
         item.kind === "message" &&
         item.role === "assistant" &&
         item.runId === cancelledRunId
@@ -1095,6 +1110,19 @@ export function ChatScreen({
   // `upsertSubagentActivity` (live + replay). No new fetch, no new
   // store — same source of truth as the in-thread `SubagentTool`.
   const subagentActivitiesByTask = useSubagentActivities(items);
+  const subagentHistoryGroups = useSubagentHistory(items);
+  const handleJumpToSubagent = useCallback(
+    (entry: SubagentEntry): void => {
+      const selector = `[data-task-id="${CSS.escape(entry.task_id)}"]`;
+      const targets = Array.from(document.querySelectorAll(selector));
+      const target =
+        targets.find((node) => !node.closest(".atlas-workspace-pane")) ??
+        targets[0];
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      paneState.openOn("agents", { focusSubagentTaskId: entry.task_id });
+    },
+    [paneState],
+  );
   const runUiState = useMemo(
     () =>
       deriveRunUiState({
@@ -1432,6 +1460,27 @@ export function ChatScreen({
     [submitUserMessage],
   );
 
+  const onAttachComposerSkill = useCallback((skill: Skill): void => {
+    setSelectedComposerSkills((current) => {
+      if (current.some((item) => item.skill_id === skill.skill_id)) {
+        return current;
+      }
+      return [...current, skill];
+    });
+    requestAnimationFrame(() => composerHandleRef.current?.focus());
+  }, []);
+
+  const onRemoveComposerSkill = useCallback((skillId: string): void => {
+    setSelectedComposerSkills((current) =>
+      current.filter((skill) => skill.skill_id !== skillId),
+    );
+    requestAnimationFrame(() => composerHandleRef.current?.focus());
+  }, []);
+
+  const onClearComposerSkills = useCallback((): void => {
+    setSelectedComposerSkills([]);
+  }, []);
+
   // Inline-edit save. Resolves the parent of the source message and
   // dispatches a fresh run with `branchId` so the original assistant
   // child stays in the tree.
@@ -1595,6 +1644,11 @@ export function ChatScreen({
                 onOpenSkillsSettings={() => onOpenSettings("skills")}
                 onShowConnectors={() => setShowConnectorSuggestions(true)}
                 onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+                onOpenSkillsPanel={() => paneState.openOn("skills")}
+                selectedSkills={selectedComposerSkills}
+                onAttachSkill={onAttachComposerSkill}
+                onRemoveSkill={onRemoveComposerSkill}
+                onClearSkills={onClearComposerSkills}
                 onOpenSources={(citationId) =>
                   paneState.openOn("sources", { focusCitationId: citationId })
                 }
@@ -1647,6 +1701,8 @@ export function ChatScreen({
             subagentsLoading={subagentsState.loading}
             subagentsError={subagentsState.error}
             subagentActivitiesByTask={subagentActivitiesByTask}
+            subagentHistoryGroups={subagentHistoryGroups}
+            onJumpToSubagent={handleJumpToSubagent}
             draft={draftsState.latest}
             draftLoading={draftsState.loading}
             draftError={draftsState.error}
@@ -1670,13 +1726,7 @@ export function ChatScreen({
             skillsLoading={skills.loading}
             skillsError={skills.error}
             onPickSkill={(skill) => {
-              const handle = composerHandleRef.current;
-              if (handle) {
-                const current = handle.getText().trimEnd();
-                handle.setText(
-                  current ? `${current} /${skill.name} ` : `/${skill.name} `,
-                );
-              }
+              onAttachComposerSkill(skill);
               if (overlayMode) {
                 paneState.close("viewport");
               }
@@ -1887,14 +1937,7 @@ function pendingActionRunId(items: ChatItem[]): string | null {
     ) {
       continue;
     }
-    const hasPendingAction = item.content.some(
-      (part) =>
-        part.type === "tool-call" &&
-        (part.toolName === "approval_request" ||
-          part.toolName === "mcp_auth_required") &&
-        part.result === undefined,
-    );
-    if (hasPendingAction) {
+    if (hasPendingAction(item.content)) {
       return item.runId;
     }
   }

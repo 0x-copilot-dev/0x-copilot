@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
+from backend_facade.app import create_app
 from backend_facade.observability import (
     SafeAttributeSpanProcessor,
     TelemetryBootstrap,
@@ -66,6 +68,18 @@ class TestTelemetryBootstrap:
         monkeypatch.setenv("FACADE_ENVIRONMENT", "production")
         with pytest.raises(RuntimeError, match="OTEL_EXPORTER_OTLP_ENDPOINT"):
             TelemetryBootstrap.configure()
+
+
+class TestBrowserOtlpForwarder:
+    def test_no_collector_configured_returns_no_content_without_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OTEL_COLLECTOR_HTTP_URL", raising=False)
+        app = create_app()
+
+        response = TestClient(app).post("/v1/telemetry/otlp/v1/traces", content=b"{}")
+
+        assert response.status_code == 204
 
 
 class TestLoggerTraceCorrelation:

@@ -119,6 +119,9 @@ from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.members import register_members_routes
 from backend_app.routes.me_mfa import register_me_mfa_routes
 from backend_app.routes.mfa import register_mfa_routes
+from backend_app.routes.workspace_mfa_policy import (
+    register_workspace_mfa_policy_routes,
+)
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
 from backend_app.routes.saml import register_saml_routes
@@ -286,6 +289,7 @@ def create_app(
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
     me_store: MeStore | None = None,
+    avatar_store: object | None = None,
     tool_use_policy_store: object | None = None,
     notification_prefs_store: object | None = None,
     privacy_settings_store: object | None = None,
@@ -375,6 +379,13 @@ def create_app(
             # bodies). Pure thin layer; auditing + replay live in the
             # service.
             register_me_mfa_routes(app, service=resolved_mfa_service)
+            # PR 8.3 — admin editor for ``identity_policies.mfa_required``
+            # + ``step_up_window_seconds``. Reads through the same
+            # IdentityStore the OIDC mint already consults at sign-in,
+            # so a toggle takes effect on the very next login.
+            register_workspace_mfa_policy_routes(
+                app, identity_store=resolved_identity_store
+            )
             resolved_oidc_service = oidc_service or OidcService(
                 identity_store=resolved_identity_store,
                 oidc_store=resolved_oidc_store,
@@ -997,6 +1008,25 @@ def create_app(
     )
     register_me_preferences_routes(
         app,
+        me_store=resolved_me_store,
+        identity_store=resolved_identity_store,
+    )
+    # PR 8.3 — server-stored avatars. In-memory adapter for dev/tests;
+    # production injects the Postgres adapter via ``avatar_store=...``
+    # in ``create_app(...)``. Same shape as the MeStore wiring above.
+    from backend_app.identity.avatar_store import (
+        AvatarStore,
+        InMemoryAvatarStore,
+    )
+    from backend_app.routes.me_avatar import register_me_avatar_routes
+
+    resolved_avatar_store: AvatarStore = (
+        avatar_store if avatar_store is not None else InMemoryAvatarStore()
+    )
+    app.state.avatar_store = resolved_avatar_store
+    register_me_avatar_routes(
+        app,
+        avatar_store=resolved_avatar_store,
         me_store=resolved_me_store,
         identity_store=resolved_identity_store,
     )

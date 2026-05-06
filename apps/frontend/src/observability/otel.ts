@@ -31,6 +31,7 @@ import {
   WebTracerProvider,
 } from "@opentelemetry/sdk-trace-web";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+import { dynamicCorrelationHeaders } from "../api/http";
 
 const SERVICE_NAME = "enterprise-search-frontend";
 
@@ -137,7 +138,10 @@ export function bootstrapTelemetry(options: BootstrapOptions = {}): void {
 
   const processors: SpanProcessor[] = [];
   if (endpoint !== null) {
-    const exporter = new OTLPTraceExporter({ url: endpoint });
+    const exporter = new OTLPTraceExporter({
+      url: endpoint,
+      headers: dynamicCorrelationHeaders(),
+    });
     processors.push(
       new SafeAttributeSpanProcessor(new BatchSpanProcessor(exporter)),
     );

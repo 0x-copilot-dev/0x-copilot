@@ -10,6 +10,7 @@ import { renderHook } from "@testing-library/react";
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import { applyRuntimeEvent, type ChatItem } from "../../chatModel";
 import {
+  collectSubagentHistory,
   collectSubagentActivities,
   useSubagentActivities,
 } from "./useSubagentActivities";
@@ -206,6 +207,51 @@ describe("collectSubagentActivities", () => {
     expect(map.get("task_b")).toHaveLength(1);
     expect(map.get("task_a")?.[0]?.title).toBe("x");
     expect(map.get("task_b")?.[0]?.title).toBe("y");
+  });
+});
+
+describe("collectSubagentHistory", () => {
+  it("builds timestamped groups from in-thread subagent parts", () => {
+    const items = pipeEvents([
+      event({
+        event_id: "subagent_1",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "task_doc_reader",
+        subagent_id: "doc_reader",
+        created_at: "2026-05-06T10:00:00Z",
+        payload: {
+          task_id: "task_doc_reader",
+          subagent_name: "doc_reader",
+          status: "started",
+          parent_fleet_id: "fleet_1",
+        },
+      }),
+      event({
+        event_id: "subagent_2",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "task_writer",
+        subagent_id: "writer",
+        created_at: "2026-05-06T10:00:02Z",
+        payload: {
+          task_id: "task_writer",
+          subagent_name: "writer",
+          status: "started",
+          parent_fleet_id: "fleet_1",
+        },
+      }),
+    ]);
+
+    const groups = collectSubagentHistory(items);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.id).toBe("fleet_1");
+    expect(groups[0]?.label).toBe("2 subagents dispatched");
+    expect(groups[0]?.timestamp).toBe("2026-05-06T10:00:00Z");
+    expect(groups[0]?.entries.map((entry) => entry.task_id)).toEqual([
+      "task_doc_reader",
+      "task_writer",
+    ]);
   });
 });
 

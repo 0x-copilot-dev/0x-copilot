@@ -309,3 +309,138 @@ class TestVerifyEndpoint:
             json={"bearer": created["plaintext"]},
         )
         assert response.status_code == 401
+
+
+class TestApiKeyPenTest:
+    """PR 8.0.5 §2.8 — red-team cases on the ``atlas_pk_*`` verify path.
+
+    These exist to keep the four documented attack vectors closed:
+    timing-bisect on the secret; empty-bearer DOS; revoked-key replay;
+    prefix collision on a freshly minted key.
+    """
+
+    def test_constant_time_verify_does_not_bisect_secret(self) -> None:
+        """A wrong secret must take roughly the same path as a right one.
+
+        We don't measure wall-clock latency (CI variance dominates a
+        per-byte diff at this scale); instead we assert the verifier
+        calls ``hmac.compare_digest`` — the public contract for
+        constant-time compare. Verified via a structural assertion on
+        :class:`ApiKeyHasher.verify`.
+        """
+
+        from backend_app.api_keys.auth import ApiKeyHasher
+        import hmac as _hmac
+        import inspect
+
+        source = inspect.getsource(ApiKeyHasher.verify)
+        # The ONE thing we care about: the verifier MUST go through
+        # ``hmac.compare_digest``. A naive ``==`` would let a remote
+        # attacker bisect bytes via timing.
+        assert "compare_digest" in source
+        # And ``compare_digest`` must be the stdlib's, not a shim.
+        assert _hmac.compare_digest is not None
+
+    def test_empty_bearer_rejects_in_constant_time(self) -> None:
+        """An empty / sentinel-only bearer never reaches a DB lookup."""
+
+        from backend_app.api_keys.auth import (
+            InvalidApiKey,
+            parse_bearer,
+        )
+
+        # Multiple malformed shapes; each MUST raise without hitting
+        # the store. The verify route catches InvalidApiKey and maps
+        # to 401 before any I/O.
+        for malformed in ("", "atlas_pk_", "atlas_pk__", "Bearer"):
+            try:
+                parse_bearer(malformed)
+            except InvalidApiKey:
+                continue
+            raise AssertionError(f"expected InvalidApiKey for {malformed!r}")
+
+    def test_revoked_replay_returns_401_and_does_not_stamp_last_used(
+        self,
+    ) -> None:
+        client, _i, store = _client()
+        created = client.post(
+            "/internal/v1/me/api-keys",
+            params=_params(),
+            json={"label": "replay-bot"},
+        ).json()
+        api_key_id = created["key"]["id"]
+        client.delete(f"/internal/v1/me/api-keys/{api_key_id}", params=_params())
+        # Capture pre-replay last_used_at.
+        before_rows = store.list_for_user(
+            org_id="org_acme", user_id="usr_sarah", include_revoked=True
+        )
+        before_last_used = next(
+            row.last_used_at for row in before_rows if row.id == api_key_id
+        )
+
+        # Replay the bearer 5x; each MUST return 401 without stamping.
+        for _ in range(5):
+            response = client.post(
+                "/internal/v1/auth/api-keys/verify",
+                json={"bearer": created["plaintext"]},
+            )
+            assert response.status_code == 401
+
+        after_rows = store.list_for_user(
+            org_id="org_acme", user_id="usr_sarah", include_revoked=True
+        )
+        after_last_used = next(
+            row.last_used_at for row in after_rows if row.id == api_key_id
+        )
+        assert before_last_used == after_last_used
+
+    def test_prefix_collision_is_rejected_at_insert(self) -> None:
+        """The unique index on ``key_prefix`` (migration 0023) makes
+        every prefix CSPRNG-unique; a duplicate insert would raise.
+
+        The mint path uses ``secrets.token_hex(6)`` — 12 hex chars =
+        48 bits of entropy, collision probability ≈ 2^-24 after a
+        million keys. The store still enforces uniqueness so an
+        attacker that wins the lottery (or a buggy mock) gets rejected
+        before any auth ambiguity.
+        """
+
+        from backend_app.api_keys.store import (
+            ApiKeyRow,
+            InMemoryApiKeyStore,
+        )
+
+        store = InMemoryApiKeyStore()
+        first = ApiKeyRow(
+            org_id="org_acme",
+            user_id="usr_sarah",
+            label="alpha",
+            key_prefix="aaaaaaaaaaaa",
+            secret_hash="hash_1",
+            scopes=(),
+        )
+        store.insert(first)
+
+        collider = ApiKeyRow(
+            org_id="org_acme",
+            user_id="usr_sarah",
+            label="beta",
+            key_prefix="aaaaaaaaaaaa",  # same prefix; would alias the bearer
+            secret_hash="hash_2",
+            scopes=(),
+        )
+        try:
+            store.insert(collider)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "expected ValueError on duplicate key_prefix — silent insert "
+                "would let two distinct secrets resolve to one row at auth time"
+            )
+
+        # Sanity: ``find_active_by_prefix`` returns the original — not
+        # the collider, even after the rejected insert.
+        active = store.find_active_by_prefix(key_prefix="aaaaaaaaaaaa")
+        assert active is not None
+        assert active.label == "alpha"

@@ -5,12 +5,12 @@ import { isPinned } from "../../utils/groupConversations";
 /**
  * One conversation row in the sidebar (PR 2.2 + PR F3 + PR 2.2.1).
  *
- * Two-line layout: title (top) + meta (timestamp or live pulse, right).
- * The row also carries a small ⋯ overflow that exposes pin/unpin and
- * archive (the two actions the design's mock surfaces). Pin lives on
- * `conversation.metadata.pinned` (no server schema change needed).
- * Archive flips `archived_at` via the existing `updateConversation`
- * route. Both actions are wired up by the parent (`Sidebar`).
+ * Single-line layout: status dot + ellipsized title + time. Hover/focus
+ * swaps the time for a small ⋯ overflow that exposes pin/unpin and archive.
+ * Pin lives on `conversation.metadata.pinned` (no server schema change
+ * needed). Archive flips `archived_at` via the existing
+ * `updateConversation` route. Both actions are wired up by the parent
+ * (`Sidebar`).
  *
  * PR 2.2.1 dropped the `disabled` prop: the runtime now keeps non-
  * visible conversations' streams running in the background, so there
@@ -50,6 +50,13 @@ export function ConversationRow({
         aria-label={title}
         onClick={() => onSelect(conversation.conversation_id)}
       >
+        <span
+          className="aui-conversation-row__status"
+          data-live={isLive ? "true" : undefined}
+          role={isLive ? "status" : undefined}
+          aria-label={isLive ? "Live run" : undefined}
+          aria-hidden={isLive ? undefined : "true"}
+        />
         <span className="aui-conversation-row__title">
           {pinned ? (
             <span className="aui-conversation-row__pin" aria-hidden="true">
@@ -58,22 +65,7 @@ export function ConversationRow({
           ) : null}
           {title}
         </span>
-        <span className="aui-conversation-row__meta">
-          {conversation.folder ? (
-            <span className="aui-conversation-row__folder">
-              {conversation.folder}
-            </span>
-          ) : null}
-          {isLive ? (
-            <span
-              className="aui-conversation-row__live"
-              role="status"
-              aria-label="Live run"
-            />
-          ) : (
-            <span className="aui-conversation-row__time">{time}</span>
-          )}
-        </span>
+        <span className="aui-conversation-row__time">{time}</span>
       </button>
       {onTogglePin || onArchive ? (
         <div className="aui-conversation-row__menu">

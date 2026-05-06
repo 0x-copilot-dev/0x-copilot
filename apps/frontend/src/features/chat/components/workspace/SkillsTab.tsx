@@ -81,7 +81,7 @@ export function SkillsTab({
                   className="atlas-workspace-skill-row"
                   disabled={disabled}
                   onClick={() => onPick?.(skill)}
-                  aria-label={`Insert /${skill.name} into composer`}
+                  aria-label={`Attach /${skill.name} skill to composer`}
                 >
                   <div className="atlas-workspace-skill-row__head">
                     <code className="atlas-workspace-skill-row__slash">

@@ -6,8 +6,10 @@ import type {
 import {
   forwardRef,
   useEffect,
+  useCallback,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -34,10 +36,9 @@ export type DetailsPanelKind = "context" | "usage";
  * Atlas composer. Replaces the previous `ComposerPrimitive` + `AuiIf` +
  * `unstable_useMentionAdapter` + `unstable_useSlashCommandAdapter`
  * implementation with a self-owned `<Composer>` from
- * `runtime/composer`. The mention / slash trigger popovers were
- * dropped — `@` and `/` are now plain typed characters; skill
- * invocation continues through the workspace-pane skills tab and the
- * `+` plus-menu.
+ * `runtime/composer`. `@` remains plain text; `/` opens the skills
+ * workspace tab when typed into an empty composer, while skill insertion
+ * still flows through the workspace-pane skills tab and the `+` plus-menu.
  *
  * The host (`ChatScreen`) forwards a `composerRef` so it can write to
  * the textarea imperatively (skill insertion path, post-OAuth resume
@@ -59,6 +60,11 @@ export const AssistantComposer = forwardRef<
     onOpenSkillsSettings: () => void;
     onShowConnectors: () => void;
     onOpenDetailsPanel?: (kind: DetailsPanelKind) => void;
+    onOpenSkillsPanel?: () => void;
+    selectedSkills?: readonly Skill[];
+    onAttachSkill?: (skill: Skill) => void;
+    onRemoveSkill?: (skillId: string) => void;
+    onClearSkills?: () => void;
     /**
      * PR 3.4 — slot for the per-chat connectors trigger + its popover.
      */
@@ -99,6 +105,11 @@ export const AssistantComposer = forwardRef<
     onOpenSkillsSettings,
     onShowConnectors,
     onOpenDetailsPanel: _onOpenDetailsPanel,
+    onOpenSkillsPanel,
+    selectedSkills = [],
+    onAttachSkill,
+    onRemoveSkill,
+    onClearSkills,
     connectorsTrigger,
     activeModelLabel,
     models,
@@ -116,6 +127,7 @@ export const AssistantComposer = forwardRef<
   ref,
 ): ReactElement {
   const composerRef = useRef<ComposerHandle | null>(null);
+  const slashCueTimeoutRef = useRef<number | null>(null);
   // Bridge the public forwardRef to the inner Composer ref, while
   // keeping a local handle for the plus-menu to call addAttachment.
   const setComposerRef = (handle: ComposerHandle | null): void => {
@@ -130,6 +142,8 @@ export const AssistantComposer = forwardRef<
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<ComposerMenuView>("root");
+  const [slashCueVisible, setSlashCueVisible] = useState(false);
+  const [slashCueText, setSlashCueText] = useState("/ skills");
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -142,6 +156,15 @@ export const AssistantComposer = forwardRef<
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [menuOpen]);
+
+  useEffect(
+    () => () => {
+      if (slashCueTimeoutRef.current !== null) {
+        window.clearTimeout(slashCueTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   function openFilePicker(accept: string): void {
     const input = document.createElement("input");
@@ -171,6 +194,38 @@ export const AssistantComposer = forwardRef<
     setMenuView("root");
   }
 
+  const showSlashCue = useCallback((text: string): void => {
+    setSlashCueText(text);
+    setSlashCueVisible(true);
+    if (slashCueTimeoutRef.current !== null) {
+      window.clearTimeout(slashCueTimeoutRef.current);
+    }
+    slashCueTimeoutRef.current = window.setTimeout(() => {
+      setSlashCueVisible(false);
+      slashCueTimeoutRef.current = null;
+    }, 1400);
+  }, []);
+
+  function attachSkill(skill: Skill): void {
+    onAttachSkill?.(skill);
+    showSlashCue(`/${skill.name} attached`);
+    setMenuOpen(false);
+    setMenuView("root");
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  const handleInputKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+      if (event.key !== "/" || event.currentTarget.value.trim().length > 0) {
+        return;
+      }
+      event.preventDefault();
+      showSlashCue("/ skills");
+      onOpenSkillsPanel?.();
+    },
+    [onOpenSkillsPanel, showSlashCue],
+  );
+
   return (
     <Composer
       ref={setComposerRef}
@@ -181,13 +236,38 @@ export const AssistantComposer = forwardRef<
       placeholder="Ask Atlas to find, summarize, or draft something for your team…"
       minRows={1}
       maxRows={5}
-      onSubmit={(payload) =>
-        onSubmit({ text: payload.text, attachments: payload.attachments })
-      }
+      onSubmit={async (payload) => {
+        const skillInstructions = selectedSkills.map((skill) =>
+          skillInstructionPrompt(skill.display_name),
+        );
+        const text = [...skillInstructions, payload.text]
+          .filter((part) => part.trim().length > 0)
+          .join("\n\n");
+        await onSubmit({ text, attachments: payload.attachments });
+        onClearSkills?.();
+      }}
       onCancel={onCancel}
+      onInputKeyDown={handleInputKeyDown}
+      hasTopBarContent={selectedSkills.length > 0}
       topBar={({ attachments, onRemove }) =>
-        attachments.length > 0 ? (
+        attachments.length > 0 || selectedSkills.length > 0 ? (
           <div className="aui-composer-attachments">
+            {selectedSkills.map((skill) => (
+              <span key={skill.skill_id} className="aui-skill-pill">
+                <code>/{skill.name}</code>
+                <span>{skill.display_name}</span>
+                {onRemoveSkill ? (
+                  <button
+                    type="button"
+                    className="aui-skill-pill__remove"
+                    aria-label={`Remove ${skill.display_name} skill`}
+                    onClick={() => onRemoveSkill(skill.skill_id)}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </span>
+            ))}
             {attachments.map((attachment) => (
               <AttachmentPill
                 key={attachment.id}
@@ -198,7 +278,7 @@ export const AssistantComposer = forwardRef<
           </div>
         ) : null
       }
-      bottomBar={({ text, running: isRunning, attachmentsCount }) => (
+      bottomBar={({ text, running: isRunning, attachmentsCount, focused }) => (
         <div className="aui-composer-action-wrapper">
           <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
@@ -238,11 +318,7 @@ export const AssistantComposer = forwardRef<
                       mcpServerInstructionPrompt(server.display_name),
                     )
                   }
-                  onUseSkill={(skill) =>
-                    appendComposerInstruction(
-                      skillInstructionPrompt(skill.display_name),
-                    )
-                  }
+                  onUseSkill={(skill) => attachSkill(skill)}
                 />
               ) : null}
             </div>
@@ -287,20 +363,42 @@ export const AssistantComposer = forwardRef<
               />
             ) : null}
           </div>
-          <ComposerSendButton
-            text={text}
-            attachmentsCount={attachmentsCount}
-            running={isRunning}
-            disabled={disabled}
-            onSend={() => void composerRef.current?.submit()}
-            onCancel={onCancel}
-            className="aui-send-button aui-composer-send"
-            stopClassName="aui-send-button aui-send-button--stop"
-            sendIcon="↑"
-            stopIcon={
-              <span className="aui-send-button__stop-icon" aria-hidden="true" />
-            }
-          />
+          <div className="aui-composer-action-wrapper__right">
+            {focused ? (
+              <span className="aui-composer-focus-meta" aria-hidden="true">
+                {activeModelLabel ?? "Atlas"} · Sources cited inline
+              </span>
+            ) : null}
+            <ComposerSendButton
+              text={text}
+              attachmentsCount={attachmentsCount}
+              running={isRunning}
+              disabled={disabled}
+              onSend={() => void composerRef.current?.submit()}
+              onCancel={onCancel}
+              className="aui-send-button aui-composer-send"
+              stopClassName="aui-send-button aui-send-button--stop"
+              sendIcon="↑"
+              stopIcon={
+                <span
+                  className="aui-send-button__stop-icon"
+                  aria-hidden="true"
+                />
+              }
+            />
+          </div>
+          {slashCueVisible ? (
+            <span className="aui-composer-slash-cue" role="status">
+              {slashCueText.startsWith("/") ? (
+                <>
+                  <kbd>/</kbd>
+                  {slashCueText.slice(1)}
+                </>
+              ) : (
+                slashCueText
+              )}
+            </span>
+          ) : null}
         </div>
       )}
       hint={
