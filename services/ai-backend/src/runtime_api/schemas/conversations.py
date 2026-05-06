@@ -105,6 +105,10 @@ class ConversationRecord(RuntimeContract):
     deleted_at: datetime | None = None
     folder: str | None = None
     parent_conversation_id: str | None = None
+    # PR 6.2 — fork lineage. Audit pointer to the share row that
+    # authorised this conversation's creation. Non-FK so revoking the
+    # share doesn't break the conversation. NULL on every non-forked row.
+    forked_from_share_id: str | None = None
 
     @field_validator(
         Keys.Field.CONVERSATION_ID,
@@ -162,6 +166,7 @@ class ConversationRecord(RuntimeContract):
             deleted_at=self.deleted_at,
             folder=self.folder,
             parent_conversation_id=self.parent_conversation_id,
+            forked_from_share_id=self.forked_from_share_id,
         )
 
 
@@ -185,6 +190,8 @@ class ConversationResponse(RuntimeContract):
     deleted_at: datetime | None = None
     folder: str | None = None
     parent_conversation_id: str | None = None
+    # PR 6.2 — fork lineage; NULL on every non-forked row.
+    forked_from_share_id: str | None = None
 
 
 class ConversationListResponse(RuntimeContract):

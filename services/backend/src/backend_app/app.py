@@ -46,15 +46,21 @@ from backend_app.contracts import (
     UpdateSkillRequest,
 )
 from backend_app.identity import (
+    AuthProviderDomainStore,
     BootstrapAdminService,
+    DiscoveryService,
+    EmailDispatcherPort,
     IdentityStore,
+    InMemoryAuthProviderDomainStore,
     InMemoryIdentityStore,
     InMemoryInvitationStore,
     InMemoryLockoutStore,
+    InMemoryMagicLinkTokenStore,
     InMemoryMeStore,
     InMemoryMfaStore,
     InMemoryOidcStore,
     InMemoryPasswordStore,
+    InMemoryRateLimiter,
     InMemorySamlStore,
     InMemoryScimStore,
     InMemorySessionStore,
@@ -62,6 +68,8 @@ from backend_app.identity import (
     InvitationsService,
     LockoutService,
     LockoutStore,
+    MagicLinkService,
+    MagicLinkTokenStore,
     MeStore,
     MfaService,
     MfaStore,
@@ -76,7 +84,10 @@ from backend_app.identity import (
     ScimService,
     ScimStore,
     SessionAuthSecretMissing,
+    SessionSelectService,
     SessionService,
+    build_default_email_dispatcher,
+    build_pick_codec,
 )
 from backend_app.identity.session_sweeper import SessionSweeper
 from backend_app.observability import (
@@ -91,6 +102,7 @@ from backend_app.routes.billing import register_billing_routes
 from backend_app.routes.health import register_health_routes
 from backend_app.routes.invitations import register_invitation_routes
 from backend_app.routes.lockouts import register_lockout_routes
+from backend_app.routes.login_email_first import register_login_email_first_routes
 from backend_app.routes.me import register_me_routes
 from backend_app.routes.me_preferences import register_me_preferences_routes
 from backend_app.routes.me_profile import register_me_profile_routes
@@ -228,6 +240,14 @@ def create_app(
     me_store: MeStore | None = None,
     invitation_store: InvitationStore | None = None,
     invitations_service: InvitationsService | None = None,
+    auth_provider_domain_store: AuthProviderDomainStore | None = None,
+    magic_link_token_store: MagicLinkTokenStore | None = None,
+    discovery_service: DiscoveryService | None = None,
+    magic_link_service: MagicLinkService | None = None,
+    session_select_service: SessionSelectService | None = None,
+    email_dispatcher: EmailDispatcherPort | None = None,
+    magic_link_globally_enabled: bool = True,
+    magic_link_base_url: str = "http://localhost:5173",
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -374,6 +394,63 @@ def create_app(
             app,
             service=resolved_password_service,
             bootstrap=bootstrap_service,
+        )
+
+        # Login email-first (PR 5.1): IdP discovery + magic-link + workspace
+        # picker. Same gating as the rest of the auth machinery — needs the
+        # session service to mint, identity store for membership lookup, and
+        # an HMAC secret (re-uses ENTERPRISE_AUTH_SECRET via SessionService).
+        # Email dispatcher port: production deploys MUST inject a real
+        # adapter (SES / SMTP / Postmark); the default LoggingEmailDispatcher
+        # writes structured logs without sending mail.
+        resolved_domain_store: AuthProviderDomainStore = (
+            auth_provider_domain_store or InMemoryAuthProviderDomainStore()
+        )
+        app.state.auth_provider_domain_store = resolved_domain_store
+        resolved_magic_link_store: MagicLinkTokenStore = (
+            magic_link_token_store or InMemoryMagicLinkTokenStore()
+        )
+        app.state.magic_link_token_store = resolved_magic_link_store
+        resolved_email_dispatcher = email_dispatcher or build_default_email_dispatcher()
+        app.state.email_dispatcher = resolved_email_dispatcher
+        resolved_rate_limiter = InMemoryRateLimiter()
+        app.state.login_email_first_rate_limiter = resolved_rate_limiter
+        resolved_pick_codec = build_pick_codec(
+            secret=resolved_session_service._auth_secret  # noqa: SLF001
+        )
+        resolved_discovery_service = discovery_service or DiscoveryService(
+            domain_store=resolved_domain_store,
+            identity_store=resolved_identity_store,
+            rate_limiter=resolved_rate_limiter,
+            magic_link_globally_enabled=magic_link_globally_enabled,
+        )
+        app.state.discovery_service = resolved_discovery_service
+        resolved_magic_link_service = magic_link_service or MagicLinkService(
+            token_store=resolved_magic_link_store,
+            identity_store=resolved_identity_store,
+            sessions=resolved_session_service,
+            pick_codec=resolved_pick_codec,
+            rate_limiter=resolved_rate_limiter,
+            email_dispatcher=resolved_email_dispatcher,
+            base_url=magic_link_base_url,
+            magic_link_globally_enabled=magic_link_globally_enabled,
+        )
+        app.state.magic_link_service = resolved_magic_link_service
+        resolved_session_select_service = (
+            session_select_service
+            or SessionSelectService(
+                identity_store=resolved_identity_store,
+                sessions=resolved_session_service,
+                pick_codec=resolved_pick_codec,
+                rate_limiter=resolved_rate_limiter,
+            )
+        )
+        app.state.session_select_service = resolved_session_select_service
+        register_login_email_first_routes(
+            app,
+            discovery=resolved_discovery_service,
+            magic_link=resolved_magic_link_service,
+            session_select=resolved_session_select_service,
         )
 
     @app.get("/v1/health", dependencies=[Depends(public_route())])

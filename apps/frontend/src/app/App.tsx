@@ -112,7 +112,19 @@ function AuthGate(): ReactElement {
     return <MfaPrompt rpId={window.location.hostname} />;
   }
 
-  if (auth.status === "anonymous" || auth.status === "error") {
+  // PR 5.1 — magic-link callback URL routes through LoginScreen even
+  // before AuthContext has flipped to a real status. The screen reads
+  // ?token= itself and calls auth.consumeMagicLink on mount.
+  const onMagicLinkCallback =
+    typeof window !== "undefined" &&
+    window.location.pathname === "/auth/magic-link/callback";
+
+  if (
+    auth.status === "anonymous" ||
+    auth.status === "error" ||
+    auth.status === "workspace_pick" ||
+    onMagicLinkCallback
+  ) {
     return (
       <>
         {auth.status === "error" && auth.error && (
@@ -123,7 +135,8 @@ function AuthGate(): ReactElement {
         <LoginScreen
           defaultOrgId={DEFAULT_ORG_ID}
           returnTo={
-            window.location.pathname === "/login"
+            window.location.pathname === "/login" ||
+            window.location.pathname === "/auth/magic-link/callback"
               ? undefined
               : window.location.pathname + window.location.search
           }

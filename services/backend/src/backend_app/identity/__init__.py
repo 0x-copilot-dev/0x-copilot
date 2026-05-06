@@ -128,6 +128,31 @@ from backend_app.identity.passwords import (
     ResetTokenRejected,
     WeakPasswordError,
 )
+from backend_app.identity.email_dispatcher import (
+    EmailDispatcherPort,
+    LoggingEmailDispatcher,
+)
+from backend_app.identity.login_email_first import (
+    DiscoveryRateLimited,
+    DiscoveryService,
+    InMemoryRateLimiter,
+    MagicLinkInvalidToken,
+    MagicLinkRateLimited,
+    MagicLinkService,
+    PickTokenInvalid,
+    SessionSelectService,
+    WorkspaceMembershipDenied,
+    build_default_email_dispatcher,
+    build_pick_codec,
+)
+from backend_app.identity.login_email_first_store import (
+    AuthProviderDomainStore,
+    InMemoryAuthProviderDomainStore,
+    InMemoryMagicLinkTokenStore,
+    MagicLinkTokenStore,
+    PostgresAuthProviderDomainStore,
+    PostgresMagicLinkTokenStore,
+)
 
 # LocalAuthDisabled is consumed by the password routes which import it via
 # the identity package. Re-exported above; nothing else to add.
@@ -260,4 +285,24 @@ __all__ = [
     "UserProfileRecord",
     "WeakPasswordError",
     "audit_session_event",
+    # PR 5.1 — login email-first
+    "AuthProviderDomainStore",
+    "DiscoveryRateLimited",
+    "DiscoveryService",
+    "EmailDispatcherPort",
+    "InMemoryAuthProviderDomainStore",
+    "InMemoryMagicLinkTokenStore",
+    "InMemoryRateLimiter",
+    "LoggingEmailDispatcher",
+    "MagicLinkInvalidToken",
+    "MagicLinkRateLimited",
+    "MagicLinkService",
+    "MagicLinkTokenStore",
+    "PickTokenInvalid",
+    "PostgresAuthProviderDomainStore",
+    "PostgresMagicLinkTokenStore",
+    "SessionSelectService",
+    "WorkspaceMembershipDenied",
+    "build_default_email_dispatcher",
+    "build_pick_codec",
 ]

@@ -568,6 +568,21 @@ class RuntimeApiRouter:
         )
 
         register_workspace_data_routes(router)
+        # PR 6.1 — conversation sharing (create / list / update / revoke
+        # + recipient view). Mounted before the fork routes below so the
+        # ``/v1/agent/shares/{share_token}`` GET registers ahead of the
+        # ``/v1/agent/shares/{share_token}/fork`` POST that PR 6.2 added.
+        from runtime_api.http.share_routes import register_share_routes
+
+        register_share_routes(router)
+        # PR 6.2 — recipient forks a shared conversation into their own
+        # workspace. The handler is a thin shim over
+        # ``ConversationForkService`` mounted on ``app.state``; if the
+        # service isn't wired the route returns 503 (same opacity as
+        # other optional services).
+        from runtime_api.http.share_fork_routes import register_share_fork_routes
+
+        register_share_fork_routes(router)
         return router
 
 

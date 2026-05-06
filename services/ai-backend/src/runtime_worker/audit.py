@@ -38,6 +38,9 @@ class _Actions:
     RUN_TIMED_OUT = "run_timed_out"
     APPROVAL_DECISION = "approval_decision"
     TOOL_CALL_OUTCOME = "tool_call_outcome"
+    # PR 6.2 — conversation fork (recipient opens a shared chat in
+    # their own workspace as a new owned conversation).
+    CONVERSATION_FORK = "conversation.fork"
 
 
 class _Outcomes:
@@ -52,6 +55,10 @@ class _ResourceTypes:
     AGENT_RUN = "agent_run"
     APPROVAL = "approval"
     TOOL_CALL = "tool_call"
+    # PR 6.2 — fork target (the *new* conversation row authorised by
+    # the share). The metadata carries the source conversation_id +
+    # share_id so SIEM queries can pivot on either side of the link.
+    CONVERSATION = "conversation"
 
 
 class _ActorTypes:
@@ -225,6 +232,45 @@ class WorkerAuditEmitter:
             outcome=_Outcomes.SUCCESS
             if outcome.lower() in {"completed", "success"}
             else _Outcomes.FAILURE,
+            metadata=metadata,
+        )
+
+    async def emit_conversation_fork(
+        self,
+        *,
+        org_id: str,
+        actor_user_id: str,
+        source_conversation_id: str,
+        target_conversation_id: str,
+        share_id: str,
+        snapshot_at: datetime,
+        message_count: int,
+        orphan_warnings: int = 0,
+    ) -> None:
+        """Audit one PR 6.2 fork.
+
+        ``orphan_warnings`` counts copied messages whose
+        ``parent_message_id`` couldn't be resolved in the snapshot set
+        (rare; data-integrity signal). The chain stays valid either way.
+        """
+
+        metadata: dict[str, Any] = {
+            "source_conversation_id": source_conversation_id,
+            "target_conversation_id": target_conversation_id,
+            "share_id": share_id,
+            "snapshot_at": snapshot_at.isoformat(),
+            "message_count": int(message_count),
+        }
+        if orphan_warnings > 0:
+            metadata["orphan_parent_warnings"] = int(orphan_warnings)
+        await self._emit(
+            event_type=_Actions.CONVERSATION_FORK,
+            org_id=org_id,
+            user_id=actor_user_id,
+            actor_type=_ActorTypes.USER,
+            resource_type=_ResourceTypes.CONVERSATION,
+            resource_id=target_conversation_id,
+            outcome=_Outcomes.SUCCESS,
             metadata=metadata,
         )
 

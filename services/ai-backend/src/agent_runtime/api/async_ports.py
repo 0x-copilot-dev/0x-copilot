@@ -109,6 +109,20 @@ class AsyncPersistencePort(Protocol):
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""
 
+    async def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        """Insert a fork-authored conversation row verbatim (PR 6.2).
+
+        Bypasses the idempotency check the standard ``create_conversation``
+        path runs (forks always mint a new row) and writes every column
+        the caller has populated — including ``parent_conversation_id``,
+        ``forked_from_share_id``, ``folder``, ``enabled_connectors``, and
+        ``deleted_at``. The standard path drops these fields because the
+        normal ``CreateConversationRequest`` doesn't carry them; the fork
+        service composes them itself from the share + recipient identity.
+        """
+
     async def update_conversation_connectors(
         self,
         *,

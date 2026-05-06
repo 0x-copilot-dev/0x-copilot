@@ -31,11 +31,17 @@ import type { ReactElement, ReactNode } from "react";
 
 import {
   configureAuthBearerProvider,
+  consumeMagicLink as consumeMagicLinkApi,
   fetchCurrentSession,
   loginWithPassword,
   logout as logoutApi,
+  selectWorkspace as selectWorkspaceApi,
   type SessionIdentity,
 } from "../../api/authApi";
+import type {
+  MagicLinkCallbackResponse,
+  WorkspaceCandidate,
+} from "@enterprise-search/api-types";
 import { configureUnauthorizedHandler } from "../../api/http";
 import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";
 
@@ -63,6 +69,7 @@ export type AuthStatus =
   | "loading"
   | "anonymous"
   | "mfa_pending"
+  | "workspace_pick"
   | "authenticated"
   | "error";
 
@@ -72,10 +79,21 @@ export interface MfaPendingState {
   user_id: string;
 }
 
+/** PR 5.1 — magic-link callback returned multiple workspaces. The user
+ * picks one and we exchange the ``pick_token`` for a final bearer. */
+export interface WorkspacePickState {
+  pick_token: string;
+  user_id: string;
+  workspaces: WorkspaceCandidate[];
+  return_to: string | null;
+  expires_in_seconds: number;
+}
+
 export interface AuthState {
   status: AuthStatus;
   identity: SessionIdentity | null;
   mfaPending: MfaPendingState | null;
+  workspacePick: WorkspacePickState | null;
   error: string | null;
 }
 
@@ -86,6 +104,15 @@ export interface AuthContextValue extends AuthState {
     password: string;
   }): Promise<void>;
   completeMfa(): Promise<void>;
+  /** PR 5.1 — consume the plaintext magic-link token from the email URL.
+   * On single-workspace returns: bearer set, status flips to authenticated.
+   * On multi-workspace returns: status flips to ``workspace_pick`` with
+   * the candidate list.
+   * Throws if the upstream returns 401 (invalid / expired / consumed). */
+  consumeMagicLink(token: string): Promise<MagicLinkCallbackResponse>;
+  /** PR 5.1 — exchange the workspace_pick state's ``pick_token`` plus a
+   * chosen org for a final session bearer. Refreshes after success. */
+  selectWorkspaceFromPick(orgId: string): Promise<void>;
   logout(): Promise<void>;
   refresh(): Promise<void>;
   bearer(): string | null;
@@ -125,6 +152,7 @@ export function AuthProvider({
     status: "initial",
     identity: null,
     mfaPending: null,
+    workspacePick: null,
     error: null,
   });
 
@@ -147,6 +175,7 @@ export function AuthProvider({
         status: "anonymous",
         identity: null,
         mfaPending: null,
+        workspacePick: null,
         error: null,
       });
     });
@@ -183,6 +212,7 @@ export function AuthProvider({
         status: "authenticated",
         identity: envelope.identity,
         mfaPending: null,
+        workspacePick: null,
         error: null,
       });
     } catch (err) {
@@ -202,6 +232,7 @@ export function AuthProvider({
               status: "authenticated",
               identity: envelope.identity,
               mfaPending: null,
+              workspacePick: null,
               error: null,
             });
             return;
@@ -215,6 +246,7 @@ export function AuthProvider({
         status: looksLike401 ? "anonymous" : "error",
         identity: null,
         mfaPending: null,
+        workspacePick: null,
         error: looksLike401 ? null : message,
       });
     }
@@ -243,6 +275,7 @@ export function AuthProvider({
               bearer_token: result.bearer_token,
               user_id: result.user_id,
             },
+            workspacePick: null,
             error: null,
           });
           return;
@@ -255,6 +288,7 @@ export function AuthProvider({
           status: "anonymous",
           identity: null,
           mfaPending: null,
+          workspacePick: null,
           error: message,
         });
         throw err;
@@ -270,6 +304,86 @@ export function AuthProvider({
     await refresh();
   }, [refresh]);
 
+  const consumeMagicLink = useCallback(
+    async (token: string): Promise<MagicLinkCallbackResponse> => {
+      setState((prev) => ({ ...prev, status: "loading", error: null }));
+      try {
+        const result = await consumeMagicLinkApi(token);
+        if (result.outcome === "session_minted") {
+          if (!result.bearer_token) {
+            throw new Error("session_minted response missing bearer_token");
+          }
+          setBearer(result.bearer_token);
+          await refresh();
+          return result;
+        }
+        // workspace_pick_required
+        if (!result.pick_token || !result.workspaces) {
+          throw new Error(
+            "workspace_pick_required response missing pick_token / workspaces",
+          );
+        }
+        setState({
+          status: "workspace_pick",
+          identity: null,
+          mfaPending: null,
+          workspacePick: {
+            pick_token: result.pick_token,
+            user_id: result.user_id,
+            workspaces: result.workspaces,
+            return_to: result.return_to ?? null,
+            expires_in_seconds: result.expires_in_seconds ?? 300,
+          },
+          error: null,
+        });
+        return result;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "could not consume magic link";
+        setBearer(null);
+        setState({
+          status: "anonymous",
+          identity: null,
+          mfaPending: null,
+          workspacePick: null,
+          error: message,
+        });
+        throw err;
+      }
+    },
+    [refresh, setBearer],
+  );
+
+  const selectWorkspaceFromPick = useCallback(
+    async (orgId: string): Promise<void> => {
+      const pick = state.workspacePick;
+      if (pick === null) {
+        throw new Error("not in workspace_pick state");
+      }
+      setState((prev) => ({ ...prev, status: "loading", error: null }));
+      try {
+        const result = await selectWorkspaceApi({
+          pick_token: pick.pick_token,
+          org_id: orgId,
+        });
+        setBearer(result.bearer_token);
+        await refresh();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "could not select workspace";
+        setState({
+          status: "workspace_pick",
+          identity: null,
+          mfaPending: null,
+          workspacePick: pick,
+          error: message,
+        });
+        throw err;
+      }
+    },
+    [refresh, setBearer, state.workspacePick],
+  );
+
   const handleLogout = useCallback(async () => {
     try {
       await logoutApi();
@@ -282,6 +396,7 @@ export function AuthProvider({
       status: "anonymous",
       identity: null,
       mfaPending: null,
+      workspacePick: null,
       error: null,
     });
   }, [setBearer]);
@@ -313,12 +428,23 @@ export function AuthProvider({
       ...state,
       login,
       completeMfa,
+      consumeMagicLink,
+      selectWorkspaceFromPick,
       logout: handleLogout,
       refresh,
       bearer: () => bearerRef.current,
       switchWorkspace,
     }),
-    [state, login, completeMfa, handleLogout, refresh, switchWorkspace],
+    [
+      state,
+      login,
+      completeMfa,
+      consumeMagicLink,
+      selectWorkspaceFromPick,
+      handleLogout,
+      refresh,
+      switchWorkspace,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

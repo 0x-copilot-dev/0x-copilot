@@ -35,6 +35,7 @@ from typing import Protocol, runtime_checkable
 from runtime_api.schemas import (
     ApprovalDecision,
     ApprovalRequestRecord,
+    ShareSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,17 @@ class NotificationDispatcher(Protocol):
         approval: ApprovalRequestRecord,
         decision: ApprovalDecision,
         decided_by_user_id: str,
+    ) -> None: ...
+
+    # PR 6.2 — fired (best-effort, off the request thread) after a
+    # recipient forks a shared conversation. Default to a no-op so
+    # impls that don't care about share fan-out don't have to override.
+    async def notify_share_forked(
+        self,
+        *,
+        share: ShareSnapshot,
+        forked_by_user_id: str,
+        new_conversation_id: str,
     ) -> None: ...
 
 
@@ -110,6 +122,27 @@ class LoggingNotificationDispatcher:
                     "decided_by_user_id": decided_by_user_id,
                     "org_id": approval.org_id,
                     "conversation_id": approval.conversation_id,
+                }
+            },
+        )
+
+    async def notify_share_forked(
+        self,
+        *,
+        share: ShareSnapshot,
+        forked_by_user_id: str,
+        new_conversation_id: str,
+    ) -> None:
+        logger.info(
+            "share.notify.forked",
+            extra={
+                "metadata": {
+                    "share_id": share.share_id,
+                    "source_conversation_id": share.conversation_id,
+                    "new_conversation_id": new_conversation_id,
+                    "forked_by_user_id": forked_by_user_id,
+                    "shared_by_user_id": share.created_by_user_id,
+                    "org_id": share.org_id,
                 }
             },
         )
@@ -217,6 +250,32 @@ class InboxAndEmailNotificationDispatcher:
                 actor_user_id=decided_by_user_id,
                 extra={"decision": decision.value},
             )
+
+    async def notify_share_forked(
+        self,
+        *,
+        share: ShareSnapshot,
+        forked_by_user_id: str,
+        new_conversation_id: str,
+    ) -> None:
+        # PR 6.2 — share-fork fan-out is opt-in per the W4.1 notification
+        # matrix. v1 emits a structured log so SIEM dashboards can pick
+        # it up; the FE inbox + email channels are wired when the
+        # matrix lands. Failing here would be a policy regression — the
+        # fork already committed; we observe the outcome, never block it.
+        logger.info(
+            "share.notify.forked",
+            extra={
+                "metadata": {
+                    "share_id": share.share_id,
+                    "source_conversation_id": share.conversation_id,
+                    "new_conversation_id": new_conversation_id,
+                    "forked_by_user_id": forked_by_user_id,
+                    "shared_by_user_id": share.created_by_user_id,
+                    "org_id": share.org_id,
+                }
+            },
+        )
 
     async def _safe_publish(
         self,

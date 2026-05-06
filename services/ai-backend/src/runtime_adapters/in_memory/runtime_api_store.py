@@ -234,6 +234,20 @@ class InMemoryRuntimeApiStore:
             )
         return message
 
+    def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        """Insert a fork-authored conversation row verbatim (PR 6.2).
+
+        Bypasses idempotency (forks always mint a new row) and stores
+        every column the caller has set — including the lineage pointers
+        ``parent_conversation_id`` and ``forked_from_share_id`` that the
+        standard ``create_conversation`` path drops.
+        """
+
+        self.conversations[conversation.conversation_id] = conversation
+        return conversation
+
     def update_conversation_connectors(
         self,
         *,

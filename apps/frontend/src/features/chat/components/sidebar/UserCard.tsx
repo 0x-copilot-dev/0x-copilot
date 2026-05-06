@@ -1,6 +1,7 @@
 import { AppIcon, Menu } from "@enterprise-search/design-system";
 import { useRef, useState, type ReactElement } from "react";
 import { useAuth } from "../../../auth/AuthContext";
+import { DevPersonaSwitcher } from "./DevPersonaSwitcher";
 import { WorkspacePicker } from "./WorkspacePicker";
 
 /**
@@ -73,6 +74,7 @@ export function UserCard({
         align="left"
         className="aui-user-card__menu"
       >
+        <DevPersonaSwitcher />
         <div className="aui-user-card__menu-section">
           <p className="aui-user-card__menu-heading">Workspaces</p>
           <WorkspacePicker

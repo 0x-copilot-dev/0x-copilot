@@ -396,6 +396,135 @@ def register_auth_routes(app: FastAPI) -> None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ------------------------------------------------------------------
+    # Login email-first (PR 5.1) — IdP discovery, magic-link, workspace pick.
+    #
+    # Public surfaces, no bearer required. The facade still ships the
+    # service token to the backend so cross-service calls remain
+    # authenticated. Anti-enumeration is enforced on the backend; the
+    # facade only forwards.
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/auth/discover")
+    async def auth_discover(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        email = _required_str(payload, "email")
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/discover",
+                json={
+                    "email": email,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
+    @app.post(
+        "/v1/auth/magic-link/start",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def auth_magic_link_start(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        email = _required_str(payload, "email")
+        return_to_raw = payload.get("return_to")
+        return_to = (
+            return_to_raw
+            if isinstance(return_to_raw, str) and return_to_raw.strip()
+            else None
+        )
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/magic-link/start",
+                json={
+                    "email": email,
+                    "return_to": return_to,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        # Anti-enumeration: 4xx upstream is also surfaced as 202 unless it's
+        # a rate-limit (which is the only signal the caller is allowed to
+        # see), or a 422 invalid_email which is structural.
+        if response.status_code in (
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        ):
+            _raise_for_upstream(response)
+        return (
+            response.json()
+            if response.status_code < 300
+            else {"status": "queued", "expires_in_seconds": 900}
+        )
+
+    @app.get("/v1/auth/magic-link/callback")
+    async def auth_magic_link_callback_get(
+        request: Request,
+        token: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # Convenience GET for email clients that can't POST. Forwards to the
+        # backend POST, which is the canonical handler.
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/magic-link/callback",
+                json={
+                    "token": token,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
+    @app.post("/v1/auth/magic-link/callback")
+    async def auth_magic_link_callback_post(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        token = _required_str(payload, "token")
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/magic-link/callback",
+                json={
+                    "token": token,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id="-"),
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
+    @app.post("/v1/auth/sessions/select")
+    async def auth_sessions_select(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        pick_token = _required_str(payload, "pick_token")
+        org_id = _required_str(payload, "org_id")
+        backend_url = settings_for(app).backend_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{backend_url}/internal/v1/auth/sessions/select",
+                json={
+                    "pick_token": pick_token,
+                    "org_id": org_id,
+                    "ip": _client_ip(request),
+                    "user_agent": _user_agent(request),
+                },
+                headers=_anonymous_service_headers(org_id=org_id),
+            )
+        _raise_for_upstream(response)
+        return response.json()
+
+    # ------------------------------------------------------------------
     # MFA (A6) — enroll, confirm, challenge, verify, recovery.
     #
     # Every route is bearer-authenticated; the caller's identity comes

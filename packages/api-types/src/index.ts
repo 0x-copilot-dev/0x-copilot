@@ -316,6 +316,44 @@ export interface Conversation {
   deleted_at?: string | null;
   folder?: string | null;
   parent_conversation_id?: string | null;
+  /**
+   * PR 6.2 — fork lineage. Audit pointer to the share row that
+   * authorised the conversation's creation; non-FK so revoking the
+   * share does not break the conversation. NULL on every non-forked
+   * row. Optional for backwards compat with payloads pre-migration
+   * 0022.
+   */
+  forked_from_share_id?: string | null;
+}
+
+/**
+ * PR 6.2 — body for ``POST /v1/agent/shares/{share_token}/fork``.
+ *
+ * Both fields optional. ``title`` defaults to ``"Forked from
+ * {source_title}"`` server-side when omitted. ``folder`` defaults to
+ * NULL.
+ */
+export interface ForkRequest {
+  title?: string | null;
+  folder?: string | null;
+}
+
+/**
+ * PR 6.2 — response shape for the fork endpoint.
+ *
+ * ``conversation_id`` is the new (recipient-owned) conversation; the
+ * FE navigates to it via ``/?conversationId={conversation_id}``.
+ * ``fork_message_count`` powers the post-fork toast.
+ */
+export interface ForkResponse {
+  conversation_id: string;
+  parent_conversation_id: string;
+  forked_from_share_id: string;
+  fork_message_count: number;
+  title: string | null;
+  folder: string | null;
+  created_at: string;
+  user_id: string;
 }
 
 /**
@@ -2140,4 +2178,90 @@ export interface UpdateUserPreferencesRequest {
       Record<NotificationEvent, Partial<Record<NotificationChannel, boolean>>>
     >;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Login email-first / magic-link / workspace picker (PR 5.1)
+// ---------------------------------------------------------------------------
+
+/** UI branch the discovery response tells the frontend to render.
+ *
+ * `personal` and `magic_link` produce identical UI (the magic-link CTA);
+ * the distinction is forensic. `unknown` means the deploy disables the
+ * magic-link path (bank-profile) and the user is shown an SSO-required
+ * message. */
+export type AuthDiscoverKind = "sso" | "personal" | "magic_link" | "unknown";
+
+export type AuthDiscoverProviderKind = AuthProviderKind | "magic_link" | null;
+
+export interface AuthDiscoverRequest {
+  email: string;
+}
+
+export interface AuthDiscoverResponse {
+  kind: AuthDiscoverKind;
+  domain: string | null;
+  org_id: string | null;
+  org_display_name: string | null;
+  org_logo_url: string | null;
+  member_count: number | null;
+  provider_id: string | null;
+  provider_kind: AuthDiscoverProviderKind;
+  provider_display_name: string | null;
+  sso_enforced: boolean;
+  magic_link_supported: boolean;
+  message: string | null;
+}
+
+export interface MagicLinkStartRequest {
+  email: string;
+  return_to?: string;
+}
+
+export interface MagicLinkStartResponse {
+  status: "queued";
+  expires_in_seconds: number;
+}
+
+export type MagicLinkCallbackOutcome =
+  | "session_minted"
+  | "workspace_pick_required";
+
+export interface WorkspaceCandidate {
+  org_id: string;
+  display_name: string;
+  logo_url: string | null;
+  role: string;
+  member_count: number;
+  last_active_at: string | null;
+}
+
+export interface MagicLinkCallbackResponse {
+  outcome: MagicLinkCallbackOutcome;
+  user_id: string;
+  // session_minted branch:
+  bearer_token?: string;
+  session_id?: string;
+  org_id?: string;
+  requires_mfa?: boolean;
+  return_to?: string | null;
+  expires_at?: string;
+  // workspace_pick_required branch:
+  pick_token?: string;
+  expires_in_seconds?: number;
+  workspaces?: WorkspaceCandidate[];
+}
+
+export interface SessionSelectRequest {
+  pick_token: string;
+  org_id: string;
+}
+
+export interface SessionSelectResponse {
+  bearer_token: string;
+  session_id: string;
+  user_id: string;
+  org_id: string;
+  requires_mfa: boolean;
+  expires_at: string;
 }

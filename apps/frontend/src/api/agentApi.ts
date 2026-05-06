@@ -12,6 +12,8 @@ import type {
   CreateRunResponse,
   ConversationConnectorScopesResponse,
   Draft,
+  ForkRequest,
+  ForkResponse,
   DraftDiscardRequest,
   DraftListResponse,
   DraftPatchRequest,
@@ -130,6 +132,23 @@ export function listMessages(
     `/v1/agent/conversations/${conversationId}/messages`,
     identity,
     { limit: "100" },
+  );
+}
+
+/**
+ * PR 6.2 — recipient forks a shared conversation into their own
+ * workspace. The share token is the access grant; the facade verifies
+ * the recipient identity from the session token before forwarding.
+ * Returns the new conversation id; the caller navigates to
+ * ``/?conversationId=``.
+ */
+export function forkShare(
+  shareToken: string,
+  request: ForkRequest,
+): Promise<ForkResponse> {
+  return httpPost<ForkResponse>(
+    `/v1/agent/shares/${encodeURIComponent(shareToken)}/fork`,
+    request,
   );
 }
 

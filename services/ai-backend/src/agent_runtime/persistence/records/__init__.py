@@ -49,6 +49,11 @@ from agent_runtime.persistence.records.retention import (
     RetentionScope,
     RetentionSweepOutcome,
 )
+from agent_runtime.persistence.records.shares import (
+    ShareRecipientRecord,
+    ShareRecord,
+    ShareViewAccess,
+)
 from agent_runtime.persistence.records.subagents import (
     AsyncTaskRecord,
     SubagentResultRecord,
@@ -145,6 +150,9 @@ __all__ = [
     "RetentionPolicyRecord",
     "RetentionScope",
     "RetentionSweepOutcome",
+    "ShareRecipientRecord",
+    "ShareRecord",
+    "ShareViewAccess",
     "SourceAggregate",
     "SubagentLifecycleStatus",
     "SubagentSnapshot",

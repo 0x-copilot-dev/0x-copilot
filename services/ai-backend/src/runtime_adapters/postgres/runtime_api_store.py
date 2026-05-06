@@ -145,6 +145,8 @@ class _Columns:
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
+    # PR 6.2 — conversation fork lineage (migration 0022).
+    FORKED_FROM_SHARE_ID = "forked_from_share_id"
     DISPLAY_TITLE = "display_title"
     EDITED_AT = "edited_at"
     ENCRYPTION_VERSION = "encryption_version"
@@ -1006,6 +1008,63 @@ class PostgresRuntimeApiStore:
                     (message.created_at, message.conversation_id),
                 )
         return message
+
+    async def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        """Insert a fork-authored conversation row verbatim (PR 6.2).
+
+        Distinct from ``create_conversation``: bypasses idempotency
+        (forks always mint a new row) and writes every column the caller
+        has populated, including the lineage pointers
+        (``parent_conversation_id``, ``forked_from_share_id``) and the
+        per-chat connector scope override the standard path drops.
+        """
+
+        # Encode the per-chat connector scope override the same way the
+        # PATCH path does (``update_conversation_connectors``): JSON null
+        # means "paused", JSON array means "active with these scopes".
+        enabled_jsonb: dict[str, list[str] | None] = {
+            connector_id: (list(scopes) if scopes is not None else None)
+            for connector_id, scopes in conversation.enabled_connectors.items()
+        }
+        async with self._tenant_connection(org_id=conversation.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO agent_conversations (
+                    id, org_id, user_id, assistant_id, title, status, created_at,
+                    updated_at, archived_at, metadata_json, schema_version,
+                    idempotency_key, enabled_connectors, connectors_updated_at,
+                    deleted_at, folder, parent_conversation_id,
+                    forked_from_share_id
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                """,
+                (
+                    conversation.conversation_id,
+                    conversation.org_id,
+                    conversation.user_id,
+                    conversation.assistant_id,
+                    conversation.title,
+                    conversation.status.value,
+                    conversation.created_at,
+                    conversation.updated_at,
+                    conversation.archived_at,
+                    Jsonb(conversation.metadata),
+                    conversation.schema_version,
+                    conversation.idempotency_key,
+                    Jsonb(enabled_jsonb),
+                    conversation.connectors_updated_at,
+                    conversation.deleted_at,
+                    conversation.folder,
+                    conversation.parent_conversation_id,
+                    conversation.forked_from_share_id,
+                ),
+            )
+        return conversation
 
     async def create_run_with_user_message(
         self,
@@ -3638,6 +3697,7 @@ class PostgresRuntimeApiStore:
             deleted_at=row.get(_Columns.DELETED_AT),
             folder=row.get(_Columns.FOLDER),
             parent_conversation_id=row.get(_Columns.PARENT_CONVERSATION_ID),
+            forked_from_share_id=row.get(_Columns.FORKED_FROM_SHARE_ID),
         )
 
     @staticmethod

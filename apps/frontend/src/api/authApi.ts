@@ -9,18 +9,25 @@
 import type {
   AccountSession,
   AccountSessionListResponse,
+  AuthDiscoverRequest,
+  AuthDiscoverResponse,
   AuthProviderSummary,
   AuthProvidersResponse,
   LoginAttempt,
   LoginAttemptListResponse,
   LoginRequest,
   LoginResponse,
+  MagicLinkCallbackResponse,
+  MagicLinkStartRequest,
+  MagicLinkStartResponse,
   MfaChallengeRequest,
   MfaChallengeResponse,
   MfaFactorListResponse,
   MfaFactorSummary,
   MfaVerifyRequest,
   MfaVerifyResponse,
+  SessionSelectRequest,
+  SessionSelectResponse,
   TotpConfirmRequest,
   TotpEnrollResponse,
 } from "@enterprise-search/api-types";
@@ -207,4 +214,39 @@ export async function listMyLoginAttempts(limit = 20): Promise<LoginAttempt[]> {
     `/v1/auth/me/login-attempts?${params}`,
   );
   return data.attempts;
+}
+
+// ---------------------------------------------------------------------------
+// Login email-first / magic-link / workspace picker (PR 5.1)
+//
+// Discovery is the only call that fires from the typing user — debounced 450ms
+// in <EmailStep>. Magic-link start is fire-and-forget (always 202 from the
+// server; we treat any other 2xx response identically). Magic-link callback
+// runs on the dedicated callback page after the user clicks the email URL.
+// ---------------------------------------------------------------------------
+
+export async function discoverAuth(
+  payload: AuthDiscoverRequest,
+): Promise<AuthDiscoverResponse> {
+  return post<AuthDiscoverResponse>("/v1/auth/discover", payload);
+}
+
+export async function startMagicLink(
+  payload: MagicLinkStartRequest,
+): Promise<MagicLinkStartResponse> {
+  return post<MagicLinkStartResponse>("/v1/auth/magic-link/start", payload);
+}
+
+export async function consumeMagicLink(
+  token: string,
+): Promise<MagicLinkCallbackResponse> {
+  return post<MagicLinkCallbackResponse>("/v1/auth/magic-link/callback", {
+    token,
+  });
+}
+
+export async function selectWorkspace(
+  payload: SessionSelectRequest,
+): Promise<SessionSelectResponse> {
+  return post<SessionSelectResponse>("/v1/auth/sessions/select", payload);
 }

@@ -14,6 +14,8 @@ from agent_runtime.persistence.records import (
     DraftStatus,
     MemoryItemRecord,
     MemoryScopeRecord,
+    ShareRecipientRecord,
+    ShareRecord,
     SourceAggregate,
     SubagentSnapshot,
 )
@@ -240,3 +242,74 @@ class CitationStorePort(Protocol):
 
         Powers the Workspace pane Sources tab when reading archived runs.
         """
+
+
+@runtime_checkable
+class ShareStorePort(Protocol):
+    """Conversation share + recipient persistence boundary (PR 6.1).
+
+    Mutations are typed (no merge-patch on the port — the service composes
+    the diff and calls the right method). Reads are scoped:
+
+    * ``get_by_id`` / ``list_for_conversation`` are creator-side reads,
+      always called within a tenant connection scoped to the share's org.
+    * ``find_by_token_hash`` is the only **org-agnostic** read — the
+      recipient endpoint resolves a token before we know which tenant
+      it belongs to. Implementations must enforce the cross-tenant guard
+      themselves (Postgres uses BYPASSRLS via the admin role; in-memory
+      just returns the matching row regardless of org).
+    """
+
+    async def insert_share(
+        self,
+        *,
+        share: ShareRecord,
+        recipients: Sequence[ShareRecipientRecord],
+    ) -> ShareRecord:
+        """Insert one share row + zero-or-many recipient rows in one TX."""
+
+    async def get_by_id(self, *, org_id: str, share_id: str) -> ShareRecord | None:
+        """Return a share by id within the tenant scope, or ``None``."""
+
+    async def list_for_conversation(
+        self, *, org_id: str, conversation_id: str, include_revoked: bool
+    ) -> Sequence[ShareRecord]:
+        """Return shares created on a conversation (creator-side popover)."""
+
+    async def find_by_token_hash(self, *, share_token_hash: str) -> ShareRecord | None:
+        """Org-agnostic token lookup. The service enforces tenant + recipient gating."""
+
+    async def list_recipients(
+        self, *, org_id: str, share_id: str
+    ) -> Sequence[ShareRecipientRecord]:
+        """Return recipient rows for a specific-mode share (empty otherwise)."""
+
+    async def replace_recipients(
+        self,
+        *,
+        org_id: str,
+        share_id: str,
+        recipients: Sequence[ShareRecipientRecord],
+    ) -> tuple[Sequence[str], Sequence[str]]:
+        """Diff-replace recipients. Returns ``(added_user_ids, removed_user_ids)``."""
+
+    async def update_share(
+        self,
+        *,
+        org_id: str,
+        share_id: str,
+        sources_visible_to_viewer: bool | None = None,
+        expires_at: datetime | None = None,
+        clear_expires_at: bool = False,
+    ) -> ShareRecord | None:
+        """Apply mutable updates. Omitted fields stay untouched.
+
+        ``clear_expires_at=True`` explicitly nulls the column (caller passes
+        ``expires_at=None`` to clear). The flag distinguishes "leave alone"
+        from "set to None" since both look like ``None`` on the wire.
+        """
+
+    async def revoke_share(
+        self, *, org_id: str, share_id: str, now: datetime
+    ) -> ShareRecord | None:
+        """Stamp ``revoked_at``. Idempotent (returns the row either way)."""

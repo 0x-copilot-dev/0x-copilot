@@ -82,6 +82,11 @@ class RuntimeApiAppFactory:
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
+        # PR 6.2 — conversation fork service. The share-snapshot port is
+        # owned by PR 6.1; until that lands the bootstrap leaves the
+        # service ``None`` and the route returns 503. Tests inject the
+        # service directly via ``app.state.conversation_fork_service``.
+        app.state.conversation_fork_service = cls.default_conversation_fork_service(app)
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
@@ -256,6 +261,44 @@ class RuntimeApiAppFactory:
             return None
         return CapabilityAuthGate(
             tool_registry=tool_registry, mcp_registry=mcp_registry
+        )
+
+    @classmethod
+    def default_conversation_fork_service(cls, app: FastAPI):
+        """Wire :class:`ConversationForkService` (PR 6.2).
+
+        Returns ``None`` when the share-snapshot port is not configured
+        on app state — the fork route then surfaces 503 to callers and
+        the FE renders a degraded state. PR 6.1 wires
+        ``app.state.share_snapshot_port`` once the share lifecycle ships;
+        until then tests are the only callers and they wire the service
+        directly via ``app.state.conversation_fork_service``.
+        """
+
+        share_snapshot_port = getattr(app.state, "share_snapshot_port", None)
+        if share_snapshot_port is None:
+            return None
+
+        from agent_runtime.api.conversation_fork import ConversationForkService
+        from runtime_api.identity import RuntimeIdentity  # noqa: F401 (typing only)
+        from runtime_worker.audit import WorkerAuditEmitter
+
+        async_ports = getattr(app.state, "async_runtime_ports", None)
+        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        if ports is None:  # pragma: no cover — only hit when app boots without ports
+            return None
+
+        # Reuse the runtime API service's persistence + notifications,
+        # so audit + inbox fan-out share the same writers as every
+        # other privileged action in this process.
+        api_service = getattr(app.state, "runtime_api_service", None)
+        if api_service is None:
+            return None
+        return ConversationForkService(
+            persistence=api_service.persistence,
+            share_snapshots=share_snapshot_port,
+            audit=WorkerAuditEmitter(api_service.persistence),
+            notifications=api_service._notifications,
         )
 
     @classmethod

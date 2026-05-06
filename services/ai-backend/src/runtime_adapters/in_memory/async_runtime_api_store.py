@@ -114,6 +114,11 @@ class AsyncInMemoryRuntimeApiStore:
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         return self._store.append_message(message)
 
+    async def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        return self._store.insert_forked_conversation(conversation)
+
     async def update_conversation_connectors(
         self,
         *,

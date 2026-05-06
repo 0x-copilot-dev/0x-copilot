@@ -78,6 +78,12 @@ class IdentityStore(Protocol):
         include_deleted: bool = False,
     ) -> UserRecord | None: ...
     def get_user_by_email(self, *, org_id: str, email: str) -> UserRecord | None: ...
+    def list_users_by_email(self, *, email: str) -> tuple[UserRecord, ...]:
+        """Cross-org lookup. PR 5.1 magic-link path: an email may map to
+        multiple workspaces (one ``users`` row per org). Returns every
+        active match. Implementations MUST exclude deleted rows."""
+        ...
+
     def list_users(
         self, *, org_id: str, include_deleted: bool = False
     ) -> tuple[UserRecord, ...]: ...
@@ -289,6 +295,19 @@ class InMemoryIdentityStore:
             ):
                 return record
         return None
+
+    def list_users_by_email(self, *, email: str) -> tuple[UserRecord, ...]:
+        normalized = email.strip().lower()
+        return tuple(
+            sorted(
+                (
+                    record
+                    for record in self.users.values()
+                    if record.deleted_at is None and record.primary_email == normalized
+                ),
+                key=lambda r: r.created_at,
+            )
+        )
 
     def list_users(
         self, *, org_id: str, include_deleted: bool = False
@@ -808,6 +827,20 @@ class PostgresIdentityStore:
             )
             row = cur.fetchone()
         return _row_to_user(row) if row else None
+
+    def list_users_by_email(self, *, email: str) -> tuple[UserRecord, ...]:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT * FROM users
+                WHERE lower(primary_email) = lower(%s)
+                  AND deleted_at IS NULL
+                ORDER BY created_at
+                """,
+                (email,),
+            )
+            rows = cur.fetchall()
+        return tuple(_row_to_user(row) for row in rows)
 
     def list_users(
         self, *, org_id: str, include_deleted: bool = False

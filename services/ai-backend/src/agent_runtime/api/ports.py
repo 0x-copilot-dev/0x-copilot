@@ -88,6 +88,17 @@ class PersistencePort(Protocol):
     def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""
 
+    def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        """Insert a fork-authored conversation row verbatim (PR 6.2).
+
+        Bypasses the idempotency check the standard ``create_conversation``
+        path runs and writes every column the caller has populated —
+        including ``parent_conversation_id``, ``forked_from_share_id``,
+        ``folder``, ``enabled_connectors``, and ``deleted_at``.
+        """
+
     def update_conversation_connectors(
         self,
         *,

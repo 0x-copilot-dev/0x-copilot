@@ -121,6 +121,13 @@ class SyncToAsyncPersistence:
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         return await asyncio.to_thread(self._port.append_message, message)
 
+    async def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        return await asyncio.to_thread(
+            self._port.insert_forked_conversation, conversation
+        )
+
     async def update_conversation_connectors(
         self,
         *,

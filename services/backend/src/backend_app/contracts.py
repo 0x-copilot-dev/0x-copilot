@@ -883,6 +883,7 @@ class LoginAttemptKind(StrEnum):
     MFA = "mfa"
     SCIM_TOKEN = "scim_token"
     API_KEY = "api_key"
+    MAGIC_LINK = "magic_link"
 
 
 class LoginAttemptOutcome(StrEnum):
@@ -892,6 +893,15 @@ class LoginAttemptOutcome(StrEnum):
     LOCKED_OUT = "locked_out"
     MFA_FAILED = "mfa_failed"
     PROVIDER_REJECTED = "provider_rejected"
+    # PR 5.1 — magic-link + workspace-pick outcomes.
+    MAGIC_LINK_REQUESTED = "magic_link_requested"
+    MAGIC_LINK_CONSUMED = "magic_link_consumed"
+    INVALID_TOKEN = "invalid_token"
+    EXPIRED_TOKEN = "expired_token"
+    CONSUMED_TOKEN = "consumed_token"
+    RATE_LIMITED = "rate_limited"
+    WORKSPACE_PICKER_ISSUED = "workspace_picker_issued"
+    WORKSPACE_SELECTED = "workspace_selected"
 
 
 # Email is normalized to NFKC + lower for the unique-index lookup. CITEXT in
@@ -2122,3 +2132,192 @@ class ScimTokenMintRequest(BackendContract):
     org_id: str
     created_by_user_id: str
     expires_at: datetime | None = None
+
+
+# -----------------------------------------------------------------------------
+# Login email-first / magic-link / workspace picker (PR 5.1)
+# -----------------------------------------------------------------------------
+
+
+class AuthDiscoverKind(StrEnum):
+    """UI branch the discovery response tells the frontend to render.
+
+    The shape is intentionally distinct from ``AuthProviderKind``: discovery
+    speaks in *experiences* (SSO redirect / personal magic-link / unknown
+    fallback / disabled), provider kinds speak in *protocols* (OIDC / SAML).
+    """
+
+    SSO = "sso"
+    PERSONAL = "personal"
+    MAGIC_LINK = "magic_link"
+    UNKNOWN = "unknown"
+
+
+class AuthProviderDomainRecord(BackendContract):
+    """A domain → (org, provider) claim. One row per claim.
+
+    Lookup is keyed by the partial unique index on ``(domain) WHERE deleted_at
+    IS NULL``; case-insensitivity comes from CITEXT in Postgres and from the
+    ``normalize_email`` validator on writes.
+    """
+
+    domain: str
+    org_id: str
+    provider_id: str
+    sso_enforced: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_by_user_id: str | None = None
+    deleted_at: datetime | None = None
+
+    @field_validator("domain")
+    @classmethod
+    def _normalize_domain(cls, value: object) -> str:
+        text = Validators.normalize_text(value).lower()
+        if "." not in text or text.startswith(".") or text.endswith(".") or "@" in text:
+            raise ValueError("invalid domain")
+        return text
+
+    @field_validator("org_id", "provider_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class AuthDiscoverRequest(BackendContract):
+    email: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: object) -> str:
+        return _IdentityValidators.normalize_email(value)
+
+
+class AuthDiscoverResponse(BackendContract):
+    kind: AuthDiscoverKind
+    domain: str | None = None
+    org_id: str | None = None
+    org_display_name: str | None = None
+    org_logo_url: str | None = None
+    member_count: int | None = None
+    provider_id: str | None = None
+    provider_kind: AuthProviderKind | None = None
+    provider_display_name: str | None = None
+    sso_enforced: bool = False
+    magic_link_supported: bool = True
+    message: str | None = None
+
+
+class MagicLinkTokenRecord(BackendContract):
+    """Server-side row backing a magic-link plaintext token.
+
+    Plaintext is sha256-hashed at write; the row's ``token_hash`` is the
+    UNIQUE lookup key. ``user_id`` is always known when the row is written —
+    if the email did not resolve to an existing active user we never insert
+    a row (anti-enumeration). ``candidate_orgs`` is materialized once at
+    request time so the ``consume`` path doesn't re-query membership.
+    """
+
+    token_id: str = Field(default_factory=lambda: f"mlt_{uuid4().hex}")
+    org_id: str | None = None
+    user_id: str
+    email_lower: str
+    token_hash: str
+    candidate_orgs: list[dict[str, Any]] = Field(default_factory=list)
+    return_to: str | None = None
+    requested_ip: str | None = None
+    requested_ua: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    consumed_session_id: str | None = None
+
+    @field_validator("user_id")
+    @classmethod
+    def _normalize_user_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("org_id")
+    @classmethod
+    def _normalize_optional_org_id(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return Validators.normalize_id(value)
+
+
+class MagicLinkStartRequest(BackendContract):
+    email: str
+    return_to: str | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: object) -> str:
+        return _IdentityValidators.normalize_email(value)
+
+
+class MagicLinkStartResponse(BackendContract):
+    """Anti-enumeration: always 202; ``expires_in_seconds`` is informational."""
+
+    status: str = "queued"
+    expires_in_seconds: int = 900
+
+
+class MagicLinkCallbackRequest(BackendContract):
+    token: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class WorkspaceCandidate(BackendContract):
+    org_id: str
+    display_name: str
+    logo_url: str | None = None
+    role: str
+    member_count: int
+    last_active_at: datetime | None = None
+
+
+class MagicLinkCallbackOutcome(StrEnum):
+    SESSION_MINTED = "session_minted"
+    WORKSPACE_PICK_REQUIRED = "workspace_pick_required"
+
+
+class MagicLinkCallbackResult(BackendContract):
+    outcome: MagicLinkCallbackOutcome
+    user_id: str
+    # session_minted branch:
+    bearer_token: str | None = None
+    session_id: str | None = None
+    org_id: str | None = None
+    requires_mfa: bool | None = None
+    return_to: str | None = None
+    expires_at: datetime | None = None
+    # workspace_pick_required branch:
+    pick_token: str | None = None
+    expires_in_seconds: int | None = None
+    workspaces: tuple[WorkspaceCandidate, ...] = ()
+
+
+class SessionSelectRequest(BackendContract):
+    pick_token: str
+    org_id: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("org_id")
+    @classmethod
+    def _normalize_org_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class SessionSelectResult(BackendContract):
+    bearer_token: str
+    session_id: str
+    user_id: str
+    org_id: str
+    requires_mfa: bool = False
+    expires_at: datetime

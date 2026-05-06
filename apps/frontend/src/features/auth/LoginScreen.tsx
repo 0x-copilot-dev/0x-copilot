@@ -1,14 +1,30 @@
 /**
- * Login screen (A9): IdP picker + email/password form.
+ * Login screen (PR 5.1) — email-first IdP discovery + magic-link +
+ * workspace picker, plus brand right pane.
  *
- * Renders the providers returned by ``GET /v1/auth/providers``. OIDC
- * buttons redirect to ``/v1/auth/oidc/{id}/start`` so the IdP handles
- * the dance; the local-password form drives ``AuthContext.login``.
+ * State machine (local to this component, narrows on each transition):
  *
- * Bank deploys hide signup + reset links via ``hideSelfService`` (a
- * later PR threads the C1 toggle through). Built on the design-system
- * primitives (``Card``, ``Field``, ``TextInput``, ``Button``) so the
- * tokens / focus rings / disabled states match the rest of the app.
+ *   email
+ *     └─ submit → kind=sso       → redirect (window.location.assign)
+ *     └─ submit → kind=personal  → magic_link_sent
+ *     └─ submit → kind=magic_link→ magic_link_sent
+ *     └─ submit → kind=unknown   → error inline (bank-profile message)
+ *
+ *   redirect          (one-shot; the OIDC/SAML start URL handles the rest)
+ *   magic_link_sent   ("Check your email"; dead-end until user clicks the URL)
+ *   magic_link_cb     (consumes ?token= on mount)
+ *   workspace_pick    (driven by auth.workspacePick from AuthContext)
+ *
+ * MFA is owned by ``AuthGate`` (status === "mfa_pending" → ``<MfaPrompt>``);
+ * we don't render it here. Same for the authenticated path.
+ *
+ * Reuse:
+ *   - ``ThemeProvider`` accent / theme already set globally; the brand
+ *     pane reads from existing CSS tokens.
+ *   - ``MfaPrompt`` mounts after a session is minted with requires_mfa=true;
+ *     no extra wiring here.
+ *   - ``auth.consumeMagicLink`` handles the bearer write + refresh.
+ *   - ``auth.selectWorkspaceFromPick`` handles the pick-token exchange.
  */
 
 import {
@@ -18,231 +34,707 @@ import {
   TextInput,
   classNames,
 } from "@enterprise-search/design-system";
+import type {
+  AuthDiscoverResponse,
+  WorkspaceCandidate,
+} from "@enterprise-search/api-types";
 import type { FormEvent, ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { listAuthProviders, type SessionIdentity } from "../../api/authApi";
-import type { AuthProviderSummary } from "@enterprise-search/api-types";
+import { discoverAuth, startMagicLink } from "../../api/authApi";
 import { useAuth } from "./AuthContext";
 
+const DEBOUNCE_MS = 450;
+const MAGIC_LINK_CALLBACK_PATH = "/auth/magic-link/callback";
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type LoginStep =
+  | { kind: "email" }
+  | { kind: "redirect"; provider_id: string; org_id: string }
+  | { kind: "magic_link_sent"; email: string }
+  | { kind: "magic_link_cb"; token: string }
+  | { kind: "workspace_pick" };
+
 export interface LoginScreenProps {
-  /** Default org slug to pull provider list from. SaaS deploys derive
-   * this from the URL subdomain; single-tenant deploys hardcode the
-   * singleton org id at build time. */
-  defaultOrgId: string;
-  /** Hide signup + reset links (bank deploys). */
-  hideSelfService?: boolean;
-  /** Optional path to navigate to after a successful login. The caller
-   * is responsible for the actual navigation — we just emit the value
-   * via the ``onAuthenticated`` callback. */
+  /** Default org slug — kept for backwards compat with the legacy URL hint
+   * (``?org_id=acme``). The new flow doesn't require it; if present, we
+   * pre-narrow discovery toward the matching workspace. */
+  defaultOrgId?: string;
+  /** Hide the magic-link CTA entirely (bank deploys with strict SSO). */
+  hideMagicLink?: boolean;
+  /** Optional path to navigate to after a successful login. Carried into
+   * the magic-link URL as a signed claim on the token (server-side). */
   returnTo?: string;
-  onAuthenticated?(args: {
-    identity: SessionIdentity;
-    returnTo: string | null;
-  }): void;
 }
 
-export function LoginScreen({
-  defaultOrgId,
-  hideSelfService = false,
-  returnTo,
-  onAuthenticated,
-}: LoginScreenProps): ReactElement {
+export function LoginScreen(props: LoginScreenProps): ReactElement {
   const auth = useAuth();
-  const [orgId, setOrgId] = useState(defaultOrgId);
-  const [providers, setProviders] = useState<AuthProviderSummary[]>([]);
-  const [providersError, setProvidersError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [step, setStep] = useState<LoginStep>(() => _initialStep(auth));
 
-  // Fire the post-login callback once the AuthContext flips to
-  // ``authenticated`` (covers both the OIDC redirect-back case and the
-  // local-password case after MFA, if any).
+  // Re-anchor on workspace_pick when the AuthContext flips into it
+  // (consumeMagicLink → kind=workspace_pick_required).
   useEffect(() => {
-    if (auth.status === "authenticated" && auth.identity && onAuthenticated) {
-      onAuthenticated({
-        identity: auth.identity,
-        returnTo: returnTo ?? null,
-      });
+    if (auth.status === "workspace_pick" && step.kind !== "workspace_pick") {
+      setStep({ kind: "workspace_pick" });
     }
-  }, [auth.status, auth.identity, onAuthenticated, returnTo]);
+  }, [auth.status, step.kind]);
 
-  // Load providers when org_id changes (debounced lightly via the
-  // controlled input).
-  useEffect(() => {
-    if (!orgId) {
-      setProviders([]);
-      return;
-    }
-    let cancelled = false;
-    setProvidersError(null);
-    listAuthProviders(orgId)
-      .then((list) => {
-        if (!cancelled) {
-          setProviders(list);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          const message =
-            err instanceof Error
-              ? err.message
-              : "could not load identity providers";
-          setProvidersError(message);
-          setProviders([]);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId]);
-
-  const oidcProviders = providers.filter((p) => p.kind === "oidc" && p.enabled);
-  const localProviderEnabled = providers.some(
-    (p) => p.kind === "local" && p.enabled,
+  return (
+    <div className="login-shell" data-testid="login-screen">
+      <Brand />
+      <main className="login-pane">
+        {step.kind === "email" && (
+          <EmailStep
+            defaultOrgId={props.defaultOrgId}
+            hideMagicLink={props.hideMagicLink ?? false}
+            returnTo={props.returnTo}
+            onRedirect={(provider_id, org_id) =>
+              setStep({ kind: "redirect", provider_id, org_id })
+            }
+            onMagicLinkSent={(email) =>
+              setStep({ kind: "magic_link_sent", email })
+            }
+          />
+        )}
+        {step.kind === "redirect" && (
+          <RedirectStep
+            provider_id={step.provider_id}
+            org_id={step.org_id}
+            returnTo={props.returnTo ?? null}
+          />
+        )}
+        {step.kind === "magic_link_sent" && (
+          <MagicLinkSent
+            email={step.email}
+            onBack={() => setStep({ kind: "email" })}
+          />
+        )}
+        {step.kind === "magic_link_cb" && (
+          <MagicLinkCallbackStep
+            token={step.token}
+            onError={() => setStep({ kind: "email" })}
+          />
+        )}
+        {step.kind === "workspace_pick" && <WorkspacePickStep />}
+      </main>
+    </div>
   );
-  // Default to local-on when the providers endpoint hasn't enumerated
-  // them (e.g. the ``providers`` table is empty in dev) so the user
-  // isn't locked out.
-  const showLocalForm = providers.length === 0 || localProviderEnabled;
+}
 
-  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (submitting) {
+function _initialStep(auth: ReturnType<typeof useAuth>): LoginStep {
+  if (auth.status === "workspace_pick") {
+    return { kind: "workspace_pick" };
+  }
+  if (typeof window !== "undefined") {
+    const url = new URL(window.location.href);
+    if (url.pathname === MAGIC_LINK_CALLBACK_PATH) {
+      const token = url.searchParams.get("token");
+      if (token) {
+        return { kind: "magic_link_cb", token };
+      }
+    }
+  }
+  return { kind: "email" };
+}
+
+// ---------------------------------------------------------------------------
+// Brand pane
+// ---------------------------------------------------------------------------
+
+function Brand(): ReactElement {
+  return (
+    <aside className="login-brand" aria-label="Atlas">
+      <div className="login-brand__head">
+        <div className="login-brand__mark" aria-hidden="true">
+          A
+        </div>
+        <div className="login-brand__name">Atlas</div>
+      </div>
+      <div className="login-brand__body">
+        <div className="login-brand__eyebrow">
+          Agentic search for the rest of the company
+        </div>
+        <h1 className="login-brand__h">
+          One place to ask, <em>find,</em> and act — across every tool your team
+          already uses.
+        </h1>
+        <p className="login-brand__lede">
+          Atlas reads across your connected tools. It drafts, summarises and
+          follows up — with citations, approvals, and a clear paper trail.
+        </p>
+      </div>
+      <footer className="login-brand__foot">
+        <span>© 2026 Atlas Labs</span>
+        <ul className="login-brand__compliance" aria-label="Compliance">
+          <li>SOC 2 Type II</li>
+          <li>ISO 27001</li>
+          <li>GDPR</li>
+          <li>HIPAA</li>
+        </ul>
+      </footer>
+    </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Email step
+// ---------------------------------------------------------------------------
+
+interface EmailStepProps {
+  defaultOrgId?: string;
+  hideMagicLink: boolean;
+  returnTo?: string;
+  onRedirect(provider_id: string, org_id: string): void;
+  onMagicLinkSent(email: string): void;
+}
+
+type DiscoveryState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; data: AuthDiscoverResponse }
+  | { kind: "error"; message: string };
+
+function EmailStep({
+  hideMagicLink,
+  returnTo,
+  onRedirect,
+  onMagicLinkSent,
+}: EmailStepProps): ReactElement {
+  const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [discovery, setDiscovery] = useState<DiscoveryState>({ kind: "idle" });
+  const debounceRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Auto-focus without scrolling. The login layout overrides body scroll
+  // (login.css opt-out) so the page stays anchored. We query by id rather
+  // than ref-forwarding so we don't have to widen the design-system primitive.
+  useEffect(() => {
+    const el = document.getElementById(
+      "login-email-input",
+    ) as HTMLInputElement | null;
+    el?.focus({ preventScroll: true });
+  }, []);
+
+  // Debounced discovery as the user types. We cancel the in-flight request
+  // when the email changes so only the latest value resolves.
+  useEffect(() => {
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+    }
+    if (abortRef.current !== null) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    if (!_emailLooksComplete(email)) {
+      setDiscovery({ kind: "idle" });
       return;
     }
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      await auth.login({ orgId, email, password });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "login failed";
-      setFormError(message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    setDiscovery({ kind: "loading" });
+    debounceRef.current = window.setTimeout(() => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      discoverAuth({ email })
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          setDiscovery({ kind: "ready", data });
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return;
+          const message =
+            err instanceof Error ? err.message : "could not look up domain";
+          setDiscovery({ kind: "error", message });
+        });
+    }, DEBOUNCE_MS);
+    return () => {
+      if (debounceRef.current !== null) {
+        window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
+  }, [email]);
 
-  const oidcStartUrl = (providerId: string): string => {
+  const submit = useCallback(
+    async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+      event.preventDefault();
+      if (submitting || !_emailLooksComplete(email)) {
+        return;
+      }
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        // If discovery already ran and we have a result, use it. Otherwise
+        // fire a synchronous discover so the submit isn't a no-op when the
+        // user hits Enter before the debounce settles.
+        const result =
+          discovery.kind === "ready"
+            ? discovery.data
+            : await discoverAuth({ email });
+        if (result.kind === "sso" && result.provider_id && result.org_id) {
+          onRedirect(result.provider_id, result.org_id);
+          return;
+        }
+        if (
+          (result.kind === "personal" || result.kind === "magic_link") &&
+          result.magic_link_supported &&
+          !hideMagicLink
+        ) {
+          await startMagicLink({ email, return_to: returnTo });
+          onMagicLinkSent(email);
+          return;
+        }
+        // unknown / SSO-required / magic-link disabled — surface the
+        // server's message verbatim if present, otherwise a generic
+        // SSO-required string.
+        setSubmitError(
+          result.message ??
+            "Your workspace requires single sign-on. Contact your admin.",
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "login failed";
+        setSubmitError(message);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [
+      submitting,
+      email,
+      discovery,
+      hideMagicLink,
+      returnTo,
+      onRedirect,
+      onMagicLinkSent,
+    ],
+  );
+
+  const buttonLabel = _adaptiveButtonLabel(discovery, hideMagicLink);
+  const data = discovery.kind === "ready" ? discovery.data : null;
+  const canSubmit = !submitting && _emailLooksComplete(email);
+
+  return (
+    <Card className="login-card login-card--email" tone="default">
+      <header className="login-card__head">
+        <h2>Sign in to Atlas</h2>
+        <p>
+          Enter your work email — we&rsquo;ll route you to the right sign-in.
+        </p>
+      </header>
+      <form
+        className="login-card__form"
+        onSubmit={submit}
+        data-testid="login-email-form"
+        noValidate
+      >
+        <Field label="Email" className="login-card__field">
+          <TextInput
+            id="login-email-input"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setSubmitError(null);
+            }}
+            data-testid="login-email-input"
+          />
+        </Field>
+        {data !== null && <DiscoveryCard data={data} />}
+        {discovery.kind === "loading" && (
+          <p className="login-card__hint" role="status">
+            Checking your domain&rsquo;s directory…
+          </p>
+        )}
+        {submitError && (
+          <p
+            className="login-card__error"
+            role="alert"
+            data-testid="login-error"
+          >
+            {submitError}
+          </p>
+        )}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          disabled={!canSubmit}
+          data-testid="login-submit"
+          className={classNames("login-card__submit")}
+        >
+          {submitting ? "One moment…" : buttonLabel}
+        </Button>
+      </form>
+    </Card>
+  );
+}
+
+function _emailLooksComplete(email: string): boolean {
+  return EMAIL_SHAPE_RE.test(email.trim());
+}
+
+function _adaptiveButtonLabel(
+  state: DiscoveryState,
+  hideMagicLink: boolean,
+): string {
+  if (state.kind !== "ready") return "Continue";
+  const data = state.data;
+  if (data.kind === "sso" && data.provider_display_name) {
+    return `Continue with ${data.provider_display_name}`;
+  }
+  if (
+    (data.kind === "personal" || data.kind === "magic_link") &&
+    data.magic_link_supported &&
+    !hideMagicLink
+  ) {
+    return "Email me a sign-in link";
+  }
+  return "Continue";
+}
+
+// ---------------------------------------------------------------------------
+// Discovery card (shown beneath the email field once a result is in)
+// ---------------------------------------------------------------------------
+
+function DiscoveryCard({ data }: { data: AuthDiscoverResponse }): ReactElement {
+  if (data.kind === "sso") {
+    return (
+      <div
+        className="login-discovery login-discovery--sso"
+        data-testid="login-discovery-sso"
+      >
+        <div className="login-discovery__row">
+          <strong className="login-discovery__org">
+            {data.org_display_name ?? data.org_id}
+          </strong>
+          <span className="login-discovery__domain">· {data.domain}</span>
+        </div>
+        <div className="login-discovery__row">
+          Sign in with{" "}
+          <strong>
+            {data.provider_display_name ?? data.provider_kind ?? "SSO"}
+          </strong>
+          {data.member_count !== null && (
+            <span className="login-discovery__members">
+              · {data.member_count.toLocaleString()} members
+            </span>
+          )}
+        </div>
+        {data.sso_enforced && (
+          <span
+            className="login-discovery__badge"
+            data-testid="login-discovery-sso-enforced"
+          >
+            SSO enforced
+          </span>
+        )}
+      </div>
+    );
+  }
+  if (data.kind === "personal") {
+    return (
+      <div
+        className="login-discovery login-discovery--personal"
+        data-testid="login-discovery-personal"
+      >
+        <strong>{data.provider_display_name ?? "Personal"} account</strong>
+        <p className="login-discovery__hint">
+          We&rsquo;ll email you a one-time sign-in link.
+        </p>
+      </div>
+    );
+  }
+  if (data.kind === "magic_link") {
+    return (
+      <div
+        className="login-discovery login-discovery--unknown"
+        data-testid="login-discovery-unknown"
+      >
+        <strong>No SSO found for {data.domain}</strong>
+        <p className="login-discovery__hint">
+          We&rsquo;ll email you a one-time sign-in link.
+        </p>
+      </div>
+    );
+  }
+  // unknown
+  return (
+    <div
+      className="login-discovery login-discovery--blocked"
+      data-testid="login-discovery-blocked"
+      role="alert"
+    >
+      <strong>{data.message ?? "Single sign-on required."}</strong>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Redirect step — ships the user to the existing OIDC/SAML start URL.
+// ---------------------------------------------------------------------------
+
+function RedirectStep({
+  provider_id,
+  org_id,
+  returnTo,
+}: {
+  provider_id: string;
+  org_id: string;
+  returnTo: string | null;
+}): ReactElement {
+  useEffect(() => {
     const params = new URLSearchParams({
-      org_id: orgId,
-      // The redirect URL the IdP will bounce back to. Backend reads it
-      // off ``oidc_authentications`` so the value here is informational.
+      org_id,
       redirect_uri: window.location.origin + "/v1/auth/oidc/callback",
     });
     if (returnTo) {
       params.set("return_to", returnTo);
     }
-    return `/v1/auth/oidc/${encodeURIComponent(providerId)}/start?${params}`;
+    // OIDC start is the first ramp; deploys with SAML can branch here on
+    // the provider kind. v1 sends both through the OIDC path because the
+    // existing facade route is the same for both.
+    window.location.assign(
+      `/v1/auth/oidc/${encodeURIComponent(provider_id)}/start?${params}`,
+    );
+  }, [provider_id, org_id, returnTo]);
+
+  return (
+    <Card className="login-card login-card--redirect" tone="muted">
+      <header className="login-card__head">
+        <h2>Redirecting to your IdP…</h2>
+        <p>
+          You&rsquo;ll come back here once your IdP confirms it&rsquo;s you.
+        </p>
+      </header>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Magic-link sent
+// ---------------------------------------------------------------------------
+
+function MagicLinkSent({
+  email,
+  onBack,
+}: {
+  email: string;
+  onBack(): void;
+}): ReactElement {
+  return (
+    <Card className="login-card login-card--magic-sent" tone="default">
+      <header className="login-card__head">
+        <h2>Check your email</h2>
+        <p>
+          We sent a one-time sign-in link to <strong>{email}</strong>. The link
+          is valid for 15 minutes.
+        </p>
+      </header>
+      <p className="login-card__hint">
+        Didn&rsquo;t see it? Check your spam folder, or{" "}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onBack}
+          data-testid="login-magic-back"
+        >
+          use a different email
+        </Button>
+        .
+      </p>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Magic-link callback step (consumes ?token= on mount)
+// ---------------------------------------------------------------------------
+
+function MagicLinkCallbackStep({
+  token,
+  onError,
+}: {
+  token: string;
+  onError(): void;
+}): ReactElement {
+  const auth = useAuth();
+  const [error, setError] = useState<string | null>(null);
+  const consumedRef = useRef(false);
+
+  useEffect(() => {
+    if (consumedRef.current) return;
+    consumedRef.current = true;
+    void (async () => {
+      try {
+        await auth.consumeMagicLink(token);
+        // On session_minted, AuthContext flips to authenticated → AuthGate
+        // remounts the app shell. On workspace_pick_required, AuthContext
+        // flips to workspace_pick → the parent re-anchors. Nothing else
+        // for us to do here.
+        if (typeof window !== "undefined") {
+          // Strip ?token= from the URL so a back-button doesn't replay.
+          const url = new URL(window.location.href);
+          url.searchParams.delete("token");
+          window.history.replaceState({}, "", url.pathname);
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "could not consume link";
+        setError(message);
+      }
+    })();
+  }, [auth, token]);
+
+  return (
+    <Card className="login-card login-card--magic-cb" tone="default">
+      <header className="login-card__head">
+        <h2>Signing you in…</h2>
+        {error === null ? (
+          <p>Hang tight — verifying your sign-in link.</p>
+        ) : (
+          <>
+            <p role="alert" className="login-card__error">
+              {error}
+            </p>
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              onClick={onError}
+              data-testid="login-magic-cb-back"
+            >
+              Try again
+            </Button>
+          </>
+        )}
+      </header>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace picker (post-magic-link, multi-workspace)
+// ---------------------------------------------------------------------------
+
+function WorkspacePickStep(): ReactElement {
+  const auth = useAuth();
+  const [submittingOrg, setSubmittingOrg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pick = auth.workspacePick;
+
+  if (pick === null) {
+    return (
+      <Card className="login-card" tone="muted">
+        <p>Workspace pick state expired. Please request a new link.</p>
+      </Card>
+    );
+  }
+
+  const onSelect = async (org_id: string): Promise<void> => {
+    if (submittingOrg !== null) return;
+    setSubmittingOrg(org_id);
+    setError(null);
+    try {
+      await auth.selectWorkspaceFromPick(org_id);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "could not select workspace";
+      setError(message);
+    } finally {
+      setSubmittingOrg(null);
+    }
   };
 
   return (
-    <main className="auth-screen" data-testid="login-screen">
-      <Card className="auth-screen__card" tone="default">
-        <header className="auth-screen__header">
-          <h1>Sign in to Enterprise Search</h1>
-          <p>Use your organization credentials to continue.</p>
-        </header>
-
-        <Field label="Organization" className="auth-screen__field">
-          <TextInput
-            value={orgId}
-            onChange={(e) => setOrgId(e.target.value)}
-            autoComplete="organization"
-            data-testid="login-org"
+    <Card className="login-card login-card--pick" tone="default">
+      <header className="login-card__head">
+        <h2>Pick a workspace</h2>
+        <p>
+          Choose where you want to land. We&rsquo;ll remember your last one.
+        </p>
+      </header>
+      <ul
+        className="login-pick__list"
+        aria-label="Your workspaces"
+        data-testid="login-pick-list"
+      >
+        {pick.workspaces.map((ws) => (
+          <WorkspaceRow
+            key={ws.org_id}
+            workspace={ws}
+            disabled={submittingOrg !== null}
+            submitting={submittingOrg === ws.org_id}
+            onSelect={() => onSelect(ws.org_id)}
           />
-        </Field>
-
-        {providersError && (
-          <p className="auth-screen__error" role="alert">
-            {providersError}
-          </p>
-        )}
-
-        {oidcProviders.length > 0 && (
-          <section
-            className="auth-screen__idp-list"
-            data-testid="login-idp-list"
-            aria-label="Identity providers"
-          >
-            {oidcProviders.map((provider) => (
-              <Button
-                key={provider.provider_id}
-                variant="secondary"
-                size="lg"
-                onClick={() => {
-                  window.location.href = oidcStartUrl(provider.provider_id);
-                }}
-                data-provider-id={provider.provider_id}
-                className="auth-screen__idp-button"
-              >
-                Continue with {provider.display_name}
-              </Button>
-            ))}
-            {showLocalForm && (
-              <p
-                className="auth-screen__divider"
-                role="separator"
-                aria-label="or"
-              >
-                <span>or</span>
-              </p>
-            )}
-          </section>
-        )}
-
-        {showLocalForm && (
-          <form
-            className="auth-screen__form"
-            onSubmit={onSubmit}
-            data-testid="login-form"
-          >
-            <Field label="Email" className="auth-screen__field">
-              <TextInput
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                data-testid="login-email"
-              />
-            </Field>
-            <Field label="Password" className="auth-screen__field">
-              <TextInput
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                data-testid="login-password"
-              />
-            </Field>
-            <Button
-              type="submit"
-              variant="primary"
-              size="lg"
-              disabled={submitting || !email || !password}
-              data-testid="login-submit"
-              className={classNames("auth-screen__submit")}
-            >
-              {submitting ? "Signing in…" : "Sign in"}
-            </Button>
-            {formError && (
-              <p className="auth-screen__error" role="alert">
-                {formError}
-              </p>
-            )}
-          </form>
-        )}
-
-        {!hideSelfService && showLocalForm && (
-          <footer className="auth-screen__self-service">
-            <a href="/forgot-password">Forgot password?</a>
-          </footer>
-        )}
-      </Card>
-    </main>
+        ))}
+      </ul>
+      {error && (
+        <p
+          className="login-card__error"
+          role="alert"
+          data-testid="login-pick-error"
+        >
+          {error}
+        </p>
+      )}
+    </Card>
   );
+}
+
+function WorkspaceRow({
+  workspace,
+  disabled,
+  submitting,
+  onSelect,
+}: {
+  workspace: WorkspaceCandidate;
+  disabled: boolean;
+  submitting: boolean;
+  onSelect(): void;
+}): ReactElement {
+  return (
+    <li className="login-pick__row">
+      <button
+        type="button"
+        className="login-pick__btn"
+        onClick={onSelect}
+        disabled={disabled}
+        data-testid={`login-pick-${workspace.org_id}`}
+        data-org-id={workspace.org_id}
+      >
+        <span className="login-pick__avatar" aria-hidden="true">
+          {workspace.display_name.charAt(0).toUpperCase()}
+        </span>
+        <span className="login-pick__col">
+          <span className="login-pick__name">{workspace.display_name}</span>
+          <span className="login-pick__sub">
+            {workspace.role} · {workspace.member_count.toLocaleString()} member
+            {workspace.member_count === 1 ? "" : "s"}
+            {workspace.last_active_at !== null && (
+              <> · last active {_formatLastActive(workspace.last_active_at)}</>
+            )}
+          </span>
+        </span>
+        <span className="login-pick__chev" aria-hidden="true">
+          {submitting ? "…" : "›"}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function _formatLastActive(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return "moments ago";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+  const days = Math.floor(seconds / 86_400);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
 }

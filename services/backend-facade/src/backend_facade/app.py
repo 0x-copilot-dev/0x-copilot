@@ -433,6 +433,26 @@ def create_app(
             identity=identity,
         )
 
+    # PR 6.2 — recipient forks a shared chat into their own workspace.
+    # Identity must be authenticated (no anonymous public link in v1);
+    # the share token is the access grant, not the identity.
+    @app.post("/v1/agent/shares/{share_token}/fork")
+    async def fork_share(
+        request: Request,
+        share_token: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/shares/{share_token}/fork",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload or {},
+            identity=identity,
+        )
+
     # PR 1.6 — workspace defaults (model + connectors + retention slider).
     @app.get("/v1/agent/workspace/defaults")
     async def get_workspace_defaults(request: Request) -> dict[str, object]:

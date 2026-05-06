@@ -147,6 +147,8 @@ class Keys:
         # job land in dedicated follow-ups.
         REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
         DELETE_WORKSPACE_DATA = "delete_workspace_data"
+        # PR 6.2 — recipient forks a shared chat into their own workspace.
+        FORK_SHARE = "fork_share"
 
 
 class Values:
