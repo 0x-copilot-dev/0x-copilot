@@ -9,8 +9,10 @@ This directory holds **cluster-scoped** notes from a pass over `apps/frontend/sr
 | Field         | Value                                                        |
 | ------------- | ------------------------------------------------------------ |
 | Last reviewed | 2026-05-06                                                   |
-| Git revision  | `a1d79d7a61868a6a9ae774e3a46c875356b29b78`                   |
+| Git revision  | `a78bfc08f5502ab600b36eed22176aaac005acd4`                   |
 | Scope         | `apps/frontend/src` (excluding `node_modules`, build output) |
+
+**Cleanup pass:** orphan files and dead exports flagged by knip §1, §2, §4b in [11-knip-unused-inventory.md](./11-knip-unused-inventory.md) were deleted at this revision. Cluster docs referencing them are marked _**RESOLVED**_ inline.
 
 ## Cluster index
 

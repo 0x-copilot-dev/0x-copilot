@@ -4,7 +4,7 @@ These files are **verbatim** output from [Vulture](https://github.com/jendriksei
 
 | File                                                         | Contents                                                                                                                          |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| [`vulture-min60-src-only.txt`](./vulture-min60-src-only.txt) | Full run: `vulture src --min-confidence 60` from `services/ai-backend` (~634 lines, exit code 3 when dead-code candidates exist). |
+| [`vulture-min60-src-only.txt`](./vulture-min60-src-only.txt) | Full run: `vulture src --min-confidence 60` from `services/ai-backend` (~639 lines, exit code 3 when dead-code candidates exist). |
 | `cluster-*-vulture.txt`                                      | Same lines filtered to one cluster (see parent [README.md](../README.md)).                                                        |
 
 **Regenerate** (from repo root):

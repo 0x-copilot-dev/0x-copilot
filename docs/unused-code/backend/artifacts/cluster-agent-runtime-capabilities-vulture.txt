@@ -2,7 +2,6 @@ src/agent_runtime/capabilities/backends/draft_backend.py:76: unused class '_Tool
 src/agent_runtime/capabilities/backends/draft_backend.py:191: unused method 'edit' (60% confidence)
 src/agent_runtime/capabilities/backends/draft_backend.py:294: unused method 'grep' (60% confidence)
 src/agent_runtime/capabilities/backends/draft_backend.py:429: unused function 'make_event_emitter' (60% confidence)
-src/agent_runtime/capabilities/citations.py:166: unused method 'cite' (60% confidence)
 src/agent_runtime/capabilities/mcp/cards.py:124: unused variable 'load_cost' (60% confidence)
 src/agent_runtime/capabilities/mcp/cards.py:130: unused method '_normalize_name' (60% confidence)
 src/agent_runtime/capabilities/mcp/cards.py:135: unused method '_normalize_optional_server_id' (60% confidence)

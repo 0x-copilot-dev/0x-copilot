@@ -31,6 +31,7 @@ import {
 } from "../features/settings/SettingsScreen";
 import {
   DEFAULT_SETTINGS_SECTION,
+  SETTINGS_SECTIONS,
   migrateLegacySettingsPath,
 } from "../features/settings/useSettingsSection";
 import { useSkills } from "../features/skills/useSkills";
@@ -54,35 +55,6 @@ type AppRoute =
   | { screen: "share"; token: string };
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
-// Superset of every Settings section slug in the design. Each wave 4 PR
-// contributes its own slugs additively; the array drives the
-// `isSettingsSection` narrowing only. The canonical set the hash
-// router uses lives in ``useSettingsSection``'s ``SETTINGS_SECTIONS``
-// — both stay in sync because both unions are derived from the same
-// ``SettingsSection`` type.
-const settingsSections = [
-  // PR 4.1 — "You" group.
-  "profile",
-  "appearance",
-  "shortcuts",
-  "notifications",
-  // PR 4.2 — Workspace group.
-  "workspace",
-  "members",
-  "billing",
-  // PR 7.1 — admin audit log under the Workspace group.
-  "audit-log",
-  // PR 4.3 — "AI & data" group.
-  "model-and-behavior",
-  "privacy-data",
-  // Legacy / misc.
-  "general",
-  "account",
-  "capabilities",
-  "connectors",
-  "skills",
-  "claude-code",
-] satisfies SettingsSection[];
 
 export default function App(): ReactElement {
   return (
@@ -263,7 +235,7 @@ function applyAppRoute(
 }
 
 function isSettingsSection(value: string): value is SettingsSection {
-  return settingsSections.includes(value as SettingsSection);
+  return (SETTINGS_SECTIONS as readonly string[]).includes(value);
 }
 
 function EnterpriseSearchApp({

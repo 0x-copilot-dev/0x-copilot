@@ -93,10 +93,6 @@ export function useCitation(citationId: string): CitationSourceRef | undefined {
   return useContext(CitationsContext).active.get(citationId);
 }
 
-export function useCitations(): CitationLookup {
-  return useContext(CitationsContext).active;
-}
-
 /**
  * PR 3.5 / G9 — per-run citation list for the post-prose Sources strip.
  *

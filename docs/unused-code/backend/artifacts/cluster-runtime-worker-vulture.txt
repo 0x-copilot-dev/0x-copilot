@@ -4,7 +4,6 @@ src/runtime_worker/jobs/encrypt_existing_columns.py:84: unused class 'FieldEncry
 src/runtime_worker/loop.py:108: unused method 'run_until_idle' (60% confidence)
 src/runtime_worker/run_metrics.py:233: unused method 'has_seen' (60% confidence)
 src/runtime_worker/stream_tools.py:280: unused method 'tool_call_payload' (60% confidence)
-src/runtime_worker/streaming_executor.py:36: unused variable 'CONNECTOR_SLUG' (60% confidence)
 src/runtime_worker/tool_call_ledger.py:97: unused method 'has_entries' (60% confidence)
 src/runtime_worker/tool_call_ledger.py:125: unused method 'record_input_tokens' (60% confidence)
 src/runtime_worker/tool_call_ledger.py:133: unused method 'mark_rejected' (60% confidence)

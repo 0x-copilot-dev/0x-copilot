@@ -22,7 +22,7 @@ No disconnected settings modules were found (all sections route from `SettingsSc
 
 ## Smells
 
-- **Duplicate settings slug lists** — [`SETTINGS_SECTIONS`](../../../apps/frontend/src/features/settings/useSettingsSection.ts) is canonical; [`App.tsx`](../../../apps/frontend/src/app/App.tsx) maintains a parallel `settingsSections` array with overlapping intent (“superset” comment). **Risk:** hash validation and UI labels drift if one array changes without the other.
+- _**RESOLVED at `a78bfc0`**_ — duplicate settings slug list. `App.tsx` now imports `SETTINGS_SECTIONS` from `useSettingsSection` and uses it for the `isSettingsSection` narrowing; the parallel `settingsSections` array was deleted.
 - **Large settings union** — `SettingsSection` spans profile, workspace, billing, connectors, skills, etc.; removing or renaming a slug requires coordinated updates across hash routing, navigation links, and tests.
 
 ## Confidence

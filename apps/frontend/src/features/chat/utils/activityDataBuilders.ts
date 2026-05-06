@@ -147,16 +147,6 @@ export function subagentActivityRecords(
     : [];
 }
 
-export function hasImportantSubagentActivity(
-  activities: SubagentActivityRecord[],
-): boolean {
-  return activities.some(
-    (activity) =>
-      activity.isError ||
-      !["complete", "completed"].includes(activity.status.toLowerCase()),
-  );
-}
-
 export function activityTitle(activity: SubagentActivityRecord): string {
   if (activity.kind === "tool") {
     return activity.isError

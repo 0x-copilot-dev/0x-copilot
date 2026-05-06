@@ -5,12 +5,7 @@
 
 ## Hooks
 
-| Hook                                                                                                     | Production usage                                                                                                                         | Notes                                                                                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`useConversationSources`](../../../apps/frontend/src/features/chat/hooks/useConversationSources.ts)     | **None found**                                                                                                                           | Implements seed + live `source_ingested` aggregation per comments (“Workspace pane Sources tab”). **Superseded in practice** by [`useArchivedSources`](../../../apps/frontend/src/features/chat/components/workspace/useArchivedSources.ts) + reducer wiring from [`ChatScreen.tsx`](../../../apps/frontend/src/features/chat/ChatScreen.tsx). |
-| [`useConversationSubagents`](../../../apps/frontend/src/features/chat/hooks/useConversationSubagents.ts) | **Tests only** ([`useConversationSubagents.test.tsx`](../../../apps/frontend/src/features/chat/hooks/useConversationSubagents.test.tsx)) | Production uses [`useSubagents`](../../../apps/frontend/src/features/chat/components/workspace/useSubagents.ts) from `ChatScreen`.                                                                                                                                                                                                             |
-
-**Recommendation:** Either delete the two `hooks/useConversation*.ts` files and migrate tests to the workspace hooks, or clearly mark as experimental and exclude from coverage targets until wired.
+_**RESOLVED at `a78bfc0`.**_ `useConversationSources.ts` and `useConversationSubagents.ts` (plus its test) were deleted. Production paths continue to use [`useArchivedSources`](../../../apps/frontend/src/features/chat/components/workspace/useArchivedSources.ts) and [`useSubagents`](../../../apps/frontend/src/features/chat/components/workspace/useSubagents.ts).
 
 ## Prompts (`prompts/index.ts`)
 
@@ -21,15 +16,11 @@
 
 ts-prune may still flag prompt helpers as unused because of analysis quirks — **verify with ripgrep** before removing.
 
-## Utils — unused exports (high confidence)
+## Utils — unused exports
 
-| Symbol                                                                                                   | File                      | Notes                                                                                               |
-| -------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`hasImportantSubagentActivity`](../../../apps/frontend/src/features/chat/utils/activityDataBuilders.ts) | `activityDataBuilders.ts` | No importers; helper for filtering noisy subagent rows — candidate delete or wire into activity UI. |
-| [`mcpToolTitle`](../../../apps/frontend/src/features/chat/utils/toolLabels.ts)                           | `toolLabels.ts`           | No references outside definition file.                                                              |
-| [`toolActivityTitle`](../../../apps/frontend/src/features/chat/utils/toolLabels.ts)                      | `toolLabels.ts`           | Same.                                                                                               |
+_**RESOLVED at `a78bfc0`.**_ `hasImportantSubagentActivity`, `mcpToolTitle`, and `toolActivityTitle` were deleted; nothing imported them.
 
-Other exports in `toolLabels.ts` **are** used (e.g. `safeVisibleText`, `toolDisplayName` from [`summarize.tsx`](../../../apps/frontend/src/features/chat/components/results/summarize.tsx)).
+Other exports in `toolLabels.ts` remain in use (e.g. `safeVisibleText`, `toolDisplayName` from [`summarize.tsx`](../../../apps/frontend/src/features/chat/components/results/summarize.tsx)).
 
 ## Markdown
 
@@ -37,9 +28,8 @@ Other exports in `toolLabels.ts` **are** used (e.g. `safeVisibleText`, `toolDisp
 
 ## Smells
 
-- **Parallel hook implementations** — `hooks/useConversation*` vs `components/workspace/use*` duplicates responsibility for “conversation opened → GET seed → SSE merge”. Pick one architecture and delete the other to reduce drift.
-- **Export sprawl in `toolLabels.ts`** — Large single module; unused exports suggest incomplete refactors or abandoned UI paths.
+- **Export sprawl in `toolLabels.ts`** — Large single module; some exports remain only because they're consumed by sibling files. Worth a focused trim if the module grows further.
 
 ## Confidence
 
-**High** for unused utils exports and orphaned `useConversationSources`; **high** for `useConversationSubagents` being test-only relative to production wiring.
+**High** at the audited revision; the orphan implementations and unused utility exports were removed at `a78bfc0`.

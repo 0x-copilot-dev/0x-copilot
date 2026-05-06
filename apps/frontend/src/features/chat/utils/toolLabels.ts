@@ -122,19 +122,6 @@ function toolCompletedTitle(toolName: string, displayName: string): string {
   return displayName;
 }
 
-export function mcpToolTitle(
-  toolName: string,
-  requestedTool: string | null,
-): string {
-  if (toolName === "load_mcp_server") {
-    return "Load MCP tools";
-  }
-  if (toolName === "auth_mcp") {
-    return "Authenticate MCP server";
-  }
-  return requestedTool ? humanizeIdentifier(requestedTool) : "Call MCP tool";
-}
-
 export function inlineToolTitle(
   toolName: string,
   status: string,
@@ -313,23 +300,6 @@ export function emptyResultLabel(toolName?: string): string {
     return "No files found";
   }
   return "No results";
-}
-
-export function toolActivityTitle(
-  toolName: string,
-  status: string,
-  isError: boolean | undefined,
-  _result: unknown,
-  _summary: string | null,
-): string {
-  const displayName = toolDisplayName(toolName);
-  if (isError || status === "incomplete") {
-    return `Could not run ${displayName}`;
-  }
-  if (status === "requires-action") {
-    return `${displayName} needs attention`;
-  }
-  return status === "running" ? `${displayName} running` : displayName;
 }
 
 function capitalize(value: string): string {

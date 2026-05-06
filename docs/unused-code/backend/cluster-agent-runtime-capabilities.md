@@ -11,7 +11,7 @@
 | ----------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Ruff `F401`, `F841`           | `src/agent_runtime/capabilities` | No findings                                                                                                                                                                                |
 | Vulture `--min-confidence 80` | same                             | No 80%+ hits                                                                                                                                                                               |
-| Vulture `--min-confidence 60` | same                             | **131 lines** in [`artifacts/cluster-agent-runtime-capabilities-vulture.txt`](./artifacts/cluster-agent-runtime-capabilities-vulture.txt); dominated by Pydantic card models and constants |
+| Vulture `--min-confidence 60` | same                             | **130 lines** in [`artifacts/cluster-agent-runtime-capabilities-vulture.txt`](./artifacts/cluster-agent-runtime-capabilities-vulture.txt); dominated by Pydantic card models and constants |
 
 ## Wiring-checked
 
@@ -39,10 +39,10 @@
 
 ## Extended vulture inventory
 
-Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this cluster’s paths (`vulture src --min-confidence 60` from `services/ai-backend`; **131** lines):
+Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this cluster’s paths (`vulture src --min-confidence 60` from `services/ai-backend`; **130** lines):
 
 - [`artifacts/cluster-agent-runtime-capabilities-vulture.txt`](./artifacts/cluster-agent-runtime-capabilities-vulture.txt)
 
-Merged output for all of `src/` (**634** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
+Merged output for all of `src/` (**639** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
 
 These lists are **candidate** unused symbols — many entries are Pydantic validators, Protocol signatures, OTEL hooks, or FastAPI/RBAC decorators. Use as a triage queue, not an automatic delete list. Regenerate: [`README.md`](./README.md), [`artifacts/README.md`](./artifacts/README.md).

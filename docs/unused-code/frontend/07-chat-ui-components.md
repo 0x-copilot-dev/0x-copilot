@@ -9,9 +9,7 @@ Thread, composer, sidebar, shell/topbar, workspace pane/tabs, activity cards, de
 
 ## Candidate dead code
 
-| Symbol / module                                                                                                  | Location                                       | Confidence | Notes                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`LargeToolResultNotice`](../../../apps/frontend/src/features/chat/components/results/LargeToolResultNotice.tsx) | `components/results/LargeToolResultNotice.tsx` | **High**   | No imports anywhere in `apps/frontend`. Large-result UX appears inlined elsewhere (e.g. [`summarize.tsx`](../../../apps/frontend/src/features/chat/components/results/summarize.tsx) `safeMainResultSummary` string path). **Candidate deletion** or wire-up if design intended a dedicated banner component. |
+_**RESOLVED at `a78bfc0`.**_ `LargeToolResultNotice.tsx` was deleted. Large-result UX remains inlined via [`summarize.tsx`](../../../apps/frontend/src/features/chat/components/results/summarize.tsx) `safeMainResultSummary`.
 
 ## ts-prune: barrel (`shell/index.ts`)
 
@@ -30,13 +28,13 @@ Other shell exports (`Crumb`, `UsageMeter`, …) may still be imported **directl
 | Export                                                                                                                                                                                                       | Status                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`useCitation`](../../../apps/frontend/src/features/chat/components/citations/citationsContext.tsx), [`useRunCitations`](../../../apps/frontend/src/features/chat/components/citations/citationsContext.tsx) | **Used** — [`CitationChip.tsx`](../../../apps/frontend/src/features/chat/components/citations/CitationChip.tsx), [`AssistantMessage.tsx`](../../../apps/frontend/src/features/chat/components/messages/AssistantMessage.tsx). |
-| [`useCitations`](../../../apps/frontend/src/features/chat/components/citations/citationsContext.tsx)                                                                                                         | **Unused** — returns full active map; no production importer. **Candidate removal** if no planned consumer (or keep as ergonomic alias with a lint ignore).                                                                   |
+| ~`useCitations`~                                                                                                                                                                                             | _**REMOVED at `a78bfc0`**_ — was returning the full active map; had no production importer.                                                                                                                                   |
 
 ## Smells
 
 - **Workspace pane composition** — Tabs (`SourcesTab`, `AgentsTab`, …) are presentational; state lives in [`ChatScreen.tsx`](../../../apps/frontend/src/features/chat/ChatScreen.tsx) + workspace hooks. Good separation, but large props drilling — watch for stale props when refactoring.
-- **Results folder growth** — `summarize.tsx`, `McpResultList`, `SearchSourceList`, and optional `LargeToolResultNotice` overlap conceptually; consolidating large-result handling could drop dead components.
+- **Results folder growth** — `summarize.tsx`, `McpResultList`, `SearchSourceList` overlap conceptually; consolidating large-result handling could drop more components.
 
 ## Confidence
 
-**High** on `LargeToolResultNotice` and `useCitations` being unused at this revision; **medium** on barrel false positives.
+**High** on `LargeToolResultNotice` and `useCitations` being unused at the audited revision (both removed at `a78bfc0`); **medium** on barrel false positives.

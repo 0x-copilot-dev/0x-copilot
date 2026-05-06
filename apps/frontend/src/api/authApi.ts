@@ -1,9 +1,5 @@
 /**
  * Typed client for the public ``/v1/auth/*`` surface (A2 + A3 + A4 + A6 + A8).
- *
- * Distinct from ``sessionApi.ts`` (which still hits the legacy ``/v1/session``
- * for the in-flight identity bootstrap). Once the AuthContext fully replaces
- * the legacy session-load this file becomes the single seat for auth HTTP.
  */
 
 import type {

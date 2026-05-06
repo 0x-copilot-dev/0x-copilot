@@ -22,7 +22,6 @@ No **unused modules** were identified under `features/auth/` at this revision.
 ## Smells
 
 - **Bearer storage policy** — Comments describe `localStorage` opt-in vs in-memory defaults; ensure product docs match implemented behavior for regulated deployments (workspace rule: treat identity as untrusted unless verified — align UX copy with actual token handling).
-- **`sessionApi` overlap** — Auth stack does not use [`getSessionIdentity`](../../../apps/frontend/src/api/sessionApi.ts); legacy API file remains in `src/api` (see [02-api-layer.md](./02-api-layer.md)).
 
 ## Confidence
 

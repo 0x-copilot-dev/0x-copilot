@@ -18,12 +18,12 @@
 ## Wiring-checked
 
 - **`DeepAgentsBackend` protocol** — `download_files` / `upload_files` / async variants are interface requirements for Deep Agents; “unused” methods on the **Protocol** are **false positives**.
-- **`AnthropicCitationStreamAdapter`** — **test-only** in production tree; used in [`tests/unit/agent_runtime/execution/test_citation_substitution.py`](../../../services/ai-backend/tests/unit/agent_runtime/execution/test_citation_substitution.py). Not wired into live streaming path unless explicitly imported elsewhere — **confirm product intent** (tests-only adapter vs future citation streaming).
-- **`runtime_run_handle`** ([`runtime.py`](../../../services/ai-backend/src/agent_runtime/execution/runtime.py)) — referenced from **tests** (`test_runtime_observability`, `test_runtime_contracts`), not from worker/runtime wiring grep of `src/` alone.
+- **`AnthropicCitationStreamAdapter`** — **wired into the live streaming path** at [`citation_pipeline.py`](../../../services/ai-backend/src/agent_runtime/execution/providers/citation_pipeline.py) (imported and instantiated when an Anthropic adapter is requested), and exercised by [`tests/unit/agent_runtime/execution/test_citation_stream_pipeline.py`](../../../services/ai-backend/tests/unit/agent_runtime/execution/test_citation_stream_pipeline.py). Vulture flags it because the only direct, non-`__all__` reference is inside `citation_pipeline.py`'s factory branch — **false positive**.
+- **`runtime_run_handle`** ([`runtime.py`](../../../services/ai-backend/src/agent_runtime/execution/runtime.py)) — referenced from **tests** (`test_runtime_contracts.py`), not from worker/runtime wiring grep of `src/` alone.
 
 ## Test-only usage
 
-- `AnthropicCitationStreamAdapter`, `runtime_run_handle` — tests and harness utilities.
+- `runtime_run_handle` — tests and harness utilities.
 
 ## Likely dead / high-confidence candidates
 
@@ -32,7 +32,6 @@
 ## Smells
 
 - **`contracts.py` validator noise** — same as API schemas: huge surface for false positives.
-- **Citation adapter not referenced from `src/` outside tests** — smell if product expects Anthropic citation substitution in production paths.
 
 ## Cross-cluster links
 
@@ -41,10 +40,10 @@
 
 ## Extended vulture inventory
 
-Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this cluster’s paths (`vulture src --min-confidence 60` from `services/ai-backend`; **54** lines):
+Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this cluster’s paths (`vulture src --min-confidence 60` from `services/ai-backend`; **55** lines):
 
 - [`artifacts/cluster-agent-runtime-execution-vulture.txt`](./artifacts/cluster-agent-runtime-execution-vulture.txt)
 
-Merged output for all of `src/` (**634** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
+Merged output for all of `src/` (**639** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
 
 These lists are **candidate** unused symbols — many entries are Pydantic validators, Protocol signatures, OTEL hooks, or FastAPI/RBAC decorators. Use as a triage queue, not an automatic delete list. Regenerate: [`README.md`](./README.md), [`artifacts/README.md`](./artifacts/README.md).

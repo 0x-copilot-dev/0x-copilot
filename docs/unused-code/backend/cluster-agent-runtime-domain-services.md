@@ -9,11 +9,11 @@ This is the **application/service layer** under `agent_runtime/api`, distinct fr
 
 ## Static signals
 
-| Tool                          | Scope                   | Result (2026-05-06)                                                                                                                                                        |
-| ----------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ruff `F401`, `F841`           | `src/agent_runtime/api` | No findings                                                                                                                                                                |
-| Vulture `--min-confidence 80` | same                    | **100%:** [`share_service.py`](../../../services/ai-backend/src/agent_runtime/api/share_service.py) `_collect_sources` — parameter `sources_visible` unused in body (~624) |
-| Vulture `--min-confidence 60` | same                    | Constants classes, presentation helpers, notification stubs                                                                                                                |
+| Tool                          | Scope                   | Result (2026-05-06)                                                                                                                                                                                                            |
+| ----------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Ruff `F401`, `F841`           | `src/agent_runtime/api` | No findings                                                                                                                                                                                                                    |
+| Vulture `--min-confidence 80` | same                    | **100%:** [`share_service.py`](../../../services/ai-backend/src/agent_runtime/api/share_service.py) `_collect_sources` — parameter `sources_visible` flagged unused in the inner body (~623); see Likely dead — false positive |
+| Vulture `--min-confidence 60` | same                    | Constants classes, presentation helpers, notification stubs                                                                                                                                                                    |
 
 ## Wiring-checked
 
@@ -27,7 +27,7 @@ This is the **application/service layer** under `agent_runtime/api`, distinct fr
 
 ## Likely dead / high-confidence candidates
 
-1. **`sources_visible` on `_collect_sources`** — Parameter accepted but **never used** when calling `list_sources`; likely **unfinished recipient-view gating** or leftover refactor. **Remediation:** wire the flag into feed query / remove parameter.
+1. **`sources_visible` on `_collect_sources`** — **False positive.** Vulture flags the parameter name on the inner method, but the flag is read by callers via `share.sources_visible_to_viewer` to gate redaction (see [`share_service.py`](../../../services/ai-backend/src/agent_runtime/api/share_service.py) ~line 468 `if not share.sources_visible_to_viewer:` and the call site at ~line 459). No remediation needed; rename the parameter to `_sources_visible` only if linter quiet is desired.
 
 ## Smells
 
@@ -43,6 +43,6 @@ Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this clust
 
 - [`artifacts/cluster-agent-runtime-domain-services-vulture.txt`](./artifacts/cluster-agent-runtime-domain-services-vulture.txt)
 
-Merged output for all of `src/` (**634** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
+Merged output for all of `src/` (**639** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
 
 These lists are **candidate** unused symbols — many entries are Pydantic validators, Protocol signatures, OTEL hooks, or FastAPI/RBAC decorators. Use as a triage queue, not an automatic delete list. Regenerate: [`README.md`](./README.md), [`artifacts/README.md`](./artifacts/README.md).

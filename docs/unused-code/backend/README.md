@@ -18,18 +18,18 @@ Refresh dates when you re-run tools and edit cluster files.
 
 ### Vulture inventory scale
 
-A full pass at **`--min-confidence 60`** over `src/` produces **634** candidate lines (exit code 3). Most are **false positives** (Pydantic validators, Protocol stubs, OTEL hooks, nested FastAPI handlers) or **test-only** symbols — but the raw list is the starting point for triage.
+A full pass at **`--min-confidence 60`** over `src/` produces **639** candidate lines (exit code 3). Most are **false positives** (Pydantic validators, Protocol stubs, OTEL hooks, nested FastAPI handlers) or **test-only** symbols — but the raw list is the starting point for triage.
 
 Committed verbatim listings:
 
 | Artifact                                                                                                                       | Lines (approx.) |
 | ------------------------------------------------------------------------------------------------------------------------------ | --------------- |
-| [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt)                                               | 634             |
-| [`artifacts/cluster-runtime-api-vulture.txt`](./artifacts/cluster-runtime-api-vulture.txt)                                     | 139             |
-| [`artifacts/cluster-runtime-worker-vulture.txt`](./artifacts/cluster-runtime-worker-vulture.txt)                               | 10              |
+| [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt)                                               | 639             |
+| [`artifacts/cluster-runtime-api-vulture.txt`](./artifacts/cluster-runtime-api-vulture.txt)                                     | 145             |
+| [`artifacts/cluster-runtime-worker-vulture.txt`](./artifacts/cluster-runtime-worker-vulture.txt)                               | 9               |
 | [`artifacts/cluster-runtime-adapters-vulture.txt`](./artifacts/cluster-runtime-adapters-vulture.txt)                           | 6               |
-| [`artifacts/cluster-agent-runtime-execution-vulture.txt`](./artifacts/cluster-agent-runtime-execution-vulture.txt)             | 54              |
-| [`artifacts/cluster-agent-runtime-capabilities-vulture.txt`](./artifacts/cluster-agent-runtime-capabilities-vulture.txt)       | 131             |
+| [`artifacts/cluster-agent-runtime-execution-vulture.txt`](./artifacts/cluster-agent-runtime-execution-vulture.txt)             | 55              |
+| [`artifacts/cluster-agent-runtime-capabilities-vulture.txt`](./artifacts/cluster-agent-runtime-capabilities-vulture.txt)       | 130             |
 | [`artifacts/cluster-agent-runtime-persistence-vulture.txt`](./artifacts/cluster-agent-runtime-persistence-vulture.txt)         | 140             |
 | [`artifacts/cluster-agent-runtime-context-memory-vulture.txt`](./artifacts/cluster-agent-runtime-context-memory-vulture.txt)   | 42              |
 | [`artifacts/cluster-agent-runtime-delegation-vulture.txt`](./artifacts/cluster-agent-runtime-delegation-vulture.txt)           | 45              |

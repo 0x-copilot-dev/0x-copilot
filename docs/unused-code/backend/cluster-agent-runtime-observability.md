@@ -10,7 +10,7 @@
 | Tool                          | Scope                             | Result (2026-05-06)                                                                                                                                                                                                        |
 | ----------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ruff `F401`, `F841`           | `src/agent_runtime/observability` | No findings                                                                                                                                                                                                                |
-| Vulture `--min-confidence 80` | same                              | **100%:** [`otel.py`](../../../services/ai-backend/src/agent_runtime/observability/otel.py) — `parent_context` param unused in `SafeAttributeSpanProcessor.on_start` (~72); `timeout_millis` unused in `force_flush` (~92) |
+| Vulture `--min-confidence 80` | same                              | **100%:** [`otel.py`](../../../services/ai-backend/src/agent_runtime/observability/otel.py) — `parent_context` param unused in `SafeAttributeSpanProcessor.on_start` (~69); `timeout_millis` unused in `force_flush` (~92) |
 | Vulture `--min-confidence 60` | same                              | OTEL hooks (`on_start`, `on_end`, `shutdown`, `instrument_psycopg`) — **SDK callbacks**                                                                                                                                    |
 
 ## Wiring-checked
@@ -39,6 +39,6 @@ Verbatim [Vulture](https://github.com/jendrikseipp/vulture) lines for this clust
 
 - [`artifacts/cluster-agent-runtime-observability-vulture.txt`](./artifacts/cluster-agent-runtime-observability-vulture.txt)
 
-Merged output for all of `src/` (**634** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
+Merged output for all of `src/` (**639** lines): [`artifacts/vulture-min60-src-only.txt`](./artifacts/vulture-min60-src-only.txt).
 
 These lists are **candidate** unused symbols — many entries are Pydantic validators, Protocol signatures, OTEL hooks, or FastAPI/RBAC decorators. Use as a triage queue, not an automatic delete list. Regenerate: [`README.md`](./README.md), [`artifacts/README.md`](./artifacts/README.md).

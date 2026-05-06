@@ -187,9 +187,4 @@ function defaultEndpoint(): string | null {
   return `${origin}/v1/telemetry/otlp/v1/traces`;
 }
 
-/** Test-only hook that allows re-bootstrapping in vitest. */
-export function _resetForTests(): void {
-  bootstrapped = false;
-}
-
 export { SAFE_ATTRIBUTE_KEYS };

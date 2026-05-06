@@ -9,16 +9,7 @@ HTTP/SSE clients and shared request helpers: [`http.ts`](../../../apps/frontend/
 
 ## Candidate dead code
 
-| Symbol               | File                                                            | Severity                   | Evidence                                                                           |
-| -------------------- | --------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------- |
-| `getSessionIdentity` | [`sessionApi.ts`](../../../apps/frontend/src/api/sessionApi.ts) | **High confidence unused** | No imports elsewhere in `apps/frontend` (ripgrep). Calls legacy `GET /v1/session`. |
-
-[`authApi.ts`](../../../apps/frontend/src/api/authApi.ts) documents that `sessionApi` is distinct from `/v1/auth/*` and implies eventual consolidation once AuthContext fully replaces legacy bootstrap — [`AuthContext.tsx`](../../../apps/frontend/src/features/auth/AuthContext.tsx) uses `fetchCurrentSession` from `authApi`, not `getSessionIdentity`.
-
-### Recommended follow-up
-
-- **Remove or wire** `getSessionIdentity`: either delete [`sessionApi.ts`](../../../apps/frontend/src/api/sessionApi.ts) if no runtime caller is planned, or replace remaining conceptual references in docs with the auth session path only.
-- If `/v1/session` must remain for a specific integration, add a single caller and tests; otherwise remove the endpoint usage from the client to avoid confusion.
+_**RESOLVED at `a78bfc0`.**_ `sessionApi.ts` (with `getSessionIdentity`) was deleted; the comment in [`authApi.ts`](../../../apps/frontend/src/api/authApi.ts) that referenced it was removed in the same pass. `AuthContext` continues to use `fetchCurrentSession` from `authApi`.
 
 ## ts-prune noise (likely intentional)
 
@@ -29,9 +20,4 @@ HTTP/SSE clients and shared request helpers: [`http.ts`](../../../apps/frontend/
 
 ## Smells
 
-- **Dual session story** — Comments in `authApi.ts` vs `sessionApi.ts` describe overlapping “who am I?” responsibilities. Until one path wins, new contributors may add duplicate bootstrap logic.
-- **ARCHITECTURE.md drift** — [`ARCHITECTURE.md`](../../../apps/frontend/ARCHITECTURE.md) still mentions `sessionApi` loading identity before chat mounts; implementation uses AuthContext + `authApi` ([`AuthContext.tsx`](../../../apps/frontend/src/features/auth/AuthContext.tsx)). Consider aligning docs with code when touching this area.
-
-## Confidence
-
-**High** on `getSessionIdentity` being unused in the tree at this revision; **medium** that a future branch might intend to call it (grep before deleting).
+- **ARCHITECTURE.md drift** — [`ARCHITECTURE.md`](../../../apps/frontend/ARCHITECTURE.md) may still mention `sessionApi` loading identity before chat mounts; implementation uses AuthContext + `authApi` ([`AuthContext.tsx`](../../../apps/frontend/src/features/auth/AuthContext.tsx)). Align the doc when touching this area.

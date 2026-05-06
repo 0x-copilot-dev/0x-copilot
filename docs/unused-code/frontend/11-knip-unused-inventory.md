@@ -2,7 +2,9 @@
 
 **Tool:** [knip](https://github.com/webpro-nl/knip) (v6.x via `npx knip` from repo root, cwd `apps/frontend`).  
 **Last reviewed:** 2026-05-06  
-**Git revision:** `a1d79d7a61868a6a9ae774e3a46c875356b29b78`
+**Git revision:** `a78bfc08f5502ab600b36eed22176aaac005acd4`
+
+> **Cleanup status (2026-05-06).** §1 unused files (`sessionApi.ts`, `LargeToolResultNotice.tsx`, `useConversationSources.ts`, `useConversationSubagents.ts` + its test), §2 unused dependency (`@opentelemetry/sdk-trace-base`), and §4b dead exports (`useCitations`, `hasImportantSubagentActivity`, `mcpToolTitle`, `toolActivityTitle`, `_resetForTests`, the duplicate `settingsSections` array in `App.tsx`) were all removed at `a78bfc0`. The §4a "strip-export-only" sweep and the §5 type-export inflation are still open.
 
 This document captures output from a **second pass** after the initial cluster notes. Knip finds substantially more than `ts-prune` alone because it also reports **unused npm dependencies**, **files nothing imports**, and **exports that no other file imports** — including symbols that are still **used inside their declaring module** (those are **export hygiene**, not necessarily dead logic).
 

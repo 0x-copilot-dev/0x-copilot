@@ -11,9 +11,7 @@
 
 ## Unused / candidate dead code
 
-| Symbol                                                               | File      | Assessment                                                                                                                                                                                                               |
-| -------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`_resetForTests`](../../../apps/frontend/src/observability/otel.ts) | `otel.ts` | Exported for test isolation but **no test file imports it** at this revision (ripgrep). Either **add** observability tests that call `_resetForTests`, **delete** the export, or **rename** to module-private if unused. |
+_**RESOLVED at `a78bfc0`.**_ `_resetForTests` was removed from `otel.ts`; no test ever imported it. Future observability tests can re-introduce a module-private flag-flip if needed.
 
 ## ts-prune signals
 
@@ -24,9 +22,8 @@
 
 ## Smells
 
-- **Leading underscore export** — `_resetForTests` signals test-only intent but lacks consumers — classic merge-gap smell.
 - **OTel attribute allowlists** — `SAFE_ATTRIBUTE_KEYS` exists to reduce PII leakage; changes should stay paired with privacy review (workspace compliance expectations).
 
 ## Confidence
 
-**High** that `_resetForTests` is currently unused; **medium** that it was added preemptively for future tests.
+**High** at the audited revision; the unused `_resetForTests` was removed at `a78bfc0`.
