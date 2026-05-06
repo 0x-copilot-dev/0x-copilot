@@ -24,15 +24,18 @@ export interface ConversationGroup {
 }
 
 const DAY_MS = 86_400_000;
+const EMPTY_PINNED: ReadonlySet<string> = new Set();
 
 export function groupConversations(
   conversations: readonly Conversation[],
   now: Date,
+  pinnedIds: ReadonlySet<string> = EMPTY_PINNED,
 ): ConversationGroup[] {
   const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short" });
   const todayKey = fmtDate.format(now);
   const yesterdayKey = fmtDate.format(new Date(now.getTime() - DAY_MS));
 
+  const pinned: Conversation[] = [];
   const today: Conversation[] = [];
   const yesterday: Conversation[] = [];
   // Folder name → rows. `__none__` is a sentinel for the no-folder bucket.
@@ -47,6 +50,10 @@ export function groupConversations(
     );
 
   for (const conversation of sorted) {
+    if (pinnedIds.has(conversation.conversation_id) || isPinned(conversation)) {
+      pinned.push(conversation);
+      continue;
+    }
     const updated = new Date(conversation.updated_at);
     const key = fmtDate.format(updated);
     if (key === todayKey) {
@@ -67,6 +74,9 @@ export function groupConversations(
   }
 
   const groups: ConversationGroup[] = [];
+  if (pinned.length > 0) {
+    groups.push({ id: "pinned", label: "Pinned", conversations: pinned });
+  }
   if (today.length > 0) {
     groups.push({ id: "today", label: "Today", conversations: today });
   }
@@ -97,4 +107,17 @@ export function groupConversations(
     });
   }
   return groups;
+}
+
+/**
+ * PR F3 — pin / unpin uses `metadata.pinned: true` on the conversation
+ * row. JSONB metadata doesn't require a server-side schema migration;
+ * the boolean is opaque to the backend until a future PR adds an
+ * indexed column. The UI is the source of truth for the rendering
+ * order; pinned threads collapse into a single Pinned group at the top.
+ */
+export function isPinned(conversation: Conversation): boolean {
+  const flag = (conversation.metadata as { pinned?: unknown } | undefined)
+    ?.pinned;
+  return flag === true;
 }

@@ -17,6 +17,19 @@ export function MessageAttachments({
   children: (props: { attachment: Attachment }) => ReactNode;
 }): ReactElement | null {
   const { message } = useMessage();
+  // Defensive: the runtime refactor occasionally renders descendants
+  // before the Provider's `message` prop is non-null (HMR transition,
+  // empty thread shell, optimistic wrappers). Render nothing rather
+  // than crash the entire ErrorBoundary subtree.
+  if (!message) {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "MessageAttachments: <Message message={...}> Provider rendered with undefined message; skipping.",
+      );
+    }
+    return null;
+  }
   const attachments = message.attachments;
   if (!attachments || attachments.length === 0) {
     return null;

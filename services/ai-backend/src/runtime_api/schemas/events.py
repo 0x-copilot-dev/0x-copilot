@@ -218,6 +218,11 @@ class RuntimeEventPresentationProjector:
             return RuntimeActivityKind.MCP_AUTH
         if event_type is RuntimeApiEventType.DRAFT_UPDATED:
             return RuntimeActivityKind.DRAFT
+        if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
+            # PR A1 — context-compression note. Renders as an inline
+            # dim line ("Atlas summarised 3 older messages…") rather
+            # than a card; FE consumes via `<NoteCard>`.
+            return RuntimeActivityKind.NOTE
         if event_type in {
             RuntimeApiEventType.APPROVAL_REQUESTED,
             RuntimeApiEventType.APPROVAL_RESOLVED,

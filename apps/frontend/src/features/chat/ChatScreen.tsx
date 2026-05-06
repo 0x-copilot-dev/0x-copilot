@@ -118,6 +118,7 @@ import {
 } from "./mcpAuthAction";
 import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
 import { useAuth } from "../auth/AuthContext";
+import { usePinnedConversations } from "./sidebar/usePinnedConversations";
 import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
 
 type SubmitMessageOptions = {
@@ -147,6 +148,9 @@ export function ChatScreen({
   // it to the auth context, which currently hard-navs to ?workspace=<id>
   // and lets <AuthGate> re-discover the session (PR 2.2 §3.7 fallback).
   const auth = useAuth();
+  // PR F3 — sidebar pin / unpin (localStorage; backend gains a typed
+  // metadata.pinned column in a future PR).
+  const pinned = usePinnedConversations(auth.identity?.user_id ?? null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -222,6 +226,27 @@ export function ChatScreen({
     const response = await listConversations(identity);
     setConversations(response.conversations);
   }, [identity]);
+
+  // PR F3 — sidebar overflow archive. Calls the existing PR 1.6
+  // `updateConversation({archived: true})` route then refreshes the
+  // list so the archived row drops out (server-side filter excludes
+  // archived from the default sidebar view).
+  const onArchiveConversation = useCallback(
+    async (id: string): Promise<void> => {
+      await updateConversation(id, { archived: true }, identity);
+      // Optimistic local removal so the UI reacts immediately.
+      setConversations((current) =>
+        current.filter((c) => c.conversation_id !== id),
+      );
+      // If the archived conversation was active, drop the active id so
+      // the user doesn't end up viewing a hidden thread.
+      if (conversationId === id) {
+        setConversationId(null);
+      }
+      pinned.togglePinned(id, false);
+    },
+    [conversationId, identity, pinned],
+  );
 
   const loadHistoryItems = useCallback(
     async (
@@ -1264,6 +1289,9 @@ export function ChatScreen({
               }
               void auth.switchWorkspace(orgId);
             }}
+            onTogglePin={pinned.togglePinned}
+            onArchive={(id) => void onArchiveConversation(id)}
+            pinnedIds={pinned.pinnedIds}
           />
           <AssistantThread
             topbar={

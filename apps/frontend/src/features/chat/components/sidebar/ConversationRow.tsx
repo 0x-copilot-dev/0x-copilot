@@ -1,17 +1,16 @@
 import type { Conversation } from "@enterprise-search/api-types";
-import { type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+import { isPinned } from "../../utils/groupConversations";
 
 /**
- * One conversation row in the sidebar (PR 2.2).
+ * One conversation row in the sidebar (PR 2.2 + PR F3).
  *
- * Pure presentation: title, optional folder + relative timestamp footer,
- * "live pulse" badge when the row owns the active run. Click handler is
- * passed in — the sidebar owns the routing decision.
- *
- * Rendered as a plain `<button>` (not `ThreadListItemPrimitive.Trigger`)
- * so we control the markup; thread-switching is wired by the parent
- * `Sidebar` via the runtime's `threadListAdapter.onSwitchToThread`
- * callback.
+ * Two-line layout: title (top) + meta (timestamp or `live` pill, right).
+ * The row also carries a small ⋯ overflow that exposes pin/unpin and
+ * archive (the two actions the design's mock surfaces). Pin lives on
+ * `conversation.metadata.pinned` (no server schema change needed).
+ * Archive flips `archived_at` via the existing `updateConversation`
+ * route. Both actions are wired up by the parent (`Sidebar`).
  */
 export function ConversationRow({
   conversation,
@@ -19,48 +18,122 @@ export function ConversationRow({
   isLive,
   disabled,
   onSelect,
+  onTogglePin,
+  onArchive,
 }: {
   conversation: Conversation;
   active: boolean;
   isLive: boolean;
   disabled: boolean;
   onSelect: (conversationId: string) => void;
+  onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
+  onArchive?: (conversationId: string) => void;
 }): ReactElement {
   const title = conversation.title?.trim() || "Untitled chat";
   const time = formatRelativeTime(conversation.updated_at);
+  const pinned = isPinned(conversation);
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
-    <button
-      type="button"
-      className="aui-thread-list-item__trigger aui-conversation-row"
+    <div
+      className="aui-conversation-row-host"
       data-active={active ? "true" : undefined}
-      data-live={isLive ? "true" : undefined}
-      aria-current={active ? "true" : undefined}
-      disabled={disabled}
-      title={
-        disabled ? "Stop the current response before switching threads" : title
-      }
-      onClick={() => {
-        if (!disabled) {
-          onSelect(conversation.conversation_id);
-        }
-      }}
     >
-      <span className="aui-conversation-row__title">{title}</span>
-      <span className="aui-conversation-row__meta">
-        {conversation.folder ? (
-          <span className="aui-conversation-row__folder">
-            {conversation.folder}
-          </span>
-        ) : null}
-        {isLive ? (
-          <span className="aui-conversation-row__live" aria-label="Live run">
-            live
-          </span>
-        ) : (
-          <span className="aui-conversation-row__time">{time}</span>
-        )}
-      </span>
-    </button>
+      <button
+        type="button"
+        className="aui-thread-list-item__trigger aui-conversation-row"
+        data-active={active ? "true" : undefined}
+        data-live={isLive ? "true" : undefined}
+        aria-current={active ? "true" : undefined}
+        disabled={disabled}
+        title={
+          disabled
+            ? "Stop the current response before switching threads"
+            : title
+        }
+        onClick={() => {
+          if (!disabled) {
+            onSelect(conversation.conversation_id);
+          }
+        }}
+      >
+        <span className="aui-conversation-row__title">
+          {pinned ? (
+            <span className="aui-conversation-row__pin" aria-hidden="true">
+              ⚲
+            </span>
+          ) : null}
+          {title}
+        </span>
+        <span className="aui-conversation-row__meta">
+          {conversation.folder ? (
+            <span className="aui-conversation-row__folder">
+              {conversation.folder}
+            </span>
+          ) : null}
+          {isLive ? (
+            <span className="aui-conversation-row__live" aria-label="Live run">
+              live
+            </span>
+          ) : (
+            <span className="aui-conversation-row__time">{time}</span>
+          )}
+        </span>
+      </button>
+      {(onTogglePin || onArchive) && !disabled ? (
+        <div className="aui-conversation-row__menu">
+          <button
+            type="button"
+            className="aui-conversation-row__more"
+            aria-label="Conversation actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenuOpen((current) => !current);
+            }}
+          >
+            ⋯
+          </button>
+          {menuOpen ? (
+            <div
+              className="aui-conversation-row__menu-pop"
+              role="menu"
+              onMouseLeave={() => setMenuOpen(false)}
+            >
+              {onTogglePin ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="aui-conversation-row__menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenuOpen(false);
+                    onTogglePin(conversation.conversation_id, !pinned);
+                  }}
+                >
+                  {pinned ? "Unpin" : "Pin to top"}
+                </button>
+              ) : null}
+              {onArchive ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="aui-conversation-row__menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenuOpen(false);
+                    onArchive(conversation.conversation_id);
+                  }}
+                >
+                  Archive
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import type { ComponentType, ReactElement, ReactNode } from "react";
 import type {
+  MessagePartStatus,
   ReasoningGroupProps,
   ReasoningMessagePartProps,
   TextMessagePartProps,
@@ -104,6 +105,15 @@ export function MessageParts({
   components?: MessagePartsComponents;
 }): ReactElement | null {
   const { message, onResumeToolCall } = useMessage();
+  if (!message) {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "MessageParts: <Message message={...}> Provider rendered with undefined message; skipping.",
+      );
+    }
+    return null;
+  }
   const content = message.content;
   if (typeof content === "string" || !content || content.length === 0) {
     return null;
@@ -190,6 +200,30 @@ function collectRangeChildren(
   return out;
 }
 
+/** Default status envelope for renderers that still expect the
+ *  assistant-ui `status: { type }` shape. The Atlas runtime stores
+ *  per-part state on the part object itself; until each renderer is
+ *  migrated off the assistant-ui shape, we synthesize this so they
+ *  don't crash on `status.type`. */
+const COMPLETE_STATUS: MessagePartStatus = { type: "complete" };
+const RUNNING_STATUS: MessagePartStatus = { type: "running" };
+
+function partStatus(part: ContentPart): MessagePartStatus {
+  // If the part already carries a `status` envelope, pass it through.
+  // Otherwise infer: tool-calls with a `result` are complete; without,
+  // they're running. Text + reasoning default to complete (they only
+  // live in the parts list once committed).
+  const existing = (part as { status?: MessagePartStatus }).status;
+  if (existing && typeof existing.type === "string") {
+    return existing;
+  }
+  if (part.type === "tool-call") {
+    const result = (part as { result?: unknown }).result;
+    return result === undefined ? RUNNING_STATUS : COMPLETE_STATUS;
+  }
+  return COMPLETE_STATUS;
+}
+
 function renderPart(
   part: ContentPart,
   index: number,
@@ -203,15 +237,26 @@ function renderPart(
     if (!ToolComp) {
       return null;
     }
+    // Tools were authored against the assistant-ui shape where the
+    // runtime synthesised non-null `args` / `argsText` / `status`. We
+    // mirror that contract here so each tool can keep destructuring
+    // without optional-chaining every field.
+    const safeArgs = ((part as { args?: unknown }).args ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const safeArgsText =
+      typeof (part as { argsText?: unknown }).argsText === "string"
+        ? (part as { argsText: string }).argsText
+        : "";
     const props = {
-      // Spread the tool-call part fields. We cast through `unknown`
-      // because the runtime's content type for a tool-call part is a
-      // structural subset of `ToolCallMessagePartProps` (which adds
-      // `addResult` + `resume`). Both are supplied below.
       ...(part as unknown as ToolCallMessagePartProps),
+      args: safeArgs,
+      argsText: safeArgsText,
+      status: partStatus(part),
       addResult: noopAddResult,
       resume: onResumeToolCall ?? noopResume,
-    };
+    } as unknown as ToolCallMessagePartProps;
     return <ToolComp key={`p-${index}`} {...props} />;
   }
   if (part.type === "text") {
@@ -223,6 +268,7 @@ function renderPart(
       <TextComp
         key={`p-${index}`}
         {...(part as unknown as TextMessagePartProps)}
+        status={partStatus(part)}
       />
     );
   }
@@ -235,6 +281,7 @@ function renderPart(
       <ReasoningComp
         key={`p-${index}`}
         {...(part as unknown as ReasoningMessagePartProps)}
+        status={partStatus(part)}
       />
     );
   }

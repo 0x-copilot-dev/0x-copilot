@@ -43,6 +43,9 @@ export function Sidebar({
   onOpenSettings,
   onRefresh,
   onSwitchWorkspace,
+  onTogglePin,
+  onArchive,
+  pinnedIds,
   now,
 }: SidebarProps): ReactElement {
   const [query, setQuery] = useState("");
@@ -149,6 +152,9 @@ export function Sidebar({
             liveConversationId={liveConversationId}
             switchingDisabled={switchingDisabled}
             onSelect={(id) => onSwitchToThread?.(id)}
+            onTogglePin={onTogglePin}
+            onArchive={onArchive}
+            pinnedIds={pinnedIds}
           />
         )}
       </div>
@@ -176,6 +182,21 @@ export interface SidebarProps {
   onOpenSettings: () => void;
   onRefresh: () => void;
   onSwitchWorkspace?: (orgId: string) => void;
+  /**
+   * PR F3 — pin / unpin a conversation. Persisted on
+   * `metadata.pinned`. Optional so non-chat surfaces (storybook) skip
+   * the affordance.
+   */
+  onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
+  /** PR F3 — archive a conversation. Server-side flips `archived_at`. */
+  onArchive?: (conversationId: string) => void;
+  /**
+   * PR F3 — set of conversation_ids the local user has pinned. Threads
+   * in this set collapse into a `Pinned` group at the top of the
+   * sidebar. Source of truth is `usePinnedConversations` (localStorage)
+   * until the backend gains a typed `metadata.pinned` column.
+   */
+  pinnedIds?: ReadonlySet<string>;
   /** Injected for tests; ChatScreen passes `new Date()`. */
   now?: Date;
 }

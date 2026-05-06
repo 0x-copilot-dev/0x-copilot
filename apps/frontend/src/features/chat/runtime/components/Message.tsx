@@ -28,7 +28,19 @@ export function Message({
   className,
   children,
   onResumeToolCall,
-}: MessageProps): ReactElement {
+}: MessageProps): ReactElement | null {
+  // Defensive: the host occasionally renders this Provider before the
+  // upstream message snapshot has resolved (HMR transition, race on
+  // initial mount). Bail rather than poison the context with
+  // `message: undefined`, which crashes every descendant that calls
+  // `useMessage()` and reads `message.<field>`.
+  if (!message) {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("Message: rendered with undefined message; skipping.");
+    }
+    return null;
+  }
   return (
     <MessageContext.Provider value={{ message, onResumeToolCall }}>
       <div className={className}>{children}</div>

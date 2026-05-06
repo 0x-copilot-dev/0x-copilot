@@ -18,6 +18,9 @@ export function ConversationListGroups({
   liveConversationId,
   switchingDisabled,
   onSelect,
+  onTogglePin,
+  onArchive,
+  pinnedIds,
 }: {
   conversations: readonly Conversation[];
   now: Date;
@@ -25,8 +28,11 @@ export function ConversationListGroups({
   liveConversationId: string | null;
   switchingDisabled: boolean;
   onSelect: (conversationId: string) => void;
+  onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
+  onArchive?: (conversationId: string) => void;
+  pinnedIds?: ReadonlySet<string>;
 }): ReactElement {
-  const groups = groupConversations(conversations, now);
+  const groups = groupConversations(conversations, now, pinnedIds);
   if (groups.length === 0) {
     return (
       <p className="aui-sidebar__note" role="status">
@@ -51,6 +57,8 @@ export function ConversationListGroups({
                     conversation.conversation_id !== activeConversationId
                   }
                   onSelect={onSelect}
+                  onTogglePin={onTogglePin}
+                  onArchive={onArchive}
                 />
               </li>
             ))}

@@ -42,12 +42,23 @@ export function ToolFallback({
   status,
   isError,
 }: ToolCallMessagePartProps<Record<string, unknown>>): ReactElement {
-  const presentation = presentationFromArgs(args);
+  // The Atlas runtime's `MessageParts` spreads the raw content-part
+  // object into tool components; that part-shape doesn't carry the
+  // assistant-ui `status: { type }` envelope. Synthesize a safe
+  // fallback so this component doesn't crash on `status.type`.
+  const safeArgs = args ?? ({} as Record<string, unknown>);
+  const safeStatusType =
+    typeof status?.type === "string"
+      ? status.type
+      : result !== undefined
+        ? "complete"
+        : "running";
+  const presentation = presentationFromArgs(safeArgs);
   const argsSummary = summarizeArgsText(argsText);
-  const activitySummary = stringValue(args.summary) ?? argsSummary;
-  const statusLabel = toolStatusLabel(status.type, isError);
+  const activitySummary = stringValue(safeArgs.summary) ?? argsSummary;
+  const statusLabel = toolStatusLabel(safeStatusType, isError);
   const largeResult = largeToolResultFromValue(result);
-  const title = inlineToolTitle(toolName, status.type, isError, result);
+  const title = inlineToolTitle(toolName, safeStatusType, isError, result);
   const resultSummary = largeResult
     ? "large result saved"
     : result !== undefined
@@ -59,14 +70,14 @@ export function ToolFallback({
       <GeneratedPresentationCard
         presentation={presentation}
         details={details}
-        forceCard={shouldRenderFullToolCard(status.type, isError, result)}
+        forceCard={shouldRenderFullToolCard(safeStatusType, isError, result)}
       />
     );
   }
-  if (!shouldRenderFullToolCard(status.type, isError, result)) {
+  if (!shouldRenderFullToolCard(safeStatusType, isError, result)) {
     return (
       <HarnessRow
-        status={harnessStatus(status.type, isError)}
+        status={harnessStatus(safeStatusType, isError)}
         tool={toolName}
         args={activitySummary ?? null}
         result={resultSummary ?? null}
@@ -79,7 +90,7 @@ export function ToolFallback({
       status={statusLabel}
       variant="tool"
       description={activitySummary}
-      params={activityParams(argsText, args)}
+      params={activityParams(argsText, safeArgs)}
       result={resultSummary}
       details={details}
     />

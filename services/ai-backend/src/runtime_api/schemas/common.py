@@ -73,6 +73,9 @@ class RuntimeActivityKind(StrEnum):
     HEARTBEAT = "heartbeat"
     EVENT = "event"
     DRAFT = "draft"
+    # PR A1 — context-compression note ("Atlas summarised N older
+    # messages…"). Renders as a single dim line in-thread, not a card.
+    NOTE = "note"
 
 
 class RuntimeApiEventType(StrEnum):
@@ -124,6 +127,15 @@ class RuntimeApiEventType(StrEnum):
     # CitationLedger registers; payload carries `CitationSourceRef` under
     # `payload.citation` and projects to RuntimeActivityKind.TOOL.
     SOURCE_INGESTED = "source_ingested"
+    # PR A1 — context-compression note. Emitted by the compression hook
+    # when the context window manager redacts older messages to keep
+    # the run efficient. Payload carries
+    # ``CompressionNotePayload`` (before_tokens, after_tokens, strategy,
+    # summary_text, payload_refs). Projects to
+    # ``RuntimeActivityKind.NOTE``; the FE renders an inline
+    # ``<NoteCard>`` ("Atlas summarised N older messages to keep this
+    # conversation efficient.").
+    COMPRESSION_NOTE = "compression_note"
 
     @classmethod
     def from_stream_event_type(
