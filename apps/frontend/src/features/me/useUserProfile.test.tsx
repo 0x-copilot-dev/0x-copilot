@@ -34,6 +34,7 @@ const SEED: UserProfile = {
   locale: "en-US",
   working_hours: null,
   avatar_url: null,
+  bio: null,
   updated_at: "2026-05-05T16:01:14Z",
 };
 

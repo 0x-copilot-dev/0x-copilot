@@ -118,3 +118,79 @@ class TestTenantIsolation:
             resolved.ttl_seconds
             == DEPLOYMENT_DEFAULT_TTL_SECONDS[RetentionKind.MESSAGES]
         )
+
+
+class TestPrivacyUserOverride:
+    """PR 8.0.5 — per-user ``privacy_settings.retention_days`` layered
+    on top of C8 ops policy."""
+
+    def test_privacy_user_override_applies_to_every_kind(self) -> None:
+        resolver = RetentionPolicyResolver(
+            org_id="org_a",
+            policies=(),
+            privacy_user_retention_days={"usr_sarah": 30},
+        )
+        for kind in (
+            RetentionKind.MESSAGES,
+            RetentionKind.EVENTS,
+            RetentionKind.CONTEXT_PAYLOADS,
+            RetentionKind.CHECKPOINTS,
+            RetentionKind.MEMORY_ITEMS,
+        ):
+            resolved = resolver.resolve(kind=kind, user_id="usr_sarah")
+            assert resolved.ttl_seconds == 30 * 86400
+            assert resolved.source_scope is RetentionScope.USER
+
+    def test_explicit_c8_user_policy_beats_privacy_override(self) -> None:
+        # C8 ops policy carries explicit operator intent and outranks
+        # the user-Settings preference when both are set.
+        policies = (
+            _policy(
+                scope=RetentionScope.USER,
+                resource_id="usr_sarah",
+                kind=RetentionKind.MESSAGES,
+                ttl_seconds=99 * 86400,
+            ),
+        )
+        resolver = RetentionPolicyResolver(
+            org_id="org_a",
+            policies=policies,
+            privacy_user_retention_days={"usr_sarah": 30},
+        )
+        resolved = resolver.resolve(kind=RetentionKind.MESSAGES, user_id="usr_sarah")
+        assert resolved.ttl_seconds == 99 * 86400
+
+    def test_conversation_policy_still_wins_over_user_privacy(self) -> None:
+        policies = (
+            _policy(
+                scope=RetentionScope.CONVERSATION,
+                resource_id="conv_xyz",
+                kind=RetentionKind.MESSAGES,
+                ttl_seconds=7 * 86400,
+            ),
+        )
+        resolver = RetentionPolicyResolver(
+            org_id="org_a",
+            policies=policies,
+            privacy_user_retention_days={"usr_sarah": 30},
+        )
+        resolved = resolver.resolve(
+            kind=RetentionKind.MESSAGES,
+            conversation_id="conv_xyz",
+            user_id="usr_sarah",
+        )
+        assert resolved.ttl_seconds == 7 * 86400
+        assert resolved.source_scope is RetentionScope.CONVERSATION
+
+    def test_zero_or_negative_override_drops_silently(self) -> None:
+        resolver = RetentionPolicyResolver(
+            org_id="org_a",
+            policies=(),
+            privacy_user_retention_days={"usr_sarah": 0, "usr_marcus": -1},
+        )
+        # Both invalid overrides drop; deployment defaults apply.
+        resolved = resolver.resolve(kind=RetentionKind.MESSAGES, user_id="usr_sarah")
+        assert (
+            resolved.ttl_seconds
+            == DEPLOYMENT_DEFAULT_TTL_SECONDS[RetentionKind.MESSAGES]
+        )

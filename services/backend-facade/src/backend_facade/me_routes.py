@@ -100,6 +100,46 @@ def register_me_routes(app: FastAPI) -> None:
             f"api-keys/{api_key_id}/rotate",
         )
 
+    # PR 8.2 — Settings → Profile → Sign-in & security: TOTP enrollment.
+    # The backend's ``/internal/v1/me/mfa/*`` wrapper takes identity in
+    # query params (matching every other ``me/*`` route) so ``_forward_me``
+    # works as-is — no body rewriting.
+    @app.get("/v1/me/mfa/factors")
+    async def list_my_mfa_factors(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "GET", "mfa/factors")
+
+    @app.post("/v1/me/mfa/factors/totp/enroll")
+    async def enroll_totp_factor(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "mfa/factors/totp/enroll")
+
+    @app.post("/v1/me/mfa/factors/totp/confirm")
+    async def confirm_totp_factor(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "mfa/factors/totp/confirm")
+
+    @app.delete("/v1/me/mfa/factors/{factor_id}", status_code=204)
+    async def disable_mfa_factor(request: Request, factor_id: str) -> None:
+        await _forward_me(
+            request,
+            "DELETE",
+            f"mfa/factors/{factor_id}",
+            expect_json=False,
+        )
+
+    # PR 8.3 — WebAuthn enrollment ceremony. The browser handles
+    # `navigator.credentials.create`; the facade just forwards the
+    # base64-url'd start/finish bodies to the backend wrapper. Identity
+    # comes from the verified session; rp_id / origin are caller-
+    # supplied (the backend verifies them against the attestation).
+    @app.post("/v1/me/mfa/factors/webauthn/register/start")
+    async def webauthn_register_start(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "mfa/factors/webauthn/register/start")
+
+    @app.post("/v1/me/mfa/factors/webauthn/register/finish")
+    async def webauthn_register_finish(request: Request) -> dict[str, object]:
+        return await _forward_me(
+            request, "POST", "mfa/factors/webauthn/register/finish"
+        )
+
     # PR B1 / 8.0.3d — tool-use policy (per-user override; admin
     # workspace-default writes go through a separate workspace route
     # below).

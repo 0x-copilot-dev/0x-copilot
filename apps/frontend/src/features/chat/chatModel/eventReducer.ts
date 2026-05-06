@@ -153,8 +153,11 @@ export function applyRuntimeEvent(
     if (!text) {
       return items;
     }
+    const replace = event.event_type === "reasoning_summary";
+    const eventCreatedAtMs = eventCreatedAtToMs(event.created_at);
+    const partStatus = { type: replace ? "complete" : "running" } as const;
     return updateAssistantContent(items, event, (content) =>
-      appendReasoning(content, text, event.event_type === "reasoning_summary"),
+      appendReasoning(content, text, replace, eventCreatedAtMs, partStatus),
     );
   }
   if (event.activity_kind === "tool") {
@@ -172,6 +175,20 @@ export function applyRuntimeEvent(
     );
   }
   return items;
+}
+
+/**
+ * Parse the runtime envelope's `created_at` (ISO 8601 string) to epoch
+ * milliseconds for FE-side elapsed-time computation. Returns `undefined`
+ * when the value is missing or malformed — callers fall back to part
+ * defaults (which means "no time stamp" rather than a wrong one).
+ */
+function eventCreatedAtToMs(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
 }
 
 function hasPendingActionForRun(

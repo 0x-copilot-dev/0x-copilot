@@ -1,6 +1,7 @@
 import type {
   AppearancePreferences,
   UpdateUserPreferencesRequest,
+  UpdateUserProfileRequest,
   UserProfileAccent,
   UserProfileDensity,
   UserProfileReduceMotion,
@@ -10,11 +11,13 @@ import {
   ACCENT_SCHEMES,
   Card,
   Field,
+  TextInput,
   classNames,
 } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UserPreferencesState } from "../../me/useUserPreferences";
+import type { UserProfileState } from "../../me/useUserProfile";
 
 const THEME_OPTIONS: ReadonlyArray<{ id: UserProfileTheme; label: string }> = [
   { id: "system", label: "System" },
@@ -53,8 +56,15 @@ const SAVE_DEBOUNCE_MS = 300;
  */
 export function Appearance({
   preferences,
+  profile,
 }: {
   preferences: UserPreferencesState;
+  /**
+   * PR 8.1 — Locale moved from Profile → Appearance ("Region & language").
+   * Optional so legacy callers without a profile hook still render the
+   * theme/accent/density block above. The card is omitted when absent.
+   */
+  profile?: UserProfileState;
 }): ReactElement {
   const data = preferences.data;
   const debounceRef = useRef<number | null>(null);
@@ -221,7 +231,77 @@ export function Appearance({
           <p className="app-error">{preferences.error}</p>
         ) : null}
       </Card>
+
+      {profile && profile.data ? <RegionAndLanguage profile={profile} /> : null}
     </div>
+  );
+}
+
+/**
+ * PR 8.1 — Locale ("Region & language") moved from Profile → Appearance
+ * because it controls display formatting (date / number / list) rather
+ * than identity. Persists via the user-profile endpoint, separate from
+ * the theme/accent preferences hook used above.
+ */
+function RegionAndLanguage({
+  profile,
+}: {
+  profile: UserProfileState;
+}): ReactElement {
+  const data = profile.data!;
+  const [locale, setLocale] = useState(data.locale ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-sync from the server snapshot when it changes underneath the
+  // form (e.g. another tab saved). Same pattern as the Profile section.
+  useEffect(() => {
+    setLocale(profile.data?.locale ?? "");
+  }, [profile.data]);
+
+  const dirty = locale.trim() !== (data.locale ?? "");
+
+  async function onSave(): Promise<void> {
+    if (!dirty) return;
+    const patch: UpdateUserProfileRequest = {
+      locale: locale.trim() === "" ? null : locale.trim(),
+    };
+    try {
+      setError(null);
+      setSaving(true);
+      await profile.save(patch);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save locale.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <Field
+        label="Locale"
+        hint="BCP-47 tag — e.g. en-US, fr-FR. Affects date and number formatting."
+      >
+        <div className="me-form__inline-field">
+          <TextInput
+            value={locale}
+            onChange={(e) => setLocale(e.target.value)}
+            placeholder="en-US"
+          />
+          <button
+            type="button"
+            className="me-form__inline-save"
+            onClick={() => void onSave()}
+            disabled={!dirty || saving}
+            title="Save locale"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </Field>
+      {error ? <p className="app-error">{error}</p> : null}
+    </Card>
   );
 }
 

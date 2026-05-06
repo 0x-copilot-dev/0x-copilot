@@ -402,7 +402,7 @@ function EnterpriseSearchApp({
       connectors={connectors}
       skills={skills}
       identity={identity}
-      onOpenSettings={(section = "general") => {
+      onOpenSettings={(section = "profile") => {
         applyAppRoute({ screen: "settings", section }, setRoute);
       }}
       oauthStatus={oauthStatus}

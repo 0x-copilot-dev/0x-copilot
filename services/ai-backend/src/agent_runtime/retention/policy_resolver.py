@@ -61,7 +61,22 @@ class RetentionPolicyResolver:
         org_id: str,
         policies: Sequence[RetentionPolicyRecord],
         deployment_defaults: Mapping[RetentionKind, int | None] | None = None,
+        privacy_user_retention_days: Mapping[str, int] | None = None,
     ) -> None:
+        """Compose retention policies for one org.
+
+        ``privacy_user_retention_days`` (PR 8.0.5) layers per-user
+        ``privacy_settings.retention_days`` overrides on top of the
+        C8 policy table. Each entry is treated as a USER-scope
+        policy across every ``RetentionKind`` so the existing
+        specificity walk (CONVERSATION > ASSISTANT > USER > ORG)
+        picks it up unchanged. A user override never expands beyond
+        the C8-defined kinds — i.e. setting ``retention_days=30``
+        applies to messages/events/context_payloads/checkpoints/
+        memory_items in lock-step, matching the user-visible "delete
+        my chats after 30 days" promise on the Privacy panel.
+        """
+
         self._org_id = org_id
         self._defaults = (
             deployment_defaults
@@ -76,6 +91,24 @@ class RetentionPolicyResolver:
                 continue
             key = (policy.scope, policy.resource_id or "", policy.kind)
             self._by_key[key] = policy
+        # PR 8.0.5 — synthesize USER-scope rows from the privacy
+        # snapshot. C8 rows still win when they exist for the same
+        # (user, kind) — explicit ops policy beats user preference.
+        for user_id, retention_days in (privacy_user_retention_days or {}).items():
+            if retention_days <= 0:
+                continue
+            ttl_seconds = retention_days * 24 * 60 * 60
+            for kind in RetentionKind:
+                key = (RetentionScope.USER, user_id, kind)
+                if key in self._by_key:
+                    continue
+                self._by_key[key] = RetentionPolicyRecord(
+                    org_id=org_id,
+                    scope=RetentionScope.USER,
+                    resource_id=user_id,
+                    kind=kind,
+                    ttl_seconds=ttl_seconds,
+                )
 
     def resolve(
         self,

@@ -62,7 +62,7 @@ import { useLocalStorageState } from "../../utils/useLocalStorageState";
 import { useViewportOverlay } from "../../utils/useViewportOverlay";
 import { ApprovalFocusProvider } from "./approval/ApprovalFocusContext";
 
-type ChatSettingsTarget = "general" | "connectors" | "skills";
+type ChatSettingsTarget = "profile" | "connectors" | "skills";
 import {
   applyRuntimeEvent,
   chatItemsToThreadMessages,
@@ -98,6 +98,7 @@ import { WorkspacePane } from "./components/workspace/WorkspacePane";
 import { useWorkspacePaneState } from "./components/workspace/useWorkspacePaneState";
 import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
 import { useSubagents } from "./components/workspace/useSubagents";
+import { useSubagentActivities } from "./components/workspace/useSubagentActivities";
 import { useDrafts } from "./components/workspace/useDrafts";
 import { useApprovalsQueue } from "./components/workspace/useApprovalsQueue";
 import {
@@ -114,6 +115,7 @@ import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
 import { useAuth } from "../auth/AuthContext";
 import { usePinnedConversations } from "./sidebar/usePinnedConversations";
 import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
+import { useBackgroundChatStreams } from "./runtime/useBackgroundChatStreams";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -191,6 +193,18 @@ export function ChatScreen({
   const [sourcesMap, setSourcesMap] = useState<SourceEntryMap>(emptySourceMap);
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
+
+  // PR 2.2.1 — background runtime store. Owns per-conversation slots
+  // for non-visible chats + the per-run SSE stream registry. ChatScreen
+  // freezes the visible state into a slot on switch-away, thaws on
+  // switch-back, and routes incoming SSE events through `routeEvent`
+  // when they belong to a non-visible run.
+  const bg = useBackgroundChatStreams();
+  // Read the visible conv id from a ref inside the SSE callback so
+  // route decisions always reflect the current visible chat (the
+  // callback closure was created when the stream opened).
+  const visibleConvIdRef = useRef<string | null>(null);
+  visibleConvIdRef.current = conversationId;
 
   // PR 3.2 — Workspace pane state (open/closed + active tab + per-conv
   // manual-close memory). Topbar panel toggle, pane close button, and
@@ -323,7 +337,15 @@ export function ChatScreen({
         reconnectTimeoutRef.current = null;
       }
       streamRef.current?.close();
+      // PR 2.2.1 — close every backgrounded stream on auth-context
+      // teardown so we don't leak EventSource connections across login
+      // / workspace switches.
+      bg.reset();
     };
+    // bg is intentionally elided from deps — its identity is stable
+    // (the hook returns a memoised object). Re-running this effect
+    // because of bg would tear down the visible run on every freeze.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, loadHistoryItems]);
 
   useEffect(() => {
@@ -366,6 +388,31 @@ export function ChatScreen({
 
   const handleEvent = useCallback(
     (event: RuntimeEventEnvelope) => {
+      // PR 2.2.1 — route by run owner. The stream registry maps
+      // `event.run_id` → `conversationId`; if that is the visible chat,
+      // apply through the visible setters (today's path); otherwise
+      // hand off to the background slot so the run keeps accumulating
+      // tokens / citations / sources without rendering. Subagent +
+      // draft data feeds remain conversation-scoped via their own
+      // hooks, so they're only updated when the run belongs to the
+      // visible conversation.
+      const ownerConvId = bg.conversationIdForRun(event.run_id);
+      const visibleConvId = visibleConvIdRef.current;
+      const isVisibleRun =
+        ownerConvId === null ? true : ownerConvId === visibleConvId;
+      if (!isVisibleRun) {
+        bg.routeEvent(event);
+        if (
+          event.event_type === "run_completed" ||
+          event.event_type === "run_cancelled" ||
+          event.event_type === "run_failed"
+        ) {
+          bg.markTerminal(event.run_id, statusForTerminalRunEvent(event));
+          bg.closeStream(event.run_id);
+          void refreshConversations();
+        }
+        return;
+      }
       latestSequenceRef.current = Math.max(
         latestSequenceRef.current,
         event.sequence_no,
@@ -398,23 +445,24 @@ export function ChatScreen({
         }
         streamRef.current?.close();
         streamRef.current = null;
+        bg.closeStream(event.run_id);
         setActiveRunId(null);
         activeRunUserMessageIdsRef.current.delete(event.run_id);
         setStatus(statusForTerminalRunEvent(event));
         void refreshConversations();
       }
     },
-    [refreshConversations, setSubagents, setDraftRegistry],
+    [bg, refreshConversations, setSubagents, setDraftRegistry],
   );
 
   const startEventStream = useCallback(
-    (runId: string, afterSequence: number) => {
+    (runId: string, afterSequence: number, conversationIdForRun: string) => {
       if (reconnectTimeoutRef.current !== null) {
         window.clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
       streamRef.current?.close();
-      streamRef.current = streamRunEvents({
+      const stream = streamRunEvents({
         runId,
         afterSequence,
         identity,
@@ -424,22 +472,36 @@ export function ChatScreen({
           streamRef.current = null;
           setStatus("Stream paused. Reconnecting...");
           reconnectTimeoutRef.current = window.setTimeout(() => {
-            startEventStream(runId, latestSequenceRef.current);
+            startEventStream(
+              runId,
+              latestSequenceRef.current,
+              conversationIdForRun,
+            );
           }, 750);
         },
         onProtocolError: (error) => {
           setStatus(error.message);
         },
       });
+      streamRef.current = stream;
+      // Register with the background runtime store so the registry can
+      // route events by run-owner and close the SSE on terminal events
+      // even if the user has switched away.
+      bg.registerStream({
+        runId,
+        conversationId: conversationIdForRun,
+        stream,
+      });
     },
-    [handleEvent, identity],
+    [bg, handleEvent, identity],
   );
 
   useEffect(() => {
     if (
       !initialHistoryLoaded ||
       activeRunId !== null ||
-      streamRef.current !== null
+      streamRef.current !== null ||
+      conversationId === null
     ) {
       return;
     }
@@ -455,8 +517,14 @@ export function ChatScreen({
       latestReplaySequenceByRunRef.current.get(pendingRunId) ?? 0;
     setActiveRunId(pendingRunId);
     setLatestRunEvent(null);
-    startEventStream(pendingRunId, latestSequenceRef.current);
-  }, [activeRunId, initialHistoryLoaded, items, startEventStream]);
+    startEventStream(pendingRunId, latestSequenceRef.current, conversationId);
+  }, [
+    activeRunId,
+    conversationId,
+    initialHistoryLoaded,
+    items,
+    startEventStream,
+  ]);
 
   useEffect(() => {
     if (
@@ -521,7 +589,15 @@ export function ChatScreen({
         setActiveRunId(runId);
         setLatestRunEvent(latestUiEvent);
         setStatus("Working...");
-        startEventStream(runId, latestSequenceRef.current);
+        // The MCP-OAuth resume path always runs against the visible
+        // conversation (the user just clicked Connect inside it).
+        if (visibleConvIdRef.current !== null) {
+          startEventStream(
+            runId,
+            latestSequenceRef.current,
+            visibleConvIdRef.current,
+          );
+        }
       } catch (err) {
         if (!cancelled) {
           setStatus(errorMessage(err, "Could not resume connector auth run"));
@@ -543,9 +619,63 @@ export function ChatScreen({
 
   const loadConversationById = useCallback(
     async (nextConversationId: string): Promise<void> => {
-      if (activeRunId !== null) {
+      const previousConvId = visibleConvIdRef.current;
+      if (previousConvId === nextConversationId) {
         return;
       }
+      // PR 2.2.1 — freeze the outgoing visible state into the
+      // background slot store so its run keeps streaming. Then either
+      // thaw the target slot if we already have its state in memory
+      // (warm switch — no replay round trip), or load history fresh.
+      if (previousConvId !== null) {
+        bg.freezeVisible({
+          conversationId: previousConvId,
+          snapshot: {
+            items,
+            citations,
+            sources: sourcesMap,
+            activeRunId,
+            latestRunEvent,
+            userMessageIdByRunId: new Map(activeRunUserMessageIdsRef.current),
+            latestSequenceByRunId: new Map(
+              latestReplaySequenceByRunRef.current,
+            ),
+            status,
+          },
+        });
+        // Detach the visible-stream ref without closing it: ownership
+        // moved to the background registry on `registerStream`.
+        streamRef.current = null;
+        if (reconnectTimeoutRef.current !== null) {
+          window.clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
+      }
+
+      const warm = bg.thaw(nextConversationId);
+      if (warm) {
+        // Restore visible state from the warm slot — no fetch, no
+        // replay, no flicker. Stream (if any) is already live in the
+        // registry; pull its run id out of the slot so resume is a
+        // no-op.
+        setConversationId(nextConversationId);
+        setItems(warm.items);
+        setCitations(warm.citations);
+        setSourcesMap(warm.sources);
+        setActiveRunId(warm.activeRunId);
+        setLatestRunEvent(warm.latestRunEvent);
+        setShowConnectorSuggestions(false);
+        activeRunUserMessageIdsRef.current = new Map(warm.userMessageIdByRunId);
+        latestReplaySequenceByRunRef.current = new Map(
+          warm.latestSequenceByRunId,
+        );
+        latestSequenceRef.current = warm.activeRunId
+          ? (warm.latestSequenceByRunId.get(warm.activeRunId) ?? 0)
+          : 0;
+        setStatus(warm.status);
+        return;
+      }
+
       try {
         setStatus("Opening conversation...");
         const [conversation, history] = await Promise.all([
@@ -560,13 +690,24 @@ export function ChatScreen({
         setItems(history.items);
         setCitations(history.citations);
         setLatestRunEvent(null);
+        setActiveRunId(null);
         setShowConnectorSuggestions(false);
         setStatus(history.replayFailed ? historyReplayWarning : "Ready");
       } catch (err) {
         setStatus(errorMessage(err, "Could not open conversation"));
       }
     },
-    [activeRunId, identity, loadHistoryItems],
+    [
+      activeRunId,
+      bg,
+      citations,
+      identity,
+      items,
+      latestRunEvent,
+      loadHistoryItems,
+      sourcesMap,
+      status,
+    ],
   );
 
   const submitUserMessage = useCallback(
@@ -653,7 +794,11 @@ export function ChatScreen({
         setActiveRunId(run.run_id);
         setLatestRunEvent(null);
         setStatus("Queued...");
-        startEventStream(run.run_id, latestSequenceRef.current);
+        startEventStream(
+          run.run_id,
+          latestSequenceRef.current,
+          targetConversationId,
+        );
         void refreshConversations();
       } catch (err) {
         setItems((current) => [
@@ -728,21 +873,66 @@ export function ChatScreen({
     if (activeRunId === null) {
       return;
     }
-    await cancelRun(activeRunId, identity);
+    const cancelledRunId = activeRunId;
+    // Optimistically settle the assistant message so the auto-resume
+    // effect (which scans `items` for unresolved approval / mcp_auth tool
+    // parts) treats the run as terminated and stops re-binding activeRunId
+    // to it. Without this, clicking Stop while an mcp_auth_required card
+    // is pending re-engages the same run within a render — the button
+    // reappears and looks like the click did nothing.
+    setItems((current) =>
+      current.map((item) =>
+        item.kind === "message" &&
+        item.role === "assistant" &&
+        item.runId === cancelledRunId
+          ? { ...item, status: { type: "incomplete", reason: "cancelled" } }
+          : item,
+      ),
+    );
     if (reconnectTimeoutRef.current !== null) {
       window.clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
     streamRef.current?.close();
     streamRef.current = null;
+    bg.closeStream(cancelledRunId);
     setActiveRunId(null);
     setLatestRunEvent(null);
     setStatus("Cancelling...");
-  }, [activeRunId, identity]);
+    try {
+      await cancelRun(cancelledRunId, identity);
+    } catch (err) {
+      setStatus(errorMessage(err, "Could not cancel run"));
+    }
+  }, [activeRunId, bg, identity]);
 
   const onStartNewChat = useCallback(() => {
-    streamRef.current?.close();
-    streamRef.current = null;
+    // PR 2.2.1 — `+ New chat` no longer tears down a running stream.
+    // If the current conversation is mid-run we freeze it into the
+    // background slot store (its SSE stays in the registry, keeps
+    // streaming, surfaces in the sidebar live-set), then clear the
+    // visible state to the welcome screen.
+    const previousConvId = visibleConvIdRef.current;
+    if (previousConvId !== null) {
+      bg.freezeVisible({
+        conversationId: previousConvId,
+        snapshot: {
+          items,
+          citations,
+          sources: sourcesMap,
+          activeRunId,
+          latestRunEvent,
+          userMessageIdByRunId: new Map(activeRunUserMessageIdsRef.current),
+          latestSequenceByRunId: new Map(latestReplaySequenceByRunRef.current),
+          status,
+        },
+      });
+      streamRef.current = null;
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    }
     setActiveRunId(null);
     setConversationId(null);
     setItems([]);
@@ -753,8 +943,11 @@ export function ChatScreen({
     setSourcesError(null);
     setLatestRunEvent(null);
     setShowConnectorSuggestions(false);
+    activeRunUserMessageIdsRef.current = new Map();
+    latestReplaySequenceByRunRef.current = new Map();
+    latestSequenceRef.current = 0;
     setStatus("Ready");
-  }, []);
+  }, [activeRunId, bg, citations, items, latestRunEvent, sourcesMap, status]);
 
   const onShare = useCallback(async (): Promise<void> => {
     if (typeof window === "undefined" || !navigator.clipboard) {
@@ -897,6 +1090,11 @@ export function ChatScreen({
     () => chatItemsToThreadMessages(items, activeRunId),
     [activeRunId, items],
   );
+  // PR 3.2.1 — projection over `items` for the Agents tab's expandable
+  // per-subagent timeline. Reads `args.activities` already populated by
+  // `upsertSubagentActivity` (live + replay). No new fetch, no new
+  // store — same source of truth as the in-thread `SubagentTool`.
+  const subagentActivitiesByTask = useSubagentActivities(items);
   const runUiState = useMemo(
     () =>
       deriveRunUiState({
@@ -918,6 +1116,21 @@ export function ChatScreen({
           },
     [activeRunId, runUiState],
   );
+
+  // PR 2.2.1 — sidebar live-set. Union the visible chat (if it has a
+  // running run) with the background-slot live-set so any number of
+  // chats can pulse simultaneously. The set is rebuilt only when its
+  // inputs change, so the sidebar re-renders are cheap.
+  const liveConversationIds = useMemo<ReadonlySet<string>>(() => {
+    if (activeRunId === null && bg.liveConvIds.size === 0) {
+      return EMPTY_LIVE_CONV_SET;
+    }
+    const next = new Set(bg.liveConvIds);
+    if (activeRunId !== null && conversationId !== null) {
+      next.add(conversationId);
+    }
+    return next;
+  }, [activeRunId, bg.liveConvIds, conversationId]);
 
   // Citation chips resolve against the active run's registry. When no
   // run is active (history viewing) we fall back to the most recent
@@ -1133,7 +1346,7 @@ export function ChatScreen({
       setActiveRunId(run.run_id);
       setLatestRunEvent(null);
       setStatus("Queued...");
-      startEventStream(run.run_id, latestSequenceRef.current);
+      startEventStream(run.run_id, latestSequenceRef.current, conversationId);
     },
     [
       activeRunId,
@@ -1261,12 +1474,12 @@ export function ChatScreen({
           data-pane-overlay={overlayMode ? "true" : "false"}
         >
           <AssistantThreadList
-            activeRunId={activeRunId}
             activeConversationId={conversationId}
+            liveConversationIds={liveConversationIds}
             collapsed={sidebarCollapsed}
             conversations={conversations}
             loading={historyLoading}
-            onOpenSettings={() => onOpenSettings("general")}
+            onOpenSettings={() => onOpenSettings("profile")}
             onRefresh={() => void refreshConversations()}
             onSwitchToThread={(id) => void loadConversationById(id)}
             onStartNewChat={onStartNewChat}
@@ -1352,7 +1565,7 @@ export function ChatScreen({
                     onStatus={(message) => setStatus(message)}
                   />
                 }
-                onOpenSettings={() => onOpenSettings("general")}
+                onOpenSettings={() => onOpenSettings("profile")}
               />
             }
           >
@@ -1433,6 +1646,7 @@ export function ChatScreen({
             subagents={subagentsState.subagents}
             subagentsLoading={subagentsState.loading}
             subagentsError={subagentsState.error}
+            subagentActivitiesByTask={subagentActivitiesByTask}
             draft={draftsState.latest}
             draftLoading={draftsState.loading}
             draftError={draftsState.error}
@@ -1664,6 +1878,15 @@ function pendingActionRunId(items: ChatItem[]): string | null {
     if (item.kind !== "message" || item.role !== "assistant" || !item.runId) {
       continue;
     }
+    // Skip runs that already terminated. Otherwise the auto-resume effect
+    // re-binds activeRunId to a cancelled / failed / completed run whose
+    // approval card is still in `items` with `result === undefined`.
+    if (
+      item.status?.type === "incomplete" ||
+      item.status?.type === "complete"
+    ) {
+      continue;
+    }
     const hasPendingAction = item.content.some(
       (part) =>
         part.type === "tool-call" &&
@@ -1729,6 +1952,12 @@ function userTextForMessage(
     .join("\n")
     .trim();
 }
+
+/**
+ * PR 2.2.1 — stable empty-set singleton so the no-live-runs path doesn't
+ * thrash referential equality on every render of `<Sidebar>`.
+ */
+const EMPTY_LIVE_CONV_SET: ReadonlySet<string> = new Set();
 
 function withAssistantParent(
   items: ChatItem[],

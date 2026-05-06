@@ -49,6 +49,17 @@ _LOGGER = logging.getLogger(__name__)
 _BCP47_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
+# PR 8.2 — bio + avatar caps. Bio is short free text the user surfaces in
+# their profile card; the cap matches the FE textarea hint. Avatar v1
+# stores a ``data:`` URL inline in the existing column, so the size cap
+# guards against accidental DOS — a 256×256 JPEG @ 0.9 typically lands
+# under 60 KB and the cap leaves headroom for PNG / WEBP.
+_BIO_MAX_LEN = 600
+_AVATAR_DATA_URL_RE = re.compile(
+    r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+$"
+)
+_AVATAR_DATA_URL_MAX_LEN = 200_000
+
 
 class WorkingHoursModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -100,6 +111,7 @@ class UserProfileResponse(BaseModel):
     locale: str | None
     working_hours: WorkingHoursModel | None
     avatar_url: str | None
+    bio: str | None
     updated_at: str
 
 
@@ -115,6 +127,7 @@ class UpdateUserProfileRequest(BaseModel):
     locale: str | None = Field(default=None)
     working_hours: WorkingHoursModel | None = Field(default=None)
     avatar_url: str | None = Field(default=None)
+    bio: str | None = Field(default=None)
 
     @field_validator("timezone")
     @classmethod
@@ -132,6 +145,36 @@ class UpdateUserProfileRequest(BaseModel):
             return None
         if not _BCP47_RE.fullmatch(value):
             raise ValueError("invalid_locale")
+        return value
+
+    @field_validator("bio")
+    @classmethod
+    def _validate_bio(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > _BIO_MAX_LEN:
+            raise ValueError("bio_too_long")
+        return trimmed
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar(cls, value: str | None) -> str | None:
+        # Empty / null → clear. ``data:`` URLs (Phase 2 inline upload) get
+        # size + content-type checks. Other strings are taken as-is on the
+        # assumption they're remote URLs; the FE can't render anything
+        # actively dangerous because the value is dropped into ``<img>``.
+        if value is None:
+            return None
+        if value == "":
+            return None
+        if value.startswith("data:"):
+            if len(value) > _AVATAR_DATA_URL_MAX_LEN:
+                raise ValueError("avatar_too_large")
+            if not _AVATAR_DATA_URL_RE.fullmatch(value):
+                raise ValueError("avatar_invalid_format")
         return value
 
 
@@ -220,6 +263,7 @@ def register_me_profile_routes(
                 avatar_url=diff.get(
                     "avatar_url", existing.avatar_url if existing else None
                 ),
+                bio=diff.get("bio", existing.bio if existing else None),
             )
             saved = me_store.upsert_profile(sidecar, conn=conn)
 
@@ -283,6 +327,7 @@ def _hydrate(user: Any, record: UserProfileRecord | None) -> UserProfileResponse
         if record and record.working_hours is not None
         else None,
         avatar_url=record.avatar_url if record else None,
+        bio=record.bio if record else None,
         updated_at=_isoformat(record.updated_at if record else user.updated_at)
         or _isoformat(user.updated_at)
         or "",
@@ -339,6 +384,7 @@ def _profile_diff_view(user: Any, record: UserProfileRecord | None) -> dict[str,
         "locale": record.locale if record else None,
         "avatar_url": record.avatar_url if record else None,
         "working_hours": record.working_hours if record else None,
+        "bio": record.bio if record else None,
     }
 
 
@@ -350,6 +396,7 @@ def _profile_diff_view_record(user: Any, record: UserProfileRecord) -> dict[str,
         "locale": record.locale,
         "avatar_url": record.avatar_url,
         "working_hours": record.working_hours,
+        "bio": record.bio,
     }
 
 

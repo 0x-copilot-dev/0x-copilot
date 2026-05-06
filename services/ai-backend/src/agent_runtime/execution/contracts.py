@@ -274,6 +274,15 @@ class AgentRuntimeContext(RuntimeContract):
     # safety middleware, model-call middleware) downcast to the typed
     # model via ``WorkspaceBehaviorOverrides.model_validate``.
     workspace_behavior_overrides: JsonObject = Field(default_factory=dict)
+    # PR 8.0.5 — per-(org, user) runtime policies resolved at run-create
+    # from backend's ``/internal/v1/policies/runtime`` aggregate route.
+    # Same JsonObject pattern as ``workspace_behavior_overrides`` so
+    # consumers downcast via the typed snapshot classes
+    # (``ToolUsePolicySnapshot.from_response`` /
+    # ``PrivacySettingsSnapshot.from_response``). Empty dict ⇒ "use
+    # deployment defaults" — every consumer's snapshot factory accepts
+    # absent keys without raising.
+    user_policies_json: JsonObject = Field(default_factory=dict)
 
     @field_validator("user_id", "org_id")
     @classmethod

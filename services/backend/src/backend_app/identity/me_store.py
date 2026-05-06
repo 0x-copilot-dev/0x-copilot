@@ -60,6 +60,9 @@ class UserProfileRecord(_MeContract):
     locale: str | None = None
     working_hours: dict[str, Any] | None = None
     avatar_url: str | None = None
+    # PR 8.2 — short free-text bio surfaced in the Settings → Profile card
+    # and in the workspace member directory. NULL means "no bio set".
+    bio: str | None = None
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -186,7 +189,7 @@ class PostgresMeStore:
             cur.execute(
                 """
                 SELECT user_id, org_id, title, timezone, locale,
-                       working_hours, avatar_url, updated_at
+                       working_hours, avatar_url, bio, updated_at
                 FROM user_profiles
                 WHERE org_id = %s AND user_id = %s
                 """,
@@ -208,14 +211,15 @@ class PostgresMeStore:
                 """
                 INSERT INTO user_profiles (
                     user_id, org_id, title, timezone, locale,
-                    working_hours, avatar_url, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    working_hours, avatar_url, bio, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE SET
                     title = EXCLUDED.title,
                     timezone = EXCLUDED.timezone,
                     locale = EXCLUDED.locale,
                     working_hours = EXCLUDED.working_hours,
                     avatar_url = EXCLUDED.avatar_url,
+                    bio = EXCLUDED.bio,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
@@ -228,6 +232,7 @@ class PostgresMeStore:
                     if updated.working_hours is not None
                     else None,
                     updated.avatar_url,
+                    updated.bio,
                     updated.updated_at,
                 ),
             )

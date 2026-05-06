@@ -172,11 +172,16 @@ export function MessageParts({
             <span key={`rg-${range.startIndex}-${rangeIndex}`}>{children}</span>
           );
         }
+        const groupParts = parts.slice(range.startIndex, range.endIndex + 1);
+        const groupStatus = reasoningGroupStatus(groupParts);
+        const groupElapsedSeconds = reasoningGroupElapsedSeconds(groupParts);
         return (
           <ReasoningGroupComponent
             key={`rg-${range.startIndex}-${rangeIndex}`}
             startIndex={range.startIndex}
             endIndex={range.endIndex}
+            status={groupStatus}
+            elapsedSeconds={groupElapsedSeconds}
           >
             {children}
           </ReasoningGroupComponent>
@@ -207,6 +212,52 @@ function collectRangeChildren(
  *  don't crash on `status.type`. */
 const COMPLETE_STATUS: MessagePartStatus = { type: "complete" };
 const RUNNING_STATUS: MessagePartStatus = { type: "running" };
+
+/** Reasoning-group status: `running` if any contained reasoning part is
+ *  still streaming, otherwise `complete`. */
+function reasoningGroupStatus(
+  parts: readonly ContentPart[],
+): "running" | "complete" {
+  for (const part of parts) {
+    if (part.type !== "reasoning") {
+      continue;
+    }
+    if ((part as { status?: MessagePartStatus }).status?.type === "running") {
+      return "running";
+    }
+  }
+  return "complete";
+}
+
+/** Reasoning-group elapsed-seconds: latest `updatedAtMs` minus earliest
+ *  `startedAtMs` across the contained reasoning parts, floored at zero
+ *  and rounded to whole seconds. Returns `0` when timestamps are
+ *  missing — happens for replayed pre-PR-3.6 messages. */
+function reasoningGroupElapsedSeconds(parts: readonly ContentPart[]): number {
+  let earliestStart = Number.POSITIVE_INFINITY;
+  let latestUpdate = Number.NEGATIVE_INFINITY;
+  for (const part of parts) {
+    if (part.type !== "reasoning") {
+      continue;
+    }
+    const start = (part as { startedAtMs?: number }).startedAtMs;
+    const updated = (part as { updatedAtMs?: number }).updatedAtMs;
+    if (typeof start === "number" && start < earliestStart) {
+      earliestStart = start;
+    }
+    if (typeof updated === "number" && updated > latestUpdate) {
+      latestUpdate = updated;
+    }
+  }
+  if (
+    !Number.isFinite(earliestStart) ||
+    !Number.isFinite(latestUpdate) ||
+    latestUpdate < earliestStart
+  ) {
+    return 0;
+  }
+  return Math.max(0, Math.round((latestUpdate - earliestStart) / 1000));
+}
 
 function partStatus(part: ContentPart): MessagePartStatus {
   // If the part already carries a `status` envelope, pass it through.

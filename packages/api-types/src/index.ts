@@ -313,6 +313,15 @@ export interface Conversation {
    */
   enabled_connectors?: ConversationConnectorScopes;
   connectors_updated_at?: string | null;
+  /**
+   * PR 2.2.1 — most recent run's status, projected from `runtime_runs`
+   * by the conversation list/get endpoints. Drives the sidebar's live
+   * indicator on cold reload (no need to open an SSE first to learn
+   * which chats are running). Optional for backwards compat with older
+   * server builds; `null` for conversations that never ran.
+   */
+  latest_run_status?: AgentRunStatus | null;
+  latest_run_id?: string | null;
   /** PR A3 — id of the message this conversation was self-forked from
    * ("retry from here" / "fork to new chat"). Mutually exclusive with
    * forked_from_share_id (declared below); both nullable for non-fork
@@ -2253,7 +2262,18 @@ export interface UserProfile {
   timezone: string | null; // IANA tz id, e.g. 'America/Los_Angeles'
   locale: string | null; // BCP-47 tag, e.g. 'en-US'
   working_hours: WorkingHours | null;
+  /**
+   * Either a remote URL or an inline `data:image/<png|jpeg|webp>;base64,…`
+   * (PR 8.2 — inline avatar upload via the existing column; ≤ 200 KB
+   * after FE resize). The FE renders both the same way (`<img src=…>`).
+   */
   avatar_url: string | null;
+  /**
+   * PR 8.2 — short free-text bio surfaced in the profile card and the
+   * member directory. Server-capped at 600 chars; whitespace-only inputs
+   * are normalised to `null`.
+   */
+  bio: string | null;
   updated_at: string;
 }
 
@@ -2314,7 +2334,53 @@ export type UpdateUserProfileRequest = {
   locale?: string | null;
   working_hours?: WorkingHours | null;
   avatar_url?: string | null;
+  /** PR 8.2 — `null` (or whitespace-only) clears. Server-capped at 600 chars. */
+  bio?: string | null;
 };
+
+/**
+ * PR 8.2 — request body for the Settings UI's TOTP enrollment route.
+ * The internal MFA contract carries org_id / user_id in the body; the
+ * caller-scoped wrapper at `/v1/me/mfa/*` derives those from the
+ * verified session, so the public body only carries the device label.
+ */
+export interface TotpEnrollRequestBody {
+  display_name: string;
+}
+
+/**
+ * PR 8.3 — WebAuthn enrollment ceremony.
+ *
+ * `options` is a `PublicKeyCredentialCreationOptionsJSON` — every binary
+ * field (`challenge`, `user.id`, `excludeCredentials[].id`) is base64-
+ * url. The FE decodes these into `Uint8Array` before passing to the
+ * navigator, then re-encodes the attestation result the same way.
+ */
+export interface MfaWebAuthnStartRequestBody {
+  display_name?: string;
+  rp_id: string;
+  rp_name: string;
+  user_name: string;
+  user_display_name?: string | null;
+}
+
+export interface MfaWebAuthnStartResponse {
+  factor_id: string;
+  challenge_id: string;
+  options: Record<string, unknown>;
+}
+
+export interface MfaWebAuthnFinishRequestBody {
+  factor_id: string;
+  challenge_id: string;
+  rp_id: string;
+  expected_origin: string;
+  attestation: Record<string, unknown>;
+}
+
+export interface MfaWebAuthnFinishResponse {
+  credential_id: string;
+}
 
 /** Deep-partial merge-patch: send only the keys you want to change.
  *  `notifications.matrix.mention.email = false` updates only that cell. */

@@ -19,6 +19,23 @@ class StreamTextHelper:
         return value.strip() or None
 
 
+class _ReasoningBlock:
+    """Provider-specific content-block constants for reasoning chunks.
+
+    LangChain surfaces native thinking/reasoning content uniformly through
+    ``AIMessageChunk.content`` as a list of typed blocks; only the block
+    ``type`` discriminator differs per provider. Centralising the strings
+    here keeps the extractor logic provider-agnostic and makes "add a new
+    provider" a one-line edit instead of a grep across the worker.
+    """
+
+    ANTHROPIC_THINKING = "thinking"
+    ANTHROPIC_TEXT_KEY = "thinking"
+    ANTHROPIC_SIGNATURE = "thinking_signature"
+    OPENAI_DELTA = "reasoning_summary_text_delta"
+    OPENAI_DONE = "reasoning_summary_text_done"
+
+
 class _Fields:
     API_EVENT_TYPE = "api_event_type"
     EVENT_TYPE = "event_type"
@@ -268,6 +285,92 @@ class StreamMessageParser:
         if isinstance(message, Mapping):
             return cls.content_delta_to_text(message.get(_Fields.CONTENT))
         return cls.content_delta_to_text(getattr(message, _Fields.CONTENT, None))
+
+    @classmethod
+    def raw_content(cls, message: object) -> object:
+        """Return the chunk's ``content`` without ``payload_mapping``'s flattening.
+
+        ``payload_mapping`` collapses list-of-mappings to a single string via
+        ``text_from_content_blocks`` — that drops the per-block ``type`` field
+        we need to distinguish reasoning blocks from text blocks. Reasoning
+        extractors must walk the raw structure.
+        """
+
+        if isinstance(message, Mapping):
+            return message.get(_Fields.CONTENT)
+        return getattr(message, _Fields.CONTENT, None)
+
+    @classmethod
+    def reasoning_delta(cls, message: object) -> str | None:
+        """Extract reasoning text from one parsed ``AIMessageChunk``.
+
+        Recognises the two provider shapes LangChain surfaces today:
+
+        - **Anthropic** (`langchain-anthropic`): ``{"type": "thinking",
+          "thinking": "…"}`` blocks while extended thinking is on.
+        - **OpenAI Responses** (`langchain-openai` with ``output_version=
+          "responses/v1"``): ``{"type": "reasoning_summary_text_delta",
+          "text": "…"}`` blocks while ``reasoning.summary`` is configured.
+
+        Returns the concatenated reasoning text for the chunk, or ``None``
+        when no reasoning blocks are present. The plain-text path
+        (`message_delta`) is unaffected — text and reasoning are extracted
+        independently from the same chunk.
+        """
+
+        content = cls.raw_content(message)
+        if not isinstance(content, Sequence) or isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            return None
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, Mapping):
+                continue
+            block_type = block.get(_Fields.TYPE)
+            if block_type == _ReasoningBlock.ANTHROPIC_THINKING:
+                # Preserve leading/trailing whitespace — provider delta
+                # chunks carry meaningful spaces between word fragments;
+                # stripping each chunk would coalesce ``"summary "`` +
+                # ``"tail"`` into ``"summarytail"``.
+                value = cls.raw_text(block.get(_ReasoningBlock.ANTHROPIC_TEXT_KEY))
+            elif block_type == _ReasoningBlock.OPENAI_DELTA:
+                value = cls.raw_text(block.get(_Fields.TEXT))
+            else:
+                continue
+            if value is not None:
+                parts.append(value)
+        return "".join(parts) or None
+
+    @classmethod
+    def reasoning_finalised(cls, message: object) -> bool:
+        """True when the chunk closes a reasoning span.
+
+        Anthropic stamps ``thinking_signature`` on the final block of a
+        thinking span; OpenAI Responses emits a sentinel
+        ``reasoning_summary_text_done`` block. Either marker means the
+        worker should emit a final ``reasoning_summary`` cap and clear the
+        per-span buffer. When neither marker shows up before the next
+        non-reasoning content arrives, the FE falls back to its own
+        ``closeReasoningIfRunning`` heuristic.
+        """
+
+        content = cls.raw_content(message)
+        if not isinstance(content, Sequence) or isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            return False
+        for block in content:
+            if not isinstance(block, Mapping):
+                continue
+            block_type = block.get(_Fields.TYPE)
+            if block_type == _ReasoningBlock.ANTHROPIC_THINKING and block.get(
+                _ReasoningBlock.ANTHROPIC_SIGNATURE
+            ):
+                return True
+            if block_type == _ReasoningBlock.OPENAI_DONE:
+                return True
+        return False
 
     @classmethod
     def content_delta_to_text(cls, value: object) -> str | None:

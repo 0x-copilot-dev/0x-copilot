@@ -25,12 +25,14 @@ from backend_app.contracts import (
     MfaFactorListResponse,
     MfaFactorSummary,
     TotpEnrollResult,
+    WebAuthnRegisterStartResult,
 )
 from backend_app.identity.mfa import (
     MfaCodeRejected,
     MfaChallengeInvalid,
     MfaFactorNotFound,
     MfaService,
+    MfaWebAuthnRejected,
 )
 from backend_app.identity.rbac import RequireScopes
 
@@ -46,6 +48,29 @@ class MeTotpEnrollRequest(_MeContract):
 class MeTotpConfirmRequest(_MeContract):
     factor_id: str = Field(..., min_length=1)
     code: str = Field(..., min_length=4, max_length=10)
+
+
+class MeWebAuthnStartRequest(_MeContract):
+    """Caller-scoped wrapper around ``WebAuthnRegisterStartRequest``.
+
+    The browser supplies the relying-party identity (rp_id, origin) via
+    its own location, not via the session. We pass them through verbatim
+    — the backend service runs the WebAuthn validation against them.
+    """
+
+    display_name: str = Field("Security key", min_length=1, max_length=64)
+    rp_id: str = Field(..., min_length=1)
+    rp_name: str = Field(..., min_length=1)
+    user_name: str = Field(..., min_length=1)
+    user_display_name: str | None = None
+
+
+class MeWebAuthnFinishRequest(_MeContract):
+    factor_id: str = Field(..., min_length=1)
+    challenge_id: str = Field(..., min_length=1)
+    rp_id: str = Field(..., min_length=1)
+    expected_origin: str = Field(..., min_length=1)
+    attestation: dict[str, object]
 
 
 def register_me_mfa_routes(app: FastAPI, *, service: MfaService) -> None:
@@ -148,6 +173,67 @@ def register_me_mfa_routes(app: FastAPI, *, service: MfaService) -> None:
             )
         except MfaFactorNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.post(
+        "/internal/v1/me/mfa/factors/webauthn/register/start",
+        response_model=WebAuthnRegisterStartResult,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def webauthn_register_start(
+        request: Request,
+        payload: MeWebAuthnStartRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> WebAuthnRegisterStartResult:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        factor, challenge, options = service.webauthn_register_options(
+            org_id=identity.org_id,
+            user_id=identity.user_id,
+            display_name=payload.display_name,
+            rp_id=payload.rp_id,
+            rp_name=payload.rp_name,
+            user_name=payload.user_name,
+            user_display_name=payload.user_display_name,
+        )
+        return WebAuthnRegisterStartResult(
+            factor_id=factor.factor_id,
+            challenge_id=challenge.challenge_id,
+            options=options,
+        )
+
+    @app.post(
+        "/internal/v1/me/mfa/factors/webauthn/register/finish",
+        status_code=status.HTTP_200_OK,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def webauthn_register_finish(
+        request: Request,
+        payload: MeWebAuthnFinishRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            record = service.webauthn_register_finish(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                factor_id=payload.factor_id,
+                challenge_id=payload.challenge_id,
+                rp_id=payload.rp_id,
+                expected_origin=payload.expected_origin,
+                attestation=payload.attestation,
+            )
+        except MfaChallengeInvalid as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        except MfaWebAuthnRejected as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        except MfaFactorNotFound as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        return {"credential_id": record.credential_id}
 
 
 __all__ = ["register_me_mfa_routes"]

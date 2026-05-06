@@ -6,20 +6,28 @@ import {
   Field,
   TextInput,
 } from "@enterprise-search/design-system";
-import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import type { ChangeEvent, DragEvent, FormEvent, ReactElement } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UserProfileState } from "../../me/useUserProfile";
+import { AccountSessionsPanel } from "../AccountSessionsPanel";
+import { useAuth } from "../../auth/AuthContext";
+import { AvatarUploadError, fileToAvatarDataUrl } from "./avatarPipeline";
+import { MfaPanel } from "./MfaPanel";
+
+/** Mirrors the server-side cap in `me_profile.py::_BIO_MAX_LEN`. */
+const BIO_MAX_CHARS = 600;
 
 /**
- * Settings → You → Profile.
+ * Settings → Account → Profile.
  *
- * Form is uncontrolled-by-default and saved on the explicit Save button
- * (no debounced auto-save). The avatar URL is text-only in v1; the
- * file-upload pipeline is a follow-up PR.
+ * PR 8.1 — restructured into two cards: **Identity** (avatar / name /
+ * email / job title / time zone) and **Sign-in & security** (sessions
+ * + sign-out). Locale moved to Appearance → Region & language.
  *
- * Validation lives server-side (timezone IANA-set membership, locale
- * BCP-47 shape, working-hours start<end) — the form surfaces the
- * server's 422 error message verbatim if the input is rejected.
+ * Avatar upload is a follow-up; v1 keeps the URL paste field but with
+ * a live circle preview so the surface looks like a real avatar
+ * picker. Validation lives server-side and the form surfaces the
+ * 422 message verbatim.
  */
 export function Profile({
   profile,
@@ -30,11 +38,19 @@ export function Profile({
   const [displayName, setDisplayName] = useState("");
   const [title, setTitle] = useState("");
   const [timezone, setTimezone] = useState("");
-  const [locale, setLocale] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
+  const [bio, setBio] = useState("");
   const [saving, setSaving] = useState(false);
+  // Avatar UI state — kept local because it never persists separately
+  // from the avatarUrl form field.
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarDragOver, setAvatarDragOver] = useState(false);
+  const [avatarUrlOpen, setAvatarUrlOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const auth = useAuth();
 
   useEffect(() => {
     if (!data) {
@@ -43,13 +59,11 @@ export function Profile({
     setDisplayName(data.display_name ?? "");
     setTitle(data.title ?? "");
     setTimezone(data.timezone ?? "");
-    setLocale(data.locale ?? "");
     setAvatarUrl(data.avatar_url ?? "");
+    setBio(data.bio ?? "");
   }, [data]);
 
-  async function onSubmit(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
+  async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!data) {
       return;
@@ -60,8 +74,8 @@ export function Profile({
     }
     patch.title = title.trim() === "" ? null : title.trim();
     patch.timezone = timezone.trim() === "" ? null : timezone.trim();
-    patch.locale = locale.trim() === "" ? null : locale.trim();
     patch.avatar_url = avatarUrl.trim() === "" ? null : avatarUrl.trim();
+    patch.bio = bio.trim() === "" ? null : bio.trim();
 
     try {
       setErrorMessage(null);
@@ -75,6 +89,61 @@ export function Profile({
     } finally {
       setSaving(false);
     }
+  }
+
+  /**
+   * Resize → base64 → write to the same `avatarUrl` slot the form
+   * already submits. The data-URL representation is server-validated on
+   * save, so a missed cap or a wrong content-type rejects with a 422
+   * and the user sees the message in the same place as any other error.
+   */
+  async function handleFiles(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0) {
+      return;
+    }
+    setAvatarError(null);
+    setAvatarBusy(true);
+    try {
+      const dataUrl = await fileToAvatarDataUrl(files[0]);
+      setAvatarUrl(dataUrl);
+    } catch (err) {
+      setAvatarError(
+        err instanceof AvatarUploadError
+          ? err.message
+          : "Could not load that image.",
+      );
+    } finally {
+      setAvatarBusy(false);
+      if (fileInputRef.current) {
+        // Allow re-picking the same file after an error.
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setAvatarDragOver(false);
+    void handleFiles(event.dataTransfer.files);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setAvatarDragOver(true);
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setAvatarDragOver(false);
+  }
+
+  function onPickFile(event: ChangeEvent<HTMLInputElement>): void {
+    void handleFiles(event.target.files);
+  }
+
+  function onRemoveAvatar(): void {
+    setAvatarError(null);
+    setAvatarUrl("");
   }
 
   if (profile.loading && data === null) {
@@ -99,30 +168,104 @@ export function Profile({
     );
   }
 
+  const initial = (
+    data.display_name?.charAt(0) ??
+    data.email.charAt(0) ??
+    "·"
+  ).toUpperCase();
+
   return (
     <div className="settings-section">
       <div className="settings-section__header">
         <div>
           <h2>Profile</h2>
-          <p>
-            Cross-device fields. They follow you to every browser you sign in
-            to.
-          </p>
+          <p>How you appear across Atlas. Visible to your workspace.</p>
         </div>
       </div>
 
       <Card>
         <form className="me-form" onSubmit={(e) => void onSubmit(e)}>
-          <Field label="Email">
-            <div className="me-form__email-row">
-              <code>{data.email}</code>
-              {data.email_verified_at ? (
-                <Badge tone="success">verified</Badge>
-              ) : (
-                <Badge tone="warning">unverified</Badge>
-              )}
+          <h3 className="me-form__card-title">Identity</h3>
+
+          <div
+            className={
+              avatarDragOver
+                ? "me-form__avatar-row me-form__avatar-row--dropzone is-drag"
+                : "me-form__avatar-row me-form__avatar-row--dropzone"
+            }
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+          >
+            <span
+              className="me-form__avatar"
+              style={
+                avatarUrl
+                  ? { backgroundImage: `url("${cssEscape(avatarUrl)}")` }
+                  : undefined
+              }
+              aria-hidden="true"
+            >
+              {avatarUrl ? "" : initial}
+            </span>
+            <div className="me-form__avatar-meta">
+              <div className="me-form__avatar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={avatarBusy}
+                  title="Choose a photo to upload"
+                >
+                  {avatarBusy ? "Resizing…" : "Upload photo"}
+                </Button>
+                {avatarUrl ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={onRemoveAvatar}
+                    disabled={avatarBusy}
+                    title="Remove the current photo"
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+              <p className="settings-meta">
+                PNG, JPEG, or WEBP. Drop a file here or click upload.
+              </p>
+              <button
+                type="button"
+                className="me-form__inline-link"
+                onClick={() => setAvatarUrlOpen((v) => !v)}
+                title="Use an external URL instead of uploading"
+              >
+                {avatarUrlOpen ? "Hide URL field" : "Use a URL instead"}
+              </button>
+              {avatarUrlOpen ? (
+                <Field
+                  label="Avatar URL"
+                  hint="Public image URL — overrides any uploaded photo."
+                >
+                  <TextInput
+                    value={avatarUrl.startsWith("data:") ? "" : avatarUrl}
+                    onChange={(e) => setAvatarUrl(e.target.value)}
+                    placeholder="https://cdn.example.com/avatar.png"
+                  />
+                </Field>
+              ) : null}
+              {avatarError ? <p className="app-error">{avatarError}</p> : null}
             </div>
-          </Field>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="me-form__file-input"
+              onChange={onPickFile}
+            />
+          </div>
 
           <Field label="Display name">
             <TextInput
@@ -132,9 +275,28 @@ export function Profile({
             />
           </Field>
 
+          <Field label="Email">
+            <div className="me-form__email-row">
+              <code>{data.email}</code>
+              {data.email_verified_at ? (
+                <Badge tone="success">verified</Badge>
+              ) : (
+                <Badge tone="warning">unverified</Badge>
+              )}
+              <button
+                type="button"
+                className="me-form__inline-link"
+                onClick={() => void auth.logout()}
+                title="Re-authenticate to refresh your session"
+              >
+                Re-authenticate
+              </button>
+            </div>
+          </Field>
+
           <Field
-            label="Title"
-            hint="Optional. Shown in the workspace member directory."
+            label="Job title"
+            hint="Helps Atlas tailor responses to your role."
           >
             <TextInput
               value={title}
@@ -144,8 +306,8 @@ export function Profile({
           </Field>
 
           <Field
-            label="Timezone"
-            hint="IANA tz id — e.g. America/Los_Angeles. Affects working hours + scheduled digests."
+            label="Time zone"
+            hint="IANA tz id — e.g. America/Los_Angeles. Used for scheduling and digests."
           >
             <TextInput
               value={timezone}
@@ -154,22 +316,17 @@ export function Profile({
             />
           </Field>
 
-          <Field label="Locale" hint="BCP-47 tag — e.g. en-US, fr-FR.">
-            <TextInput
-              value={locale}
-              onChange={(e) => setLocale(e.target.value)}
-              placeholder="en-US"
-            />
-          </Field>
-
           <Field
-            label="Avatar URL"
-            hint="Drag-drop upload coming soon. Paste a public image URL for now."
+            label="Bio"
+            hint={`A few lines about how you work. Atlas can reference this. ${BIO_MAX_CHARS - bio.trim().length} characters remaining.`}
           >
-            <TextInput
-              value={avatarUrl}
-              onChange={(e) => setAvatarUrl(e.target.value)}
-              placeholder="https://cdn.example.com/avatar.png"
+            <textarea
+              className="me-form__bio"
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              maxLength={BIO_MAX_CHARS}
+              rows={3}
+              placeholder="Lead ops at Northwind. I run weekly cross-team standups and keep the shipping schedule honest."
             />
           </Field>
 
@@ -187,6 +344,41 @@ export function Profile({
           </div>
         </form>
       </Card>
+
+      <MfaPanel />
+
+      <Card>
+        <h3 className="me-form__card-title">Sign-in &amp; security</h3>
+        <AccountSessionsPanel />
+        <div className="me-form__sign-out-row">
+          <div>
+            <strong>Sign out everywhere</strong>
+            <p className="settings-meta">
+              Ends every session on every device — including this one.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            onClick={() => void auth.logout()}
+            data-testid="profile-sign-out-everywhere"
+            title="Sign out of every device"
+          >
+            Sign out everywhere
+          </Button>
+        </div>
+      </Card>
     </div>
   );
+}
+
+/**
+ * Avatar URLs come from user input — escape characters that could break
+ * out of the inline `url("…")` string. We're not rendering the value as
+ * HTML; this just keeps the CSS valid. Browsers fetch with their normal
+ * referer policy.
+ */
+function cssEscape(input: string): string {
+  return input.replace(/["\\]/g, "\\$&");
 }

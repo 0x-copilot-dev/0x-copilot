@@ -84,6 +84,12 @@ class StreamMessageProcessor:
         # first tool_call_started, used by `RuntimeRunHandler` to settle
         # orphaned calls when a run hits a terminal failure path.
         self._ledgers: dict[str, ToolCallLedger] = {}
+        # Per-run reasoning span accumulator. Keyed by run_id; value is the
+        # text assembled across delta chunks for the currently-open span.
+        # Cleared on emission of the final ``reasoning_summary`` cap (or
+        # on run discard). Subagent reasoning is intentionally dropped at
+        # the extraction site, so this dict only ever sees main-agent runs.
+        self._reasoning_buffers: dict[str, str] = {}
 
     def ledger_for_run(self, run_id: str) -> ToolCallLedger:
         """Return (and lazily create) the per-run tool call ledger."""
@@ -98,6 +104,61 @@ class StreamMessageProcessor:
         """Free per-run ledger state once the run has reached a terminal state."""
 
         self._ledgers.pop(run_id, None)
+        self._reasoning_buffers.pop(run_id, None)
+
+    async def emit_reasoning_events(
+        self,
+        *,
+        run: RunRecord,
+        namespace: StreamNamespace,
+        message: object,
+        metadata: JsonObject,
+        parent_task_id: str | None,
+        subagent_id: str | None,
+    ) -> None:
+        """Emit ``reasoning_summary_delta`` (per chunk) and ``reasoning_summary``
+        (cap) events from a parsed message chunk.
+
+        Subagent runs are dropped (matches the text path in
+        ``StreamOrchestrator.stream_delta`` and the v1 design decision: the
+        subagent fleet card carries its own progress affordance; we do not
+        bubble the subagent's thinking up to the parent thread).
+        """
+
+        if namespace.is_subagent:
+            return
+        delta = StreamMessageParser.reasoning_delta(message)
+        if delta is not None:
+            buffer = self._reasoning_buffers.get(run.run_id, "")
+            self._reasoning_buffers[run.run_id] = buffer + delta
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.MODEL,
+                event_type=RuntimeApiEventType.REASONING_SUMMARY_DELTA,
+                payload={
+                    Keys.Payload.DELTA: delta,
+                    Keys.Field.SUMMARY: delta,
+                },
+                summary=delta,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
+            )
+        if not StreamMessageParser.reasoning_finalised(message):
+            return
+        assembled = self._reasoning_buffers.pop(run.run_id, "")
+        if not assembled:
+            return
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.MODEL,
+            event_type=RuntimeApiEventType.REASONING_SUMMARY,
+            payload={Keys.Field.SUMMARY: assembled},
+            summary=assembled,
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
+        )
 
     async def process(
         self,
@@ -119,6 +180,15 @@ class StreamMessageProcessor:
         subagent_id = self._update_processor.subagent_id_for_subgraph(
             run_id=run.run_id,
             subgraph_task_id=subgraph_task_id,
+        )
+
+        await self.emit_reasoning_events(
+            run=run,
+            namespace=namespace,
+            message=message,
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
         )
 
         for tool_call in StreamMessageParser.tool_call_chunks(message):

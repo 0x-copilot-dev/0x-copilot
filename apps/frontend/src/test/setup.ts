@@ -14,6 +14,16 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   } as unknown as typeof ResizeObserver;
 }
 
+// jsdom doesn't ship `Element.prototype.scrollIntoView`; the workspace
+// pane's focus-jump effect calls it (SourcesTab + AgentsTab). Provide a
+// no-op shim so component tests don't crash when focus is wired.
+if (
+  typeof Element !== "undefined" &&
+  typeof Element.prototype.scrollIntoView !== "function"
+) {
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {};
+}
+
 afterEach(() => {
   cleanup();
 });

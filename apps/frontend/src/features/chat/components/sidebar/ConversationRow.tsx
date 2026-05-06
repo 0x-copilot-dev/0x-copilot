@@ -3,20 +3,23 @@ import { useState, type ReactElement } from "react";
 import { isPinned } from "../../utils/groupConversations";
 
 /**
- * One conversation row in the sidebar (PR 2.2 + PR F3).
+ * One conversation row in the sidebar (PR 2.2 + PR F3 + PR 2.2.1).
  *
- * Two-line layout: title (top) + meta (timestamp or `live` pill, right).
+ * Two-line layout: title (top) + meta (timestamp or live pulse, right).
  * The row also carries a small ⋯ overflow that exposes pin/unpin and
  * archive (the two actions the design's mock surfaces). Pin lives on
  * `conversation.metadata.pinned` (no server schema change needed).
  * Archive flips `archived_at` via the existing `updateConversation`
  * route. Both actions are wired up by the parent (`Sidebar`).
+ *
+ * PR 2.2.1 dropped the `disabled` prop: the runtime now keeps non-
+ * visible conversations' streams running in the background, so there
+ * is no longer a state where switching threads has to be blocked.
  */
 export function ConversationRow({
   conversation,
   active,
   isLive,
-  disabled,
   onSelect,
   onTogglePin,
   onArchive,
@@ -24,7 +27,6 @@ export function ConversationRow({
   conversation: Conversation;
   active: boolean;
   isLive: boolean;
-  disabled: boolean;
   onSelect: (conversationId: string) => void;
   onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
   onArchive?: (conversationId: string) => void;
@@ -46,21 +48,7 @@ export function ConversationRow({
         data-live={isLive ? "true" : undefined}
         aria-current={active ? "true" : undefined}
         aria-label={title}
-        disabled={disabled}
-        // Only set the native `title` attribute when the row is
-        // disabled — otherwise the chat title is already visible
-        // inline and the browser's native tooltip just leaks an
-        // ugly pill outside the sidebar on hover.
-        title={
-          disabled
-            ? "Stop the current response before switching threads"
-            : undefined
-        }
-        onClick={() => {
-          if (!disabled) {
-            onSelect(conversation.conversation_id);
-          }
-        }}
+        onClick={() => onSelect(conversation.conversation_id)}
       >
         <span className="aui-conversation-row__title">
           {pinned ? (
@@ -77,15 +65,17 @@ export function ConversationRow({
             </span>
           ) : null}
           {isLive ? (
-            <span className="aui-conversation-row__live" aria-label="Live run">
-              live
-            </span>
+            <span
+              className="aui-conversation-row__live"
+              role="status"
+              aria-label="Live run"
+            />
           ) : (
             <span className="aui-conversation-row__time">{time}</span>
           )}
         </span>
       </button>
-      {(onTogglePin || onArchive) && !disabled ? (
+      {onTogglePin || onArchive ? (
         <div className="aui-conversation-row__menu">
           <button
             type="button"

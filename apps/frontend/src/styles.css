@@ -544,9 +544,9 @@ p {
   --color-text: #fafafa;
   --color-text-muted: #a1a1aa;
   --color-text-subtle: #71717a;
-  --color-accent: #fafafa;
-  --color-accent-strong: #e4e4e7;
-  --color-accent-contrast: #09090b;
+  --color-accent: #d8b46a;
+  --color-accent-strong: #f0ca7a;
+  --color-accent-contrast: #1c160a;
   background: var(--color-bg);
   color: var(--color-text);
   display: grid;
@@ -638,16 +638,21 @@ p {
 
 .aui-logo__mark {
   align-items: center;
-  background: var(--color-accent);
-  border-radius: var(--radius-md);
+  background: linear-gradient(
+    140deg,
+    var(--color-accent) 0%,
+    var(--color-accent-strong) 100%
+  );
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
   color: var(--color-accent-contrast);
   display: inline-flex;
-  font-size: 0.95rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  height: 1.75rem;
+  height: 1.625rem;
   justify-content: center;
-  letter-spacing: 0;
-  width: 1.75rem;
+  letter-spacing: -0.04em;
+  width: 1.625rem;
 }
 
 .aui-logo__wordmark {
@@ -773,17 +778,19 @@ p {
 
 .aui-conversation-row__title {
   color: var(--color-text);
-  /* Smaller than the previous 0.85rem so most chat titles fit on
-   * one line. With less text width pressure the `⋯` overflow has
-   * natural whitespace to land in on hover. */
   font-size: 0.78rem;
   font-weight: 500;
   overflow: hidden;
+  /* Reserve a hover-gutter on the right so the `⋯` button always
+   * lands in empty space; the title ellipsizes a bit earlier
+   * instead of being covered by the menu trigger on hover. */
+  padding-right: 1.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.aui-conversation-row[data-active] .aui-conversation-row__title {
+.aui-conversation-row[data-active] .aui-conversation-row__title,
+.aui-conversation-row[data-live="true"] .aui-conversation-row__title {
   color: var(--color-text);
 }
 
@@ -809,16 +816,61 @@ p {
   flex: none;
 }
 
-.aui-conversation-row__live {
+/* Live thread — amber left rail makes it impossible to miss
+ * which conversation has an in-flight run. Mirrors the design's
+ * `.thread-item[data-running="true"]::before` accent stripe. */
+.aui-conversation-row[data-live="true"] {
+  position: relative;
+}
+
+.aui-conversation-row[data-live="true"]::before {
   background: var(--color-accent);
-  border-radius: var(--radius-full);
-  color: var(--color-accent-contrast);
+  border-radius: 999px;
+  bottom: 22%;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: 22%;
+  width: 2px;
+}
+
+/* PR 2.2.1 — single signal, dot only.
+ *
+ * The lowercase "live" text duplicated the left amber rail
+ * (`[data-live="true"]::before`) that already calls out a row with an
+ * in-flight run. Drop the word, keep a single pulsing dot sized to the
+ * footprint of the timestamp (`10:37`) it replaces so the row's
+ * vertical rhythm doesn't shift when a run starts. The aria-label on
+ * the span carries the screen-reader semantics. */
+.aui-conversation-row__live {
+  align-items: center;
+  display: inline-flex;
   flex: none;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 0.1rem 0.5rem;
-  text-transform: lowercase;
+  height: 1lh;
+  justify-content: center;
+  width: 0.95rem;
+}
+
+.aui-conversation-row__live::before {
+  animation: aui-live-pulse 1.6s ease-out infinite;
+  background: var(--color-accent);
+  border-radius: 999px;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 40%, transparent);
+  content: "";
+  height: 6px;
+  width: 6px;
+}
+
+@keyframes aui-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 40%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* PR F3 — sidebar pin / overflow menu. */
@@ -907,7 +959,7 @@ p {
 }
 
 .aui-sidebar__footer {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
   margin-top: auto;
   padding-top: var(--space-sm);
 }
@@ -1023,11 +1075,20 @@ p {
  * `.ui-dropdown__menu` rule; we only need to paint the contents. */
 
 .aui-user-card__menu {
-  /* Comfortable popover footprint for the dev-persona select +
-   * workspace picker + actions. Default ui-dropdown is 15rem; we
-   * widen so the persona select doesn't truncate "Sarah Chen · acme
-   * · employee" and so the action row breathes. */
-  min-width: 18rem;
+  /* Sized to fit inside the sidebar. The sidebar uses
+   * `overflow: hidden` to keep the conversation list scrolling
+   * cleanly, which means the popover cannot extend past the
+   * sidebar's right edge — a wider `min-width` here clips the
+   * persona select and Sign-out button at the sidebar boundary.
+   * `width: 100%` of the user-card container, plus the
+   * design-system's default `min-width: 15rem` floor, keeps the
+   * popover inside the chrome. The persona select has its own
+   * ellipsis fallback for very long display names. */
+  width: 100%;
+  /* Reset the design-system 15rem default so the popover never
+   * exceeds the user-card width. The card's own width (set by
+   * `.aui-user-card__trigger { width: 100% }`) provides the floor. */
+  min-width: 0;
   padding: var(--space-md);
   gap: var(--space-md);
 }
@@ -1258,7 +1319,7 @@ p {
   letter-spacing: 0.04em;
   margin: 0 0 0.25rem;
   padding: 0 0.625rem;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .aui-conversation-group__list {
@@ -2222,7 +2283,6 @@ p {
   padding: 0.35rem 0.7rem;
 }
 
-.aui-reasoning-group,
 .aui-tool-group,
 .aui-tool-card {
   background: color-mix(in srgb, var(--color-surface-muted) 62%, transparent);
@@ -2230,17 +2290,11 @@ p {
   border-radius: var(--radius-lg);
 }
 
-.aui-reasoning-group,
 .aui-tool-group {
   color: var(--color-text-muted);
-}
-
-.aui-reasoning-group,
-.aui-tool-group {
   overflow: hidden;
 }
 
-.aui-reasoning-group summary,
 .aui-tool-group summary {
   align-items: center;
   cursor: pointer;
@@ -2250,14 +2304,125 @@ p {
   padding: var(--space-sm) var(--space-md);
 }
 
-.aui-reasoning-group__icon {
-  flex-shrink: 0;
-  height: 1rem;
-  width: 1rem;
+/* Atlas thought-process accordion (PR 3.6).
+ * Native <details>: closed by default, dashed-pill summary on hover,
+ * solid pill once open, italic accent-bordered body, blinking cursor
+ * while reasoning is mid-stream (driven by `data-status="running"`). */
+.aui-reasoning-group {
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  margin: 0 0 var(--space-2xs);
+  max-width: 760px;
+  padding: 0;
+  width: 100%;
 }
 
-.aui-reasoning-group[open] .aui-reasoning-group__icon {
+.aui-reasoning-group > summary {
+  align-items: center;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-full);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 500;
+  gap: var(--space-sm);
+  list-style: none;
+  padding: var(--space-2xs) var(--space-sm);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+  user-select: none;
+}
+
+.aui-reasoning-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aui-reasoning-group > summary:hover,
+.aui-reasoning-group > summary:focus-visible {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.aui-reasoning-group[open] > summary {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.aui-reasoning-group__icon {
+  color: var(--color-accent);
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 0.875rem;
+  width: 0.875rem;
+}
+
+.aui-reasoning-group[data-status="running"] .aui-reasoning-group__icon {
   animation: reasoning-spin 1.5s linear infinite;
+}
+
+.aui-reasoning-group__label {
+  white-space: nowrap;
+}
+
+.aui-reasoning-group__time {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--space-xs);
+}
+
+.aui-reasoning-group__time:empty {
+  display: none;
+}
+
+.aui-reasoning-group__content {
+  background: var(--color-surface-muted);
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-top: 0;
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: 0.84rem;
+  font-style: italic;
+  gap: var(--space-sm);
+  line-height: 1.65;
+  margin-top: var(--space-2xs);
+  padding: var(--space-md) var(--space-lg);
+  white-space: pre-wrap;
+}
+
+.aui-reasoning-group__content :where(strong, em) {
+  color: var(--color-text);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.aui-reasoning-group[data-status="running"]
+  .aui-reasoning-group__content::after {
+  animation: reasoning-cursor-blink 1s steps(1, end) infinite;
+  color: var(--color-accent);
+  content: "▍";
+  font-style: normal;
+  margin-left: 0.125rem;
+}
+
+@keyframes reasoning-cursor-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
 @keyframes assistant-stream-enter {
@@ -2291,17 +2456,10 @@ p {
   }
 }
 
-.aui-reasoning-group__content,
 .aui-tool-group__content {
   display: grid;
   gap: var(--space-sm);
   padding: 0 var(--space-md) var(--space-md);
-}
-
-.aui-reasoning-group__content {
-  border-top: 1px solid var(--color-border);
-  font-size: 0.92em;
-  padding-top: var(--space-sm);
 }
 
 .aui-tool-card {
@@ -3183,79 +3341,177 @@ p {
   --color-text: #fafafa;
   --color-text-muted: #a1a1aa;
   --color-text-subtle: #71717a;
-  --color-accent: #fafafa;
-  --color-accent-strong: #e4e4e7;
-  --color-accent-contrast: #09090b;
+  --color-accent: #d8b46a;
+  --color-accent-strong: #f0ca7a;
+  --color-accent-contrast: #1c160a;
   background: var(--color-bg);
   color: var(--color-text);
   display: grid;
   font-size: 0.875rem;
-  grid-template-columns: 16rem 1fr;
+  grid-template-rows: auto 1fr;
   height: 100dvh;
   min-height: 100vh;
   overflow: hidden;
 }
 
-.settings-nav {
-  background: var(--color-bg);
-  border-right: 1px solid var(--color-border);
+.settings-shell__body {
+  display: grid;
+  grid-template-columns: 16rem 1fr;
   min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-sm);
 }
 
-.settings-brand {
+/* PR 8.1 — top chrome row above the rail+content body. Workspace-scoped
+   crumb + back-to-Atlas + Manage MCP shortcut + user pill. */
+.settings-chrome {
   align-items: center;
-  color: var(--color-text);
-  display: flex;
-  font-weight: 600;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-xl);
-  min-height: 2.5rem;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: auto 1fr auto;
+  min-height: 3rem;
+  padding: 0.625rem var(--space-lg);
 }
 
-.settings-back {
+.settings-chrome__back,
+.settings-chrome__shortcut {
+  align-items: center;
   background: transparent;
-  border: 1px solid var(--color-border);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--color-text-muted);
   cursor: pointer;
-  margin-bottom: var(--space-xl);
-  min-height: 2.25rem;
-  padding: 0.5rem 0.625rem;
-  text-align: left;
-  width: 100%;
+  display: inline-flex;
+  font: inherit;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
 }
 
-.settings-back:hover {
+.settings-chrome__back:hover,
+.settings-chrome__shortcut:hover {
   background: var(--color-surface-muted);
   color: var(--color-text);
 }
 
-.settings-nav h1 {
-  font-size: 1.25rem;
-  margin: 0 0 var(--space-xl);
+.settings-chrome__crumb {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-nav nav {
+.settings-chrome__crumb strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.settings-chrome__crumb-sep {
+  color: var(--color-text-subtle);
+  margin: 0 0.4rem;
+}
+
+.settings-chrome__right {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+}
+
+.settings-chrome__user {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.settings-chrome__avatar {
+  align-items: center;
+  background: var(--color-accent);
+  border-radius: 999px;
+  color: var(--color-accent-contrast);
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 600;
+  height: 1.5rem;
+  justify-content: center;
+  width: 1.5rem;
+}
+
+.settings-chrome__email {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.settings-nav {
+  background: var(--color-bg);
+  border-right: 1px solid var(--color-border);
   display: grid;
-  gap: var(--space-xs);
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-md) var(--space-sm);
 }
 
-.settings-nav nav button {
+.settings-nav__row {
+  align-items: center;
   background: transparent;
   border: 0;
   border-radius: var(--radius-md);
   color: var(--color-text-muted);
   cursor: pointer;
-  padding: 0.72rem 0.8rem;
+  display: grid;
+  font: inherit;
+  gap: 0.6rem;
+  grid-template-columns: 1rem 1fr auto;
+  padding: 0.55rem 0.7rem;
   text-align: left;
+  width: 100%;
 }
 
-.settings-nav nav button.is-active,
-.settings-nav nav button:hover {
+.settings-nav__row:hover {
   background: var(--color-surface-muted);
   color: var(--color-text);
+}
+
+.settings-nav__row.is-active {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.settings-nav__icon {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  height: 1rem;
+  justify-content: center;
+  width: 1rem;
+}
+
+.settings-nav__row.is-active .settings-nav__icon,
+.settings-nav__row:hover .settings-nav__icon {
+  color: var(--color-text);
+}
+
+.settings-nav__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav__badge {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.05rem 0.45rem;
+}
+
+.settings-nav__badge--admin {
+  background: transparent;
+  border-color: var(--color-border-strong);
+  color: var(--color-accent);
 }
 
 .settings-content {
@@ -3418,8 +3674,19 @@ p {
     width: auto;
   }
 
-  .settings-shell {
+  .settings-shell__body {
     grid-template-columns: 1fr;
+  }
+
+  .settings-chrome {
+    flex-wrap: wrap;
+    grid-template-columns: auto 1fr;
+    padding: 0.5rem var(--space-md);
+  }
+
+  .settings-chrome__right {
+    grid-column: span 2;
+    justify-content: space-between;
   }
 
   .settings-nav {
@@ -4290,6 +4557,64 @@ p {
   font-weight: 500;
 }
 
+/* PR 3.2.1 — expandable per-subagent timeline inside the Agents tab. */
+.atlas-workspace-agent__details {
+  margin-top: 2px;
+}
+
+.atlas-workspace-agent__details-summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  list-style: none;
+  padding: 2px 0;
+  user-select: none;
+}
+
+.atlas-workspace-agent__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.atlas-workspace-agent__details-summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.atlas-workspace-agent__disclosure-hint {
+  color: var(--color-text-subtle);
+  font-size: 10px;
+  transition: transform 120ms ease;
+}
+
+.atlas-workspace-agent__details[open]
+  > .atlas-workspace-agent__details-summary
+  .atlas-workspace-agent__disclosure-hint {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-workspace-agent__disclosure-hint {
+    transition: none;
+  }
+}
+
+.atlas-workspace-agent__timeline {
+  /* Composes with `aui-tool-card__timeline`. Pane-narrow tweaks: tighter
+     rows, smaller font, narrower left rail. The base in-thread styling
+     (dot + connector via ::before) is preserved. */
+  font-size: 11.5px;
+  margin-top: 6px;
+  padding-left: 16px;
+}
+
+.atlas-workspace-agent__timeline.aui-tool-card__timeline
+  > .aui-tool-card__timeline-item {
+  padding: 6px 0;
+}
+
 /* PR 3.2 — Draft tab. */
 .atlas-workspace-draft-tab {
   padding: 0;
@@ -5078,6 +5403,283 @@ p {
   display: flex;
   gap: var(--space-md);
   margin-top: var(--space-xs);
+}
+
+/* PR 8.1 — two-card Profile structure (Identity + Sign-in & security)
+   plus the Appearance Region & language card. The card title sits inside
+   the design-system <Card> so it doesn't collide with the section h2. */
+.me-form__card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  margin: 0 0 var(--space-md);
+}
+
+.me-form__avatar-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-md);
+}
+
+/* PR 8.2 — drag-drop avatar zone. Modifier-only so legacy rows stay
+   visually unchanged; `is-drag` highlights while a file hovers. */
+.me-form__avatar-row--dropzone {
+  border: 1px dashed transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  position: relative;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.me-form__avatar-row--dropzone.is-drag {
+  background: var(--color-surface-muted);
+  border-color: var(--color-accent);
+}
+
+.me-form__avatar-actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.me-form__file-input {
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 0;
+}
+
+.me-form__bio {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.me-form__bio:focus {
+  border-color: var(--color-accent);
+  outline: 0;
+}
+
+/* PR 8.2 — TOTP enrollment panel. The "step" container is just a
+   stack with a tighter gap than the form's default; the QR + secret
+   row uses a 2-column grid that collapses on narrow viewports. */
+.me-form__mfa-head {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+}
+
+.me-form__mfa-step {
+  display: grid;
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+}
+
+.me-form__mfa-actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.me-form__mfa-list {
+  display: grid;
+  gap: var(--space-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.me-form__mfa-row {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+}
+
+.me-form__mfa-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.me-form__mfa-confirm {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: minmax(168px, max-content) minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .me-form__mfa-confirm {
+    grid-template-columns: 1fr;
+  }
+}
+
+.me-form__mfa-qr {
+  background: #fff;
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+}
+
+.me-form__mfa-secret {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.me-form__mfa-secret-code {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  letter-spacing: 0.05em;
+  padding: 0.4rem 0.6rem;
+  word-break: break-all;
+}
+
+.me-form__mfa-recovery summary {
+  cursor: pointer;
+  padding: var(--space-xs) 0;
+}
+
+.me-form__mfa-recovery-list {
+  columns: 2;
+  display: block;
+  list-style: none;
+  margin: var(--space-sm) 0;
+  padding: 0;
+}
+
+.me-form__mfa-recovery-list code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+
+/* PR 8.2 — Personal | Workspace tab strip in the API keys section. */
+.api-keys__tabs {
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.api-keys__tab {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  gap: 0.4rem;
+  padding: 0.55rem 0.4rem;
+}
+
+.api-keys__tab:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.api-keys__tab--active {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.api-keys__tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.me-form__avatar {
+  align-items: center;
+  background: var(--color-surface-muted) center / cover no-repeat;
+  border-radius: 999px;
+  color: var(--color-text);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  height: 4rem;
+  justify-content: center;
+  overflow: hidden;
+  width: 4rem;
+}
+
+.me-form__avatar-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.me-form__inline-link {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.me-form__inline-link:hover {
+  color: var(--color-accent-strong);
+}
+
+.me-form__sign-out-row {
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-md);
+  justify-content: space-between;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+}
+
+.me-form__sign-out-row strong {
+  font-weight: 600;
+}
+
+.me-form__inline-field {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.me-form__inline-field > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.me-form__inline-save {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.45rem 0.75rem;
+}
+
+.me-form__inline-save:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.me-form__inline-save:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .me-radio-group {

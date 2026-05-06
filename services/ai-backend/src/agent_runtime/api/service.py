@@ -24,6 +24,10 @@ from agent_runtime.api.notifications import (
     LoggingNotificationDispatcher,
     NotificationDispatcher,
 )
+from agent_runtime.api.user_policies_resolver import (
+    NullUserPoliciesResolver,
+    UserPoliciesResolver,
+)
 from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.observability.approval_metrics import (
     ApprovalMetrics,
@@ -113,6 +117,12 @@ class RuntimeApiService:
         # exercise non-forwarding paths don't have to wire them.
         membership_resolver: "WorkspaceMembershipResolver | None" = None,
         notification_dispatcher: "NotificationDispatcher | None" = None,
+        # PR 8.0.5 — per-(org, user) policy resolver. Optional so unit
+        # tests that don't exercise the runtime-policy path keep their
+        # existing wiring; the default ``NullUserPoliciesResolver``
+        # returns ``{}`` (= deployment defaults) so the runtime never
+        # refuses on a missing resolver.
+        user_policies_resolver: "UserPoliciesResolver | None" = None,
     ) -> None:
         # The service is uniformly async on the inside. Sync ports get
         # wrapped via to_thread; async ports pass through. This way every
@@ -143,6 +153,14 @@ class RuntimeApiService:
         )
         self._notifications: NotificationDispatcher = (
             notification_dispatcher or LoggingNotificationDispatcher()
+        )
+        # PR 8.0.5 — late import to avoid a cycle: the resolver module
+        # imports from ``execution.contracts`` which lives upstream of
+        # this file in the dep graph, but the constructor is reached
+        # at module-init time so we keep the import local.
+
+        self._user_policies_resolver: UserPoliciesResolver = (
+            user_policies_resolver or NullUserPoliciesResolver()
         )
         # PR 1.4.1 Gap #9 — three OTel signals (forward_total,
         # forward_invalid_total, chain_resolution_seconds). Best-effort:
@@ -326,14 +344,19 @@ class RuntimeApiService:
         user_id: str,
         conversation_id: str,
     ) -> ConversationResponse:
-        """Return conversation metadata for the caller scope."""
+        """Return conversation metadata for the caller scope.
+
+        PR 2.2.1 — overlays the most-recent non-terminal run (if any)
+        onto the response so the sidebar / topbar can paint live state
+        on a fresh navigation without opening a stream first.
+        """
 
         conversation = await self._conversation_for_scope(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
         )
-        return conversation.to_response()
+        return await self._with_latest_run(conversation.to_response(), org_id=org_id)
 
     async def list_conversations(
         self,
@@ -350,6 +373,13 @@ class RuntimeApiService:
         view (active rows only) and the "Show deleted" filter that
         powers Restore. Deleted rows are still inside the retention
         window — the C8 sweeper reaps them on TTL.
+
+        PR 2.2.1 — every row is overlaid with the conversation's
+        most-recent non-terminal run via ``_with_latest_run`` so the
+        sidebar live-set is correct on cold reload. The lookup uses
+        the existing ``get_active_run_for_conversation`` port
+        (terminal runs return ``None``, leaving both projection fields
+        ``None`` on the response — the FE then doesn't paint live).
         """
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
@@ -360,9 +390,41 @@ class RuntimeApiService:
             include_archived=include_archived,
             include_deleted=include_deleted,
         )
+        responses: list[ConversationResponse] = []
+        for record in records:
+            responses.append(
+                await self._with_latest_run(record.to_response(), org_id=org_id)
+            )
         return ConversationListResponse(
-            conversations=tuple(record.to_response() for record in records),
+            conversations=tuple(responses),
             has_more=len(records) == bounded_limit,
+        )
+
+    async def _with_latest_run(
+        self,
+        response: ConversationResponse,
+        *,
+        org_id: str,
+    ) -> ConversationResponse:
+        """Overlay the most-recent non-terminal run onto a conversation.
+
+        Returns the response unchanged when there is no live run for
+        this conversation. The non-terminal filter mirrors what the
+        sidebar's live-pill cares about; terminal runs do not paint a
+        pulse so we do not project them.
+        """
+
+        active = await self.persistence.get_active_run_for_conversation(
+            org_id=org_id,
+            conversation_id=response.conversation_id,
+        )
+        if active is None:
+            return response
+        return response.with_latest_run(
+            status=active.status.value
+            if hasattr(active.status, "value")
+            else str(active.status),
+            run_id=active.run_id,
         )
 
     async def list_messages(
@@ -558,8 +620,17 @@ class RuntimeApiService:
         workspace_overrides = await self._resolve_workspace_behavior_overrides(
             org_id=request.org_id
         )
+        # PR 8.0.5 — single fetch for (tool-use × privacy) per-(org, user)
+        # policy. Same lifecycle as workspace_behavior_overrides: resolve
+        # once, freeze on the runtime context, downstream consumers read
+        # from the snapshot for the lifetime of the run.
+        user_policies_json = await self._resolve_user_policies(
+            org_id=request.org_id, user_id=request.user_id
+        )
         request = self._request_with_runtime_context(
-            request, workspace_behavior_overrides=workspace_overrides
+            request,
+            workspace_behavior_overrides=workspace_overrides,
+            user_policies_json=user_policies_json,
         )
         context = request.runtime_context
         if context is None:
@@ -1350,6 +1421,23 @@ class RuntimeApiService:
             cursor = record.parent_message_id
         return tuple(reversed(ordered))
 
+    async def _resolve_user_policies(
+        self, *, org_id: str, user_id: str
+    ) -> dict[str, object]:
+        """PR 8.0.5 — fetch the per-(org, user) policy snapshot once.
+
+        Returns ``{"tool_use": {...}, "privacy": {...}}`` or ``{}`` —
+        the resolver itself maps every "not configured" / "fetch
+        failed" case to the empty dict so the runtime never refuses
+        a run on a missing snapshot. Consumers downcast to typed
+        snapshots via the ``ToolUsePolicySnapshot.from_response`` /
+        ``PrivacySettingsSnapshot.from_response`` factories.
+        """
+
+        return await self._user_policies_resolver.resolve(
+            org_id=org_id, user_id=user_id
+        )
+
     async def _resolve_workspace_behavior_overrides(
         self, *, org_id: str
     ) -> dict[str, object]:
@@ -1374,11 +1462,12 @@ class RuntimeApiService:
             blob.pop("training_data_opt_out", None)
         return blob
 
-    def _request_with_runtime_context(
+    def _request_with_runtime_context(  # noqa: C901 — additive params keep the call site small
         self,
         request: CreateRunRequest,
         *,
         workspace_behavior_overrides: dict[str, object] | None = None,
+        user_policies_json: dict[str, object] | None = None,
     ) -> CreateRunRequest:
         try:
             model = request.model
@@ -1456,6 +1545,7 @@ class RuntimeApiService:
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
             workspace_behavior_overrides=workspace_behavior_overrides or {},
+            user_policies_json=user_policies_json or {},
         )
         return request.model_copy(update={"runtime_context": runtime_context})
 

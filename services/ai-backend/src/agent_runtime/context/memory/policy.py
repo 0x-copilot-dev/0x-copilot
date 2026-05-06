@@ -118,8 +118,20 @@ class MemoryPolicyAuthorizer:
         operation: MemoryAccessOperation,
         content: str | None = None,
         policies: tuple[MemoryPathPolicy, ...] | None = None,
+        memory_writes_allowed: bool | None = None,
     ) -> MemoryPolicyDecision:
-        """Return whether a memory operation is allowed by path policy."""
+        """Return whether a memory operation is allowed by path policy.
+
+        ``memory_writes_allowed=False`` (PR 8.0.5) short-circuits every
+        write with the dedicated ``MEMORY_DISABLED_BY_USER`` message —
+        keeps the user-toggled refusal cleanly separable from the
+        policy-denied path in observability + audit. ``None`` (the
+        default) leaves existing call sites that don't yet thread the
+        snapshot working unchanged.
+        """
+
+        if memory_writes_allowed is False and operation is MemoryAccessOperation.WRITE:
+            return MemoryPolicyDecision.deny(Messages.Errors.MEMORY_DISABLED_BY_USER)
 
         policy = cls.policy_for_path(path, policies)
         if policy is None:

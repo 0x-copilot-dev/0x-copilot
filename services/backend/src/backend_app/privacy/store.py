@@ -166,9 +166,122 @@ class InMemoryPrivacySettingsStore:
 _ORG_SCOPE = "__org__"
 
 
+# ---------------------------------------------------------------------------
+# Postgres adapter
+# ---------------------------------------------------------------------------
+
+
+class PostgresPrivacySettingsStore:
+    """PR 8.0.5 — postgres-backed adapter for ``privacy_settings``.
+
+    The ``unique (org_id, COALESCE(user_id, '__org__'))`` index from
+    migration 0022 is what lets a single ``INSERT … ON CONFLICT``
+    handle both the workspace-default and user-override paths.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    @contextmanager
+    def _cursor(self, conn: Any | None) -> Iterator[Any]:
+        if conn is not None:
+            with conn.cursor() as cur:
+                yield cur
+            return
+        with self._pool.connection() as owned:
+            with owned.cursor() as cur:
+                yield cur
+
+    def get_for_scope(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None,
+    ) -> PrivacySettingsRow | None:
+        scope = user_id or _ORG_SCOPE
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT org_id, user_id, training_opt_out, region,
+                       retention_days, share_metadata, memory_enabled,
+                       updated_at, updated_by_user_id
+                FROM privacy_settings
+                WHERE org_id = %s AND COALESCE(user_id, '__org__') = %s
+                """,
+                (org_id, scope),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return PrivacySettingsRow.model_validate(dict(row))
+
+    def upsert(
+        self,
+        row: PrivacySettingsRow,
+        *,
+        conn: Any | None = None,
+    ) -> PrivacySettingsRow:
+        saved = row.model_copy(update={"updated_at": _now()})
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO privacy_settings (
+                    org_id, user_id, training_opt_out, region,
+                    retention_days, share_metadata, memory_enabled,
+                    updated_at, updated_by_user_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (org_id, COALESCE(user_id, '__org__')) DO UPDATE SET
+                    training_opt_out = EXCLUDED.training_opt_out,
+                    region = EXCLUDED.region,
+                    retention_days = EXCLUDED.retention_days,
+                    share_metadata = EXCLUDED.share_metadata,
+                    memory_enabled = EXCLUDED.memory_enabled,
+                    updated_at = EXCLUDED.updated_at,
+                    updated_by_user_id = EXCLUDED.updated_by_user_id
+                """,
+                (
+                    saved.org_id,
+                    saved.user_id,
+                    saved.training_opt_out,
+                    saved.region.value if saved.region is not None else None,
+                    saved.retention_days,
+                    saved.share_metadata,
+                    saved.memory_enabled,
+                    saved.updated_at,
+                    saved.updated_by_user_id,
+                ),
+            )
+        return saved
+
+    def delete_for_scope(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None,
+        conn: Any | None = None,
+    ) -> bool:
+        scope = user_id or _ORG_SCOPE
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                DELETE FROM privacy_settings
+                WHERE org_id = %s AND COALESCE(user_id, '__org__') = %s
+                """,
+                (org_id, scope),
+            )
+            return (cur.rowcount or 0) > 0
+
+
 __all__ = [
     "DataResidencyRegion",
     "InMemoryPrivacySettingsStore",
+    "PostgresPrivacySettingsStore",
     "PrivacySettingsRow",
     "PrivacySettingsStore",
 ]

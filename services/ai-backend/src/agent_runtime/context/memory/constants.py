@@ -115,6 +115,11 @@ class Messages:
         INVALID_CONTEXT_SUMMARY = "Context summary was empty or invalid."
         MEMORY_POLICY_DENIED = "Memory access was denied by policy."
         PROMPT_INJECTION_REJECTED = "Memory write was rejected by policy."
+        # PR 8.0.5 — surfaced when the user's privacy snapshot has
+        # ``memory_enabled=false``. Distinct from policy-denied so SIEM
+        # exports / observability can split user-toggled denials from
+        # path-policy denials cleanly.
+        MEMORY_DISABLED_BY_USER = "Memory writes disabled by user."
 
     class Validation:
         NAMESPACE_REQUIRED = "namespace must contain stable scope identifiers"

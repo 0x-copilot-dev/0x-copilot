@@ -310,15 +310,19 @@ export function appendTextDelta(
   content: ThreadMessageContent,
   delta: string,
 ): ThreadMessageContent {
-  if (content.length === 0) {
+  // Visible text means the model has stopped thinking — flip any open
+  // reasoning span to `complete` even if the provider didn't emit an
+  // explicit close marker.
+  const settled = closeReasoningIfRunning(content);
+  if (settled.length === 0) {
     return [{ type: "text", text: delta }];
   }
-  const index = content.length - 1;
-  const last = content[index];
+  const index = settled.length - 1;
+  const last = settled[index];
   if (!isTextPart(last)) {
-    return [...content, { type: "text", text: delta }];
+    return [...settled, { type: "text", text: delta }];
   }
-  return content.map((part, currentIndex) =>
+  return settled.map((part, currentIndex) =>
     currentIndex === index && isTextPart(part)
       ? { ...part, text: part.text + delta }
       : part,
@@ -329,14 +333,15 @@ export function reconcileFinalText(
   content: ThreadMessageContent,
   text: string,
 ): ThreadMessageContent {
-  const lastTextIndex = lastTextPartIndex(content);
+  const settled = closeReasoningIfRunning(content);
+  const lastTextIndex = lastTextPartIndex(settled);
   if (lastTextIndex === -1) {
-    return [...content, { type: "text", text }];
+    return [...settled, { type: "text", text }];
   }
-  if (lastTextIndex !== content.length - 1) {
-    return [...content, { type: "text", text }];
+  if (lastTextIndex !== settled.length - 1) {
+    return [...settled, { type: "text", text }];
   }
-  return content.map((part, currentIndex) =>
+  return settled.map((part, currentIndex) =>
     currentIndex === lastTextIndex && isTextPart(part)
       ? { ...part, text }
       : part,
@@ -356,32 +361,77 @@ export function appendReasoning(
   content: ThreadMessageContent,
   text: string,
   replace: boolean,
+  eventCreatedAtMs?: number,
+  partStatus?: { type: "running" | "complete" },
 ): ThreadMessageContent {
+  const status = partStatus ?? { type: replace ? "complete" : "running" };
   const index = content.findIndex(isReasoningPart);
   if (index === -1) {
-    return [...content, { type: "reasoning", text }];
+    return [
+      ...content,
+      {
+        type: "reasoning",
+        text,
+        status,
+        startedAtMs: eventCreatedAtMs,
+        updatedAtMs: eventCreatedAtMs,
+      },
+    ];
   }
   return content.map((part, currentIndex) =>
     currentIndex === index && isReasoningPart(part)
-      ? { ...part, text: replace ? text : part.text + text }
+      ? {
+          ...part,
+          text: replace ? text : part.text + text,
+          status,
+          startedAtMs: part.startedAtMs ?? eventCreatedAtMs,
+          updatedAtMs: eventCreatedAtMs ?? part.updatedAtMs,
+        }
       : part,
   );
+}
+
+/**
+ * Flip any running reasoning part to `complete`. Called when a
+ * non-reasoning event (text delta, tool call, final response) lands on
+ * the same assistant message — covers the case where the provider never
+ * emits an explicit close marker (`thinking_signature` /
+ * `reasoning_summary_text_done`) and the BE therefore can't emit a final
+ * `reasoning_summary` cap. Idempotent.
+ */
+export function closeReasoningIfRunning(
+  content: ThreadMessageContent,
+): ThreadMessageContent {
+  let changed = false;
+  const next = content.map((part) => {
+    if (!isReasoningPart(part) || part.status?.type !== "running") {
+      return part;
+    }
+    changed = true;
+    return { ...part, status: { type: "complete" } as const };
+  });
+  return changed ? next : content;
 }
 
 export function upsertPart(
   content: ThreadMessageContent,
   next: ThreadMessageContentPart,
 ): ThreadMessageContent {
+  // A tool-call dispatch (or any non-reasoning part) closes any open
+  // reasoning span — the model has finished thinking and is acting.
+  const settled = isToolCallPart(next)
+    ? closeReasoningIfRunning(content)
+    : content;
   if (!isToolCallPart(next)) {
-    return [...content, next];
+    return [...settled, next];
   }
-  const index = content.findIndex(
+  const index = settled.findIndex(
     (part) => isToolCallPart(part) && part.toolCallId === next.toolCallId,
   );
   if (index === -1) {
-    return [...content, next];
+    return [...settled, next];
   }
-  return content.map((part, currentIndex) =>
+  return settled.map((part, currentIndex) =>
     currentIndex === index ? next : part,
   );
 }

@@ -9,6 +9,7 @@ import type {
 import type { RequestIdentity } from "./config";
 import {
   assertOk,
+  correlationHeaders,
   httpDelete,
   httpGet,
   httpPatchQuery,
@@ -84,7 +85,7 @@ export async function skipMcpAuth(
   });
   const response = await fetch(
     `/v1/mcp/servers/${serverId}/auth/skip?${params}`,
-    { method: "POST" },
+    { method: "POST", headers: correlationHeaders() },
   );
   await assertOk(response);
   return (await response.json()) as McpServer;

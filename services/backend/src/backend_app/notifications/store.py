@@ -211,6 +211,181 @@ class InMemoryNotificationPrefsStore:
         return saved
 
 
+# ---------------------------------------------------------------------------
+# Postgres adapter
+# ---------------------------------------------------------------------------
+
+
+class PostgresNotificationPrefsStore:
+    """PR 8.0.5 — postgres-backed adapter for the typed notification
+    tables introduced in migration 0024.
+
+    Two physical tables; one logical store. The primary key
+    ``(user_id, event_kind, channel)`` on
+    ``notification_preferences`` is what lets the per-cell upsert
+    work without per-row branching.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    @contextmanager
+    def _cursor(self, conn: Any | None) -> Iterator[Any]:
+        if conn is not None:
+            with conn.cursor() as cur:
+                yield cur
+            return
+        with self._pool.connection() as owned:
+            with owned.cursor() as cur:
+                yield cur
+
+    def list_preferences(
+        self, *, user_id: str
+    ) -> tuple[NotificationPreferenceRow, ...]:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT user_id, event_kind, channel, enabled, updated_at
+                FROM notification_preferences
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+        return tuple(NotificationPreferenceRow.model_validate(dict(r)) for r in rows)
+
+    def get_quiet_hours(self, *, user_id: str) -> NotificationQuietHoursRow | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT user_id, enabled, from_local, to_local, tz, updated_at
+                FROM notification_quiet_hours
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        # ``from_local`` / ``to_local`` come back as ``datetime.time``
+        # objects from psycopg; coerce to ``HH:MM`` strings to match
+        # the in-memory store's wire shape.
+        record = dict(row)
+        record["from_local"] = _format_hhmm(record["from_local"])
+        record["to_local"] = _format_hhmm(record["to_local"])
+        return NotificationQuietHoursRow.model_validate(record)
+
+    def upsert_preference(
+        self,
+        row: NotificationPreferenceRow,
+        *,
+        conn: Any | None = None,
+    ) -> NotificationPreferenceRow:
+        saved = row.model_copy(update={"updated_at": _now()})
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO notification_preferences (
+                    user_id, event_kind, channel, enabled, updated_at
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, event_kind, channel) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    saved.user_id,
+                    saved.event_kind.value,
+                    saved.channel.value,
+                    saved.enabled,
+                    saved.updated_at,
+                ),
+            )
+        return saved
+
+    def replace_preferences(
+        self,
+        *,
+        user_id: str,
+        rows: tuple[NotificationPreferenceRow, ...],
+        conn: Any | None = None,
+    ) -> tuple[NotificationPreferenceRow, ...]:
+        # Same partial-replace semantics as the in-memory adapter — we
+        # upsert each row and leave the rest of the matrix alone.
+        saved: list[NotificationPreferenceRow] = []
+        with self._cursor(conn) as cur:
+            for row in rows:
+                if row.user_id != user_id:
+                    raise ValueError("row.user_id must match the bulk-PUT user_id")
+                persisted = row.model_copy(update={"updated_at": _now()})
+                cur.execute(
+                    """
+                    INSERT INTO notification_preferences (
+                        user_id, event_kind, channel, enabled, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, event_kind, channel) DO UPDATE SET
+                        enabled = EXCLUDED.enabled,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        persisted.user_id,
+                        persisted.event_kind.value,
+                        persisted.channel.value,
+                        persisted.enabled,
+                        persisted.updated_at,
+                    ),
+                )
+                saved.append(persisted)
+        return tuple(saved)
+
+    def upsert_quiet_hours(
+        self,
+        row: NotificationQuietHoursRow,
+        *,
+        conn: Any | None = None,
+    ) -> NotificationQuietHoursRow:
+        saved = row.model_copy(update={"updated_at": _now()})
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO notification_quiet_hours (
+                    user_id, enabled, from_local, to_local, tz, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    from_local = EXCLUDED.from_local,
+                    to_local = EXCLUDED.to_local,
+                    tz = EXCLUDED.tz,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    saved.user_id,
+                    saved.enabled,
+                    saved.from_local,
+                    saved.to_local,
+                    saved.tz,
+                    saved.updated_at,
+                ),
+            )
+        return saved
+
+
+def _format_hhmm(value: Any) -> str:
+    """Coerce psycopg ``datetime.time`` (or pre-formatted strings) into
+    the ``HH:MM`` wire shape Pydantic validates against."""
+
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M")
+    return str(value)
+
+
 __all__ = [
     "InMemoryNotificationPrefsStore",
     "NotificationChannel",
@@ -218,4 +393,5 @@ __all__ = [
     "NotificationPrefsStore",
     "NotificationPreferenceRow",
     "NotificationQuietHoursRow",
+    "PostgresNotificationPrefsStore",
 ]

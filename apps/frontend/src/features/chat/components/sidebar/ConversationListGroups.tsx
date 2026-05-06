@@ -10,13 +10,18 @@ import { ConversationRow } from "./ConversationRow";
  *
  * Receives `now` so tests / storybook can drive the time bucket
  * deterministically. In ChatScreen we pass `new Date()`.
+ *
+ * PR 2.2.1 — `liveConversationIds` is a Set so any number of chats can
+ * pulse simultaneously (background runs across conversations). The old
+ * `switchingDisabled` gate is gone; rows are always clickable because
+ * the runtime keeps non-visible streams alive instead of tearing them
+ * down on switch.
  */
 export function ConversationListGroups({
   conversations,
   now,
   activeConversationId,
-  liveConversationId,
-  switchingDisabled,
+  liveConversationIds,
   onSelect,
   onTogglePin,
   onArchive,
@@ -25,8 +30,7 @@ export function ConversationListGroups({
   conversations: readonly Conversation[];
   now: Date;
   activeConversationId: string | null;
-  liveConversationId: string | null;
-  switchingDisabled: boolean;
+  liveConversationIds: ReadonlySet<string>;
   onSelect: (conversationId: string) => void;
   onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
   onArchive?: (conversationId: string) => void;
@@ -51,11 +55,7 @@ export function ConversationListGroups({
                 <ConversationRow
                   conversation={conversation}
                   active={conversation.conversation_id === activeConversationId}
-                  isLive={conversation.conversation_id === liveConversationId}
-                  disabled={
-                    switchingDisabled &&
-                    conversation.conversation_id !== activeConversationId
-                  }
+                  isLive={liveConversationIds.has(conversation.conversation_id)}
                   onSelect={onSelect}
                   onTogglePin={onTogglePin}
                   onArchive={onArchive}

@@ -1,4 +1,4 @@
-"""Typed notification preferences + quiet hours (PR B4 / 8.0.3e)."""
+"""Typed notification preferences + quiet hours (PR B4 / 8.0.3e, PR 8.0.5)."""
 
 from backend_app.notifications.store import (
     InMemoryNotificationPrefsStore,
@@ -7,6 +7,7 @@ from backend_app.notifications.store import (
     NotificationPrefsStore,
     NotificationPreferenceRow,
     NotificationQuietHoursRow,
+    PostgresNotificationPrefsStore,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "NotificationPrefsStore",
     "NotificationPreferenceRow",
     "NotificationQuietHoursRow",
+    "PostgresNotificationPrefsStore",
 ]

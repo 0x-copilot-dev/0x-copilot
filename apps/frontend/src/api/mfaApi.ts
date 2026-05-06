@@ -1,5 +1,9 @@
 import type {
   MfaFactorListResponse,
+  MfaWebAuthnFinishRequestBody,
+  MfaWebAuthnFinishResponse,
+  MfaWebAuthnStartRequestBody,
+  MfaWebAuthnStartResponse,
   TotpConfirmRequest,
   TotpEnrollRequestBody,
   TotpEnrollResponse,

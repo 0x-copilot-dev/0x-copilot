@@ -1,7 +1,8 @@
-"""Tool-use policy storage + routes (PR B1 / 8.0.3d)."""
+"""Tool-use policy storage + routes (PR B1 / 8.0.3d, PR 8.0.5)."""
 
 from backend_app.policies.store import (
     InMemoryToolUsePolicyStore,
+    PostgresToolUsePolicyStore,
     ToolUsePolicyKind,
     ToolUsePolicyMode,
     ToolUsePolicyRow,
@@ -10,6 +11,7 @@ from backend_app.policies.store import (
 
 __all__ = [
     "InMemoryToolUsePolicyStore",
+    "PostgresToolUsePolicyStore",
     "ToolUsePolicyKind",
     "ToolUsePolicyMode",
     "ToolUsePolicyRow",

@@ -114,8 +114,10 @@ from backend_app.routes.notifications import (
 )
 from backend_app.routes.privacy import register_privacy_settings_routes
 from backend_app.routes.tool_use_policies import register_tool_use_policy_routes
+from backend_app.routes.runtime_policies import register_runtime_policies_routes
 from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.members import register_members_routes
+from backend_app.routes.me_mfa import register_me_mfa_routes
 from backend_app.routes.mfa import register_mfa_routes
 from backend_app.routes.oidc import register_oidc_routes
 from backend_app.routes.passwords import register_password_routes
@@ -367,6 +369,12 @@ def create_app(
                 service=resolved_mfa_service,
                 sessions=resolved_session_service,
             )
+            # PR 8.2 — caller-scoped MFA wrapper for the Settings UI.
+            # Same MfaService, query-based identity (so the facade's
+            # ``_forward_me`` helper can reach it without rewriting
+            # bodies). Pure thin layer; auditing + replay live in the
+            # service.
+            register_me_mfa_routes(app, service=resolved_mfa_service)
             resolved_oidc_service = oidc_service or OidcService(
                 identity_store=resolved_identity_store,
                 oidc_store=resolved_oidc_store,
@@ -1044,6 +1052,15 @@ def create_app(
         app,
         privacy_store=resolved_privacy_store,
         identity_store=resolved_identity_store,
+    )
+    # PR 8.0.5 — single aggregate runtime-policies route consumed by
+    # ai-backend at run start. Composes the same two stores above into
+    # one wire shape so each run pays one HTTP round-trip instead of
+    # two. Read-only; no audit row beyond the per-fetch access log.
+    register_runtime_policies_routes(
+        app,
+        tool_use_store=resolved_policy_store,
+        privacy_store=resolved_privacy_store,
     )
     # PR B3 / 8.0.3g — personal API keys (atlas_pk_… bearer for CI /
     # scripts). Plaintext is shown ONCE on creation; the server stores

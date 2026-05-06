@@ -91,8 +91,8 @@ describe("workspace switch wiring (PR 3.5 / G4)", () => {
     const user = userEvent.setup();
     render(
       <AssistantThreadList
-        activeRunId={null}
         activeConversationId={null}
+        liveConversationIds={new Set<string>()}
         collapsed={false}
         conversations={conversations}
         loading={false}

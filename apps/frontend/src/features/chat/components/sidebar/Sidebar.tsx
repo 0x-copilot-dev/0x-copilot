@@ -10,7 +10,8 @@ import { SidebarSearch } from "./SidebarSearch";
 import { UserCard } from "./UserCard";
 
 /**
- * Sidebar surface (PR 2.2) — replaces the body of `AssistantThreadList`.
+ * Sidebar surface (PR 2.2 + PR 2.2.1) — replaces the body of
+ * `AssistantThreadList`.
  *
  * Owns:
  *   - search query state (ephemeral; not persisted across reloads),
@@ -22,8 +23,11 @@ import { UserCard } from "./UserCard";
  * Reads (no fetches in this layer):
  *   - `conversations` is the same `Conversation[]` already in
  *     `ChatScreen.tsx` state,
- *   - `activeConversationId` is the conversation that owns the active
- *     run, used to render the "live pulse" badge.
+ *   - `activeConversationId` is the visible conversation,
+ *   - `liveConversationIds` is the set of conversations currently
+ *     running a backgrounded SSE stream (PR 2.2.1). Replaces the prior
+ *     singleton `liveConversationId` and the `switchingDisabled` gate —
+ *     rows are always clickable now.
  *
  * Switching conversations and starting a new one are handed back to the
  * parent (the runtime owns the actual switch). When the consumer doesn't
@@ -35,8 +39,7 @@ export function Sidebar({
   conversations,
   loading,
   activeConversationId,
-  liveConversationId,
-  switchingDisabled,
+  liveConversationIds,
   onSwitchToThread,
   onStartNewChat,
   onToggleSidebar,
@@ -101,7 +104,20 @@ export function Sidebar({
             data-tooltip="Hide sidebar (⌘\\)"
             onClick={onToggleSidebar}
           >
-            ⤺
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M9 3v18" />
+            </svg>
           </IconButton>
         ) : null}
       </div>
@@ -109,18 +125,11 @@ export function Sidebar({
         <button
           type="button"
           className="aui-new-thread"
-          disabled={!onStartNewChat || switchingDisabled}
-          title={
-            switchingDisabled
-              ? "Stop the current response before starting a new chat"
-              : "Start a new thread (⌘N)"
-          }
+          disabled={!onStartNewChat}
+          title="Start a new thread (⌘N)"
           onClick={() => onStartNewChat?.()}
         >
           + New chat
-          <span className="aui-new-thread__chord" aria-hidden="true">
-            ⌘N
-          </span>
         </button>
         <SidebarSearch
           ref={searchRef}
@@ -139,8 +148,7 @@ export function Sidebar({
             conversations={filtered}
             now={now ?? new Date()}
             activeConversationId={activeConversationId}
-            liveConversationId={liveConversationId}
-            switchingDisabled={switchingDisabled}
+            liveConversationIds={liveConversationIds}
             onSelect={(id) => onSwitchToThread?.(id)}
             onTogglePin={onTogglePin}
             onArchive={onArchive}
@@ -163,9 +171,12 @@ export interface SidebarProps {
   conversations: readonly Conversation[];
   loading: boolean;
   activeConversationId: string | null;
-  liveConversationId: string | null;
-  /** True while a run is streaming — switching threads is suppressed. */
-  switchingDisabled: boolean;
+  /**
+   * PR 2.2.1 — set of conversation_ids whose runtime slot has a live
+   * (non-terminal) run. Replaces the singleton `liveConversationId` so
+   * any number of chats can pulse simultaneously.
+   */
+  liveConversationIds: ReadonlySet<string>;
   onSwitchToThread?: (conversationId: string) => void;
   onStartNewChat?: () => void;
   onToggleSidebar?: () => void;

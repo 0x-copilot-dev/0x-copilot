@@ -12,8 +12,6 @@ import {
   Select,
   Switch,
   TextInput,
-  useTheme,
-  type ThemeScheme,
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
@@ -24,24 +22,24 @@ import type { SkillState } from "../skills/useSkills";
 import type { RequestIdentity } from "../../api/config";
 import type { UserProfileState } from "../me/useUserProfile";
 import type { UserPreferencesState } from "../me/useUserPreferences";
-import { AccountSessionsPanel } from "./AccountSessionsPanel";
-// PR 4.1 — "You" group sections.
+// PR 8.1 — ACCOUNT group sections.
 import { Appearance } from "./sections/Appearance";
 import { Notifications } from "./sections/Notifications";
 import { Profile } from "./sections/Profile";
 import { Shortcuts } from "./sections/Shortcuts";
-// PR B3 / 8.0.3g — personal API keys.
 import { ApiKeys } from "./sections/ApiKeys";
-// PR 4.3 — "AI & data" group sections.
+// PR 8.1 — AI & DATA group sections.
 import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
-// PR 4.2 — "Workspace" group sections.
+// PR 8.1 — WORKSPACE group sections.
 import { AuditLogSettings } from "./AuditLogSettings";
 import { BillingSettings } from "./BillingSettings";
 import { McpOverlay } from "../connectors/mcp/McpOverlay";
 import { MembersSettings } from "./MembersSettings";
 import { WorkspaceSettings } from "./WorkspaceSettings";
+// PR 8.1 — top chrome reads workspace name + member count.
+import { useWorkspace, useWorkspaceMembers } from "./useWorkspace";
 import "./workspace.css";
 
 const DEFAULT_SKILL_MARKDOWN = `---
@@ -63,62 +61,133 @@ Use this skill when...
 `;
 
 export type SettingsSection =
-  // PR 4.1 — "You" group (Profile / Appearance / Shortcuts / Notifications).
+  // PR 8.1 — ACCOUNT group (per-user identity + appearance + shortcuts +
+  // personal API keys). Lands first so users find their own settings.
   | "profile"
   | "appearance"
   | "shortcuts"
-  | "notifications"
-  // PR 4.2 — "Workspace" group (Workspace branding / Members / Billing).
+  | "api-keys"
+  // PR 8.1 — WORKSPACE group (admin / shared surfaces).
   | "workspace"
   | "members"
   | "billing"
-  // PR 7.1 — admin-only audit log table under the Workspace group.
   | "audit-log"
-  // PR 4.3 — "AI & data" group (Model & behavior / Privacy & data; the
-  // existing "connectors" slug also belongs to this group visually).
+  // PR 8.1 — AI & DATA group (agent behavior + sources).
   | "model-and-behavior"
-  | "privacy-data"
-  // Legacy / misc (predate the design's grouping).
-  | "general"
-  | "account"
-  | "capabilities"
   | "connectors"
   | "skills"
-  | "claude-code"
-  // Personal API keys (per-user; admin tokens live elsewhere).
-  | "api-keys";
+  | "privacy-data"
+  // PR 8.1 — NOTIFICATIONS (single section, kept as its own group to
+  // match the design bundle's IA).
+  | "notifications";
 
-// PR 4.3 — sections array supports a "group" entry alongside section
-// rows so the rail can render Atlas's design grouping. Other PRs
-// extend this list additively under their group.
+// PR 8.1 — `RailEntry` carries the icon glyph + an optional badge so the
+// rail rows visually match the Atlas design (icon + label + count /
+// "Admin" tag). Group entries are heading rows the user can't click.
+type RailIcon =
+  | "user"
+  | "sun"
+  | "command"
+  | "key"
+  | "building"
+  | "users"
+  | "card"
+  | "doc"
+  | "spark"
+  | "link"
+  | "book"
+  | "shield"
+  | "bell";
+
 type RailEntry =
   | { kind: "group"; label: string }
-  | { kind: "section"; id: SettingsSection; label: string };
+  | {
+      kind: "section";
+      id: SettingsSection;
+      label: string;
+      icon: RailIcon;
+      /**
+       * Optional badge override. When omitted the rail computes a sensible
+       * default at render time (member count, connector count, etc.).
+       */
+      badge?: string;
+      /**
+       * Slug for the data-driven badge resolver. `null` means no badge,
+       * a string keys into the runtime count map below.
+       */
+      countKey?: "members" | "connectors" | "skills" | null;
+      /** Show the static "Admin" pill — purely cosmetic; backend still gates. */
+      adminPill?: boolean;
+    };
 
-const sections: Array<RailEntry> = [
-  // PR 4.1 — "You" group: per-user profile + preferences. Atlas places
-  // this first so users land on their own settings.
-  { kind: "group", label: "You" },
-  { kind: "section", id: "profile", label: "Profile" },
-  { kind: "section", id: "appearance", label: "Appearance" },
-  { kind: "section", id: "shortcuts", label: "Shortcuts" },
-  { kind: "section", id: "notifications", label: "Notifications" },
-  { kind: "section", id: "api-keys", label: "API keys" },
-  // PR 4.2 — "Workspace" group: workspace branding, members, billing.
+const railSections: ReadonlyArray<RailEntry> = [
+  { kind: "group", label: "Account" },
+  { kind: "section", id: "profile", label: "Profile", icon: "user" },
+  { kind: "section", id: "appearance", label: "Appearance", icon: "sun" },
+  { kind: "section", id: "shortcuts", label: "Shortcuts", icon: "command" },
+  { kind: "section", id: "api-keys", label: "API keys", icon: "key" },
   { kind: "group", label: "Workspace" },
-  { kind: "section", id: "workspace", label: "Workspace" },
-  { kind: "section", id: "members", label: "Members" },
-  { kind: "section", id: "billing", label: "Billing" },
-  { kind: "section", id: "audit-log", label: "Audit log" },
-  { kind: "section", id: "general", label: "General" },
-  { kind: "section", id: "account", label: "Account" },
-  { kind: "section", id: "capabilities", label: "Capabilities" },
+  {
+    kind: "section",
+    id: "workspace",
+    label: "Workspace",
+    icon: "building",
+    adminPill: true,
+  },
+  {
+    kind: "section",
+    id: "members",
+    label: "Members & roles",
+    icon: "users",
+    countKey: "members",
+  },
+  {
+    kind: "section",
+    id: "billing",
+    label: "Billing & usage",
+    icon: "card",
+  },
+  {
+    kind: "section",
+    id: "audit-log",
+    label: "Audit log",
+    icon: "doc",
+    adminPill: true,
+  },
   { kind: "group", label: "AI & data" },
-  { kind: "section", id: "model-and-behavior", label: "Model & behavior" },
-  { kind: "section", id: "connectors", label: "Connectors" },
-  { kind: "section", id: "privacy-data", label: "Privacy & data" },
-  { kind: "section", id: "skills", label: "Skills" },
-  { kind: "section", id: "claude-code", label: "Claude Code" },
+  {
+    kind: "section",
+    id: "model-and-behavior",
+    label: "Model & behavior",
+    icon: "spark",
+  },
+  {
+    kind: "section",
+    id: "connectors",
+    label: "Connectors",
+    icon: "link",
+    countKey: "connectors",
+  },
+  {
+    kind: "section",
+    id: "skills",
+    label: "Skills",
+    icon: "book",
+    countKey: "skills",
+  },
+  {
+    kind: "section",
+    id: "privacy-data",
+    label: "Privacy & data",
+    icon: "shield",
+  },
+  { kind: "group", label: "Notifications" },
+  {
+    kind: "section",
+    id: "notifications",
+    label: "Notifications",
+    icon: "bell",
+  },
 ];
 
 export function SettingsScreen({
@@ -127,7 +196,7 @@ export function SettingsScreen({
   identity,
   profile,
   preferences,
-  initialSection = "general",
+  initialSection = "profile",
   dataResidency,
   onBackToChat,
   onSectionChange,
@@ -142,18 +211,17 @@ export function SettingsScreen({
    */
   identity?: RequestIdentity;
   /**
-   * PR 4.1 — hydrated user profile + preferences from the app shell.
+   * Hydrated user profile + preferences from the app shell.
    * Optional so legacy callers that mount SettingsScreen without
-   * threading these (tests, storybook) keep working — the "You"
+   * threading these (tests, storybook) keep working — the affected
    * sections render a soft-disabled state when the state is absent.
    */
   profile?: UserProfileState;
   preferences?: UserPreferencesState;
   initialSection?: SettingsSection;
   /**
-   * PR 4.3 — read-only deployment region label rendered in the
-   * Privacy & data panel. Sourced from deploy config; ``null`` ⇒
-   * "Not configured".
+   * Read-only deployment region label rendered in the Privacy & data
+   * panel. Sourced from deploy config; ``null`` ⇒ "Not configured".
    */
   dataResidency?: string | null;
   onBackToChat: () => void;
@@ -166,39 +234,46 @@ export function SettingsScreen({
     setActiveSection(initialSection);
   }, [initialSection]);
 
-  // PR 4.3 — single hydration of workspace defaults for both Model &
-  // behavior and Privacy & data. The hook tolerates being called
-  // without an identity (returns nulls) so legacy callers without
-  // identity threading don't break.
+  // Single hydration of workspace defaults for both Model & behavior and
+  // Privacy & data. The hook tolerates being called without an identity
+  // (returns nulls) so legacy callers without identity threading don't
+  // break.
   const workspaceDefaults = useWorkspaceDefaults(identity ?? FALLBACK_IDENTITY);
 
-  // PR 4.2 — admin gating for the Workspace group. Backend enforces via
-  // ``ADMIN_USERS`` permission scope; this client check hides controls
+  // Admin gating for the Workspace group. Backend enforces via the
+  // ``admin:users`` permission scope; the client check hides controls
   // ahead of the round-trip. Members see the panels in read-only mode.
   const auth = useAuth();
   const isAdmin =
     auth.identity?.permission_scopes?.includes("admin:users") ?? false;
 
+  // PR 8.1 — top chrome data + rail badges. Both hooks tolerate the
+  // fallback identity and short-circuit to a null/empty state when the
+  // org/user are blank, so legacy mounts still render.
+  const workspace = useWorkspace(identity ?? FALLBACK_IDENTITY);
+  const members = useWorkspaceMembers(identity ?? FALLBACK_IDENTITY);
+  const counts = {
+    members: members.members.length,
+    connectors: connectors.servers.length,
+    skills: skills.skills.length,
+  };
+
+  function handlePick(id: SettingsSection): void {
+    setActiveSection(id);
+    onSectionChange?.(id);
+  }
+
   return (
     <main className="settings-shell">
-      <aside className="settings-nav">
-        <div className="settings-brand aui-logo">
-          <span className="aui-logo__mark" aria-hidden="true">
-            A
-          </span>
-          <span className="aui-logo__wordmark">Atlas</span>
-        </div>
-        <button
-          className="settings-back"
-          type="button"
-          title="Back to chat"
-          onClick={onBackToChat}
-        >
-          Back to chat
-        </button>
-        <h1>Settings</h1>
-        <nav aria-label="Settings sections">
-          {sections.map((entry, index) =>
+      <SettingsTopChrome
+        workspaceName={workspace.workspace?.display_name ?? null}
+        userEmail={profile?.data?.email ?? null}
+        onBack={onBackToChat}
+        onJumpConnectors={() => handlePick("connectors")}
+      />
+      <div className="settings-shell__body">
+        <aside className="settings-nav" aria-label="Settings sections">
+          {railSections.map((entry, index) =>
             entry.kind === "group" ? (
               <div
                 key={`group-${index}`}
@@ -208,84 +283,282 @@ export function SettingsScreen({
                 {entry.label}
               </div>
             ) : (
-              <button
+              <RailRow
                 key={entry.id}
-                className={activeSection === entry.id ? "is-active" : undefined}
-                type="button"
-                title={`Open ${entry.label} settings`}
-                onClick={() => {
-                  setActiveSection(entry.id);
-                  onSectionChange?.(entry.id);
-                }}
-              >
-                {entry.label}
-              </button>
+                entry={entry}
+                active={activeSection === entry.id}
+                count={entry.countKey ? counts[entry.countKey] : null}
+                onPick={handlePick}
+              />
             ),
           )}
-        </nav>
-      </aside>
-      <section className="settings-content">
-        {/* PR 4.1 — "You" group. Render only when the shell threaded the
-            hydrated state in. Legacy mounts without these props see the
-            unchanged legacy rail. */}
-        {activeSection === "profile" && profile ? (
-          <Profile profile={profile} />
-        ) : null}
-        {activeSection === "appearance" && preferences ? (
-          <Appearance preferences={preferences} />
-        ) : null}
-        {activeSection === "shortcuts" && preferences ? (
-          <Shortcuts preferences={preferences} />
-        ) : null}
-        {activeSection === "notifications" && preferences ? (
-          <Notifications preferences={preferences} />
-        ) : null}
-        {activeSection === "api-keys" ? <ApiKeys /> : null}
-        {/* PR 4.2 — Workspace group. Render only when identity is plumbed
-            (legacy callers that don't pass identity see the legacy rail). */}
-        {activeSection === "workspace" && identity ? (
-          <WorkspaceSettings identity={identity} isAdmin={isAdmin} />
-        ) : null}
-        {activeSection === "members" && identity ? (
-          <MembersSettings identity={identity} isAdmin={isAdmin} />
-        ) : null}
-        {activeSection === "billing" && identity ? (
-          <BillingSettings identity={identity} />
-        ) : null}
-        {activeSection === "audit-log" && identity ? (
-          <AuditLogSettings identity={identity} isAdmin={isAdmin} />
-        ) : null}
-        {activeSection === "general" ? <GeneralSettings /> : null}
-        {activeSection === "account" ? <AccountSettings /> : null}
-        {activeSection === "capabilities" ? (
-          <PlaceholderSettings
-            title="Capabilities"
-            body="Agent capabilities are driven by enabled connectors for this milestone."
-          />
-        ) : null}
-        {activeSection === "connectors" ? (
-          <ConnectorsSettings connectors={connectors} />
-        ) : null}
-        {activeSection === "skills" ? <SkillsSettings skills={skills} /> : null}
-        {activeSection === "claude-code" ? (
-          <PlaceholderSettings
-            title="Claude Code"
-            body="Claude Code style settings can live here later without changing connector management."
-          />
-        ) : null}
-        {activeSection === "model-and-behavior" ? (
-          <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
-        ) : null}
-        {activeSection === "privacy-data" && identity !== undefined ? (
-          <PrivacyAndData
-            identity={identity}
-            workspaceDefaults={workspaceDefaults}
-            dataResidency={dataResidency}
-          />
-        ) : null}
-      </section>
+        </aside>
+        <section className="settings-content">
+          {activeSection === "profile" && profile ? (
+            <Profile profile={profile} />
+          ) : null}
+          {activeSection === "appearance" && preferences && profile ? (
+            <Appearance preferences={preferences} profile={profile} />
+          ) : null}
+          {activeSection === "shortcuts" && preferences ? (
+            <Shortcuts preferences={preferences} />
+          ) : null}
+          {activeSection === "notifications" && preferences ? (
+            <Notifications preferences={preferences} />
+          ) : null}
+          {activeSection === "api-keys" ? <ApiKeys /> : null}
+          {activeSection === "workspace" && identity ? (
+            <WorkspaceSettings identity={identity} isAdmin={isAdmin} />
+          ) : null}
+          {activeSection === "members" && identity ? (
+            <MembersSettings identity={identity} isAdmin={isAdmin} />
+          ) : null}
+          {activeSection === "billing" && identity ? (
+            <BillingSettings identity={identity} />
+          ) : null}
+          {activeSection === "audit-log" && identity ? (
+            <AuditLogSettings identity={identity} isAdmin={isAdmin} />
+          ) : null}
+          {activeSection === "model-and-behavior" ? (
+            <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
+          ) : null}
+          {activeSection === "connectors" ? (
+            <ConnectorsSettings connectors={connectors} />
+          ) : null}
+          {activeSection === "skills" ? (
+            <SkillsSettings skills={skills} />
+          ) : null}
+          {activeSection === "privacy-data" && identity !== undefined ? (
+            <PrivacyAndData
+              identity={identity}
+              workspaceDefaults={workspaceDefaults}
+              dataResidency={dataResidency}
+            />
+          ) : null}
+        </section>
+      </div>
     </main>
   );
+}
+
+function SettingsTopChrome({
+  workspaceName,
+  userEmail,
+  onBack,
+  onJumpConnectors,
+}: {
+  workspaceName: string | null;
+  userEmail: string | null;
+  onBack: () => void;
+  onJumpConnectors: () => void;
+}): ReactElement {
+  const initial = userEmail ? userEmail.charAt(0).toUpperCase() : "·";
+  return (
+    <header className="settings-chrome" role="banner">
+      <button
+        type="button"
+        className="settings-chrome__back"
+        onClick={onBack}
+        title="Back to chat"
+      >
+        <RailGlyph name="back" />
+        <span>Back to Atlas</span>
+      </button>
+      <div className="settings-chrome__crumb" aria-live="polite">
+        Settings
+        {workspaceName ? (
+          <>
+            <span className="settings-chrome__crumb-sep" aria-hidden="true">
+              ·
+            </span>
+            <strong>{workspaceName}</strong>
+          </>
+        ) : null}
+      </div>
+      <div className="settings-chrome__right">
+        <button
+          type="button"
+          className="settings-chrome__shortcut"
+          onClick={onJumpConnectors}
+          title="Manage MCP servers"
+        >
+          <RailGlyph name="link" />
+          <span>Manage MCP servers</span>
+        </button>
+        <div className="settings-chrome__user" aria-label="Signed-in user">
+          <span className="settings-chrome__avatar" aria-hidden="true">
+            {initial}
+          </span>
+          <span className="settings-chrome__email">
+            {userEmail ?? "Signed in"}
+          </span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function RailRow({
+  entry,
+  active,
+  count,
+  onPick,
+}: {
+  entry: Extract<RailEntry, { kind: "section" }>;
+  active: boolean;
+  count: number | null;
+  onPick: (id: SettingsSection) => void;
+}): ReactElement {
+  // Don't render zero-count badges for hooks still loading or empty
+  // collections — only show the count chip when there's something to
+  // count. Avoids "Connectors 0" before connectors hydrate.
+  const badge =
+    entry.badge ?? (count !== null && count > 0 ? String(count) : null);
+  return (
+    <button
+      className={active ? "settings-nav__row is-active" : "settings-nav__row"}
+      type="button"
+      title={`Open ${entry.label} settings`}
+      onClick={() => onPick(entry.id)}
+    >
+      <span className="settings-nav__icon" aria-hidden="true">
+        <RailGlyph name={entry.icon} />
+      </span>
+      <span className="settings-nav__label">{entry.label}</span>
+      {entry.adminPill ? (
+        <span className="settings-nav__badge settings-nav__badge--admin">
+          Admin
+        </span>
+      ) : badge ? (
+        <span className="settings-nav__badge">{badge}</span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * Inline glyphs for the rail + chrome. The design system doesn't ship
+ * an icon set today; rather than introduce one for a single surface we
+ * inline the strokes here in the same style the design bundle used.
+ * Stroke `currentColor` so the active-row colour change picks up
+ * automatically.
+ */
+function RailGlyph({ name }: { name: RailIcon | "back" }): ReactElement | null {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.6,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  switch (name) {
+    case "back":
+      return (
+        <svg {...common}>
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+      );
+    case "user":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" />
+        </svg>
+      );
+    case "sun":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5" />
+        </svg>
+      );
+    case "command":
+      return (
+        <svg {...common}>
+          <path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z" />
+        </svg>
+      );
+    case "key":
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="14" r="4" />
+          <path d="M11 12l9-9 2 2-2 2 2 2-2 2-2-2-3 3" />
+        </svg>
+      );
+    case "building":
+      return (
+        <svg {...common}>
+          <path d="M4 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16" />
+          <path d="M15 9h3a2 2 0 0 1 2 2v10" />
+          <path d="M8 7h2M8 11h2M8 15h2" />
+        </svg>
+      );
+    case "users":
+      return (
+        <svg {...common}>
+          <circle cx="9" cy="8" r="3.5" />
+          <path d="M2 20c1-3.5 3.5-5 7-5s6 1.5 7 5" />
+          <circle cx="17" cy="9" r="2.5" />
+          <path d="M22 18c-.5-2-2-3-4-3" />
+        </svg>
+      );
+    case "card":
+      return (
+        <svg {...common}>
+          <rect x="3" y="6" width="18" height="13" rx="2" />
+          <path d="M3 10h18" />
+        </svg>
+      );
+    case "doc":
+      return (
+        <svg {...common}>
+          <path d="M6 3h8l4 4v14H6z" />
+          <path d="M14 3v4h4" />
+          <path d="M9 13h6M9 17h6" />
+        </svg>
+      );
+    case "spark":
+      return (
+        <svg {...common}>
+          <path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z" />
+          <path d="M19 15l.6 1.4L21 17l-1.4.6L19 19l-.6-1.4L17 17l1.4-.6z" />
+        </svg>
+      );
+    case "link":
+      return (
+        <svg {...common}>
+          <path d="M10 13a4 4 0 0 0 5.7 0l3-3a4 4 0 1 0-5.7-5.7l-1 1" />
+          <path d="M14 11a4 4 0 0 0-5.7 0l-3 3a4 4 0 1 0 5.7 5.7l1-1" />
+        </svg>
+      );
+    case "book":
+      return (
+        <svg {...common}>
+          <path d="M4 5a2 2 0 0 1 2-2h12v15H6a2 2 0 0 0-2 2z" />
+          <path d="M4 18a2 2 0 0 1 2-2h12" />
+          <path d="M8 7h7" />
+        </svg>
+      );
+    case "shield":
+      return (
+        <svg {...common}>
+          <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+        </svg>
+      );
+    case "bell":
+      return (
+        <svg {...common}>
+          <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" />
+          <path d="M10 21a2 2 0 0 0 4 0" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 }
 
 // PR 4.3 — fallback identity used only by legacy callers that mount
@@ -296,81 +569,6 @@ const FALLBACK_IDENTITY: RequestIdentity = {
   orgId: "",
   userId: "",
 };
-
-function GeneralSettings(): ReactElement {
-  const { scheme, setScheme } = useTheme();
-
-  return (
-    <div className="settings-section">
-      <h2>General</h2>
-      <Card>
-        <Field
-          label="Color scheme"
-          hint="Theme tokens update the whole UI kit."
-        >
-          <Select
-            value={scheme}
-            onChange={(event) => setScheme(event.target.value as ThemeScheme)}
-          >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="slate">Slate</option>
-          </Select>
-        </Field>
-      </Card>
-    </div>
-  );
-}
-
-function AccountSettings(): ReactElement {
-  const auth = useAuth();
-  const identity = auth.identity;
-  return (
-    <div className="settings-section">
-      <h2>Account</h2>
-      {identity && (
-        <Card className="settings-account-summary">
-          <Field label="Organization">
-            <code>{identity.org_id}</code>
-          </Field>
-          <Field label="User">
-            <code>{identity.user_id}</code>
-          </Field>
-          <Field label="Roles">
-            <span>{identity.roles.join(", ") || "none"}</span>
-          </Field>
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            onClick={() => void auth.logout()}
-            data-testid="account-sign-out"
-          >
-            Sign out everywhere on this device
-          </Button>
-        </Card>
-      )}
-      <AccountSessionsPanel />
-    </div>
-  );
-}
-
-function PlaceholderSettings({
-  title,
-  body = "This section is intentionally light for now. Privacy and billing are out of scope.",
-}: {
-  title: string;
-  body?: string;
-}): ReactElement {
-  return (
-    <div className="settings-section">
-      <h2>{title}</h2>
-      <Card>
-        <p>{body}</p>
-      </Card>
-    </div>
-  );
-}
 
 function ConnectorsSettings({
   connectors,

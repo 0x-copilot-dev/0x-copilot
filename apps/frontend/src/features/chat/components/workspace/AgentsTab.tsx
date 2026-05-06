@@ -7,6 +7,12 @@
 // jump target is identified by `data-task-id={task_id}` on the
 // SubagentTool block; a lightweight scroll helper here keeps the
 // integration shallow.
+//
+// PR 3.2.1 — each card body wraps in a native `<details>` disclosure
+// that reveals the per-subagent step timeline (the same activities the
+// in-thread `SubagentTool` shows, projected from the chat tree by
+// `useSubagentActivities`). Reuses `SubagentActivityList` verbatim with
+// a pane-narrow class composed on top of `aui-tool-card__timeline`.
 
 import {
   Badge,
@@ -22,6 +28,8 @@ import {
   subagentsByRecency,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
+import { SubagentActivityList } from "../tools/SubagentActivityList";
+import type { SubagentActivitiesByTask } from "./useSubagentActivities";
 
 export interface AgentsTabProps {
   subagents: SubagentSnapshotMap;
@@ -30,6 +38,10 @@ export interface AgentsTabProps {
   /** Subagent task_id to scroll into focus on next render. */
   focusTaskId?: string | null;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  /** PR 3.2.1 — `task_id → activities[]` projected from the chat tree
+   *  by `useSubagentActivities`. Hoisted in `ChatScreen` so the pane
+   *  and the in-thread `SubagentTool` share one source of truth. */
+  activitiesByTask?: SubagentActivitiesByTask;
 }
 
 export function AgentsTab({
@@ -38,6 +50,7 @@ export function AgentsTab({
   error,
   focusTaskId,
   onJumpToSubagent,
+  activitiesByTask,
 }: AgentsTabProps): ReactElement {
   const ordered = subagentsByRecency(subagents);
   const focusRef = useRef<HTMLLIElement | null>(null);
@@ -92,6 +105,12 @@ export function AgentsTab({
         {ordered.map((entry) => {
           const isFocused = entry.task_id === focusTaskId;
           const running = isRunningStatus(entry.status);
+          const activities = activitiesByTask?.get(entry.task_id) ?? [];
+          const metaText = running
+            ? "working…"
+            : entry.duration_ms !== null
+              ? `Completed in ${formatDuration(entry.duration_ms)}`
+              : null;
           return (
             <li
               key={entry.task_id}
@@ -134,17 +153,32 @@ export function AgentsTab({
                       {entry.result_summary}
                     </p>
                   ) : null}
-                  <div className="atlas-workspace-agent__meta">
-                    {running ? (
-                      <span className="atlas-workspace-agent__working">
-                        working…
+                  <details
+                    className="atlas-workspace-agent__details"
+                    open={isFocused || undefined}
+                    data-testid={`workspace-agent-details-${entry.task_id}`}
+                  >
+                    <summary className="atlas-workspace-agent__details-summary">
+                      <span
+                        className={classNames(
+                          "atlas-workspace-agent__meta",
+                          running && "atlas-workspace-agent__working",
+                        )}
+                      >
+                        {metaText ?? <span aria-hidden="true">&nbsp;</span>}
                       </span>
-                    ) : entry.duration_ms !== null ? (
-                      <span>
-                        Completed in {formatDuration(entry.duration_ms)}
+                      <span
+                        className="atlas-workspace-agent__disclosure-hint"
+                        aria-hidden="true"
+                      >
+                        ▾
                       </span>
-                    ) : null}
-                  </div>
+                    </summary>
+                    <SubagentActivityList
+                      className="atlas-workspace-agent__timeline aui-tool-card__timeline"
+                      activities={[...activities]}
+                    />
+                  </details>
                 </div>
               </Card>
             </li>

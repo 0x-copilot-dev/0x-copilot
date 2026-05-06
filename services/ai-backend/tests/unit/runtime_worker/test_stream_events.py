@@ -51,6 +51,122 @@ class TestFixtures:
         )
 
 
+def test_reasoning_delta_extracts_anthropic_thinking_block() -> None:
+    chunk = {"content": [{"type": "thinking", "thinking": "weighing options"}]}
+    assert StreamMessageParser.reasoning_delta(chunk) == "weighing options"
+
+
+def test_reasoning_delta_extracts_openai_responses_summary_delta() -> None:
+    chunk = {
+        "content": [
+            {"type": "reasoning_summary_text_delta", "text": "summary "},
+            {"type": "reasoning_summary_text_delta", "text": "tail"},
+        ]
+    }
+    assert StreamMessageParser.reasoning_delta(chunk) == "summary tail"
+
+
+def test_reasoning_delta_returns_none_for_plain_text_chunks() -> None:
+    assert StreamMessageParser.reasoning_delta({"content": "visible reply"}) is None
+    assert (
+        StreamMessageParser.reasoning_delta(
+            {"content": [{"type": "text", "text": "visible"}]}
+        )
+        is None
+    )
+
+
+def test_reasoning_finalised_detects_explicit_close_markers() -> None:
+    assert StreamMessageParser.reasoning_finalised(
+        {"content": [{"type": "thinking", "thinking_signature": "sig"}]}
+    )
+    assert StreamMessageParser.reasoning_finalised(
+        {"content": [{"type": "reasoning_summary_text_done"}]}
+    )
+    assert not StreamMessageParser.reasoning_finalised(
+        {"content": [{"type": "thinking", "thinking": "still going"}]}
+    )
+
+
+async def _drive_emit_reasoning(
+    processor: StreamMessageProcessor,
+    *,
+    namespace: StreamNamespace,
+    message: object,
+) -> None:
+    await processor.emit_reasoning_events(
+        run=TestFixtures.run_record(),
+        namespace=namespace,
+        message=message,
+        metadata={},
+        parent_task_id=None,
+        subagent_id=None,
+    )
+
+
+def test_emit_reasoning_streams_delta_and_caps_on_signature() -> None:
+    import asyncio
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    processor = StreamMessageProcessor(
+        event_producer=producer, update_processor=update_processor
+    )
+    main = StreamNamespace.from_value(())
+
+    asyncio.run(
+        _drive_emit_reasoning(
+            processor,
+            namespace=main,
+            message={"content": [{"type": "thinking", "thinking": "first "}]},
+        )
+    )
+    asyncio.run(
+        _drive_emit_reasoning(
+            processor,
+            namespace=main,
+            message={"content": [{"type": "thinking", "thinking": "second"}]},
+        )
+    )
+    asyncio.run(
+        _drive_emit_reasoning(
+            processor,
+            namespace=main,
+            message={"content": [{"type": "thinking", "thinking_signature": "sig"}]},
+        )
+    )
+
+    event_types = [event["event_type"] for event in producer.events]
+    assert event_types == [
+        RuntimeApiEventType.REASONING_SUMMARY_DELTA,
+        RuntimeApiEventType.REASONING_SUMMARY_DELTA,
+        RuntimeApiEventType.REASONING_SUMMARY,
+    ]
+    assert producer.events[-1]["payload"] == {"summary": "first second"}
+    assert "run_123" not in processor._reasoning_buffers
+
+
+def test_emit_reasoning_drops_subagent_chunks() -> None:
+    import asyncio
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    processor = StreamMessageProcessor(
+        event_producer=producer, update_processor=update_processor
+    )
+    sub = StreamNamespace.from_value(("tools:task_42",))
+
+    asyncio.run(
+        _drive_emit_reasoning(
+            processor,
+            namespace=sub,
+            message={"content": [{"type": "thinking", "thinking": "subagent"}]},
+        )
+    )
+
+    assert producer.events == []
+
+
 def test_stream_part_parser_normalizes_namespace_metadata() -> None:
     part = StreamPartParser.stream_part(
         {

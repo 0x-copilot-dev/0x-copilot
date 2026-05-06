@@ -28,29 +28,23 @@ import type { SettingsSection } from "./SettingsScreen";
  * the union without merge collisions in the route table.
  */
 export const SETTINGS_SECTIONS = [
-  // PR 4.1 — "You" group
+  // PR 8.1 — ACCOUNT group (was "You")
   "profile",
   "appearance",
   "shortcuts",
-  "notifications",
-  // PR 4.2 — "Workspace" group
+  "api-keys",
+  // PR 8.1 — WORKSPACE group
   "workspace",
   "members",
   "billing",
-  // PR 7.1 — admin audit log under the Workspace group
   "audit-log",
-  // PR 4.3 — "AI & data" group
+  // PR 8.1 — AI & DATA group
   "model-and-behavior",
   "connectors",
-  "privacy-data",
-  // Legacy / misc
-  "general",
-  "account",
-  "capabilities",
   "skills",
-  "claude-code",
-  // Personal API keys
-  "api-keys",
+  "privacy-data",
+  // PR 8.1 — NOTIFICATIONS group
+  "notifications",
 ] as const satisfies readonly SettingsSection[];
 
 const VALID = new Set<string>(SETTINGS_SECTIONS);

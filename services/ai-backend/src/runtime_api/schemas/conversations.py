@@ -200,6 +200,33 @@ class ConversationResponse(RuntimeContract):
     forked_from_share_id: str | None = None
     # PR A3 — self-fork lineage; NULL on every non-self-fork row.
     forked_from_message_id: str | None = None
+    # PR 2.2.1 — most-recent-run projection. Optional so older clients
+    # that never call the projection helper compile against this schema
+    # unchanged. The list endpoint populates them via
+    # ``ConversationResponse.with_latest_run`` after the read.
+    latest_run_status: str | None = None
+    latest_run_id: str | None = None
+
+    def with_latest_run(
+        self,
+        *,
+        status: str | None,
+        run_id: str | None,
+    ) -> "ConversationResponse":
+        """Return a copy with the most-recent-run projection populated.
+
+        Kept as a typed copy method (not field mutation) so consumers that
+        receive the response from elsewhere always observe immutable
+        Pydantic instances. The list endpoint resolves the latest run
+        once per page and overlays it via this method.
+        """
+
+        return self.model_copy(
+            update={
+                "latest_run_status": status,
+                "latest_run_id": run_id,
+            }
+        )
 
 
 class ConversationListResponse(RuntimeContract):

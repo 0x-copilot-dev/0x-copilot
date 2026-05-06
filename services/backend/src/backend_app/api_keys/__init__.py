@@ -1,10 +1,11 @@
-"""Personal API keys (PR B3 / 8.0.3g)."""
+"""Personal API keys (PR B3 / 8.0.3g, PR 8.0.5)."""
 
 from backend_app.api_keys.store import (
     ApiKeyMint,
     ApiKeyRow,
     ApiKeyStore,
     InMemoryApiKeyStore,
+    PostgresApiKeyStore,
 )
 from backend_app.api_keys.auth import (
     API_KEY_PREFIX_BYTES,
@@ -27,5 +28,6 @@ __all__ = [
     "ApiKeyStore",
     "InMemoryApiKeyStore",
     "InvalidApiKey",
+    "PostgresApiKeyStore",
     "parse_bearer",
 ]

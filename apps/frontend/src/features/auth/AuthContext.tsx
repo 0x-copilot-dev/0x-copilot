@@ -167,26 +167,6 @@ export function AuthProvider({
     configureAuthBearerProvider(() => bearerRef.current);
   }, []);
 
-  // Register the 401 interceptor so any other API helper (agentApi,
-  // mcpApi, skillsApi, etc.) that sees a 401 drops the bearer and
-  // flips back to anonymous.  Wrapped in a ref-stable closure so the
-  // interceptor doesn't capture stale state.
-  useEffect(() => {
-    configureUnauthorizedHandler(() => {
-      bearerRef.current = null;
-      setState({
-        status: "anonymous",
-        identity: null,
-        mfaPending: null,
-        workspacePick: null,
-        error: null,
-      });
-    });
-    return () => {
-      configureUnauthorizedHandler(null);
-    };
-  }, []);
-
   const setBearer = useCallback(
     (value: string | null) => {
       bearerRef.current = value;
@@ -207,6 +187,56 @@ export function AuthProvider({
     [persistBearer],
   );
 
+  // W0.1 — in dev, a 401 means the bearer is missing or stale. Mint a
+  // fresh one for the active persona via the dev IdP, attach it, and
+  // re-probe the session so the identity matches the new bearer.
+  // Returns true on full recovery (bearer + identity refreshed) so
+  // callers can short-circuit any "go to anonymous" path. Production
+  // builds tree-shake _devEnsureBearer.
+  const _devReauthAndRestoreSession =
+    useCallback(async (): Promise<boolean> => {
+      const minted = await _devEnsureBearer();
+      if (!minted) return false;
+      setBearer(minted);
+      try {
+        const envelope = await fetchCurrentSession();
+        setState({
+          status: "authenticated",
+          identity: envelope.identity,
+          mfaPending: null,
+          workspacePick: null,
+          error: null,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }, [setBearer]);
+
+  // Register the 401 interceptor so any other API helper (agentApi,
+  // mcpApi, skillsApi, etc.) that sees a 401 attempts a silent dev
+  // re-auth before falling back to anonymous. In prod the dev mint
+  // returns null, so this collapses to the original "drop bearer +
+  // flip to anonymous" behavior.
+  useEffect(() => {
+    configureUnauthorizedHandler(() => {
+      void (async () => {
+        if (await _devReauthAndRestoreSession()) return;
+        bearerRef.current = null;
+        setState({
+          status: "anonymous",
+          identity: null,
+          mfaPending: null,
+          workspacePick: null,
+          error: null,
+        });
+      })();
+    });
+    return () => {
+      configureUnauthorizedHandler(null);
+    };
+  }, [_devReauthAndRestoreSession]);
+
   const refresh = useCallback(async () => {
     setState((prev) => ({ ...prev, status: "loading", error: null }));
     try {
@@ -226,28 +256,8 @@ export function AuthProvider({
       // structured `{"detail":"Missing bearer token"}` body that no longer
       // contained the substring "401" or "unauthor").
       const looksLike401 = err instanceof UnauthorizedError;
-      // W0.1 — in dev, a 401 means there is no bearer. Mint one for the
-      // active persona via the dev IdP and retry once. Production builds
-      // tree-shake _devEnsureBearer; the catch above handles all real
-      // 401s (expired bearer, invalid signature, missing IdP).
-      if (looksLike401 && import.meta.env.DEV) {
-        const minted = await _devEnsureBearer();
-        if (minted) {
-          setBearer(minted);
-          try {
-            const envelope = await fetchCurrentSession();
-            setState({
-              status: "authenticated",
-              identity: envelope.identity,
-              mfaPending: null,
-              workspacePick: null,
-              error: null,
-            });
-            return;
-          } catch {
-            // Fall through to anonymous below if the retry also fails.
-          }
-        }
+      if (looksLike401 && (await _devReauthAndRestoreSession())) {
+        return;
       }
       setBearer(null);
       // PR 5.1 — don't stomp on a pending interactive flow (mfa_pending,
@@ -268,7 +278,7 @@ export function AuthProvider({
         };
       });
     }
-  }, [setBearer]);
+  }, [_devReauthAndRestoreSession, setBearer]);
 
   useEffect(() => {
     void refresh();

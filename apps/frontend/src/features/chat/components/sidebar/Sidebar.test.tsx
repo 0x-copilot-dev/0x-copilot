@@ -31,6 +31,8 @@ vi.mock("../../../../api/meApi", () => ({
 
 import { Sidebar } from "./Sidebar";
 
+const EMPTY_LIVE: ReadonlySet<string> = new Set();
+
 const conversations: readonly Conversation[] = [
   {
     conversation_id: "conv_1",
@@ -57,8 +59,7 @@ describe("Sidebar", () => {
         conversations={conversations}
         loading={false}
         activeConversationId={null}
-        liveConversationId={null}
-        switchingDisabled={false}
+        liveConversationIds={EMPTY_LIVE}
         onStartNewChat={onStartNewChat}
         onOpenSettings={vi.fn()}
         onRefresh={vi.fn()}
@@ -76,8 +77,7 @@ describe("Sidebar", () => {
         conversations={conversations}
         loading={false}
         activeConversationId={null}
-        liveConversationId={null}
-        switchingDisabled={false}
+        liveConversationIds={EMPTY_LIVE}
         onOpenSettings={vi.fn()}
         onRefresh={vi.fn()}
         now={NOW}
@@ -96,8 +96,7 @@ describe("Sidebar", () => {
         conversations={conversations}
         loading={false}
         activeConversationId={null}
-        liveConversationId={null}
-        switchingDisabled={false}
+        liveConversationIds={EMPTY_LIVE}
         onOpenSettings={vi.fn()}
         onRefresh={vi.fn()}
         now={NOW}
@@ -130,8 +129,7 @@ describe("Sidebar", () => {
         conversations={[]}
         loading={false}
         activeConversationId={null}
-        liveConversationId={null}
-        switchingDisabled={false}
+        liveConversationIds={EMPTY_LIVE}
         onOpenSettings={vi.fn()}
         onRefresh={vi.fn()}
         now={NOW}

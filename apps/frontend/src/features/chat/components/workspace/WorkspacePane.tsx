@@ -19,6 +19,7 @@ import { useId, type ReactElement } from "react";
 
 import type { SourceEntryMap } from "../../chatModel/sourcesReducer";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
+import type { SubagentActivitiesByTask } from "./useSubagentActivities";
 import { ApprovalsTab } from "./ApprovalsTab";
 import { AgentsTab } from "./AgentsTab";
 import { DraftTab, type DraftTabProps } from "./DraftTab";
@@ -46,6 +47,11 @@ export interface WorkspacePaneProps {
   subagentsLoading?: boolean;
   subagentsError?: string | null;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  /** PR 3.2.1 — activities-by-task projection for the expandable
+   *  per-subagent timeline inside each Agents tab card. Hoisted in
+   *  `ChatScreen` from `useSubagentActivities(items)` so the pane and
+   *  the in-thread `SubagentTool` share one source of truth. */
+  subagentActivitiesByTask?: SubagentActivitiesByTask;
   /** Draft tab inputs (PR 1.3 + PR 3.2 mutations). */
   draft: DraftTabProps["draft"];
   draftLoading?: boolean;
@@ -78,6 +84,7 @@ export function WorkspacePane({
   subagentsLoading,
   subagentsError,
   onJumpToSubagent,
+  subagentActivitiesByTask,
   draft,
   draftLoading,
   draftError,
@@ -189,6 +196,7 @@ export function WorkspacePane({
             error={subagentsError ?? null}
             focusTaskId={state.focus.subagentTaskId ?? null}
             onJumpToSubagent={onJumpToSubagent}
+            activitiesByTask={subagentActivitiesByTask}
           />
         ) : null}
         {state.activeTab === "draft" ? (

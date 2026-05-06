@@ -8,15 +8,20 @@ import {
 export function SubagentActivityList({
   activities,
   emptyText = "No detailed activity was reported.",
+  className = "aui-tool-card__timeline",
 }: {
   activities: SubagentActivityRecord[];
   emptyText?: string;
+  /** Override the timeline container class. Defaults to the in-thread
+   *  `aui-tool-card__timeline` styling; the workspace pane composes a
+   *  pane-narrow variant on top via PR 3.2.1. */
+  className?: string;
 }): ReactElement {
   if (activities.length === 0) {
     return <p className="aui-tool-card__empty">{emptyText}</p>;
   }
   return (
-    <div className="aui-tool-card__timeline">
+    <div className={className}>
       {activities.map((activity) => (
         <div className="aui-tool-card__timeline-item" key={activity.id}>
           <div>

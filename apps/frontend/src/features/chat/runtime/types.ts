@@ -70,6 +70,21 @@ export interface ReasoningMessagePart {
   readonly type: "reasoning";
   readonly text: string;
   readonly status?: MessagePartStatus;
+  /**
+   * `event.created_at` (epoch ms) of the first delta/cap that contributed
+   * to this part. Together with `updatedAtMs` it lets the
+   * `<ReasoningGroup>` render the "Thought process · Ns" elapsed-time
+   * stamp without an additional event-time clock per message. Optional
+   * because pre-PR-3.6 messages and synthesised parts may lack one.
+   */
+  readonly startedAtMs?: number;
+  /**
+   * `event.created_at` (epoch ms) of the latest event applied to this
+   * part. While the part is `running` the difference between
+   * `updatedAtMs` and `startedAtMs` is the live "Thinking… · Ns"
+   * counter; once `complete`, it freezes the final span length.
+   */
+  readonly updatedAtMs?: number;
 }
 
 export interface ToolCallMessagePart<
@@ -263,6 +278,20 @@ export interface ReasoningGroupProps {
   readonly startIndex: number;
   readonly endIndex: number;
   readonly children?: ReactNode;
+  /**
+   * Synthesised by `MessageParts` from the contained reasoning parts'
+   * statuses. `running` while any child part is mid-stream; `complete`
+   * once every child part has settled. Drives the "Thinking…" /
+   * "Thought process" label flip and the streaming cursor.
+   */
+  readonly status?: "running" | "complete";
+  /**
+   * Synthesised by `MessageParts` as
+   * `max(updatedAtMs) - min(startedAtMs)` rounded down to seconds. `0`
+   * when the contained parts lack timestamps (replayed pre-PR-3.6
+   * messages, or replay before any event has arrived).
+   */
+  readonly elapsedSeconds?: number;
 }
 
 /**

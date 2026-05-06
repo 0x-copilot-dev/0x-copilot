@@ -6,18 +6,19 @@ import { Sidebar } from "../sidebar/Sidebar";
  * Sidebar mount point.
  *
  * The body of this file used to render `ThreadListPrimitive` directly;
- * PR 2.2 replaced it with `<Sidebar />` (search + grouping + UserCard +
- * keymap) but kept the import surface so `ChatScreen.tsx`'s call site
- * stays unchanged. The three new optional props are passed by ChatScreen
- * to wire `⌘N`, `⌘\`, and thread switching from the sidebar's keymap +
- * UI; not passing them silently degrades to read-only behaviour.
+ * PR 2.2 replaced it with `<Sidebar />`. PR 2.2.1 widened the live
+ * signal from a single conversation id (driven by the visible
+ * `activeRunId`) into a set, so background runs across non-visible
+ * chats can surface in the sidebar simultaneously, and dropped the
+ * `switchingDisabled` gate now that switching mid-run is a supported
+ * lifecycle.
  */
 export function AssistantThreadList({
   collapsed,
   conversations,
   loading,
-  activeRunId,
   activeConversationId,
+  liveConversationIds,
   onOpenSettings,
   onRefresh,
   onSwitchToThread,
@@ -31,11 +32,12 @@ export function AssistantThreadList({
   collapsed: boolean;
   conversations: Conversation[];
   loading: boolean;
-  activeRunId: string | null;
-  /** PR 2.2 — the conversation id whose run is currently streaming.
-   * Drives the sidebar's "live pulse" badge. Optional (and falls back
-   * to `null`) so older callers compile unchanged. */
+  /** The visible conversation. Drives the active row highlight. */
   activeConversationId?: string | null;
+  /** PR 2.2.1 — every conversation with a live (non-terminal) run.
+   * Drives the sidebar's "live pulse" badge for both the visible chat
+   * and any backgrounded ones. */
+  liveConversationIds: ReadonlySet<string>;
   onOpenSettings: () => void;
   onRefresh: () => void;
   /** PR 2.2 — switch threads programmatically (sidebar row click + ⌘N). */
@@ -59,10 +61,7 @@ export function AssistantThreadList({
       conversations={conversations}
       loading={loading}
       activeConversationId={activeConversationId ?? null}
-      liveConversationId={
-        activeRunId !== null ? (activeConversationId ?? null) : null
-      }
-      switchingDisabled={activeRunId !== null}
+      liveConversationIds={liveConversationIds}
       onSwitchToThread={onSwitchToThread}
       onStartNewChat={onStartNewChat}
       onToggleSidebar={onToggleSidebar}

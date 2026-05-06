@@ -19,6 +19,7 @@ until the user revokes it).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -206,9 +207,161 @@ class InMemoryApiKeyStore:
         )
 
 
+# ---------------------------------------------------------------------------
+# Postgres adapter
+# ---------------------------------------------------------------------------
+
+
+class PostgresApiKeyStore:
+    """PR 8.0.5 — postgres-backed adapter for ``api_keys`` (migration 0023).
+
+    The unique index on ``key_prefix`` is what makes the
+    ``find_active_by_prefix`` lookup an O(1) probe; the partial
+    indexes on ``revoked_at IS NULL`` keep the listing path off the
+    revoked rows.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    @contextmanager
+    def _cursor(self, conn: Any | None) -> Iterator[Any]:
+        if conn is not None:
+            with conn.cursor() as cur:
+                yield cur
+            return
+        with self._pool.connection() as owned:
+            with owned.cursor() as cur:
+                yield cur
+
+    def list_for_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        include_revoked: bool = False,
+    ) -> tuple[ApiKeyRow, ...]:
+        sql = """
+            SELECT id, org_id, user_id, label, key_prefix, secret_hash,
+                   scopes, last_used_at, last_used_ip, created_at,
+                   rotated_from_id, revoked_at
+            FROM api_keys
+            WHERE org_id = %s AND user_id = %s
+        """
+        params: list[Any] = [org_id, user_id]
+        if not include_revoked:
+            sql += " AND revoked_at IS NULL"
+        sql += " ORDER BY created_at DESC"
+        with self._cursor(None) as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        return tuple(_row_to_api_key(row) for row in rows)
+
+    def insert(self, row: ApiKeyRow, *, conn: Any | None = None) -> ApiKeyRow:
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO api_keys (
+                    id, org_id, user_id, label, key_prefix, secret_hash,
+                    scopes, last_used_at, last_used_ip, created_at,
+                    rotated_from_id, revoked_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row.id,
+                    row.org_id,
+                    row.user_id,
+                    row.label,
+                    row.key_prefix,
+                    row.secret_hash,
+                    json.dumps(list(row.scopes)),
+                    row.last_used_at,
+                    row.last_used_ip,
+                    row.created_at,
+                    row.rotated_from_id,
+                    row.revoked_at,
+                ),
+            )
+        return row
+
+    def find_active_by_prefix(self, *, key_prefix: str) -> ApiKeyRow | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT id, org_id, user_id, label, key_prefix, secret_hash,
+                       scopes, last_used_at, last_used_ip, created_at,
+                       rotated_from_id, revoked_at
+                FROM api_keys
+                WHERE key_prefix = %s AND revoked_at IS NULL
+                """,
+                (key_prefix,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _row_to_api_key(row)
+
+    def revoke(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        api_key_id: str,
+        conn: Any | None = None,
+    ) -> bool:
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                UPDATE api_keys
+                SET revoked_at = NOW()
+                WHERE id = %s AND org_id = %s AND user_id = %s
+                  AND revoked_at IS NULL
+                """,
+                (api_key_id, org_id, user_id),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def stamp_last_used(
+        self,
+        *,
+        api_key_id: str,
+        when: datetime,
+        ip: str | None,
+        conn: Any | None = None,
+    ) -> None:
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                UPDATE api_keys
+                SET last_used_at = %s, last_used_ip = %s
+                WHERE id = %s
+                """,
+                (when, ip, api_key_id),
+            )
+
+
+def _row_to_api_key(row: Any) -> ApiKeyRow:
+    record = dict(row)
+    raw_scopes = record.get("scopes")
+    if isinstance(raw_scopes, str):
+        record["scopes"] = tuple(json.loads(raw_scopes) or ())
+    elif isinstance(raw_scopes, (bytes, bytearray)):
+        record["scopes"] = tuple(json.loads(bytes(raw_scopes).decode("utf-8")) or ())
+    elif isinstance(raw_scopes, list):
+        record["scopes"] = tuple(raw_scopes)
+    return ApiKeyRow.model_validate(record)
+
+
 __all__ = [
     "ApiKeyMint",
     "ApiKeyRow",
     "ApiKeyStore",
     "InMemoryApiKeyStore",
+    "PostgresApiKeyStore",
 ]
