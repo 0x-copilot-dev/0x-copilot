@@ -249,6 +249,16 @@ class RuntimeRunHandler:
             if citation_resolver is not None
             else None
         )
+        logging.getLogger(__name__).info(
+            "[citations] run.bind run=%s conv=%s allocator_seed=%d "
+            "ledger=%s allocator=%s resolver=%s",
+            run.run_id,
+            command.conversation_id,
+            allocator.last_allocated if allocator is not None else -1,
+            "bound" if ledger_token is not None else "unbound",
+            "bound" if allocator_token is not None else "unbound",
+            "bound" if resolver_token is not None else "unbound",
+        )
         # B8 — per-tool budget guard. Loads the org's
         # ``runtime_tool_budgets`` snapshot, binds it alongside the
         # in-flight ``ToolCallLedger`` so every LangChain
@@ -370,6 +380,11 @@ class RuntimeRunHandler:
                     cited_ordinals = citation_resolver.sealed_ordinals()
                     if cited_ordinals:
                         final_payload["cited_ordinals"] = cited_ordinals
+                    logging.getLogger(__name__).info(
+                        "[citations] run.final_response run=%s cited_ordinals=%s",
+                        run.run_id,
+                        cited_ordinals,
+                    )
                 await self._append_lifecycle(
                     run,
                     RuntimeApiEventType.FINAL_RESPONSE,

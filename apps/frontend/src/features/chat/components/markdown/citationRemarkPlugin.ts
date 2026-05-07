@@ -19,6 +19,7 @@
 import type { Plugin } from "unified";
 import type { Root, Text, PhrasingContent, Parent } from "mdast";
 import { visit } from "unist-util-visit";
+import { citationDebug } from "../../chatModel/citationDebug";
 
 // Combined pattern: matches either ``[c<base36>]`` or ``[[<digits>]]``.
 // The two captures are mutually exclusive — exactly one of group 1
@@ -67,10 +68,12 @@ function splitCitationTokens(value: string): PhrasingContent[] | null {
     return null;
   }
   TOKEN_PATTERN.lastIndex = 0;
+  const matches: string[] = [];
   const out: PhrasingContent[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = TOKEN_PATTERN.exec(value)) !== null) {
+    matches.push(match[0]);
     if (match.index > cursor) {
       out.push({ type: "text", value: value.slice(cursor, match.index) });
     }
@@ -95,6 +98,9 @@ function splitCitationTokens(value: string): PhrasingContent[] | null {
   }
   if (cursor < value.length) {
     out.push({ type: "text", value: value.slice(cursor) });
+  }
+  if (matches.length > 0) {
+    citationDebug(`plugin.match tokens=${matches.length}`, matches);
   }
   return out;
 }

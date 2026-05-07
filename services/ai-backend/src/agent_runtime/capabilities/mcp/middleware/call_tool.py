@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -13,10 +14,6 @@ from agent_runtime.capabilities.citation_capturing_tool import _CitationHint
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
-from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
-    CitationProjectingMcpMiddleware,
-)
-from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
     McpLoadErrorCode,
@@ -31,8 +28,14 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Messages, Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
+from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
+    CitationProjectingMcpMiddleware,
+)
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.execution.contracts import AgentRuntimeContext
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,14 @@ class CallMcpTool:
         # bound (replay/eval) the output is returned unchanged.
         try:
             allocator = ConversationOrdinalAllocator.active()
-            if allocator is not None:
+            if allocator is None:
+                _LOGGER.warning(
+                    "[citations] mcp.hint_skipped server=%s tool=%s "
+                    "reason=no_allocator_bound",
+                    parsed_input.server_name,
+                    parsed_input.tool_name,
+                )
+            else:
                 tool_call_id = (
                     self.runtime_context.trace_id
                     if isinstance(self.runtime_context.trace_id, str)
@@ -168,8 +178,21 @@ class CallMcpTool:
                 )
                 if isinstance(hinted, dict):
                     output = hinted
+                _LOGGER.info(
+                    "[citations] mcp.hint_appended server=%s tool=%s "
+                    "ordinal=%d call_id='%s'",
+                    parsed_input.server_name,
+                    parsed_input.tool_name,
+                    ordinal,
+                    tool_call_id or "",
+                )
         except Exception:  # noqa: BLE001 - best-effort; never break MCP results
-            pass
+            _LOGGER.warning(
+                "[citations] mcp.hint_raised server=%s tool=%s",
+                parsed_input.server_name,
+                parsed_input.tool_name,
+                exc_info=True,
+            )
 
         return McpToolCallResult.ok(
             server_name=parsed_input.server_name,

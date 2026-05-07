@@ -61,4 +61,59 @@ describe("applyRuntimeEvent", () => {
       ]),
     );
   });
+
+  // PR 4.4.7 Phase 2 (Slice C) — catalog-suggestion payloads omit
+  // ``auth_url`` / ``expires_at`` (the runtime projector strips empty
+  // strings, and there's no MCP server row yet to issue an auth URL
+  // against). Before this fix, ``isMcpAuthRequiredPayload`` rejected
+  // the payload as malformed and the reducer dropped the event,
+  // leaving the user with the agent's "tap Connect above" text but no
+  // card to tap.
+  it("projects a catalog-suggestion mcp_auth_required payload without auth_url into a card", () => {
+    const assistantSeed = {
+      id: "assistant-run_xyz",
+      kind: "message",
+      role: "assistant",
+      runId: "run_xyz",
+      content: [],
+    } as ChatItem;
+
+    const next = applyRuntimeEvent(
+      [assistantSeed],
+      event({
+        run_id: "run_xyz",
+        event_id: "event_disc_1",
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        status: "waiting",
+        payload: {
+          // Note: NO auth_url, NO expires_at — exactly what the catalog
+          // path emits.
+          approval_id: "mcp_discovery:run_xyz:linear",
+          action_id: "mcp_discovery:run_xyz:linear",
+          approval_kind: "mcp_auth",
+          server_id: "seed:linear",
+          server_name: "linear",
+          display_name: "Linear",
+          message: "Linear isn't connected.",
+          discovery_reason: "fetch ticket statuses",
+          expected_value: "ground claims about ticket progress",
+          catalog_slug: "linear",
+        },
+      }),
+    );
+
+    const assistant = next.find(
+      (item): item is Extract<ChatItem, { kind: "message" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+    const part = assistant?.content.find(
+      (entry) =>
+        entry.type === "tool-call" && entry.toolName === "mcp_auth_required",
+    );
+    expect(
+      part,
+      "discovery card was projected into the assistant content",
+    ).toBeDefined();
+  });
 });

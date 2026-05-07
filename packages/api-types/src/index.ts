@@ -148,8 +148,17 @@ export interface McpAuthRequiredEventPayload {
   server_id: string;
   server_name: string;
   display_name: string;
-  auth_url: string;
-  expires_at: string;
+  /**
+   * Pre-baked OAuth URL. Always present on the *blocking* auth gate
+   * (PR 3.3) where the user clicks Connect and we redirect immediately.
+   * Absent on the *catalog suggestion* variant (PR 4.4.7 Phase 2,
+   * Slice C) — for an uninstalled connector, no MCP server row exists
+   * yet to issue an auth URL against. The FE branches on
+   * ``catalog_slug`` to deep-link the install overlay instead.
+   */
+  auth_url?: string;
+  /** Companion to ``auth_url`` — same lifecycle. */
+  expires_at?: string;
   message: string;
   source_tool_call_id?: string;
   // PR 3.3 — non-blocking MCP discovery. When set, the agent surfaced
@@ -160,6 +169,23 @@ export interface McpAuthRequiredEventPayload {
   // PR 3.3 — agent's one-line statement of why the user might benefit
   // from connecting (e.g. "could ground claims about ticket progress").
   expected_value?: string | null;
+  /**
+   * PR 4.4.7 Phase 2 (Slice C) — present only when the suggestion came
+   * from the org catalog (uninstalled connector). The FE's
+   * ``ConnectorAuthTool`` branches Connect on this field: present →
+   * route through the install flow; absent → run OAuth against the
+   * already-installed server.
+   */
+  catalog_slug?: string | null;
+  /**
+   * PR 4.4.7 follow-up — only meaningful alongside ``catalog_slug``.
+   * When false (default), Connect runs the 1-click chain inline:
+   * install + start OAuth + redirect. When true, Connect opens a
+   * credentials form first because the vendor doesn't support RFC
+   * 8414 metadata or RFC 7591 dynamic client registration (Atlassian,
+   * GitHub, Intercom, PayPal, Plaid, Square).
+   */
+  requires_pre_registered_client?: boolean;
 }
 
 export type ConversationStatus = "active" | "archived";
@@ -2234,11 +2260,17 @@ export function isMcpAuthRequiredPayload(
   if (!isPlainRecord(payload)) {
     return false;
   }
+  // PR 4.4.7 Phase 2 (Slice C) — ``auth_url`` / ``expires_at`` are no
+  // longer required. The blocking auth gate (PR 3.3) still always
+  // sets them, but the catalog-suggestion variant emits an empty
+  // string (which the runtime payload projector strips before the
+  // wire) because no ``mcp_servers`` row exists yet to issue an auth
+  // URL against. Accepting them as optional means the chat reducer
+  // projects the catalog-only event into a discovery card instead of
+  // silently dropping it.
   return (
     typeof payload.server_id === "string" &&
-    typeof payload.display_name === "string" &&
-    typeof payload.auth_url === "string" &&
-    typeof payload.expires_at === "string"
+    typeof payload.display_name === "string"
   );
 }
 
@@ -2465,6 +2497,17 @@ export function isCitationLink(value: unknown): value is CitationLink {
     return false;
   }
   const candidate = value as Record<string, unknown>;
+  // ``source_tool_call_id`` is intentionally lenient. Two cases need
+  // it absent: events persisted before the projector was taught to
+  // default the field to ``""``, and resolver emissions for a
+  // hallucinated ordinal that the allocator never bound to a tool
+  // call. Treat any of (missing | null | string) as valid; the chip
+  // renders muted-but-numbered when the call_id is empty.
+  const callIdField = candidate.source_tool_call_id;
+  const callIdValid =
+    callIdField === undefined ||
+    callIdField === null ||
+    typeof callIdField === "string";
   return (
     typeof candidate.conversation_ordinal === "number" &&
     Number.isInteger(candidate.conversation_ordinal) &&
@@ -2477,7 +2520,7 @@ export function isCitationLink(value: unknown): value is CitationLink {
     typeof candidate.prose_length === "number" &&
     Number.isInteger(candidate.prose_length) &&
     candidate.prose_length > 0 &&
-    typeof candidate.source_tool_call_id === "string"
+    callIdValid
   );
 }
 

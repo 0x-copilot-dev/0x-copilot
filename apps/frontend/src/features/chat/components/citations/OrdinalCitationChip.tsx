@@ -13,7 +13,9 @@
 // merge or the legacy file is deleted.
 
 import type { ReactElement } from "react";
+import { useEffect, useRef } from "react";
 import { useOrdinalCitation } from "./citationsContext";
+import { citationDebug } from "../../chatModel/citationDebug";
 
 export const CITATION_ORDINAL_HREF_PREFIX = "#cite-ord:";
 
@@ -51,6 +53,23 @@ export function OrdinalCitationChip({
   onSelect,
 }: OrdinalCitationChipProps): ReactElement {
   const link = useOrdinalCitation(conversationOrdinal);
+  // Trace each chip's resolution outcome once per ordinal+state — first
+  // mount and any subsequent state change. Helps the user diagnose
+  // "chip rendered but unresolved" vs "chip never rendered".
+  const lastLoggedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const state = link === undefined ? "unresolved" : "resolved";
+    const key = `${conversationOrdinal}:${state}`;
+    if (lastLoggedRef.current !== key) {
+      lastLoggedRef.current = key;
+      citationDebug(
+        `chip.${state} ordinal=${conversationOrdinal}` +
+          (link
+            ? ` call_id='${link.source_tool_call_id}' msg=${link.message_id}`
+            : ""),
+      );
+    }
+  }, [conversationOrdinal, link]);
   if (link === undefined) {
     return (
       <span

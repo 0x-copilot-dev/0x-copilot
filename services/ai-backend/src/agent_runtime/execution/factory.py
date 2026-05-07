@@ -419,12 +419,31 @@ def _instructions_with_suggested_connectors(
             instructions,
             (
                 "## Suggestable integrations the user has not yet connected\n\n"
-                "The capabilities below are available in the workspace catalog "
-                "but are NOT installed for the current user. If the user's "
-                "intent maps to one of these, call ``suggest_mcp_connector`` "
-                "with the slug, a one-sentence ``reason``, and a one-line "
-                "``expected_value``. Do NOT pretend you can already access "
-                "these tools — you cannot. Suggest at most one per turn."
+                "The capabilities below are available in the workspace "
+                "catalog but are NOT installed for the current user.\n\n"
+                "**When the user's request mentions or implies one of these "
+                'slugs (e.g. "check my Linear tasks", "any new Notion '
+                'pages?", "connect Asana"), you MUST:**\n'
+                "1. Immediately call ``suggest_mcp_connector(slug, reason, "
+                "expected_value)`` with the matching slug. This emits a "
+                "Connect/Skip card the user can click — no extra "
+                "confirmation from you needed.\n"
+                "2. Then write a single short line to the user pointing at "
+                "the card (e.g. \"Linear isn't connected yet — tap "
+                'Connect above to set it up.").\n\n'
+                "**Do NOT:**\n"
+                "- Ask the user which option they want or list numbered "
+                "alternatives. The Connect/Skip card is the one and only "
+                "next step.\n"
+                "- Call ``auth_mcp`` for these slugs. ``auth_mcp`` only "
+                "works for servers the user has already installed; calling "
+                "it on a catalog entry will fail.\n"
+                "- Pretend you can already access these tools — you "
+                "cannot, and saying you can will mislead the user.\n\n"
+                "Suggest at most one connector per turn. If the user "
+                "skipped a connector earlier in this run, do not re-suggest "
+                "the same one.\n\n"
+                "Available slugs:"
             ),
             "\n".join(lines),
         )

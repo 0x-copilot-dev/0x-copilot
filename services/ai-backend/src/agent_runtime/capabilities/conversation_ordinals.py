@@ -96,6 +96,11 @@ class ConversationOrdinalAllocator:
         """
 
         self._counter += 1
+        _LOGGER.info(
+            "[citations] allocator.allocate conv=%s ordinal=%d (no tool_call_id binding)",
+            self._conversation_id,
+            self._counter,
+        )
         return self._counter
 
     def allocate_for_tool_call(self, *, tool_call_id: str) -> int:
@@ -108,8 +113,15 @@ class ConversationOrdinalAllocator:
 
         if not tool_call_id:
             raise ValueError("tool_call_id must be a non-empty string")
-        ordinal = self.allocate()
+        self._counter += 1
+        ordinal = self._counter
         self._ordinal_to_tool_call_id[ordinal] = tool_call_id
+        _LOGGER.info(
+            "[citations] allocator.allocate_for_tool_call conv=%s ordinal=%d call_id=%s",
+            self._conversation_id,
+            ordinal,
+            tool_call_id,
+        )
         return ordinal
 
     def tool_call_id_for(self, ordinal: int) -> str | None:
@@ -121,6 +133,37 @@ class ConversationOrdinalAllocator:
         """Return ``True`` when ``ordinal`` has ever been allocated."""
 
         return 0 < ordinal <= self._counter
+
+    @classmethod
+    async def for_conversation(
+        cls,
+        *,
+        org_id: str,
+        conversation_id: str,
+        prior_run_ids: Sequence[str],
+        event_store: "EventStorePort",
+    ) -> "ConversationOrdinalAllocator":
+        """Build a freshly-seeded allocator for a run on this conversation.
+
+        Convenience wrapper for callers that don't need to inspect the
+        seed separately (the run handler keeps the seed inline because
+        it logs ``allocator_seed=…``; the approval handler just wants
+        an allocator). Both handlers must use the same seeding
+        primitive so resumes after an approval continue the
+        conversation's ordinal sequence rather than restarting at 0.
+        """
+
+        seed = await ConversationOrdinalSeeder.seed_from_event_log(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            prior_run_ids=prior_run_ids,
+            event_store=event_store,
+        )
+        return cls(
+            conversation_id=conversation_id,
+            starting_ordinal=seed.starting_ordinal,
+            ordinal_to_tool_call_id=seed.ordinal_to_tool_call_id,
+        )
 
     @classmethod
     def bind_for_run(cls, allocator: "ConversationOrdinalAllocator") -> object:
@@ -205,6 +248,14 @@ class ConversationOrdinalSeeder:
                     call_id = event.payload.get(cls.Keys.CALL_ID)
                     if isinstance(call_id, str) and call_id:
                         mapping[ordinal] = call_id
+        _LOGGER.info(
+            "[citations] seeder.seed_from_event_log conv=%s prior_runs=%d "
+            "starting_ordinal=%d mapped_ordinals=%d",
+            conversation_id,
+            len(prior_run_ids),
+            ordinal,
+            len(mapping),
+        )
         return cls.Seed(
             starting_ordinal=ordinal,
             ordinal_to_tool_call_id=mapping,

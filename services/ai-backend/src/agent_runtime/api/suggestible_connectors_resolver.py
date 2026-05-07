@@ -30,6 +30,11 @@ _LOGGER = logging.getLogger(__name__)
 
 class _Env:
     BACKEND_BASE_URL = "BACKEND_BASE_URL"
+    # PR 4.4.7 — ai-backend dev startup historically only set
+    # ``MCP_BACKEND_REGISTRY_URL``; ``BACKEND_BASE_URL`` was reserved for
+    # production. Accept the dev var as a fallback so progressive
+    # discovery works in ``make dev`` without a Makefile change.
+    BACKEND_BASE_URL_FALLBACK = "MCP_BACKEND_REGISTRY_URL"
     SERVICE_TOKEN = "ENTERPRISE_SERVICE_TOKEN"
 
 
@@ -72,10 +77,16 @@ class HttpSuggestibleConnectorsResolver:
     def __init__(
         self,
         *,
-        http_client: httpx.AsyncClient,
+        http_client: httpx.AsyncClient | None = None,
         backend_url: str,
         service_token: str,
     ) -> None:
+        # ``http_client=None`` means "create a short-lived client per
+        # resolve". The default RuntimeApiAppFactory wiring uses this
+        # path to avoid threading a long-lived client through every
+        # service constructor (mirrors the membership resolver's
+        # ``_httpx_membership_fetcher``). Tests inject an explicit
+        # client backed by ``httpx.MockTransport``.
         self._client = http_client
         self._backend_url = backend_url.rstrip("/")
         self._service_token = service_token
@@ -88,21 +99,28 @@ class HttpSuggestibleConnectorsResolver:
         exclude_paused: Iterable[str],
     ) -> tuple[CatalogSuggestionCard, ...]:
         excluded = ",".join(piece for piece in exclude_paused if piece)
+        params = {
+            "org_id": org_id,
+            "user_id": user_id,
+            "exclude_paused": excluded,
+        }
+        headers = {
+            _Headers.SERVICE_TOKEN: self._service_token,
+            _Headers.ORG: org_id,
+            _Headers.USER: user_id,
+        }
+        url = f"{self._backend_url}/internal/v1/me/suggestible-connectors"
         try:
-            response = await self._client.get(
-                f"{self._backend_url}/internal/v1/me/suggestible-connectors",
-                params={
-                    "org_id": org_id,
-                    "user_id": user_id,
-                    "exclude_paused": excluded,
-                },
-                headers={
-                    _Headers.SERVICE_TOKEN: self._service_token,
-                    _Headers.ORG: org_id,
-                    _Headers.USER: user_id,
-                },
-                timeout=_FETCH_TIMEOUT_SECONDS,
-            )
+            if self._client is not None:
+                response = await self._client.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=_FETCH_TIMEOUT_SECONDS,
+                )
+            else:
+                async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT_SECONDS) as client:
+                    response = await client.get(url, params=params, headers=headers)
         except (
             httpx.ConnectError,
             httpx.ReadTimeout,
@@ -154,6 +172,9 @@ class HttpSuggestibleConnectorsResolver:
                             "description": entry.get("description") or "",
                             "scopes_summary": entry.get("scopes_summary"),
                             "brand_color": entry.get("brand_color"),
+                            "requires_pre_registered_client": bool(
+                                entry.get("requires_pre_registered_client", False)
+                            ),
                         }
                     )
                 )
@@ -184,7 +205,16 @@ class NullSuggestibleConnectorsResolver:
 class SuggestibleConnectorsResolverFactory:
     """Pick a resolver based on env. Mirrors
     ``UserPoliciesResolverFactory`` so the two run-start fetches are
-    wired identically."""
+    wired identically.
+
+    ``http_client`` is optional — when omitted the factory still wires
+    a working ``HttpSuggestibleConnectorsResolver`` whose ``resolve``
+    creates a per-call short-lived ``httpx.AsyncClient``. That matches
+    the ``HttpWorkspaceMembershipResolver`` lifecycle (per-call client)
+    so callers don't have to plumb a long-lived client through service
+    construction. Pass an explicit ``http_client`` only for tests or
+    advanced production wiring that wants connection reuse.
+    """
 
     @classmethod
     def default(
@@ -192,9 +222,12 @@ class SuggestibleConnectorsResolverFactory:
         *,
         http_client: httpx.AsyncClient | None = None,
     ) -> SuggestibleConnectorsResolver:
-        backend_url = os.environ.get(_Env.BACKEND_BASE_URL, "").strip()
+        backend_url = (
+            os.environ.get(_Env.BACKEND_BASE_URL, "").strip()
+            or os.environ.get(_Env.BACKEND_BASE_URL_FALLBACK, "").strip()
+        )
         service_token = os.environ.get(_Env.SERVICE_TOKEN, "").strip()
-        if not backend_url or not service_token or http_client is None:
+        if not backend_url or not service_token:
             return NullSuggestibleConnectorsResolver()
         return HttpSuggestibleConnectorsResolver(
             http_client=http_client,

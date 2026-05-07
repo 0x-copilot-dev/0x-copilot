@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from runtime_api.schemas import (
 )
 from runtime_worker.run_metrics import AssistantRunMetrics, TokenUsageExtractor
 from runtime_worker.stream_events import StreamOrchestrator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,6 +117,15 @@ class StreamingExecutor:
         citation_pipeline: CitationStreamPipeline | None = None,
         citation_resolver: CitationResolver | None = None,
     ) -> StreamingResult:
+        # PR 1.1-rev2 — fall back to the active ContextVar-bound resolver
+        # when the caller didn't pass one. This lets the approval-resume
+        # path (``RuntimeApprovalHandler._stream_resume``) and any future
+        # caller pick up the resolver automatically as long as
+        # ``CitationResolver.bind_for_run`` is active in the same async
+        # context. Without this fallback, the resume path streams
+        # ``[[N]]`` markers from the model that get silently dropped.
+        if citation_resolver is None:
+            citation_resolver = CitationResolver.active()
         result = StreamingResult()
         active_subagent_tasks: set[str] = set()
         completed_subagent_tasks: set[str] = set()
@@ -224,13 +236,40 @@ class StreamingExecutor:
             # ``sequence_no``). The resolver is best-effort and never
             # raises into the streaming path; an unbound resolver
             # (citations disabled, replay path) is a no-op.
-            if (
-                citation_resolver is not None
-                and chunk_message_id is not None
-                and not active_subagent_tasks
-            ):
+            #
+            # ``chunk_message_id`` may be ``None`` for some providers
+            # (notably OpenAI Responses streaming chunks, where
+            # LangChain's adapter doesn't always surface an id on every
+            # delta). The FE's chip resolution scans by ordinal across
+            # the run via ``anyLinkForOrdinalInRun`` — message_id is
+            # only used for positional offset anchoring, not lookup —
+            # so we synthesize a per-run id here rather than dropping
+            # the delta. This guarantees the resolver always observes
+            # text the model emitted, regardless of provider quirks.
+            if citation_resolver is None:
+                if "[[" in delta:
+                    _LOGGER.warning(
+                        "[citations] streaming.skip run=%s reason=no_resolver "
+                        "delta_preview=%r",
+                        run.run_id,
+                        delta[:80],
+                    )
+            elif active_subagent_tasks:
+                if "[[" in delta:
+                    _LOGGER.debug(
+                        "[citations] streaming.skip run=%s "
+                        "reason=active_subagent active_count=%d",
+                        run.run_id,
+                        len(active_subagent_tasks),
+                    )
+            else:
+                effective_message_id = (
+                    chunk_message_id
+                    if chunk_message_id is not None
+                    else f"msg-of-run:{run.run_id}"
+                )
                 await citation_resolver.observe_delta(
-                    message_id=chunk_message_id,
+                    message_id=effective_message_id,
                     delta_text=delta,
                 )
         return result

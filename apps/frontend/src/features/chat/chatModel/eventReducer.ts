@@ -47,6 +47,14 @@ export function applyRuntimeEvent(
   if (event.visibility === "internal") {
     return items;
   }
+  // PR 1.1-rev2 — ``citation_made`` events are *registration* events
+  // that feed the ``citationLinkReducer`` registry directly (see
+  // ``ChatScreen``), not activity-timeline events. They must not
+  // produce inline tool cards in the thread — the chip in the
+  // assistant's prose is the only visible affordance.
+  if (event.event_type === "citation_made") {
+    return items;
+  }
   if (event.event_type === "presentation_updated") {
     return patchToolPartPresentation(items, event);
   }

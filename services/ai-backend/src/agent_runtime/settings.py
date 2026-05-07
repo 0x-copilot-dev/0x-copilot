@@ -306,7 +306,16 @@ class RuntimeSettings(BaseSettings):
                     E.MCP_AUTH_REDIRECT_URI,
                     "http://127.0.0.1:5173/mcp/oauth/callback",
                 ),
-                discovery_enabled=_s(v, E.MCP_DISCOVERY_ENABLED, "false").lower()
+                # PR 4.4.7 — flip default ON. The discovery tool +
+                # progressive-discovery flow is the agent's primary path
+                # for "user asks about an integration that isn't
+                # connected yet". With this off, the agent has nothing
+                # to call and falls back to text prose or worse,
+                # ``auth_mcp`` against an uninstalled server (which
+                # fails). Operators can still set
+                # ``RUNTIME_MCP_DISCOVERY_ENABLED=false`` to turn it
+                # off — the env var is the kill switch.
+                discovery_enabled=_s(v, E.MCP_DISCOVERY_ENABLED, "true").lower()
                 in _truthy,
             ),
             skills=RuntimeSkillSettings(

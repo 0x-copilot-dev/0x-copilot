@@ -55,16 +55,23 @@ class TestSuggestedConnectorsPromptSection:
                 ),
             ),
         )
-        # Section header + per-card lines + the agent guidance.
+        # Section header + per-card lines.
         assert "Suggestable integrations" in rendered
         assert "linear (Linear)" in rendered
         assert "notion (Notion)" in rendered
         # Scope summary wins when present; description is the fallback.
         assert "Read issues, projects, and cycles." in rendered
         assert "Workspace pages and databases." in rendered
-        # The PRD's "do not pretend" clause is the load-bearing hint —
-        # without it the agent halucinates capabilities.
-        assert "Do NOT pretend" in rendered or "do not pretend" in rendered.lower()
+        # PR 4.4.7 — the prompt now carries directive language so the
+        # agent stops asking clarifying questions and stops reaching
+        # for ``auth_mcp`` against uninstalled connectors. These
+        # phrases are load-bearing — losing them sends the agent back
+        # to "I see two options, which would you like?" prose.
+        lower = rendered.lower()
+        assert "suggest_mcp_connector" in rendered
+        assert "do not" in lower
+        assert "auth_mcp" in rendered
+        assert "pretend" in lower
 
     def test_suggestion_without_summary_or_description_still_renders(
         self,

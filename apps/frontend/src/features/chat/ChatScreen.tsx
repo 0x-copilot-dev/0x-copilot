@@ -39,6 +39,7 @@ import {
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { updateMyPreferences } from "../../api/meApi";
+import { isOAuthSetupRequired } from "../../api/mcpErrors";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import { ConnectorPopover } from "../connectors/ConnectorPopover";
 import { McpOverlay } from "../connectors/mcp/McpOverlay";
@@ -114,6 +115,7 @@ import {
 } from "./chatModel/sourcesReducer";
 import {
   citedToolSources,
+  toolInvocationCallIdsInOrder,
   toolInvocationIndex,
 } from "./chatModel/citedToolSources";
 import { WorkspacePane } from "./components/workspace/WorkspacePane";
@@ -1118,18 +1120,74 @@ export function ChatScreen({
     [connectors],
   );
 
-  // PR 4.4.7 Phase 2 (Slice C) — chat-mounted McpOverlay for the
-  // progressive-discovery deep-link. Owns its own (open, slug) tuple
-  // so the user stays in the chat surface — no detour through Settings
-  // — when the agent surfaces a catalog suggestion via
-  // ``suggest_mcp_connector`` and the user clicks Connect.
+  // PR 4.4.7 Phase 2 (Slice C) — chat-mounted McpOverlay used ONLY for
+  // catalog entries that need a pre-registered OAuth client (Atlassian,
+  // GitHub, Intercom, PayPal, Plaid, Square). For the 1-click vendors
+  // we run install + start-OAuth + redirect inline so the user clicks
+  // Connect once and lands on the vendor's consent page.
   const [chatMcpOverlay, setChatMcpOverlay] = useState<{
     open: boolean;
     slug: string | null;
   }>({ open: false, slug: null });
-  const onMcpInstallCatalog = useCallback(({ slug }: { slug: string }) => {
-    setChatMcpOverlay({ open: true, slug });
-  }, []);
+  const onMcpInstallCatalog = useCallback(
+    async ({
+      slug,
+      requiresPreRegisteredClient,
+      approvalId,
+    }: {
+      slug: string;
+      requiresPreRegisteredClient: boolean;
+      approvalId: string;
+      serverId: string;
+    }): Promise<void> => {
+      if (requiresPreRegisteredClient) {
+        // Vendor needs the user to paste a client_id/client_secret
+        // first — open the McpOverlay focused on this slug so the
+        // SetupModal renders. The 1-click path below would 422 on
+        // install (backend refuses without an OAuth client).
+        setChatMcpOverlay({ open: true, slug });
+        return;
+      }
+      // 1-click: install creates the ``mcp_servers`` row, authenticate
+      // starts OAuth and full-page redirects to the vendor's consent
+      // screen. Same chain the catalog tab's Install button runs —
+      // skipping the overlay because the discovery card already
+      // carried enough context to commit.
+      try {
+        const server = await connectors.installFromCatalog(slug);
+        // Stash the discovery-card approval id keyed by the freshly
+        // minted ``server_id`` *before* the authenticate call kicks
+        // off the full-page redirect. The post-OAuth callback in
+        // App.tsx reads this back to (a) route the user to chat
+        // instead of settings and (b) flag the discovery card as
+        // resolved so it transitions out of "Connecting...".
+        rememberPendingMcpAuthAction({
+          approvalId,
+          serverId: server.server_id,
+        });
+        await connectors.authenticate(server.server_id);
+      } catch (err) {
+        // OAuth metadata discovery failures (no RFC 8414 endpoint,
+        // no DCR support) classify as ``OAuthSetupRequiredError`` —
+        // recover gracefully by surfacing the catalog overlay so the
+        // user can paste credentials.
+        if (isOAuthSetupRequired(err)) {
+          setChatMcpOverlay({ open: true, slug });
+          return;
+        }
+        setItems((current) => [
+          ...current,
+          {
+            id: `mcp-install-error-${Date.now()}`,
+            kind: "status",
+            title: "Connector install failed",
+            text: errorMessage(err, "Could not install connector"),
+          },
+        ]);
+      }
+    },
+    [connectors],
+  );
   // PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the user's
   // discoverable preference so the agent never re-suggests this
   // connector. We PATCH the preferences endpoint directly rather than
@@ -1256,6 +1314,15 @@ export function ChatScreen({
   // ``source_doc_id`` prefixes (``tool:`` / ``tool-call:``) keep the
   // two paths from key-colliding.
   const toolIndex = useMemo(() => toolInvocationIndex(items), [items]);
+  // PR 1.1-rev2 — ordinal-position fallback list. ``citedToolSources``
+  // walks this when a citation_made event lacks ``source_tool_call_id``
+  // (LangChain tools that don't pass ``InjectedToolCallId``, e.g.
+  // DuckDuckGo). The Nth ordinal maps to the Nth tool invocation by
+  // document order.
+  const toolCallIdsInOrder = useMemo(
+    () => toolInvocationCallIdsInOrder(items),
+    [items],
+  );
   const sourcesWithToolCitations = useMemo<SourceEntryMap>(() => {
     const fallbackRunId =
       activeRunId ?? mostRecentAssistantRunId(items) ?? null;
@@ -1263,6 +1330,7 @@ export function ChatScreen({
       runId: fallbackRunId,
       citationLinks,
       toolIndex,
+      toolCallIdsInOrder,
     });
     if (cited.length === 0) {
       return sourcesMap;
@@ -1278,7 +1346,14 @@ export function ChatScreen({
       }
     }
     return merged;
-  }, [activeRunId, citationLinks, items, sourcesMap, toolIndex]);
+  }, [
+    activeRunId,
+    citationLinks,
+    items,
+    sourcesMap,
+    toolIndex,
+    toolCallIdsInOrder,
+  ]);
 
   // PR 3.5 / G9 — set of runIds whose assistant message has reached a
   // terminal status (complete/incomplete). Used by `useRunCitations` so

@@ -213,7 +213,55 @@ describe("citedToolSources", () => {
     expect(out[0].citation_count).toBe(2);
   });
 
-  it("skips citation links with empty source_tool_call_id (hallucinated ordinal)", () => {
+  it("falls back to ordinal-position when source_tool_call_id is empty", () => {
+    // Regression pin: LangChain tools that don't pass
+    // ``InjectedToolCallId`` (DuckDuckGo et al.) leave the resolver
+    // with an empty ``source_tool_call_id``. The FE recovers by
+    // matching the Nth ordinal to the Nth tool invocation in document
+    // order.
+    const items = [
+      toolPart({
+        toolCallId: "call_a",
+        toolName: "web_search",
+        result: "result a",
+      }),
+      toolPart({
+        toolCallId: "call_b",
+        toolName: "web_search",
+        result: "result b",
+      }),
+    ];
+    let registry = emptyCitationLinkRegistry();
+    registry = upsertCitationLink(
+      registry,
+      RUN,
+      link({ conversation_ordinal: 1, source_tool_call_id: "" }),
+    );
+    registry = upsertCitationLink(
+      registry,
+      RUN,
+      link({
+        conversation_ordinal: 2,
+        prose_offset: 9,
+        source_tool_call_id: "",
+      }),
+    );
+    const out = citedToolSources({
+      runId: RUN,
+      citationLinks: registry,
+      toolIndex: toolInvocationIndex(items),
+      toolCallIdsInOrder: ["call_a", "call_b"],
+    });
+    expect(out).toHaveLength(2);
+    // Each ordinal resolved to its positional tool call.
+    const docIds = out.map((row) => row.source_doc_id).sort();
+    expect(docIds).toEqual([
+      `${TOOL_DOC_ID_PREFIX}call_a`,
+      `${TOOL_DOC_ID_PREFIX}call_b`,
+    ]);
+  });
+
+  it("skips citation links with empty source_tool_call_id when no fallback list provided", () => {
     const links = upsertCitationLink(
       emptyCitationLinkRegistry(),
       RUN,

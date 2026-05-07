@@ -121,6 +121,61 @@ class TestAppendToDict:
         assert len(out["content"]) == 2
 
 
+class TestAppendToTuple:
+    """LangChain ``response_format="content_and_artifact"`` tools (e.g.
+    ``DuckDuckGoSearchResults(output_format="list")``) return a
+    ``(content_string, artifact)`` tuple. Without explicit handling the
+    hint slips through to the unchanged-passthrough branch and the
+    model never sees the ``[[N]]`` pointer."""
+
+    def test_appends_to_first_string_element_and_preserves_artifact(self) -> None:
+        artifact = [{"title": "Page A", "link": "https://a"}]
+        out = _CitationHint.append_to(
+            ("Some search result text", artifact),
+            ordinal=_Values.ORDINAL,
+            tool_name=_Values.TOOL_NAME,
+        )
+        assert isinstance(out, tuple)
+        assert len(out) == 2
+        assert isinstance(out[0], str)
+        assert out[0].startswith("Some search result text")
+        assert "[[7]]" in out[0]
+        # Artifact is preserved unchanged so downstream consumers
+        # (Sources tab, telemetry) still see the structured payload.
+        assert out[1] is artifact
+
+    def test_handles_single_element_tuple(self) -> None:
+        out = _CitationHint.append_to(
+            ("only entry",),
+            ordinal=_Values.ORDINAL,
+            tool_name=_Values.TOOL_NAME,
+        )
+        assert isinstance(out, tuple)
+        assert len(out) == 1
+        assert isinstance(out[0], str)
+        assert "[[7]]" in out[0]
+
+    def test_skips_non_string_head_and_extends_last_string(self) -> None:
+        out = _CitationHint.append_to(
+            ({"meta": True}, "the body the model reads"),
+            ordinal=_Values.ORDINAL,
+            tool_name=_Values.TOOL_NAME,
+        )
+        assert isinstance(out, tuple)
+        assert out[0] == {"meta": True}
+        assert isinstance(out[1], str)
+        assert "[[7]]" in out[1]
+
+    def test_empty_tuple_inserts_rendered_hint(self) -> None:
+        out = _CitationHint.append_to(
+            (),
+            ordinal=_Values.ORDINAL,
+            tool_name=_Values.TOOL_NAME,
+        )
+        assert isinstance(out, tuple)
+        assert len(out) == 1
+
+
 class TestAppendToOtherShapes:
     def test_returns_unchanged_for_unknown_shape(self) -> None:
         sentinel = object()

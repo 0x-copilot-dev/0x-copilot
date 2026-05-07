@@ -162,18 +162,47 @@ export function useRunCitations(
  *
  * Returns the underlying ``CitationLink`` (with the cited
  * ``source_tool_call_id``) when the resolver has fired a
- * ``citation_made`` event for this ordinal in the active run, or
- * ``undefined`` for hallucinated / unresolved ordinals. The chip
- * renders a muted placeholder for the latter.
+ * ``citation_made`` event for this ordinal in any run currently
+ * indexed in the registry, or ``undefined`` for hallucinated /
+ * unresolved ordinals. The chip renders a muted placeholder for the
+ * latter.
+ *
+ * Lookup order:
+ * 1. ``activeRunId`` if set (mid-stream).
+ * 2. Otherwise scan every run in the registry — when the run has
+ *    completed (``activeRunId`` reset to ``null``) but the chips are
+ *    still on screen, the chip needs to keep resolving. This mirrors
+ *    ``activeCitations``'s ``mostRecentAssistantRunId`` fallback used
+ *    for legacy ``[c<id>]`` chips.
  */
 export function useOrdinalCitation(
   conversationOrdinal: number,
 ): CitationLink | undefined {
   const { linksByRun, activeRunId } = useContext(CitationsContext);
   return useMemo(() => {
-    if (activeRunId === null) {
-      return undefined;
+    if (activeRunId !== null) {
+      const found = anyLinkForOrdinalInRun(
+        linksByRun,
+        activeRunId,
+        conversationOrdinal,
+      );
+      if (found !== undefined) {
+        return found;
+      }
     }
-    return anyLinkForOrdinalInRun(linksByRun, activeRunId, conversationOrdinal);
+    // Fallback: scan every run (typical case after the assistant
+    // message completes — ``activeRunId`` is null but the chips are
+    // still rendered against the persisted message).
+    for (const runId of linksByRun.keys()) {
+      const link = anyLinkForOrdinalInRun(
+        linksByRun,
+        runId,
+        conversationOrdinal,
+      );
+      if (link !== undefined) {
+        return link;
+      }
+    }
+    return undefined;
   }, [linksByRun, activeRunId, conversationOrdinal]);
 }

@@ -470,6 +470,59 @@ class TestSuggestCatalogFallback(DiscoveryFixtureMixin):
         # An audit row was still emitted (the run took an action).
         assert len(persistence.audit_records) == 1
 
+    def test_catalog_suggestion_does_not_call_auth_session_creator(self) -> None:
+        # Regression: a catalog hit must NOT call
+        # ``auth_session_creator.create_auth_session`` — that path
+        # 404s against backend's auth-start endpoint because the
+        # ``mcp_servers`` row for ``seed:linear`` doesn't exist yet.
+        # The Connect button on the FE deep-links to the install
+        # overlay, which creates the row + starts OAuth in a single
+        # flow.
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        class _AssertingCreator:
+            def create_auth_session(self, *, server_id, runtime_context):
+                # Args ignored on purpose — the assertion is "this
+                # method must not be invoked at all" for a catalog hit.
+                del server_id, runtime_context
+                raise AssertionError(
+                    "auth_session_creator must not be called on a catalog hit"
+                )
+
+        from runtime_worker.audit import WorkerAuditEmitter
+
+        events = _RecordingEventStore()
+        persistence = _RecordingPersistence()
+        producer = RuntimeEventProducer(persistence=persistence, event_store=events)
+        audit = WorkerAuditEmitter(persistence=persistence)
+        suggestion = CatalogSuggestionCard(
+            slug="linear", display_name="Linear", description="Tickets."
+        )
+        service = McpDiscoveryService(
+            run=_run_record(suggested_connectors=(suggestion,)),
+            runtime_context=_runtime_context(suggested_connectors=(suggestion,)),
+            producer=producer,
+            audit_emitter=audit,
+            registry=_StubRegistry([]),
+            auth_session_creator=_AssertingCreator(),  # type: ignore[arg-type]
+        )
+
+        result = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+
+        assert result["status"] == "emitted"
+        # The card was emitted with empty auth_url because the
+        # creator was correctly skipped — the projector strips empty
+        # strings, so the field is absent on the wire.
+        payload = events.drafts[0].payload
+        assert Keys.Field.AUTH_URL not in payload
+        assert payload["catalog_slug"] == "linear"
+
     def test_suggestion_id_works_with_seed_prefix_too(self) -> None:
         # The agent might call the tool with the bare slug OR the
         # ``seed:<slug>`` form. Both should resolve to the same
@@ -509,6 +562,62 @@ class TestSuggestCatalogFallback(DiscoveryFixtureMixin):
         assert result["status"] == "unknown_server"
         assert len(events.drafts) == 0
         assert len(persistence.audit_records) == 0
+
+    def test_catalog_payload_carries_requires_pre_registered_client_flag(
+        self,
+    ) -> None:
+        # PR 4.4.7 follow-up — the FE Connect button branches on this
+        # flag: false → 1-click install + auth + redirect inline; true
+        # → open the credentials form. The discovery service must pull
+        # the flag off the suggestion card and stamp it on the wire
+        # payload so the FE doesn't have to hit the catalog endpoint
+        # again to look it up.
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        suggestion_one_click = CatalogSuggestionCard(
+            slug="linear",
+            display_name="Linear",
+            description="Tickets.",
+            requires_pre_registered_client=False,
+        )
+        service, events, _ = self._build(
+            cards=[],
+            suggested_connectors=(suggestion_one_click,),
+        )
+        result = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+        assert result["status"] == "emitted"
+        payload = events.drafts[0].payload
+        assert payload["catalog_slug"] == "linear"
+        assert payload["requires_pre_registered_client"] is False
+
+    def test_catalog_payload_marks_pre_registered_vendor(self) -> None:
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        suggestion_setup = CatalogSuggestionCard(
+            slug="atlassian",
+            display_name="Atlassian",
+            description="Jira.",
+            requires_pre_registered_client=True,
+        )
+        service, events, _ = self._build(
+            cards=[],
+            suggested_connectors=(suggestion_setup,),
+        )
+        asyncio.run(
+            service.suggest(
+                server_id="atlassian",
+                reason="fetch issues",
+                expected_value="ground claims",
+            )
+        )
+        payload = events.drafts[0].payload
+        assert payload["requires_pre_registered_client"] is True
 
     def test_registry_takes_precedence_over_catalog_fallback(self) -> None:
         # When the user HAS installed Linear (registry hit), the

@@ -137,6 +137,7 @@ class CitationResolver:
             buf = self._MessageBuffer()
             self._buffers[message_id] = buf
         buf.accumulated += delta_text
+        emitted_this_call = 0
         for match in self._CITATION_PATTERN.finditer(buf.accumulated):
             try:
                 ordinal = int(match.group(1))
@@ -154,6 +155,16 @@ class CitationResolver:
                 self._seen_ordinals_set.add(ordinal)
                 self._seen_ordinals.append(ordinal)
             tool_call_id = self._allocator.tool_call_id_for(ordinal) or ""
+            _LOGGER.info(
+                "[citations] resolver.match run=%s msg=%s ordinal=%d offset=%d "
+                "tool_call_id='%s' (allocator_last=%d)",
+                self._run.run_id,
+                message_id,
+                ordinal,
+                prose_offset,
+                tool_call_id,
+                self._allocator.last_allocated,
+            )
             await self._producer.append_api_event(
                 run=self._run,
                 source=self._source,
@@ -168,6 +179,18 @@ class CitationResolver:
                     }
                 },
             )
+            emitted_this_call += 1
+        if emitted_this_call == 0 and "[[" in delta_text:
+            # Surface partial-token state on the noisy path so a missing
+            # closing ``]]`` is visible during debug.
+            _LOGGER.debug(
+                "[citations] resolver.partial run=%s msg=%s delta_tail=%r "
+                "buffer_len=%d",
+                self._run.run_id,
+                message_id,
+                delta_text[-40:],
+                len(buf.accumulated),
+            )
 
     def sealed_ordinals(self) -> list[int]:
         """Snapshot the resolved ordinals for ``final_response.cited_ordinals``.
@@ -176,7 +199,13 @@ class CitationResolver:
         "sealed list of cited ordinals in order of first reference."
         """
 
-        return list(self._seen_ordinals)
+        ordinals = list(self._seen_ordinals)
+        _LOGGER.info(
+            "[citations] resolver.sealed_ordinals run=%s ordinals=%s",
+            self._run.run_id,
+            ordinals,
+        )
+        return ordinals
 
     @classmethod
     def bind_for_run(cls, resolver: "CitationResolver") -> object:

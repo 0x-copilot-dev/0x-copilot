@@ -10,6 +10,10 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.capabilities.citation_resolver import CitationResolver
+from agent_runtime.capabilities.conversation_ordinals import (
+    ConversationOrdinalAllocator,
+)
 from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from runtime_adapters.async_wrappers import (
     adapt_event_store_to_async,
@@ -213,6 +217,25 @@ class RuntimeApprovalHandler:
             approval=approval,
             command=command,
         )
+        # PR 1.1-rev2 — bind a fresh allocator + resolver for the resume.
+        # ``handle_resolved`` runs in a separate async task from the
+        # original ``RuntimeRunHandler.handle`` (the original task ended
+        # with the run paused; this task is the queue's approval-resolved
+        # callback). The original allocator/resolver were unbound when
+        # the run paused, so we need a new pair seeded from the
+        # already-persisted ``TOOL_CALL_STARTED`` events of all prior
+        # runs in the conversation INCLUDING the run being resumed —
+        # tools that fired before the pause already burned their
+        # ordinals.
+        allocator = await self._build_allocator_for_resume(running)
+        allocator_token = ConversationOrdinalAllocator.bind_for_run(allocator)
+        citation_resolver = CitationResolver(
+            run=running,
+            allocator=allocator,
+            producer=self.event_producer,
+            source=StreamEventSource.MODEL,
+        )
+        resolver_token = CitationResolver.bind_for_run(citation_resolver)
         try:
             harness = self.agent_factory(
                 context=running.runtime_context,
@@ -250,6 +273,9 @@ class RuntimeApprovalHandler:
                 summary="Run failed",
             )
             raise
+        finally:
+            CitationResolver.unbind(resolver_token)
+            ConversationOrdinalAllocator.unbind(allocator_token)
 
     # PR 3.2.5 Phase 3 — paired with the ``SUBAGENT_PAUSED`` emit in
     # ``stream_events.append_activity_events``. ``approval`` is the
@@ -296,6 +322,46 @@ class RuntimeApprovalHandler:
             event_type=RuntimeApiEventType.SUBAGENT_RESUMED,
             payload=payload,
             parent_task_id=parent_task_id,
+        )
+
+    async def _build_allocator_for_resume(
+        self,
+        run: RunRecord,
+    ) -> ConversationOrdinalAllocator:
+        """Build a fresh allocator seeded for a resumed run.
+
+        The original run paused with the allocator unbound. Tools that
+        fired before the pause already emitted ``TOOL_CALL_STARTED``
+        events and burned their ordinals. The seeder walks every
+        message in the conversation, picks the run_ids referenced
+        there, and counts those events — matching the run handler's
+        seeding rule but including the run being resumed (its prior
+        tool calls are part of the persisted history).
+        """
+
+        records = await self.persistence.list_messages(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            limit=200,
+        )
+        # Collect every run_id referenced by the conversation's messages,
+        # including the run we're resuming. Order doesn't matter for
+        # counting; the seeder iterates per-run events independently.
+        run_ids: list[str] = []
+        seen: set[str] = set()
+        for record in records:
+            run_id = record.run_id
+            if run_id is None or run_id in seen:
+                continue
+            seen.add(run_id)
+            run_ids.append(run_id)
+        if run.run_id not in seen:
+            run_ids.append(run.run_id)
+        return await ConversationOrdinalAllocator.for_conversation(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            prior_run_ids=tuple(run_ids),
+            event_store=self.event_store,
         )
 
     async def _stream_resume(

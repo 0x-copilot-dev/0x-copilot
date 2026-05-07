@@ -44,10 +44,17 @@ export function AssistantMessage({
   /**
    * PR 4.4.7 Phase 2 (Slice C) — invoked when the discovery card was
    * emitted for a catalog-only suggestion (uninstalled). The host
-   * (ChatScreen) routes this to opening the McpOverlay deep-linked to
-   * the matching slug. Optional so old call-sites keep working.
+   * (ChatScreen) branches on ``requiresPreRegisteredClient``: 1-click
+   * vendors (false) get an inline install + auth + redirect chain;
+   * pre-registered vendors (true) get a credentials form via the
+   * McpOverlay. Optional so old call-sites keep working.
    */
-  onMcpInstallCatalog?: (payload: { slug: string }) => void;
+  onMcpInstallCatalog?: (payload: {
+    slug: string;
+    requiresPreRegisteredClient: boolean;
+    approvalId: string;
+    serverId: string;
+  }) => void;
   /** PR 4.4.7 Phase 2 — Skip on a catalog discovery card writes
    *  ``discoverable_connectors[slug] = false`` to the user's prefs
    *  so the agent never re-suggests this connector in future runs. */

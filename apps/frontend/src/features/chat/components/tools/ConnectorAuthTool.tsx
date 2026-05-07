@@ -29,11 +29,24 @@ export function ConnectorAuthTool({
   onSkip: (payload: { approvalId: string; serverId: string }) => Promise<void>;
   // PR 4.4.7 Phase 2 (Slice C) — invoked instead of ``onConnect`` when
   // the discovery card was emitted for a *catalog-only* connector
-  // (uninstalled). The chat surface deep-links the McpOverlay to the
-  // matching slug so the user completes install + OAuth via the catalog
-  // flow rather than starting OAuth against a server row that doesn't
-  // exist yet. Optional so old call sites / tests keep working.
-  onInstallCatalog?: (payload: { slug: string }) => void;
+  // (uninstalled). The host branches on
+  // ``requiresPreRegisteredClient``:
+  //   false — run 1-click install + auth + redirect inline.
+  //   true  — open a credentials form for the OAuth client.
+  // Either way no extra "Install" confirmation step is required —
+  // the discovery card already carried the context.
+  //
+  // ``approvalId`` and ``serverId`` are forwarded so the host can
+  // ``rememberPendingMcpAuthAction`` *before* full-page redirect to
+  // the vendor. Without that, the post-OAuth callback in App.tsx has
+  // no pending action to read back, never returns the user to chat,
+  // and the discovery card stays stuck on "Connecting...".
+  onInstallCatalog?: (payload: {
+    slug: string;
+    requiresPreRegisteredClient: boolean;
+    approvalId: string;
+    serverId: string;
+  }) => void;
   // PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the user's
   // ``discoverable_connectors[slug] = false`` preference so the agent
   // never re-suggests it in this OR future conversations. Optional so
@@ -61,10 +74,12 @@ export function ConnectorAuthTool({
   const isDiscovery = discoveryReason !== null;
   // PR 4.4.7 Phase 2 (Slice C) — when the suggestion is for a catalog
   // entry the user hasn't installed yet, the backend stamps
-  // ``catalog_slug`` onto the payload. Connect routes to the install
-  // overlay instead of OAuth.
+  // ``catalog_slug`` (and ``requires_pre_registered_client``) onto
+  // the payload. Connect routes to the install flow instead of OAuth.
   const catalogSlug = stringValue(args.catalog_slug);
   const isCatalogSuggestion = catalogSlug !== null;
+  const requiresPreRegisteredClient =
+    args.requires_pre_registered_client === true;
   const message = isDiscovery
     ? (expectedValue ?? `${displayName} could improve this answer.`)
     : (stringValue(args.message) ??
@@ -83,11 +98,18 @@ export function ConnectorAuthTool({
     try {
       if (action === "connect") {
         if (isCatalogSuggestion && onInstallCatalog && catalogSlug) {
-          // Catalog-only suggestion: open the install overlay rather
-          // than starting OAuth against a server that doesn't exist
-          // yet. Resolution of the discovery card itself is left to
-          // the install flow + a follow-up turn.
-          onInstallCatalog({ slug: catalogSlug });
+          // Catalog-only suggestion. The host runs install + start
+          // OAuth + redirect (1-click) or opens a credentials form
+          // (pre-registered) — the user does not see an interim
+          // "Install" confirmation overlay. Resolution of the
+          // discovery card itself is left to the install flow + a
+          // follow-up turn.
+          onInstallCatalog({
+            slug: catalogSlug,
+            requiresPreRegisteredClient,
+            approvalId,
+            serverId,
+          });
         } else {
           await onConnect({ approvalId, serverId });
         }

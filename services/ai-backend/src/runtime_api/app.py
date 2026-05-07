@@ -184,6 +184,20 @@ class RuntimeApiAppFactory:
         app.state.runtime_settings = settings
         app.state.runtime_event_bus = event_bus
         app.state.runtime_membership_resolver = membership_resolver
+        # PR 4.4.7 Phase 2 (Slice B) — wire the suggestible-connectors
+        # resolver. Without this the runtime defaults to ``Null`` and
+        # ``runtime_context.suggested_connectors`` is always empty, so
+        # the system prompt skips the catalog suggestions section and
+        # the agent has no idea Linear / Notion / etc. exist when the
+        # user asks "can you connect me to Linear". The factory falls
+        # back to ``MCP_BACKEND_REGISTRY_URL`` when ``BACKEND_BASE_URL``
+        # isn't set so dev (``make dev``) gets the production behavior
+        # without a Makefile change.
+        from agent_runtime.api.suggestible_connectors_resolver import (
+            SuggestibleConnectorsResolverFactory,
+        )
+
+        suggestible_resolver = SuggestibleConnectorsResolverFactory.default()
         if settings.store.backend in _ASYNC_BACKENDS:
             async_ports = RuntimeAdapterFactory.async_from_settings(settings)
             app.state.async_runtime_ports = async_ports
@@ -199,6 +213,7 @@ class RuntimeApiAppFactory:
                 )
                 else LoggingNotificationDispatcher(),
                 membership_resolver=membership_resolver,
+                suggestible_connectors_resolver=suggestible_resolver,
             )
         ports = RuntimeAdapterFactory.from_settings(settings)
         app.state.runtime_ports = ports
@@ -210,6 +225,7 @@ class RuntimeApiAppFactory:
             on_event_appended=event_bus.notify_sync,
             notification_dispatcher=notification_dispatcher,
             membership_resolver=membership_resolver,
+            suggestible_connectors_resolver=suggestible_resolver,
         )
 
     @classmethod

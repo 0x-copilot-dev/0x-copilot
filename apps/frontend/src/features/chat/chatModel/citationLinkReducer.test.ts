@@ -140,6 +140,53 @@ describe("applyCitationLinkEvent", () => {
     const after = applyCitationLinkEvent(before, event);
     expect(after).toBe(before);
   });
+
+  it("accepts events that omit source_tool_call_id (replay of pre-fix data)", () => {
+    // Regression pin: events persisted before the projector defaulted
+    // ``source_tool_call_id`` to ``""`` arrive without the field on
+    // replay. Old conversations whose chips currently render as ``?``
+    // must resolve once the FE picks up the lenient guard.
+    const before = emptyCitationLinkRegistry();
+    const event = {
+      ...citationMadeEvent(link({})),
+      payload: {
+        link: {
+          conversation_ordinal: 4,
+          message_id: "msg_old",
+          prose_offset: 0,
+          prose_length: 5,
+          // source_tool_call_id intentionally omitted.
+        },
+      },
+    } as unknown as RuntimeEventEnvelope;
+    const after = applyCitationLinkEvent(before, event);
+    const offsets = linksForMessage(after, RUN, "msg_old");
+    expect(offsets.size).toBe(1);
+    const stored = offsets.get(0);
+    expect(stored?.conversation_ordinal).toBe(4);
+    // Coerced to empty string so downstream consumers (chip,
+    // ``citedToolSources``) can rely on a ``string`` typing.
+    expect(stored?.source_tool_call_id).toBe("");
+  });
+
+  it("accepts events whose source_tool_call_id is null", () => {
+    const before = emptyCitationLinkRegistry();
+    const event = {
+      ...citationMadeEvent(link({})),
+      payload: {
+        link: {
+          conversation_ordinal: 5,
+          message_id: "msg_null",
+          prose_offset: 0,
+          prose_length: 5,
+          source_tool_call_id: null,
+        },
+      },
+    } as unknown as RuntimeEventEnvelope;
+    const after = applyCitationLinkEvent(before, event);
+    const offsets = linksForMessage(after, RUN, "msg_null");
+    expect(offsets.get(0)?.source_tool_call_id).toBe("");
+  });
 });
 
 describe("buildCitationLinkRegistry", () => {

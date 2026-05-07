@@ -495,13 +495,19 @@ class RuntimeEventPresentationProjector:
             # PR 4.4.7 Phase 2 (Slice C) — present iff the suggestion
             # came from the catalog (uninstalled connector). The FE
             # branches Connect on this so it routes to the install
-            # overlay rather than starting OAuth against a server row
+            # flow rather than starting OAuth against a server row
             # that doesn't exist yet.
             "catalog_slug",
         ):
             value = cls._text(payload.get(key))
             if value is not None:
                 safe_payload[key] = value
+        # PR 4.4.7 follow-up — boolean flag (string-only ``_text``
+        # would coerce False to None). Pass through bool values
+        # verbatim; absent/non-bool keys are dropped.
+        requires_pre = payload.get("requires_pre_registered_client")
+        if isinstance(requires_pre, bool):
+            safe_payload["requires_pre_registered_client"] = requires_pre
         return safe_payload
 
     @classmethod
@@ -559,13 +565,24 @@ class RuntimeEventPresentationProjector:
         ordinal = link.get(_Fields.CONVERSATION_ORDINAL)
         if isinstance(ordinal, int) and ordinal > 0:
             safe_link[_Fields.CONVERSATION_ORDINAL] = ordinal
-        for text_key in (
-            _Fields.MESSAGE_ID,
-            _Fields.SOURCE_TOOL_CALL_ID,
-        ):
-            value = link.get(text_key)
-            if isinstance(value, str) and value.strip():
-                safe_link[text_key] = value
+        # ``message_id`` must be a non-empty string — without it the FE
+        # cannot key the chip back to its assistant message.
+        message_id = link.get(_Fields.MESSAGE_ID)
+        if isinstance(message_id, str) and message_id.strip():
+            safe_link[_Fields.MESSAGE_ID] = message_id
+        # ``source_tool_call_id`` is *allowed* to be empty: when the
+        # model emits ``[[N]]`` for an ordinal the allocator hasn't
+        # bound to a tool_call_id (hallucinated ordinal, or
+        # provider-native passthrough that fired before the tool
+        # message materialized), the resolver still emits the event so
+        # the chip can render — the FE renders it as a muted
+        # placeholder when the call_id is empty. Preserve the field as
+        # a string (possibly empty) so the FE type guard accepts it.
+        source_tool_call_id = link.get(_Fields.SOURCE_TOOL_CALL_ID)
+        if isinstance(source_tool_call_id, str):
+            safe_link[_Fields.SOURCE_TOOL_CALL_ID] = source_tool_call_id
+        else:
+            safe_link[_Fields.SOURCE_TOOL_CALL_ID] = ""
         for offset_key in (_Fields.PROSE_OFFSET, _Fields.PROSE_LENGTH):
             value = link.get(offset_key)
             if isinstance(value, int) and value >= 0:

@@ -52,14 +52,18 @@ class _CitationHint:
     Result types:
 
     - ``str`` — append ``\\n\\n[Tool call #N — <tool> — cite as [[N]]…]``.
+    - ``tuple`` — LangChain's ``response_format="content_and_artifact"``
+      contract; the first element is the string the model reads, the
+      second is the structured artifact. We extend the first element
+      and return a new tuple. ``DuckDuckGoSearchResults`` and most
+      LangChain web-search wrappers use this shape.
     - ``list`` of strings — append the hint to the last string entry, or
       append a new string entry when the list is empty / has no string
       tail. (LangChain occasionally returns ``list[str]`` for tools that
       stream multi-part text outputs.)
-    - any other shape — return unchanged. Structured tool results
-      (dicts, MCP-shaped content) are handled by the MCP middleware
-      (see ``cite_mcp.py``); the generic LangChain tool path here only
-      knows how to extend text.
+    - ``dict`` — MCP envelope with a ``content`` array, OR generic dict
+      that gets a top-level ``_citation_hint`` field added.
+    - any other shape — return unchanged.
     """
 
     HINT_TEMPLATE = (
@@ -86,6 +90,23 @@ class _CitationHint:
         suffix = cls.SEPARATOR + rendered
         if isinstance(result, str):
             return result + suffix
+        if isinstance(result, tuple):
+            # LangChain ``response_format="content_and_artifact"`` —
+            # ``(content_string, artifact)`` is the canonical shape;
+            # ``DuckDuckGoSearchResults(output_format="list")`` returns
+            # ``(formatted_text, list[dict])``. Extending the first
+            # element is the only place the model actually reads.
+            if len(result) >= 1 and isinstance(result[0], str):
+                return (result[0] + suffix, *result[1:])
+            # Tuple whose head isn't a string — walk for the last
+            # string entry and extend it.
+            updated_seq: list[Any] = list(result)
+            for idx in range(len(updated_seq) - 1, -1, -1):
+                if isinstance(updated_seq[idx], str):
+                    updated_seq[idx] = updated_seq[idx] + suffix
+                    return tuple(updated_seq)
+            updated_seq.insert(0, suffix.lstrip())
+            return tuple(updated_seq)
         if isinstance(result, list):
             updated = list(result)
             for idx in range(len(updated) - 1, -1, -1):
@@ -165,7 +186,13 @@ class CitationCapturingTool(BaseTool):
         # is returned unchanged.
         try:
             allocator = ConversationOrdinalAllocator.active()
-            if allocator is not None:
+            if allocator is None:
+                _LOGGER.warning(
+                    "[citations] tool.hint_skipped tool=%s reason=no_allocator_bound "
+                    "(citations disabled or replay path)",
+                    self.name,
+                )
+            else:
                 ordinal = (
                     allocator.allocate_for_tool_call(tool_call_id=tool_call_id)
                     if tool_call_id
@@ -174,9 +201,17 @@ class CitationCapturingTool(BaseTool):
                 result = _CitationHint.append_to(
                     result, ordinal=ordinal, tool_name=self.name
                 )
+                _LOGGER.info(
+                    "[citations] tool.hint_appended tool=%s ordinal=%d "
+                    "call_id='%s' result_type=%s",
+                    self.name,
+                    ordinal,
+                    tool_call_id or "",
+                    type(result).__name__,
+                )
         except Exception:  # noqa: BLE001 - best-effort, never break the tool path
             _LOGGER.warning(
-                "citation hint append raised on %s; returning unmodified result",
+                "[citations] tool.hint_raised tool=%s; returning unmodified result",
                 self.name,
                 exc_info=True,
             )

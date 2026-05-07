@@ -86,7 +86,12 @@ export const ThreadBody = forwardRef<
     /** PR 4.4.7 Phase 2 (Slice C) — discovery card for an uninstalled
      *  catalog entry routes here instead of OAuth. Optional so older
      *  test harnesses keep working. */
-    onMcpInstallCatalog?: (payload: { slug: string }) => void;
+    onMcpInstallCatalog?: (payload: {
+      slug: string;
+      requiresPreRegisteredClient: boolean;
+      approvalId: string;
+      serverId: string;
+    }) => void;
     /** PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the
      *  user's discoverable preference so the agent never resurfaces
      *  the same suggestion in a future run. */

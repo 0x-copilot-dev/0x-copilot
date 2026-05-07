@@ -53,8 +53,18 @@ export function clearPendingMcpAuthAction(): void {
 }
 
 export function runIdFromMcpAuthApprovalId(approvalId: string): string | null {
+  // Two prefixes round-trip through this helper:
+  //   ``mcp_auth:<run_id>:<server_id>``       — blocking auth gate
+  //   ``mcp_discovery:<run_id>:<server_id>``  — Phase 2 catalog suggestion
+  // Both share the ``<prefix>:<run_id>:<rest>`` shape, so we accept
+  // either prefix rather than special-casing one. Returning null for
+  // an unfamiliar prefix lets callers degrade safely (the App.tsx
+  // OAuth callback only uses runId to scope the chat route).
   const parts = approvalId.split(":");
-  return parts.length >= 3 && parts[0] === "mcp_auth" && parts[1]
+  if (parts.length < 3 || !parts[1]) {
+    return null;
+  }
+  return parts[0] === "mcp_auth" || parts[0] === "mcp_discovery"
     ? parts[1]
     : null;
 }

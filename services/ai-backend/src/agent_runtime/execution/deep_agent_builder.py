@@ -83,7 +83,18 @@ def format_web_subagent_suffix(
         "read-only at `/subagents/<task_id>/`. When the user asks about a "
         "delegate's tools, queries, or conversation, run `ls /subagents/` and "
         "`read_file` on the relevant `tool_calls.json` or `conversation.md` "
-        "rather than guessing or saying you cannot recall."
+        "rather than guessing or saying you cannot recall.\n\n"
+        # PR 1.1-rev2 — model-declared citation pointers (subagent path).
+        "Cite tool calls inline. Each tool result you read ends with a "
+        "pointer of the form `[Tool call #N — <tool_name> — cite as "
+        "[[N]] when referencing this result.]`. When you ground any "
+        "factual claim — including in a checkpoint, a delegated "
+        "summary, or your final answer — append `[[N]]` immediately "
+        "after the claim, where N is the matching tool call number. "
+        "Use double square brackets with a positive integer (e.g. "
+        "`[[3]]`, `[[12]]`); never invent ordinals you were not "
+        "shown. If no pointer was provided for the source you used, "
+        "omit the marker rather than guessing."
     )
 
 

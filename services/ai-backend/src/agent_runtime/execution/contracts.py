@@ -262,6 +262,13 @@ class CatalogSuggestionCard(RuntimeContract):
     description: str = ""
     scopes_summary: str | None = None
     brand_color: str | None = None
+    # PR 4.4.7 follow-up — when True, install requires the user to
+    # paste a pre-registered OAuth client first (vendor doesn't expose
+    # RFC 8414 metadata or RFC 7591 dynamic client registration). The
+    # discovery card stamps this onto the wire payload so the FE
+    # routes Connect to the credentials form instead of running a
+    # 1-click install + redirect.
+    requires_pre_registered_client: bool = False
 
     @field_validator("slug")
     @classmethod

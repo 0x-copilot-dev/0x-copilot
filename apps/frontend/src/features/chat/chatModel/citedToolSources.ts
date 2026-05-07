@@ -27,6 +27,7 @@ import type { CitationLink, SourceEntry } from "@enterprise-search/api-types";
 
 import type { CitationLinkRegistryByRun } from "./citationLinkReducer";
 import { linksForRun } from "./citationLinkReducer";
+import { citationDebug } from "./citationDebug";
 import type { ChatItem, ThreadToolCallArgs, ThreadToolCallPart } from "./types";
 
 /** Compact view of a tool invocation we may need to cite. */
@@ -96,10 +97,45 @@ export function toolInvocationIndex(
   return index.size === 0 ? EMPTY_INDEX : index;
 }
 
+/** Walk ``items`` in document order and yield each tool-call part's
+ *  call_id, deduped. Used by ``citedToolSources`` to map ordinals (1-based
+ *  per conversation) back to the corresponding tool invocation when the
+ *  runtime didn't bind a ``source_tool_call_id`` — common for LangChain
+ *  tools that don't opt into ``InjectedToolCallId`` (DuckDuckGo et al.). */
+export function toolInvocationCallIdsInOrder(
+  items: readonly ChatItem[],
+): readonly string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const item of items) {
+    if (item.kind !== "message") {
+      continue;
+    }
+    for (const part of item.content) {
+      if (!isToolCallPart(part)) {
+        continue;
+      }
+      const callId = stringValue(part.toolCallId);
+      if (callId === null || seen.has(callId)) {
+        continue;
+      }
+      seen.add(callId);
+      order.push(callId);
+    }
+  }
+  return order;
+}
+
 export interface CitedToolSourcesArgs {
   runId: string | null;
   citationLinks: CitationLinkRegistryByRun;
   toolIndex: ToolInvocationIndex;
+  /** PR 1.1-rev2 — ordinal-position fallback. When the runtime
+   *  couldn't bind a ``source_tool_call_id`` to an ordinal (LangChain
+   *  tool that didn't opt into ``InjectedToolCallId``), we resolve the
+   *  ``Nth`` cited ordinal against the ``Nth`` tool-call part in
+   *  ``items`` order. ``[]`` disables the fallback. */
+  toolCallIdsInOrder?: readonly string[];
   /** Optional cap on the snippet length, mostly for tests. */
   snippetMaxChars?: number;
 }
@@ -115,6 +151,7 @@ export function citedToolSources({
   runId,
   citationLinks,
   toolIndex,
+  toolCallIdsInOrder = [],
   snippetMaxChars = SNIPPET_MAX_CHARS,
 }: CitedToolSourcesArgs): readonly SourceEntry[] {
   if (runId === null) {
@@ -122,6 +159,10 @@ export function citedToolSources({
   }
   const links = linksForRun(citationLinks, runId);
   if (links.length === 0) {
+    citationDebug(
+      `cited_tool_sources.empty run=${runId} reason=no_links_in_run ` +
+        `runs_indexed=${citationLinks.size} tools_indexed=${toolIndex.size}`,
+    );
     return EMPTY_SOURCES;
   }
   // Bucket by tool_call_id; aggregate count and the latest seen offset.
@@ -133,12 +174,24 @@ export function citedToolSources({
       links: CitationLink[];
     }
   >();
+  let ordinalFallbacks = 0;
   for (const link of links) {
-    const callId = link.source_tool_call_id;
+    let callId = link.source_tool_call_id;
     if (!callId) {
-      // Unresolved tool_call_id (hallucinated ordinal or pre-allocator
-      // citation). Skip — there's no tool invocation to surface.
-      continue;
+      // PR 1.1-rev2 — ordinal-position fallback. The Nth cited ordinal
+      // resolves to the Nth tool invocation in document order. Common
+      // for LangChain tools that don't pass ``InjectedToolCallId`` (the
+      // runtime allocates an ordinal but can't bind a call_id at
+      // dispatch time).
+      const fallback = toolCallIdsInOrder[link.conversation_ordinal - 1];
+      if (typeof fallback === "string" && fallback.length > 0) {
+        callId = fallback;
+        ordinalFallbacks += 1;
+      } else {
+        // Truly unresolvable (hallucinated ordinal beyond any real
+        // tool call). Skip — there's nothing to surface.
+        continue;
+      }
     }
     const existing = byCallId.get(callId);
     if (existing) {
@@ -153,10 +206,20 @@ export function citedToolSources({
   }
 
   const rows: SourceEntry[] = [];
+  let missingSnapshots = 0;
   for (const bucket of byCallId.values()) {
     const snapshot = toolIndex.get(bucket.tool_call_id);
+    if (snapshot === undefined) {
+      missingSnapshots += 1;
+    }
     rows.push(toSourceEntry(bucket, snapshot, snippetMaxChars));
   }
+  citationDebug(
+    `cited_tool_sources.projected run=${runId} links=${links.length} ` +
+      `unique_calls=${byCallId.size} rows=${rows.length} ` +
+      `missing_snapshots=${missingSnapshots} ` +
+      `ordinal_fallbacks=${ordinalFallbacks}`,
+  );
   return rows;
 }
 

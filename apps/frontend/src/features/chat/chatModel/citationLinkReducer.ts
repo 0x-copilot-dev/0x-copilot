@@ -17,6 +17,7 @@ import {
   type CitationLink,
   type RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
+import { citationDebug } from "./citationDebug";
 
 /** All resolved citation links for one assistant message, keyed by their
  *  prose offset so a re-delivered delta does not duplicate the chip. */
@@ -47,18 +48,54 @@ export function applyCitationLinkEvent(
     return registry;
   }
   if (!isCitationMadePayload(event.payload)) {
+    citationDebug("reducer.reject_payload run=" + event.run_id, {
+      payload: event.payload,
+    });
     return registry;
   }
-  return upsertCitationLink(registry, event.run_id, event.payload.link);
+  const link = normalizeLink(event.payload.link);
+  citationDebug(
+    `reducer.accept run=${event.run_id} ordinal=${link.conversation_ordinal} ` +
+      `msg=${link.message_id} call_id='${link.source_tool_call_id}'`,
+  );
+  return upsertCitationLink(registry, event.run_id, link);
+}
+
+/** Coerce a wire-shape ``CitationLink`` to a fully-typed value.
+ *
+ *  ``source_tool_call_id`` may arrive as ``undefined`` or ``null`` for
+ *  two reasons:
+ *  - events persisted before the projector defaulted the field to
+ *    ``""`` (replay path),
+ *  - the resolver fired for a hallucinated ordinal the allocator
+ *    never bound to a tool call.
+ *  Downstream consumers (chip resolution, tool-source projection)
+ *  rely on the field being a string, so coerce here once.
+ */
+function normalizeLink(link: CitationLink): CitationLink {
+  const callId = (link as { source_tool_call_id?: string | null })
+    .source_tool_call_id;
+  if (typeof callId === "string") {
+    return link;
+  }
+  return { ...link, source_tool_call_id: "" };
 }
 
 export function buildCitationLinkRegistry(
   events: Iterable<RuntimeEventEnvelope>,
 ): CitationLinkRegistryByRun {
   let registry: CitationLinkRegistryByRun = EMPTY_REGISTRY;
+  let citationMadeCount = 0;
   for (const event of events) {
+    if (event.event_type === "citation_made") {
+      citationMadeCount += 1;
+    }
     registry = applyCitationLinkEvent(registry, event);
   }
+  citationDebug(
+    `registry.replay_rebuild citation_made_events=${citationMadeCount} ` +
+      `runs_in_registry=${registry.size}`,
+  );
   return registry;
 }
 

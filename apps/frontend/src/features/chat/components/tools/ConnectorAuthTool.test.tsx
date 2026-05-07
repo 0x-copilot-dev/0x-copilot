@@ -149,8 +149,62 @@ describe("ConnectorAuthTool", () => {
   // McpOverlay deep-link (not OAuth) and the Skip button mutes the
   // suggestion via the user's preferences.
   describe("catalog suggestion variant (PR 4.4.7)", () => {
-    it("routes Connect to onInstallCatalog when catalog_slug is set", async () => {
+    it("routes Connect to onInstallCatalog with requiresPreRegisteredClient=false (1-click)", async () => {
       const { onInstallCatalog, onConnect } = renderConnectorAuth({
+        server_id: "seed:linear",
+        approval_id: "mcp_discovery:run_1:seed:linear",
+        display_name: "Linear",
+        discovery_reason: "fetch ticket statuses",
+        expected_value: "ground claims",
+        catalog_slug: "linear",
+        requires_pre_registered_client: false,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+      await waitFor(() => {
+        expect(onInstallCatalog).toHaveBeenCalledWith({
+          slug: "linear",
+          requiresPreRegisteredClient: false,
+          // approvalId / serverId are forwarded so the host can stash
+          // the pending action under the post-install ``server_id``
+          // before redirecting to OAuth — without that, the post-OAuth
+          // callback sees no pending action and routes the user to
+          // settings instead of back into chat.
+          approvalId: "mcp_discovery:run_1:seed:linear",
+          serverId: "seed:linear",
+        });
+      });
+      // Catalog branch must NOT call the OAuth-start path — that
+      // would target a server row that doesn't exist yet.
+      expect(onConnect).not.toHaveBeenCalled();
+    });
+
+    it("forwards requires_pre_registered_client=true so the host opens the credentials form", async () => {
+      const { onInstallCatalog } = renderConnectorAuth({
+        server_id: "seed:atlassian",
+        approval_id: "mcp_discovery:run_1:seed:atlassian",
+        display_name: "Atlassian",
+        discovery_reason: "fetch jira issues",
+        expected_value: "ground claims",
+        catalog_slug: "atlassian",
+        requires_pre_registered_client: true,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+      await waitFor(() => {
+        expect(onInstallCatalog).toHaveBeenCalledWith({
+          slug: "atlassian",
+          requiresPreRegisteredClient: true,
+          approvalId: "mcp_discovery:run_1:seed:atlassian",
+          serverId: "seed:atlassian",
+        });
+      });
+    });
+
+    it("defaults requires_pre_registered_client to false when the field is absent", async () => {
+      // Backwards-compat for ai-backend payloads that predate the
+      // new field. The 1-click branch is the safe default — at worst
+      // it falls through to the credentials form via the OAuth
+      // setup-required error classifier.
+      const { onInstallCatalog } = renderConnectorAuth({
         server_id: "seed:linear",
         approval_id: "mcp_discovery:run_1:seed:linear",
         display_name: "Linear",
@@ -160,11 +214,13 @@ describe("ConnectorAuthTool", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
       await waitFor(() => {
-        expect(onInstallCatalog).toHaveBeenCalledWith({ slug: "linear" });
+        expect(onInstallCatalog).toHaveBeenCalledWith({
+          slug: "linear",
+          requiresPreRegisteredClient: false,
+          approvalId: "mcp_discovery:run_1:seed:linear",
+          serverId: "seed:linear",
+        });
       });
-      // Catalog branch must NOT call the OAuth-start path — that
-      // would target a server row that doesn't exist yet.
-      expect(onConnect).not.toHaveBeenCalled();
     });
 
     it("falls back to onConnect when catalog_slug is absent", async () => {

@@ -68,9 +68,13 @@ class McpServerLookup(Protocol):
 # PR 4.4.7 Phase 2 (Slice C) — sentinel surfaced on the
 # ``mcp_auth_required`` payload when the suggestion came from the
 # catalog (uninstalled). The FE reads this and routes the Connect
-# button to ``McpOverlay?install=<slug>`` instead of the
-# already-installed-server OAuth path.
+# button to the install flow instead of the already-installed-server
+# OAuth path.
 _CATALOG_SLUG_FIELD = "catalog_slug"
+# PR 4.4.7 follow-up — when False (default), Connect runs a 1-click
+# install + auth chain inline; when True, it opens a credentials form
+# so the user can paste a pre-registered OAuth client first.
+_REQUIRES_PRE_REGISTERED_FIELD = "requires_pre_registered_client"
 
 
 def _synthesize_catalog_card(suggestion: CatalogSuggestionCard) -> McpServerCard:
@@ -367,7 +371,17 @@ class McpDiscoveryService:
         message = Messages.Event.MCP_AUTH_REQUIRED
         auth_url = ""
         expires_at = ""
-        if self._auth_session_creator is not None:
+        # PR 4.4.7 Phase 2 (Slice C) — only create an auth session for
+        # *installed* servers (lookup_source="registry"). Catalog
+        # suggestions point at uninstalled connectors; the user's
+        # ``mcp_servers`` row doesn't exist yet, so calling
+        # ``create_auth_session`` would 404 against backend's
+        # ``/internal/v1/mcp/servers/<id>/auth/start`` and the entire
+        # tool call would fail. The FE branches Connect on
+        # ``catalog_slug`` to open the install overlay, which creates
+        # the row + starts OAuth in a single flow — the discovery card
+        # itself doesn't need a pre-baked auth_url.
+        if lookup_source == "registry" and self._auth_session_creator is not None:
             session = self._auth_session_creator.create_auth_session(
                 server_id=server_id,
                 runtime_context=self._runtime_context,
@@ -399,6 +413,19 @@ class McpDiscoveryService:
         # slug also appears in ``suggested_connectors``.
         if lookup_source == "catalog":
             payload[_CATALOG_SLUG_FIELD] = card.name
+            # PR 4.4.7 follow-up — also stamp ``requires_pre_registered_client``
+            # so the FE can branch the Connect button:
+            #   False (default): 1-click install + auth + redirect, no
+            #     overlay needed.
+            #   True: open the credentials form so the user can paste a
+            #     pre-registered OAuth client BEFORE install (vendors
+            #     like Atlassian, GitHub, Intercom, PayPal, Plaid, Square).
+            for entry in self._runtime_context.suggested_connectors:
+                if entry.slug == card.name:
+                    payload[_REQUIRES_PRE_REGISTERED_FIELD] = (
+                        entry.requires_pre_registered_client
+                    )
+                    break
         return payload
 
     def _approval_id(self, server_id: str) -> str:

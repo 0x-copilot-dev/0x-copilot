@@ -191,19 +191,38 @@ class TestSuggestibleConnectorsResolverFactory:
         self, monkeypatch
     ) -> None:
         monkeypatch.delenv("BACKEND_BASE_URL", raising=False)
+        monkeypatch.delenv("MCP_BACKEND_REGISTRY_URL", raising=False)
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
-        client = httpx.AsyncClient()
-        try:
-            resolver = SuggestibleConnectorsResolverFactory.default(http_client=client)
-            assert isinstance(resolver, NullSuggestibleConnectorsResolver)
-        finally:
-            asyncio.run(client.aclose())
+        resolver = SuggestibleConnectorsResolverFactory.default()
+        assert isinstance(resolver, NullSuggestibleConnectorsResolver)
 
-    def test_returns_null_resolver_when_no_http_client(self, monkeypatch) -> None:
+    def test_returns_http_resolver_with_per_call_clients_when_no_client_passed(
+        self, monkeypatch
+    ) -> None:
+        # PR 4.4.7 — the factory builds a working resolver even when no
+        # shared ``http_client`` is passed; the resolver creates a
+        # per-call short-lived client. The previous behaviour (Null
+        # fallback) meant production never wired the resolver because
+        # nothing in ``RuntimeApiAppFactory`` constructed an
+        # AsyncClient. ``RuntimeApiAppFactory.create_service`` calls
+        # this code path with no http_client argument; without this
+        # change the agent never sees catalog suggestions.
         monkeypatch.setenv("BACKEND_BASE_URL", "http://backend")
         monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "svc-test")
-        resolver = SuggestibleConnectorsResolverFactory.default(http_client=None)
-        assert isinstance(resolver, NullSuggestibleConnectorsResolver)
+        resolver = SuggestibleConnectorsResolverFactory.default()
+        assert isinstance(resolver, HttpSuggestibleConnectorsResolver)
+
+    def test_falls_back_to_mcp_backend_registry_url_in_dev(self, monkeypatch) -> None:
+        # ``make dev`` only sets ``MCP_BACKEND_REGISTRY_URL`` for the
+        # ai-backend process. Without the fallback the factory would
+        # return Null and the agent would never see catalog
+        # suggestions in dev. Pin the fallback so dev parity with prod
+        # stays load-bearing.
+        monkeypatch.delenv("BACKEND_BASE_URL", raising=False)
+        monkeypatch.setenv("MCP_BACKEND_REGISTRY_URL", "http://127.0.0.1:8100")
+        monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "svc-test")
+        resolver = SuggestibleConnectorsResolverFactory.default()
+        assert isinstance(resolver, HttpSuggestibleConnectorsResolver)
 
     def test_returns_http_resolver_when_fully_configured(self, monkeypatch) -> None:
         monkeypatch.setenv("BACKEND_BASE_URL", "http://backend")
