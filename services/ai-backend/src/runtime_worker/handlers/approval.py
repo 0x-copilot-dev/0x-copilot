@@ -70,6 +70,14 @@ class RuntimeApprovalHandler:
         TYPE = "type"
         STATUS = "status"
         MESSAGE = "message"
+        # PR 3.2.5 Phase 3 — set on approval.metadata when the original
+        # interrupt fired inside a subagent's subgraph. Drives the paired
+        # ``SUBAGENT_RESUMED`` emit on resolution so the FE flips the
+        # row's status back to ``running`` before any subsequent
+        # progress event arrives.
+        PARENT_TASK_ID = "parent_task_id"
+        REASON = "reason"
+        TASK_ID = "task_id"
 
     def __init__(
         self,
@@ -105,6 +113,16 @@ class RuntimeApprovalHandler:
         # default early-return (status transitions skipped) — surfaced as
         # an audit gap rather than a crash.
         self._draft_store = draft_store
+        # PR 3.2.5 Phase 3 — explicit dedup so a transient retry of
+        # ``handle()`` for the same approval cannot re-emit
+        # ``SUBAGENT_RESUMED``. Upstream approval-status idempotency
+        # generally short-circuits the second invocation before it reaches
+        # the resume path, but this set is the belt-and-braces guarantee
+        # that the FE reducer's ``running → running`` no-op never has to
+        # absorb a duplicate (and that audit replay stays single-emit).
+        # Keyed by ``(run_id, task_id)`` because handler instances are
+        # scoped per-worker and outlive a single approval.
+        self._resumed_task_ids: set[tuple[str, str]] = set()
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
         # PR 1.4 — two-stage approval forwarding. The API service has already
@@ -183,6 +201,18 @@ class RuntimeApprovalHandler:
                 status=AgentRunStatus.RUNNING,
             )
         )
+        # PR 3.2.5 Phase 3 — if the original interrupt fired inside a
+        # subagent's subgraph, emit ``SUBAGENT_RESUMED`` BEFORE invoking
+        # the LangGraph resumer. The FE reducer keys on ``task_id`` to
+        # flip the fleet row's state from ``paused`` back to ``running``;
+        # ordering it ahead of the resume avoids a race where a tool
+        # event from the resumed branch lands first and gets rendered
+        # against a still-paused row.
+        await self._maybe_emit_subagent_resumed(
+            run=running,
+            approval=approval,
+            command=command,
+        )
         try:
             harness = self.agent_factory(
                 context=running.runtime_context,
@@ -220,6 +250,53 @@ class RuntimeApprovalHandler:
                 summary="Run failed",
             )
             raise
+
+    # PR 3.2.5 Phase 3 — paired with the ``SUBAGENT_PAUSED`` emit in
+    # ``stream_events.append_activity_events``. ``approval`` is the
+    # ``ApprovalRequestRecord`` we just resolved; if its ``metadata``
+    # carries ``parent_task_id`` (set on creation when the interrupt
+    # fired inside a subagent's subgraph), reuse it as the ``task_id``
+    # of the resume signal so the FE reducer's existing ``applySubagent``
+    # slot finds the row by task_id.
+    _SUBAGENT_RESUME_REASONS = {
+        ApprovalDecision.APPROVED: "approved",
+        ApprovalDecision.REJECTED: "rejected",
+    }
+
+    async def _maybe_emit_subagent_resumed(
+        self,
+        *,
+        run: RunRecord,
+        approval: object,
+        command: RuntimeApprovalResolvedCommand,
+    ) -> None:
+        metadata = getattr(approval, "metadata", None)
+        if not isinstance(metadata, Mapping):
+            return
+        parent_task_id = StreamTextHelper.extract(
+            metadata.get(self._Fields.PARENT_TASK_ID)
+        )
+        if parent_task_id is None:
+            return
+        reason = self._SUBAGENT_RESUME_REASONS.get(command.decision)
+        if reason is None:
+            return
+        dedup_key = (run.run_id, parent_task_id)
+        if dedup_key in self._resumed_task_ids:
+            return
+        self._resumed_task_ids.add(dedup_key)
+        payload: dict[str, object] = {
+            self._Fields.TASK_ID: parent_task_id,
+            self._Fields.REASON: reason,
+            self._Fields.APPROVAL_ID: command.approval_id,
+        }
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_RESUMED,
+            payload=payload,
+            parent_task_id=parent_task_id,
+        )
 
     async def _stream_resume(
         self,

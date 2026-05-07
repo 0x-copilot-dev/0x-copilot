@@ -192,6 +192,32 @@ def create_app(
             identity=identity,
         )
 
+    # PR 4.4.6 — curated catalog (read-only) and explicit install path.
+    @app.get("/v1/mcp/catalog")
+    async def list_mcp_catalog(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/mcp/catalog",
+            target="backend",
+            identity=identity,
+        )
+
+    @app.post("/v1/mcp/servers/install")
+    async def install_mcp_server(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            "/v1/mcp/servers/install",
+            target="backend",
+            json=identity.scoped_payload(payload),
+            identity=identity,
+        )
+
     @app.delete("/v1/mcp/servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_mcp_server(
         request: Request,

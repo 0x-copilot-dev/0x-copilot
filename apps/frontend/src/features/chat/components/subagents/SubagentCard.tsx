@@ -32,6 +32,10 @@ export interface SubagentCardProps {
   timelineClassName?: string;
   /** Optional jump-to-thread affordance (workspace pane only). */
   onJumpToThread?: () => void;
+  /** PR 3.2.7 — optional jump-to-approval affordance (workspace pane).
+   *  Visible only when `view.status === "paused"` and the entry carries
+   *  `pauseSourceEventId`. */
+  onJumpToApproval?: (sourceEventId: string) => void;
   /** Auto-expand the disclosure on first render. Component-local thereafter. */
   defaultOpen?: boolean;
   /** Compact card chrome for narrow workspace pane rendering. */
@@ -43,10 +47,11 @@ export function SubagentCard({
   activities,
   timelineClassName,
   onJumpToThread,
+  onJumpToApproval,
   defaultOpen,
   compact,
 }: SubagentCardProps): ReactElement {
-  const statusLabel = labelForStatus(view.status);
+  const statusLabel = labelForStatus(view);
   const statusTone = toneForStatus(view.status);
   const meta = metaText(view);
   const showFinding = view.terminal && view.finding !== null;
@@ -54,6 +59,10 @@ export function SubagentCard({
   const hasActivities = activities.length > 0;
   const showFullResult =
     !hasActivities && view.terminal && view.fullResult !== null;
+  const showJumpToApproval =
+    view.status === "paused" &&
+    typeof view.pauseSourceEventId === "string" &&
+    onJumpToApproval !== undefined;
   return (
     <div
       className="subagent-card"
@@ -92,6 +101,15 @@ export function SubagentCard({
       {showFinding ? (
         <p className="subagent-card__finding">{view.finding}</p>
       ) : null}
+      {showJumpToApproval ? (
+        <button
+          type="button"
+          className="subagent-card__jump-to-approval"
+          onClick={() => onJumpToApproval!(view.pauseSourceEventId!)}
+        >
+          Review {jumpLabelForPause(view.pauseReason)} →
+        </button>
+      ) : null}
       <details
         className="subagent-card__details"
         open={defaultOpen || undefined}
@@ -126,12 +144,20 @@ export function SubagentCard({
   );
 }
 
-function labelForStatus(status: SubagentCardStatus): string {
-  switch (status) {
+function labelForStatus(view: SubagentCardViewModel): string {
+  switch (view.status) {
     case "queued":
       return "Queued";
     case "running":
       return "Running";
+    case "paused":
+      // PR 3.2.7 — when the worker handed us a `pauseReason`, surface it
+      // in the badge so a fleet user reading the chip knows what kind of
+      // gate is open ("Paused · approval" / "Paused · connector" /
+      // "Paused · answer").
+      return view.pauseReason
+        ? `Paused · ${pauseShortLabel(view.pauseReason)}`
+        : "Paused";
     case "completed":
       return "Done";
     case "cancelled":
@@ -143,6 +169,34 @@ function labelForStatus(status: SubagentCardStatus): string {
   }
 }
 
+function pauseShortLabel(
+  reason: NonNullable<SubagentCardViewModel["pauseReason"]>,
+): string {
+  switch (reason) {
+    case "approval":
+      return "approval";
+    case "mcp_auth":
+      return "connector";
+    case "ask_a_question":
+      return "answer";
+  }
+}
+
+function jumpLabelForPause(
+  reason: SubagentCardViewModel["pauseReason"],
+): string {
+  switch (reason) {
+    case "approval":
+      return "approval";
+    case "mcp_auth":
+      return "connector auth";
+    case "ask_a_question":
+      return "question";
+    default:
+      return "approval";
+  }
+}
+
 function toneForStatus(
   status: SubagentCardStatus,
 ): "neutral" | "accent" | "success" | "warning" | "danger" {
@@ -150,6 +204,8 @@ function toneForStatus(
     case "queued":
     case "running":
       return "accent";
+    case "paused":
+      return "warning";
     case "completed":
       return "success";
     case "cancelled":
@@ -173,12 +229,20 @@ function iconStatus(status: SubagentCardStatus): string {
       return "cancelled";
     case "queued":
     case "running":
+    case "paused":
       return "running";
   }
 }
 
 function metaText(view: SubagentCardViewModel): string {
-  if (view.status === "running" || view.status === "queued") {
+  if (
+    view.status === "running" ||
+    view.status === "queued" ||
+    view.status === "paused"
+  ) {
+    if (view.status === "paused") {
+      return "paused";
+    }
     return view.startedAt ? "working…" : "starting…";
   }
   const duration =

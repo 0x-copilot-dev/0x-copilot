@@ -1,7 +1,11 @@
 import type { McpServer } from "@enterprise-search/api-types";
 import { describe, expect, it } from "vitest";
 
-import { activeCount, projectConnectors } from "./projectConnectors";
+import {
+  activeCount,
+  projectChatConnectors,
+  projectConnectors,
+} from "./projectConnectors";
 
 function server(overrides: Partial<McpServer> = {}): McpServer {
   return {
@@ -15,6 +19,11 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     health: "healthy",
     enabled: true,
     oauth_client_configured: true,
+    logo_url: null,
+    brand_color: null,
+    scopes_summary: null,
+    default_scopes: [],
+    admin_managed: false,
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-05T00:00:00Z",
     ...overrides,
@@ -100,6 +109,82 @@ describe("projectConnectors", () => {
       {},
     );
     expect(rows.map((r) => r.server_id)).toEqual(["a", "b", "c"]);
+  });
+
+  // PR 3.4.1 — server-supplied default_scopes power the resume-from-paused
+  // payload so a Resume-from-Paused row no longer flips the connector on
+  // with `[]` (the PR 3.4 behaviour). Active rows with no explicit override
+  // pick up the same defaults (mirrors runtime_connector_scopes()).
+  it("uses server default_scopes as the resume target", () => {
+    const [row] = projectConnectors(
+      [server({ default_scopes: ["read", "write_drafts"] })],
+      { srv_notion: null },
+    );
+    expect(row.state).toBe("paused");
+    expect(row.default_scopes).toEqual(["read", "write_drafts"]);
+  });
+
+  it("active with no override falls back to server defaults", () => {
+    const [row] = projectConnectors([server({ default_scopes: ["read"] })], {});
+    expect(row.state).toBe("active");
+    expect(row.current_scopes).toEqual(["read"]);
+  });
+
+  it("carries brand metadata onto the row", () => {
+    const [row] = projectConnectors(
+      [
+        server({
+          logo_url: "https://cdn.example/notion.svg",
+          brand_color: "#000000",
+          scopes_summary: "Read all pages, write to /Drafts",
+          admin_managed: true,
+        }),
+      ],
+      {},
+    );
+    expect(row.logo_url).toBe("https://cdn.example/notion.svg");
+    expect(row.brand_color).toBe("#000000");
+    expect(row.scopes_summary).toBe("Read all pages, write to /Drafts");
+    expect(row.admin_managed).toBe(true);
+  });
+
+  it("normalises missing brand metadata to nulls / defaults", () => {
+    const [row] = projectConnectors([server()], {});
+    expect(row.logo_url).toBeNull();
+    expect(row.brand_color).toBeNull();
+    expect(row.scopes_summary).toBeNull();
+    expect(row.admin_managed).toBe(false);
+    expect(row.default_scopes).toEqual([]);
+  });
+});
+
+describe("projectChatConnectors (PR 4.4.6)", () => {
+  // The chat popover shows only **Connected** rows: installed AND
+  // authorized. Catalog availability lives in Settings → Manage MCP
+  // servers; the chat surface never renders disconnected / workspace_off
+  // rows. The base ``projectConnectors`` is preserved for admin views
+  // that *do* need the full four-state vocabulary.
+  it("includes authenticated + enabled servers as active", () => {
+    const rows = projectChatConnectors([server()], {});
+    expect(rows.map((r) => r.state)).toEqual(["active"]);
+  });
+
+  it("drops unauthenticated servers from the chat popover", () => {
+    const rows = projectChatConnectors(
+      [server({ auth_state: "unauthenticated" })],
+      {},
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("drops workspace-disabled servers from the chat popover", () => {
+    const rows = projectChatConnectors([server({ enabled: false })], {});
+    expect(rows).toEqual([]);
+  });
+
+  it("keeps paused authenticated servers visible (user's per-chat choice)", () => {
+    const [row] = projectChatConnectors([server()], { srv_notion: null });
+    expect(row.state).toBe("paused");
   });
 });
 

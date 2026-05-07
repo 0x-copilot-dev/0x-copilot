@@ -220,6 +220,27 @@ export function Switch({
   );
 }
 
+/**
+ * PR 3.4.1 — icon-only switch. Same visual track + knob as ``<Switch>`` but
+ * without the visible ``<strong>`` label, for cases where the surrounding
+ * row already labels the toggle (e.g. connector popover rows). Pass an
+ * ``aria-label`` for screen readers.
+ */
+export function Toggle({
+  checked,
+  className,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
+  checked: boolean;
+}): ReactElement {
+  return (
+    <label className={classNames("ui-switch", "ui-switch--bare", className)}>
+      <input type="checkbox" role="switch" checked={checked} {...props} />
+      <span aria-hidden="true" />
+    </label>
+  );
+}
+
 export function Field({
   label,
   hint,
@@ -348,12 +369,19 @@ const BRAND_GLYPHS: Record<string, BrandGlyph> = {
 export function AppIcon({
   name,
   color,
+  logoUrl,
   size = "sm",
   className,
   ...props
 }: HTMLAttributes<HTMLSpanElement> & {
   name: string;
   color?: string;
+  /**
+   * PR 3.4.1 — server-supplied brand favicon URL. When present, renders an
+   * ``<img>`` with ``onError`` fallback to the existing brand-glyph /
+   * letter chain. Existing call-sites (no ``logoUrl``) are byte-identical.
+   */
+  logoUrl?: string | null;
   size?: "sm" | "lg";
 }): ReactElement {
   // PR 8.0.1 — brand-aware mapping. Consumers still pass `name={connector.id}`
@@ -362,6 +390,35 @@ export function AppIcon({
   // so existing call-sites that hard-code a tenant brand colour still work.
   const slug = name.toLowerCase();
   const brand = !color ? BRAND_GLYPHS[slug] : undefined;
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if (logoUrl && !imgFailed) {
+    // Brand surface uses the brand-color when known so the chip shape stays
+    // consistent with the glyph fallback while the SVG itself loads.
+    const surface = brand?.bg ?? color ?? "var(--color-surface-muted)";
+    return (
+      <span
+        className={classNames(
+          "ui-app-icon",
+          "ui-app-icon--img",
+          size === "lg" && "ui-app-icon--lg",
+          className,
+        )}
+        style={{ background: surface }}
+        aria-label={brand?.label ?? name}
+        {...props}
+      >
+        <img
+          src={logoUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => setImgFailed(true)}
+        />
+      </span>
+    );
+  }
   if (brand) {
     return (
       <span

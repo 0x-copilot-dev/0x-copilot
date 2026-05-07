@@ -269,6 +269,20 @@ class McpServerRecord(BackendContract):
     required_scopes: tuple[str, ...] = ()
     last_discovery: dict[str, Any] = Field(default_factory=dict)
     oauth_client: McpOAuthClientConfig | None = None
+    # PR 3.4.1 — brand metadata for the connector popover. ``logo_url`` /
+    # ``brand_color`` / ``scopes_summary`` are presentation-only; the
+    # frontend falls through to a letter glyph when missing. ``default_scopes``
+    # is the resume-from-paused payload PR 1.2 round-trips through PATCH /…/connectors;
+    # ``admin_managed`` gates the popover's ``Enable in Settings`` action.
+    logo_url: str | None = None
+    brand_color: str | None = None
+    scopes_summary: str | None = None
+    default_scopes: tuple[str, ...] = ()
+    admin_managed: bool = False
+    # Marketing description copied from the catalog entry on install. Empty
+    # for custom (non-catalog) servers. Distinct from ``scopes_summary``
+    # (what the connector *is allowed to do*) — this is what it *is*.
+    description: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -514,6 +528,15 @@ class McpServerResponse(BackendContract):
     health: McpServerHealth
     enabled: bool
     oauth_client_configured: bool = False
+    # PR 3.4.1 — brand metadata mirrored from ``McpServerRecord``. Optional
+    # everywhere so old clients tolerate missing values; new clients
+    # render the favicon / scopes subtitle / per-row resume target.
+    logo_url: str | None = None
+    brand_color: str | None = None
+    scopes_summary: str | None = None
+    default_scopes: tuple[str, ...] = ()
+    admin_managed: bool = False
+    description: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -530,6 +553,12 @@ class McpServerResponse(BackendContract):
             health=record.health,
             enabled=record.enabled,
             oauth_client_configured=record.oauth_client is not None,
+            logo_url=record.logo_url,
+            brand_color=record.brand_color,
+            scopes_summary=record.scopes_summary,
+            default_scopes=record.default_scopes,
+            admin_managed=record.admin_managed,
+            description=record.description,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
@@ -537,6 +566,69 @@ class McpServerResponse(BackendContract):
 
 class McpServerListResponse(BackendContract):
     servers: tuple[McpServerResponse, ...]
+
+
+class McpCatalogEntryResponse(BackendContract):
+    """One curated catalog entry — the wire shape of ``CatalogEntry``.
+
+    PR 4.4.6 — catalog endpoint payload. Org-agnostic; static; sourced
+    from ``mcp_catalog.DEFAULT_CATALOG``. The frontend caches this for
+    the lifetime of the McpOverlay and only re-fetches on user action.
+
+    Distinct from ``McpServerResponse``: catalog is what we *ship*; the
+    server response is what the user has *installed*. The frontend
+    cross-references catalog entries with installed servers by
+    ``server_id == "seed:" + slug`` to render Install / Resume install /
+    Installed state per card.
+    """
+
+    slug: str
+    display_name: str
+    url: str
+    transport: McpTransport
+    auth_mode: McpAuthMode
+    description: str = ""
+    logo_url: str | None = None
+    brand_color: str | None = None
+    scopes_summary: str | None = None
+    default_scopes: tuple[str, ...] = ()
+    # When True, install requires a pre-registered OAuth client (the
+    # vendor doesn't support DCR or auth-server-metadata discovery).
+    # Frontend prompts for ``client_id`` / ``client_secret`` first.
+    requires_pre_registered_client: bool = False
+    verified: bool = True
+
+
+class McpCatalogResponse(BackendContract):
+    entries: tuple[McpCatalogEntryResponse, ...]
+
+
+class InstallMcpServerRequest(BackendContract):
+    """Install a curated catalog entry into the user's workspace.
+
+    PR 4.4.6 — explicit install. Server resolves ``slug`` against
+    ``DEFAULT_CATALOG`` and creates a row keyed by stable
+    ``seed:<slug>`` server_id. Idempotent on slug — re-installing
+    returns the existing record. When the catalog entry sets
+    ``requires_pre_registered_client``, the request must include
+    ``oauth_client``; otherwise the service responds with HTTP 422 and
+    the frontend opens the credentials form.
+    """
+
+    org_id: str
+    user_id: str
+    slug: str
+    oauth_client: McpOAuthClientRequest | None = None
+
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("slug")
+    @classmethod
+    def _normalize_slug(cls, value: object) -> str:
+        return Validators.normalize_skill_slug(value)
 
 
 class McpAuthSessionRecord(BackendContract):

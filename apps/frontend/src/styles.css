@@ -3775,15 +3775,20 @@ p {
 }
 
 .connector-group {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
   display: grid;
   gap: var(--space-sm);
   margin-top: var(--space-lg);
+  padding: var(--space-lg);
 }
 
 .connector-group__head {
   align-items: center;
   display: flex;
   gap: var(--space-sm);
+  justify-content: space-between;
 }
 
 .connector-group__head h3 {
@@ -3794,7 +3799,103 @@ p {
 .connector-group__hint {
   color: var(--color-text-muted);
   font-size: 0.85rem;
+  margin: 0 0 var(--space-sm);
+}
+
+.connector-card-grid {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 760px) {
+  .connector-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connector-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.connector-card[data-state="active"] {
+  border-color: var(--color-accent);
+  background: color-mix(
+    in srgb,
+    var(--color-accent) 6%,
+    var(--color-bg-elevated)
+  );
+}
+
+.connector-card:hover {
+  border-color: var(--color-border-strong);
+}
+
+.connector-card__head {
+  align-items: center;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.connector-card__body {
+  min-width: 0;
+}
+
+.connector-card__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+.connector-card__sub {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connector-card__error {
+  margin: 0;
+}
+
+.connector-card__switch {
+  flex-shrink: 0;
+}
+
+.mcp-cta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  justify-content: space-between;
+  margin-top: var(--space-lg);
+}
+
+.mcp-cta__copy {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.mcp-cta__copy h3 {
+  font-size: 1rem;
   margin: 0 0 var(--space-xs);
+}
+
+.mcp-cta__copy p {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  margin: 0;
 }
 
 .connector-manual-add {
@@ -4797,6 +4898,58 @@ p {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 50%;
+}
+
+/* PR 3.7.3 — connector grouping section header. Renders only when the
+ * source list passes the threshold (5+); below that, rows render flat. */
+.atlas-workspace-tab__group {
+  margin-bottom: 12px;
+}
+
+.atlas-workspace-tab__group-header {
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: 0.7rem;
+  font-weight: 600;
+  gap: 8px;
+  letter-spacing: 0.04em;
+  padding: 10px 4px 6px;
+  text-transform: uppercase;
+}
+
+.atlas-workspace-tab__group:first-child .atlas-workspace-tab__group-header {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.atlas-workspace-tab__group-count {
+  background: var(--color-surface-muted);
+  border-radius: 999px;
+  color: var(--color-text);
+  font-size: 0.65rem;
+  letter-spacing: 0;
+  padding: 2px 8px;
+  text-transform: none;
+}
+
+/* PR 3.7.3 — chip pulse used by the reverse handshake (panel row click
+ * scrolls the chat to the first message that cited this source and
+ * pulses the matching chip). */
+.citation-chip--pulse {
+  animation: citation-pulse 1.5s ease-out;
+}
+
+@keyframes citation-pulse {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+  20%,
+  60% {
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
 }
 
 .atlas-source-row__title {
@@ -6050,19 +6203,27 @@ p {
 
 /* PR 3.4 — connector popover body. The host shell is design-system
  * `Menu` (absolute via `.ui-dropdown__menu` + `--up`/`--down`); these
- * rules style the inner content. Width is fixed so the popover doesn't
- * jitter as rows toggle states. */
+ * rules style the inner content. PR 3.4.1 widened the popover so the
+ * scope subtitles fit on a single line for the catalog connectors. */
 .atlas-connector-popover {
-  width: 280px;
+  width: 340px;
   padding: var(--space-xs) 0;
   z-index: 12;
 }
 
 .atlas-connector-popover__head {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm) var(--space-2xs);
+}
+
+.atlas-connector-popover__head-text {
+  display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--space-xs) var(--space-sm) var(--space-2xs);
+  min-width: 0;
 }
 
 .atlas-connector-popover__title {
@@ -6074,6 +6235,27 @@ p {
 .atlas-connector-popover__sub {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+/* Inline Manage caret link in the header — replaces the footer button. */
+.atlas-connector-popover__manage {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--color-accent);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+.atlas-connector-popover__manage:hover,
+.atlas-connector-popover__manage:focus-visible {
+  background: var(--color-bg-elevated-strong, var(--color-bg-elevated));
+  outline: none;
 }
 
 .atlas-connector-popover__list {
@@ -6098,23 +6280,26 @@ p {
   font-size: 11px;
 }
 
+/* PR 3.4.1 — footer becomes informational copy ("per-chat changes
+ * don't affect other conversations"); the Manage button moved up. */
 .atlas-connector-popover__foot {
-  display: flex;
-  justify-content: flex-end;
-  padding: var(--space-2xs) var(--space-xs) 0;
+  padding: var(--space-2xs) var(--space-sm) 0;
   border-top: 1px solid var(--color-border-soft, var(--color-border));
   margin-top: var(--space-2xs);
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
-/* PR 3.4 — single row inside the popover. Acts as a button when not
- * read-only; pause/resume rows are menuitemcheckbox, connect/enable
- * rows are menuitem. Visual state keys off `data-state`. */
+/* PR 3.4 / 3.4.1 — single row. Pause/resume rows are
+ * menuitemcheckbox; connect/enable rows are menuitem. The button is
+ * the entire interactive surface (whole-row click); the slider / pill
+ * on the right are visuals. */
 .atlas-connector-row {
   display: grid;
-  grid-template-columns: 22px 1fr auto auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-xs);
-  padding: 6px var(--space-xs);
+  gap: var(--space-sm);
+  padding: 8px var(--space-sm);
   border: 0;
   background: transparent;
   color: var(--color-text);
@@ -6136,9 +6321,24 @@ p {
 }
 
 .atlas-connector-row__glyph {
-  width: 22px;
-  height: 22px;
-  font-size: 11px;
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+.atlas-connector-row__col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.atlas-connector-row__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .atlas-connector-row__name {
@@ -6149,29 +6349,87 @@ p {
   text-overflow: ellipsis;
 }
 
-.atlas-connector-row__state {
-  font-size: 11px;
-  color: var(--color-text-muted);
+.atlas-connector-row__badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-full, 999px);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: var(--color-accent);
+  white-space: nowrap;
 }
 
-.atlas-connector-row__action {
+.atlas-connector-row__subtitle {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* CSS-only slider knob. The button itself owns ARIA + state; this
+ * <span> is purely visual. Knob slides on data-checked. */
+.atlas-connector-row__switch {
+  position: relative;
+  flex: none;
+  height: 18px;
+  width: 32px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  transition: background var(--duration-fast, 0.15s) var(--ease-standard, ease);
+}
+.atlas-connector-row__switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transition: transform var(--duration-fast, 0.15s) var(--ease-standard, ease);
+}
+.atlas-connector-row__switch[data-checked] {
+  background: color-mix(in srgb, var(--color-accent) 32%, transparent);
+  border-color: var(--color-accent);
+}
+.atlas-connector-row__switch[data-checked]::after {
+  background: var(--color-accent-strong, var(--color-accent));
+  transform: translateX(13px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .atlas-connector-row__switch,
+  .atlas-connector-row__switch::after {
+    transition: none;
+  }
+}
+
+/* Pill button visual for Connect / Enable rows. */
+.atlas-connector-row__pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-full, 999px);
   font-size: 11px;
   font-weight: 600;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-accent);
-  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 36%, transparent);
+}
+.atlas-connector-row__pill--ghost {
+  background: transparent;
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
 }
 
 .atlas-connector-row--paused .atlas-connector-row__glyph,
 .atlas-connector-row--paused .atlas-connector-row__name {
   opacity: 0.55;
-}
-
-.atlas-connector-row--disconnected {
-  border: 1px dashed var(--color-border);
-}
-
-.atlas-connector-row--workspace_off .atlas-connector-row__action {
-  color: var(--color-text-muted);
 }
 
 /* Usage meter */

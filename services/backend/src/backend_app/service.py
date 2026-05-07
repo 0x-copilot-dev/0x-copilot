@@ -21,6 +21,7 @@ from backend_app.contracts import (
     DeployAuditEventResponse,
     DeployAuditRequest,
     CreateSkillRequest,
+    InstallMcpServerRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpRpcRequest,
@@ -36,6 +37,8 @@ from backend_app.contracts import (
     McpAuthStartRequest,
     McpAuthStartResponse,
     McpAuthState,
+    McpCatalogEntryResponse,
+    McpCatalogResponse,
     McpOAuthClientConfig,
     McpOAuthClientRequest,
     McpServerHealth,
@@ -55,7 +58,7 @@ from backend_app.contracts import (
     Validators,
     _Fields,
 )
-from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry
+from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
@@ -67,6 +70,29 @@ from backend_app.store import (
     PostgresSkillStore,
 )
 from backend_app.token_vault import TokenVault, TokenVaultFactory
+
+
+def _catalog_entry_response(entry: CatalogEntry) -> McpCatalogEntryResponse:
+    """Project a code-side ``CatalogEntry`` to its wire shape."""
+
+    return McpCatalogEntryResponse(
+        slug=entry.slug,
+        display_name=entry.display_name,
+        url=entry.url,
+        transport=entry.transport,
+        auth_mode=entry.auth_mode,
+        description=entry.description,
+        logo_url=entry.logo_url,
+        brand_color=entry.brand_color,
+        scopes_summary=entry.scopes_summary,
+        default_scopes=entry.default_scopes,
+        requires_pre_registered_client=entry.requires_pre_registered_client,
+        verified=entry.verified,
+    )
+
+
+def _catalog_by_slug() -> dict[str, CatalogEntry]:
+    return catalog_by_slug()
 
 
 class Keys:
@@ -199,61 +225,59 @@ class McpRegistryService:
         return McpServerResponse.from_record(record)
 
     def list_servers(self, *, org_id: str, user_id: str) -> McpServerListResponse:
-        existing = self.store.list_servers(org_id=org_id, user_id=user_id)
-        # First-time seed: when the user has zero servers, pre-add the
-        # well-known catalog as ``enabled=False`` so the chat agent does
-        # not auto-recommend connectors the user hasn't reviewed. After
-        # the first list, removals are honoured (we never re-seed
-        # automatically); use ``reset_catalog`` for an explicit refresh.
-        if not existing:
-            seeded = self._seed_catalog(org_id=org_id, user_id=user_id)
-            if seeded:
-                existing = self.store.list_servers(org_id=org_id, user_id=user_id)
+        # PR 4.4.6 — no seeding. ``connectors.servers`` reflects exactly
+        # what the user has installed. The curated list lives behind
+        # ``GET /v1/mcp/catalog``; install creates a row.
         return McpServerListResponse(
-            servers=tuple(self._response_from_record(record) for record in existing)
+            servers=tuple(
+                self._response_from_record(record)
+                for record in self.store.list_servers(org_id=org_id, user_id=user_id)
+            )
         )
 
-    def reset_catalog(self, *, org_id: str, user_id: str) -> McpServerListResponse:
-        """Idempotently re-add any missing catalog entries for the user.
+    def list_catalog(self) -> McpCatalogResponse:
+        """Curated MCP catalog. Org-agnostic, no DB read.
 
-        Honours existing entries (matched by stable ``seed:<slug>`` id)
-        and never overwrites the user's enabled/auth state. Removed
-        catalog entries come back as ``enabled=False``.
+        Source of truth is ``mcp_catalog.DEFAULT_CATALOG``. Frontend
+        cross-references entries with ``connectors.servers`` by
+        ``server_id == "seed:" + slug`` to render Install / Resume install
+        / Installed state per card.
         """
 
-        self._seed_catalog(org_id=org_id, user_id=user_id)
-        return self.list_servers(org_id=org_id, user_id=user_id)
+        return McpCatalogResponse(
+            entries=tuple(_catalog_entry_response(entry) for entry in DEFAULT_CATALOG)
+        )
 
-    def _seed_catalog(self, *, org_id: str, user_id: str) -> bool:
-        """Insert any missing catalog entries. Returns True if any rows
-        were added.
+    def install_from_catalog(
+        self, request: InstallMcpServerRequest
+    ) -> McpServerResponse:
+        """Install a curated catalog entry into the user's workspace.
+
+        Idempotent on slug — re-installing returns the existing row
+        unchanged. Raises ``ValueError`` when the slug is unknown or
+        when the entry requires a pre-registered OAuth client and none
+        was supplied (mapped to 422 at the route layer).
         """
 
-        existing_ids = {
-            record.server_id
-            for record in self.store.list_servers(org_id=org_id, user_id=user_id)
-        }
-        added = False
-        with self.store.transaction() as conn:
-            for entry in DEFAULT_CATALOG:
-                if entry.server_id in existing_ids:
-                    continue
-                record = self._record_from_catalog(
-                    entry, org_id=org_id, user_id=user_id
-                )
-                self.store.create_server(record, conn=conn)
-                self._audit(record, "mcp_server_seeded", conn=conn)
-                added = True
-        return added
+        entry = _catalog_by_slug().get(request.slug)
+        if entry is None:
+            raise ValueError(f"Unknown catalog entry: {request.slug}")
 
-    @staticmethod
-    def _record_from_catalog(
-        entry: CatalogEntry, *, org_id: str, user_id: str
-    ) -> McpServerRecord:
-        return McpServerRecord(
+        existing = self._server_for_user(
+            org_id=request.org_id,
+            user_id=request.user_id,
             server_id=entry.server_id,
-            org_id=org_id,
-            user_id=user_id,
+        )
+        if existing is not None:
+            return McpServerResponse.from_record(existing)
+
+        if entry.requires_pre_registered_client and request.oauth_client is None:
+            raise ValueError(f"Pre-registered OAuth client required for {entry.slug}.")
+
+        record = McpServerRecord(
+            server_id=entry.server_id,
+            org_id=request.org_id,
+            user_id=request.user_id,
             name=entry.slug.replace("-", "_"),
             display_name=entry.display_name,
             url=entry.url,
@@ -264,9 +288,19 @@ class McpRegistryService:
                 if entry.auth_mode == McpAuthMode.NONE
                 else McpAuthState.UNAUTHENTICATED
             ),
-            health=McpServerHealth.DISABLED,
-            enabled=False,
+            health=McpServerHealth.HEALTHY,
+            enabled=True,
+            description=entry.description,
+            logo_url=entry.logo_url,
+            brand_color=entry.brand_color,
+            scopes_summary=entry.scopes_summary,
+            default_scopes=entry.default_scopes,
+            oauth_client=self._oauth_client_config(request.oauth_client),
         )
+        with self.store.transaction() as conn:
+            self.store.create_server(record, conn=conn)
+            self._audit(record, "mcp_server_installed", conn=conn)
+        return McpServerResponse.from_record(record)
 
     def delete_server(self, *, org_id: str, user_id: str, server_id: str) -> bool:
         record = self._server_for_user(

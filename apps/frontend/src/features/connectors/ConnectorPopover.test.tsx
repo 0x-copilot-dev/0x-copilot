@@ -12,6 +12,10 @@ function row(overrides: Partial<ConnectorRow> = {}): ConnectorRow {
     state: "active",
     current_scopes: [],
     default_scopes: [],
+    logo_url: null,
+    brand_color: null,
+    scopes_summary: null,
+    admin_managed: false,
     ...overrides,
   };
 }
@@ -109,9 +113,7 @@ describe("ConnectorPopover", () => {
     const { onManage, onClose } = renderPopover({
       rows: [row()],
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: /manage in settings/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^manage/i }));
     expect(onManage).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
@@ -200,5 +202,67 @@ describe("ConnectorPopover", () => {
   it("does not render when closed", () => {
     renderPopover({ open: false });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // PR 3.4.1 — header copy shifted to "Searching this chat / N of M
+  // connectors active" with an inline Manage caret link top-right.
+  it("renders the design's header copy with active counts", () => {
+    renderPopover({
+      rows: [
+        row({ server_id: "a", display_name: "A", state: "active" }),
+        row({ server_id: "b", display_name: "B", state: "paused" }),
+        row({ server_id: "c", display_name: "C", state: "disconnected" }),
+      ],
+    });
+    expect(screen.getByText("Searching this chat")).toBeInTheDocument();
+    expect(screen.getByText(/^1 of 3 connectors active$/)).toBeInTheDocument();
+  });
+
+  // PR 3.4.1 — Resume from paused round-trips the row's server-supplied
+  // default_scopes, not an empty array.
+  it("Resume payload uses server default_scopes from the row", () => {
+    const { onToggle } = renderPopover({
+      rows: [
+        row({
+          state: "paused",
+          default_scopes: ["read", "write_drafts"],
+        }),
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: /Notion — Paused/i }),
+    );
+    expect(onToggle).toHaveBeenCalledWith("srv_notion", [
+      "read",
+      "write_drafts",
+    ]);
+  });
+
+  // PR 3.4.1 — non-admins cannot enable a workspace-managed connector.
+  // Admins still can.
+  it("workspace_off admin_managed row is disabled for non-admins", () => {
+    const { onEnableInSettings } = renderPopover({
+      isAdmin: false,
+      rows: [row({ state: "workspace_off", admin_managed: true })],
+    });
+    const button = screen.getByRole("menuitem", {
+      name: /Notion — Workspace off/i,
+    });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onEnableInSettings).not.toHaveBeenCalled();
+  });
+
+  it("workspace_off admin_managed row is enabled for admins", () => {
+    const { onEnableInSettings } = renderPopover({
+      isAdmin: true,
+      rows: [row({ state: "workspace_off", admin_managed: true })],
+    });
+    const button = screen.getByRole("menuitem", {
+      name: /Notion — Workspace off/i,
+    });
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+    expect(onEnableInSettings).toHaveBeenCalledWith("srv_notion");
   });
 });

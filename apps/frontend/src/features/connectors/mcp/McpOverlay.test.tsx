@@ -1,41 +1,72 @@
 /**
- * PR 4.4 — McpOverlay wizard behavioural tests.
+ * PR 4.4.6 — McpOverlay tabs + install behaviour.
  *
- * Pins the contracts the rest of the system depends on:
- *   - 5-step navigation (browse → auth → scope → confirm → connected).
- *   - Catalog selection pre-fills URL + auth method.
- *   - Custom URL path mints from a paste, not the catalog.
- *   - "Add to workspace" calls connectors.addServer with the right URL.
- *   - "Authenticate" on the success step calls connectors.authenticate.
- *   - Reopen resets state (no stale "connected" view).
+ * Replaces PR 4.4's 5-step wizard tests. Pins:
+ *   - Catalog tab renders one card per `useMcpCatalog` entry.
+ *   - Install on a 1-click vendor calls installFromCatalog → authenticate.
+ *   - Install on a pre-registered vendor opens the credentials form first.
+ *   - Connected tab lists only `isAuthenticated` servers.
+ *   - Search filters the catalog grid.
  */
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { McpServer } from "@enterprise-search/api-types";
+import type {
+  McpCatalogEntry,
+  McpCatalogResponse,
+  McpServer,
+} from "@enterprise-search/api-types";
 
 import { McpOverlay } from "./McpOverlay";
 import type { ConnectorState } from "../useConnectors";
 
+// `useMcpCatalog` calls `listMcpCatalog` from `mcpApi`. Stub the module
+// so we don't need a real fetch mock and the test stays isolated to the
+// component's behaviour.
+vi.mock("../../../api/mcpApi", () => ({
+  listMcpCatalog: vi.fn(),
+}));
+
+import { listMcpCatalog } from "../../../api/mcpApi";
+
+function makeCatalogEntry(
+  overrides: Partial<McpCatalogEntry> = {},
+): McpCatalogEntry {
+  return {
+    slug: "linear",
+    display_name: "Linear",
+    url: "https://mcp.linear.app/mcp",
+    transport: "http",
+    auth_mode: "oauth2",
+    description: "Issues, projects, and cycles.",
+    logo_url: null,
+    brand_color: "#5E6AD2",
+    scopes_summary: "Read issues, projects, cycles",
+    default_scopes: ["read"],
+    requires_pre_registered_client: false,
+    verified: true,
+    ...overrides,
+  };
+}
+
 function makeServer(overrides: Partial<McpServer> = {}): McpServer {
   return {
-    server_id: "srv_01",
-    org_id: "org_acme",
-    user_id: "usr_marcus",
+    server_id: "seed:linear",
     name: "linear",
     display_name: "Linear",
-    url: "https://mcp.linear.app/sse",
-    transport: "sse",
+    url: "https://mcp.linear.app/mcp",
+    transport: "http",
     auth_mode: "oauth2",
-    auth_state: "unauthenticated",
-    health: "unknown",
+    auth_state: "authenticated",
+    health: "healthy",
     enabled: true,
-    required_scopes: [],
     oauth_client_configured: false,
+    created_at: "2026-05-07T00:00:00Z",
+    updated_at: "2026-05-07T00:00:00Z",
     ...overrides,
-  } as unknown as McpServer;
+  };
 }
 
 function makeConnectors(
@@ -47,6 +78,7 @@ function makeConnectors(
     error: null,
     refresh: vi.fn().mockResolvedValue(undefined),
     addServer: vi.fn().mockResolvedValue(undefined),
+    installFromCatalog: vi.fn().mockResolvedValue(makeServer()),
     removeServer: vi.fn().mockResolvedValue(undefined),
     setEnabled: vi.fn().mockResolvedValue(undefined),
     authenticate: vi.fn().mockResolvedValue(undefined),
@@ -55,137 +87,150 @@ function makeConnectors(
   };
 }
 
+function mockCatalog(entries: McpCatalogEntry[]): void {
+  vi.mocked(listMcpCatalog).mockResolvedValue({
+    entries,
+  } satisfies McpCatalogResponse);
+}
+
+beforeEach(() => {
+  vi.mocked(listMcpCatalog).mockReset();
+});
+
 describe("McpOverlay", () => {
-  it("walks through browse → auth → scope → confirm → connected", async () => {
-    const linearRow = makeServer();
-    const connectors = makeConnectors({
-      // Mirror the real flow: addServer mutates state; the wizard reads
-      // back the new row from .servers post-resolve.
-      servers: [linearRow],
-      addServer: vi.fn().mockResolvedValue(undefined),
-    });
+  it("renders one Catalog card per entry from useMcpCatalog", async () => {
+    mockCatalog([
+      makeCatalogEntry({ slug: "linear", display_name: "Linear" }),
+      makeCatalogEntry({ slug: "notion", display_name: "Notion" }),
+    ]);
+    render(<McpOverlay open onClose={vi.fn()} connectors={makeConnectors()} />);
 
-    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
-
-    // Step 1: pick Linear from the catalog.
-    await userEvent.click(screen.getByLabelText("Add Linear"));
-
-    // Step 2: pre-selected method = OAuth (Linear's documented mode).
-    expect(screen.getByText("Recommended")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /^OAuth\b/ }));
-
-    // Step 3: scope review — Linear's suggested scopes appear.
-    expect(screen.getByText("read:issues")).toBeInTheDocument();
-    expect(screen.getByText("read:projects")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Review/ }));
-
-    // Step 4: confirm summary shows URL + auth + scopes.
-    expect(screen.getByText("https://mcp.linear.app/sse")).toBeInTheDocument();
-    expect(screen.getByText("OAuth")).toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to workspace/ }),
-    );
-
-    // Step 5: connected.
-    await waitFor(() => {
-      expect(screen.getByText("Linear added")).toBeInTheDocument();
-    });
-    expect(connectors.addServer).toHaveBeenCalledWith(
-      "https://mcp.linear.app/sse",
-    );
-  });
-
-  it("uses the custom URL path when no catalog entry is picked", async () => {
-    const customRow = makeServer({
-      url: "https://mcp.example.com/sse",
-      display_name: "mcp.example.com",
-      name: "mcp.example.com",
-    });
-    const connectors = makeConnectors({
-      servers: [customRow],
-    });
-
-    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
-
-    const customInput = screen.getByPlaceholderText(
-      "https://mcp.example.com/sse",
-    );
-    // ``userEvent.type`` chokes on URL special chars in some test envs;
-    // ``fireEvent.change`` is the reliable seam for "paste this whole
-    // string into the input" semantics.
-    fireEvent.change(customInput, {
-      target: { value: "https://mcp.example.com/sse" },
-    });
-    await userEvent.click(screen.getByRole("button", { name: /^Continue$/ }));
-
-    // Step 2 → step 3 → step 4 with the custom URL plumbed through.
-    await userEvent.click(screen.getByRole("button", { name: /^OAuth\b/ }));
-    await userEvent.click(screen.getByRole("button", { name: /Review/ }));
-    expect(screen.getByText("https://mcp.example.com/sse")).toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to workspace/ }),
-    );
-
-    expect(connectors.addServer).toHaveBeenCalledWith(
-      "https://mcp.example.com/sse",
-    );
-  });
-
-  it("surfaces add errors without leaving the confirm step", async () => {
-    const connectors = makeConnectors({
-      addServer: vi.fn().mockRejectedValue(new Error("URL not reachable")),
-    });
-
-    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
-
-    await userEvent.click(screen.getByLabelText("Add Notion"));
-    await userEvent.click(screen.getByRole("button", { name: /^OAuth\b/ }));
-    await userEvent.click(screen.getByRole("button", { name: /Review/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to workspace/ }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("URL not reachable")).toBeInTheDocument();
-    });
-    // Still on the confirm step — caller can retry.
     expect(
-      screen.getByRole("button", { name: /Add to workspace/ }),
+      await screen.findByLabelText("Linear catalog card"),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Notion catalog card")).toBeInTheDocument();
   });
 
-  it("calls authenticate when the user clicks Authenticate on the success step", async () => {
-    const linearRow = makeServer({ auth_state: "unauthenticated" });
-    const connectors = makeConnectors({ servers: [linearRow] });
+  it("Install button on a 1-click vendor calls installFromCatalog then authenticate", async () => {
+    mockCatalog([makeCatalogEntry({ slug: "linear" })]);
+    const installFromCatalog = vi
+      .fn()
+      .mockResolvedValue(makeServer({ server_id: "seed:linear" }));
+    const authenticate = vi.fn().mockResolvedValue(undefined);
+    const connectors = makeConnectors({ installFromCatalog, authenticate });
 
     render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
 
-    await userEvent.click(screen.getByLabelText("Add Linear"));
-    await userEvent.click(screen.getByRole("button", { name: /^OAuth\b/ }));
-    await userEvent.click(screen.getByRole("button", { name: /Review/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to workspace/ }),
-    );
+    await userEvent.click(await screen.findByLabelText("Install Linear"));
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: /Authenticate with Linear/ }),
-    );
-
-    expect(connectors.authenticate).toHaveBeenCalledWith("srv_01");
+    await waitFor(() => {
+      expect(installFromCatalog).toHaveBeenCalledWith("linear");
+    });
+    expect(authenticate).toHaveBeenCalledWith("seed:linear");
   });
 
-  it("filters the catalog by search input", async () => {
-    const connectors = makeConnectors();
+  it("Install on a pre-registered vendor opens the credentials form first", async () => {
+    mockCatalog([
+      makeCatalogEntry({
+        slug: "atlassian",
+        display_name: "Atlassian",
+        requires_pre_registered_client: true,
+      }),
+    ]);
+    const installFromCatalog = vi.fn();
+    const connectors = makeConnectors({ installFromCatalog });
 
     render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
 
-    fireEvent.change(screen.getByPlaceholderText("Linear, Notion, Sentry, …"), {
+    await userEvent.click(await screen.findByLabelText("Install Atlassian"));
+
+    // Credentials form expanded; install was NOT called yet.
+    expect(
+      await screen.findByLabelText("OAuth credentials for Atlassian"),
+    ).toBeInTheDocument();
+    expect(installFromCatalog).not.toHaveBeenCalled();
+  });
+
+  it("submitting credentials installs with the OAuth client", async () => {
+    mockCatalog([
+      makeCatalogEntry({
+        slug: "atlassian",
+        display_name: "Atlassian",
+        requires_pre_registered_client: true,
+      }),
+    ]);
+    const installFromCatalog = vi
+      .fn()
+      .mockResolvedValue(makeServer({ server_id: "seed:atlassian" }));
+    const authenticate = vi.fn().mockResolvedValue(undefined);
+    const connectors = makeConnectors({ installFromCatalog, authenticate });
+
+    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
+
+    await userEvent.click(await screen.findByLabelText("Install Atlassian"));
+    fireEvent.change(screen.getByLabelText("Client ID"), {
+      target: { value: "atl-client-123" },
+    });
+    fireEvent.change(screen.getByLabelText("Client secret"), {
+      target: { value: "atl-secret" },
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: /Install with credentials/ }),
+    );
+
+    await waitFor(() => {
+      expect(installFromCatalog).toHaveBeenCalledWith("atlassian", {
+        client_id: "atl-client-123",
+        client_secret: "atl-secret",
+        token_endpoint_auth_method: "client_secret_post",
+      });
+    });
+    expect(authenticate).toHaveBeenCalledWith("seed:atlassian");
+  });
+
+  it("Connected tab shows only authenticated servers, hides unauthenticated", async () => {
+    mockCatalog([]);
+    const connectors = makeConnectors({
+      servers: [
+        makeServer({
+          server_id: "seed:linear",
+          display_name: "Linear",
+          auth_state: "authenticated",
+        }),
+        makeServer({
+          server_id: "seed:notion",
+          display_name: "Notion",
+          auth_state: "unauthenticated",
+        }),
+      ],
+    });
+
+    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Connected" }));
+
+    expect(screen.getByText("Linear")).toBeInTheDocument();
+    expect(screen.queryByText("Notion")).toBeNull();
+  });
+
+  it("filters the Catalog grid by search input", async () => {
+    mockCatalog([
+      makeCatalogEntry({ slug: "linear", display_name: "Linear" }),
+      makeCatalogEntry({ slug: "sentry", display_name: "Sentry" }),
+      makeCatalogEntry({ slug: "notion", display_name: "Notion" }),
+    ]);
+
+    render(<McpOverlay open onClose={vi.fn()} connectors={makeConnectors()} />);
+
+    await screen.findByLabelText("Linear catalog card");
+    fireEvent.change(screen.getByLabelText("Search catalog"), {
       target: { value: "sentry" },
     });
+
     await waitFor(() => {
-      expect(screen.queryByLabelText("Add Linear")).toBeNull();
+      expect(screen.queryByLabelText("Linear catalog card")).toBeNull();
     });
-    expect(screen.getByLabelText("Add Sentry")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Add Notion")).toBeNull();
+    expect(screen.getByLabelText("Sentry catalog card")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Notion catalog card")).toBeNull();
   });
 });

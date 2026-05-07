@@ -16,10 +16,23 @@ export type SubagentSnapshotMap = ReadonlyMap<string, SubagentEntry>;
 const SUBAGENT_STARTED = "subagent_started";
 const SUBAGENT_PROGRESS = "subagent_progress";
 const SUBAGENT_COMPLETED = "subagent_completed";
+const SUBAGENT_PAUSED = "subagent_paused";
+const SUBAGENT_RESUMED = "subagent_resumed";
 
+// `paused` is intentionally NOT a running state — fleet-row "is anything
+// running" checks should classify a paused subagent as not running so the
+// progress bar freezes and the chrome flips to amber.
 const RUNNING_STATES: ReadonlySet<SubagentLifecycleStatus> = new Set([
   "queued",
   "running",
+]);
+
+// Statuses that a `subagent_resumed` event is allowed to flip back to
+// `running`. Terminal states win — a completed/cancelled/failed subagent
+// stays terminal even if a stray resume arrives (e.g. mid-replay).
+const RESUMABLE_STATES: ReadonlySet<SubagentLifecycleStatus> = new Set([
+  "queued",
+  "paused",
 ]);
 
 export function emptySubagentMap(): SubagentSnapshotMap {
@@ -76,6 +89,10 @@ function projectEvent(
       return onProgress(current, event);
     case SUBAGENT_COMPLETED:
       return onCompleted(current, event);
+    case SUBAGENT_PAUSED:
+      return onPaused(current, event);
+    case SUBAGENT_RESUMED:
+      return onResumed(current, event);
     default:
       return undefined;
   }
@@ -128,6 +145,55 @@ function onCompleted(
     completed_at: completedAt,
     duration_ms: duration,
     result_summary: event.summary ?? base.result_summary,
+    // PR 3.2.7 — terminal wins over paused. Clear the pause hints so a
+    // cancelled-from-paused row doesn't render amber chrome.
+    pause_reason: null,
+    pause_source_event_id: null,
+  };
+}
+
+function onPaused(
+  current: SubagentEntry | undefined,
+  event: RuntimeEventEnvelope,
+): SubagentEntry {
+  const base = current ?? seedFromEvent(event);
+  const reason = pauseReasonFromPayload(event);
+  const sourceEventId = pauseSourceEventIdFromPayload(event);
+  if (
+    base.status === "paused" &&
+    base.pause_reason === reason &&
+    base.pause_source_event_id === sourceEventId
+  ) {
+    return base;
+  }
+  return {
+    ...base,
+    status: "paused",
+    pause_reason: reason,
+    pause_source_event_id: sourceEventId,
+  };
+}
+
+function onResumed(
+  current: SubagentEntry | undefined,
+  event: RuntimeEventEnvelope,
+): SubagentEntry {
+  const base = current ?? seedFromEvent(event);
+  if (
+    base.status === "running" &&
+    !base.pause_reason &&
+    !base.pause_source_event_id
+  ) {
+    return base;
+  }
+  if (!RESUMABLE_STATES.has(base.status)) {
+    return base;
+  }
+  return {
+    ...base,
+    status: "running",
+    pause_reason: null,
+    pause_source_event_id: null,
   };
 }
 
@@ -149,7 +215,51 @@ function seedFromEvent(event: RuntimeEventEnvelope): SubagentEntry {
     // the seed read; the live event projection has no access to per-call
     // usage rows, so it stays null until the next conversation re-seed.
     token_usage: null,
+    pause_reason: null,
+    pause_source_event_id: null,
   };
+}
+
+const PAUSE_REASONS: ReadonlySet<string> = new Set([
+  "approval",
+  "mcp_auth",
+  "ask_a_question",
+]);
+
+function pauseReasonFromPayload(
+  event: RuntimeEventEnvelope,
+): SubagentEntry["pause_reason"] {
+  const payload = event.payload;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+  const raw = (payload as Record<string, unknown>).reason;
+  if (typeof raw !== "string" || !PAUSE_REASONS.has(raw)) {
+    return null;
+  }
+  return raw as Exclude<SubagentEntry["pause_reason"], null | undefined>;
+}
+
+function pauseSourceEventIdFromPayload(
+  event: RuntimeEventEnvelope,
+): string | null {
+  const payload = event.payload;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+  const raw = (payload as Record<string, unknown>).source_event_id;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return null;
+  }
+  return raw;
 }
 
 function subagentName(event: RuntimeEventEnvelope): string | null {

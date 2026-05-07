@@ -1,6 +1,8 @@
 import type {
   CreateMcpServerRequest,
+  InstallMcpServerRequest,
   McpAuthStartResponse,
+  McpCatalogResponse,
   McpOAuthClientConfigRequest,
   McpServer,
   McpServerListResponse,
@@ -40,6 +42,32 @@ export function createMcpServer(
     payload.oauth_client = oauthClient;
   }
   return httpPost<McpServer>("/v1/mcp/servers", payload);
+}
+
+// PR 4.4.6 — catalog endpoint is org-agnostic; we bypass ``httpGet`` so
+// no ``org_id`` / ``user_id`` query params are appended.
+export async function listMcpCatalog(): Promise<McpCatalogResponse> {
+  const response = await fetch("/v1/mcp/catalog", {
+    headers: correlationHeaders(),
+  });
+  await assertOk(response);
+  return (await response.json()) as McpCatalogResponse;
+}
+
+export function installMcpServer(
+  slug: string,
+  identity: RequestIdentity,
+  oauthClient?: McpOAuthClientConfigRequest,
+): Promise<McpServer> {
+  const payload: InstallMcpServerRequest = {
+    org_id: identity.orgId,
+    user_id: identity.userId,
+    slug,
+  };
+  if (oauthClient !== undefined) {
+    payload.oauth_client = oauthClient;
+  }
+  return httpPost<McpServer>("/v1/mcp/servers/install", payload);
 }
 
 export function updateMcpServer(

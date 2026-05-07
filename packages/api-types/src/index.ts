@@ -24,6 +24,28 @@ export interface McpServer {
   health: McpServerHealth;
   enabled: boolean;
   oauth_client_configured: boolean;
+  /**
+   * PR 3.4.1 — brand metadata. ``logo_url`` is the row favicon (frontend
+   * falls through to a letter glyph on 404). ``brand_color`` tints the
+   * chip surface. ``scopes_summary`` is the popover row's one-line
+   * subtitle. ``default_scopes`` is the resume-from-paused payload PR 1.2's
+   * PATCH endpoint round-trips. ``admin_managed`` gates the popover's
+   * Enable button for non-admin members.
+   *
+   * All optional / defaulted: old clients that ignore these still render
+   * correctly; rows that lack metadata fall back to the design-system
+   * letter glyph and a state-specific subtitle.
+   */
+  logo_url?: string | null;
+  brand_color?: string | null;
+  scopes_summary?: string | null;
+  default_scopes?: readonly string[];
+  admin_managed?: boolean;
+  /**
+   * PR 4.4.6 — marketing description copied from the catalog entry on
+   * install. Empty for custom (non-catalog) servers.
+   */
+  description?: string;
   created_at: string;
   updated_at: string;
 }
@@ -44,6 +66,45 @@ export interface CreateMcpServerRequest {
   display_name?: string;
   transport?: McpTransport;
   auth_mode?: McpAuthMode;
+  oauth_client?: McpOAuthClientConfigRequest;
+}
+
+/**
+ * PR 4.4.6 — curated catalog entry. Org-agnostic; the wire shape served
+ * by ``GET /v1/mcp/catalog``. Frontend cross-references with the user's
+ * ``McpServer`` list (matching ``server_id === "seed:" + slug``) to
+ * decide between Install / Resume install / Installed in the catalog
+ * grid.
+ */
+export interface McpCatalogEntry {
+  slug: string;
+  display_name: string;
+  url: string;
+  transport: McpTransport;
+  auth_mode: McpAuthMode;
+  description: string;
+  logo_url?: string | null;
+  brand_color?: string | null;
+  scopes_summary?: string | null;
+  default_scopes?: readonly string[];
+  /**
+   * When true, install requires the caller to supply a pre-registered
+   * OAuth client (the vendor doesn't expose RFC 8414 metadata or RFC
+   * 7591 dynamic client registration). Frontend prompts for credentials
+   * before submitting the install request.
+   */
+  requires_pre_registered_client: boolean;
+  verified: boolean;
+}
+
+export interface McpCatalogResponse {
+  entries: readonly McpCatalogEntry[];
+}
+
+export interface InstallMcpServerRequest {
+  org_id: string;
+  user_id: string;
+  slug: string;
   oauth_client?: McpOAuthClientConfigRequest;
 }
 
@@ -167,7 +228,9 @@ export type RuntimeApiEventType =
   | "draft_updated"
   | "compression_note"
   | "subagent_fleet_started"
-  | "subagent_fleet_finished";
+  | "subagent_fleet_finished"
+  | "subagent_paused"
+  | "subagent_resumed";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -218,6 +281,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   "compression_note",
   "subagent_fleet_started",
   "subagent_fleet_finished",
+  "subagent_paused",
+  "subagent_resumed",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -1462,6 +1527,12 @@ export interface RuntimeEventPayloadByType {
    * `parent_fleet_id` for grouping. */
   subagent_fleet_started: SubagentFleetStartedPayload;
   subagent_fleet_finished: SubagentFleetFinishedPayload;
+  /** PR 3.2.5 Phase 3 — explicit pause/resume signals so the FE marks a
+   * fleet row "paused" without inferring from the absence of
+   * SUBAGENT_COMPLETED. Both events carry
+   * `task_id == parent_task_id == supervisor_call_id`. */
+  subagent_paused: SubagentPausedPayload;
+  subagent_resumed: SubagentResumedPayload;
 }
 
 export interface CompressionNotePayload {
@@ -1482,6 +1553,42 @@ export interface SubagentFleetStartedPayload {
 export interface SubagentFleetFinishedPayload {
   fleet_id: string;
   elapsed?: string | null;
+}
+
+/** PR 3.2.5 Phase 3 — `subagent_paused` payload. Emitted by the worker
+ *  when an APPROVAL_REQUESTED / MCP_AUTH_REQUIRED / ASK_A_QUESTION
+ *  interrupt fires INSIDE a subagent (i.e. when `parent_task_id`
+ *  resolves to the subagent's supervisor `task` call_id). The FE
+ *  reducer flips the matching `SubagentEntry.status` to `paused` so
+ *  fleet rows + pane cards render the amber/paused visual without
+ *  inferring from the absence of SUBAGENT_COMPLETED. */
+export interface SubagentPausedPayload {
+  task_id: string;
+  /** What kind of interrupt paused it; the FE picks the right copy /
+   *  icon. Mirrors the variants the worker already supports. */
+  reason: "approval" | "mcp_auth" | "ask_a_question";
+  /** The event_id of the underlying interrupt event (for cross-linking
+   *  in the FE: clicking the paused row jumps to the interrupt card). */
+  source_event_id?: string | null;
+}
+
+/** PR 3.2.5 Phase 3 — `subagent_resumed` payload. Emitted before any
+ *  further activity from the resumed subagent so the FE flips state
+ *  back to `running` BEFORE the next progress event. */
+export interface SubagentResumedPayload {
+  task_id: string;
+  /** Outcome of the gating interrupt that paused the subagent. Drives
+   *  per-row copy (e.g. "Resumed (rejected)" vs "Resumed (approved)").
+   *  Optional: the resolution path may have no semantic decision (e.g.
+   *  a future cancel-clear path) — the FE flips paused → running on
+   *  the event regardless. */
+  reason?: "approved" | "rejected";
+  /** approval_id of the resolved approval / auth / question; useful for
+   *  cross-linking the row back to the original gating card on the
+   *  thread. */
+  approval_id?: string;
+  /** The event_id of the resolution event for cross-linking. */
+  source_event_id?: string | null;
 }
 
 // PR 1.3 — Workspace-pane Draft artifact contracts. Mirrors
@@ -1681,6 +1788,13 @@ export interface SkillListResponse {
 export type SubagentLifecycleStatus =
   | "queued"
   | "running"
+  // PR 3.2.5 Phase 3 — set by `subagentReducer` when a `subagent_paused`
+  // event arrives (the worker emits one whenever an
+  // APPROVAL_REQUESTED / MCP_AUTH_REQUIRED / ASK_A_QUESTION interrupt
+  // resolves to a non-null `parent_task_id`). Live-stream-only: the
+  // archive read at `GET .../subagents` projects from the terminal-or-
+  // running `runtime_async_tasks.status` and never emits "paused".
+  | "paused"
   | "completed"
   | "cancelled"
   | "failed"
@@ -1714,6 +1828,13 @@ export interface SubagentEntry {
   safe_error_code: string | null;
   safe_error_message: string | null;
   token_usage: SubagentTokenUsage | null;
+  /** PR 3.2.7 — set live (FE-only projection) when status === "paused"; the
+   *  reducer copies these fields from the most recent `subagent_paused`
+   *  payload so the row / card can render reason-specific copy without
+   *  rescanning the event log. Cleared on resume / terminal. The archive
+   *  read never returns them — they're additive optional FE state. */
+  pause_reason?: "approval" | "mcp_auth" | "ask_a_question" | null;
+  pause_source_event_id?: string | null;
 }
 
 export interface SubagentListResponse {

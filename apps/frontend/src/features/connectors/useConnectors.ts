@@ -4,10 +4,12 @@ import type {
 } from "@enterprise-search/api-types";
 import { useMemo } from "react";
 import type { RequestIdentity } from "../../api/config";
+import { classifyMcpError } from "../../api/mcpErrors";
 import { requireIdentity, useResource } from "../../api/useResource";
 import {
   createMcpServer,
   deleteMcpServer,
+  installMcpServer,
   listMcpServers,
   skipMcpAuth,
   startMcpAuth,
@@ -23,6 +25,10 @@ export interface ConnectorState {
     url: string,
     oauthClient?: McpOAuthClientConfigRequest,
   ) => Promise<void>;
+  installFromCatalog: (
+    slug: string,
+    oauthClient?: McpOAuthClientConfigRequest,
+  ) => Promise<McpServer>;
   removeServer: (serverId: string) => Promise<void>;
   setEnabled: (serverId: string, enabled: boolean) => Promise<void>;
   authenticate: (serverId: string) => Promise<void>;
@@ -47,6 +53,22 @@ export function useConnectors(
         await createMcpServer(url, requireIdentity(identity), oauthClient);
         await refresh();
       },
+      async installFromCatalog(
+        slug: string,
+        oauthClient?: McpOAuthClientConfigRequest,
+      ): Promise<McpServer> {
+        try {
+          const server = await installMcpServer(
+            slug,
+            requireIdentity(identity),
+            oauthClient,
+          );
+          await refresh();
+          return server;
+        } catch (err) {
+          throw classifyMcpError({ kind: "slug", slug }, err);
+        }
+      },
       async removeServer(serverId: string): Promise<void> {
         await deleteMcpServer(serverId, requireIdentity(identity));
         await refresh();
@@ -56,8 +78,12 @@ export function useConnectors(
         await refresh();
       },
       async authenticate(serverId: string): Promise<void> {
-        const auth = await startMcpAuth(serverId, requireIdentity(identity));
-        window.location.href = auth.auth_url;
+        try {
+          const auth = await startMcpAuth(serverId, requireIdentity(identity));
+          window.location.href = auth.auth_url;
+        } catch (err) {
+          throw classifyMcpError({ kind: "server", serverId }, err);
+        }
       },
       async skipAuth(serverId: string): Promise<void> {
         await skipMcpAuth(serverId, requireIdentity(identity));

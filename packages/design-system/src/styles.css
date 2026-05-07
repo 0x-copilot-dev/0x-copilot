@@ -445,6 +445,20 @@ textarea {
   transform: translateX(1.15rem);
 }
 
+/* PR 3.4.1 — bare variant: same track, no visible label. */
+.ui-switch--bare {
+  gap: 0;
+}
+.ui-switch--bare > strong {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-switch span::after {
+    transition: none;
+  }
+}
+
 .ui-dialog-backdrop {
   align-items: center;
   background: rgb(0 0 0 / 0.54);
@@ -623,6 +637,21 @@ textarea {
 
 .ui-app-icon--drive {
   font-size: 0.7rem;
+}
+
+/* PR 3.4.1 — server-supplied logo URL variant. The chip surface is set
+ * inline (so it tints to brand-color while the SVG loads); the <img>
+ * fills the chip and falls through to the glyph chain on error via
+ * ``imgFailed`` state in ``<AppIcon>``. */
+.ui-app-icon--img {
+  overflow: hidden;
+  padding: 0;
+}
+.ui-app-icon--img > img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
 }
 
 .ui-connector-chip {

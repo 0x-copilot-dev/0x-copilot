@@ -32,12 +32,14 @@ from backend_app.contracts import (
     InternalMcpClientSession,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
+    InstallMcpServerRequest,
     InternalMcpServerListResponse,
     InternalSkillBundle,
     InternalSkillListResponse,
     McpAuthCallbackRequest,
     McpAuthStartRequest,
     McpAuthStartResponse,
+    McpCatalogResponse,
     McpServerListResponse,
     McpServerResponse,
     OAuthTokenRequest,
@@ -550,6 +552,42 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         return _AppServices.mcp(app).create_server(payload)
+
+    @app.get(
+        "/v1/mcp/catalog",
+        response_model=McpCatalogResponse,
+        # PR 4.4.6 — org-agnostic curated list. ``MCP_READ`` is the
+        # appropriate gate (any reader who can see installed servers
+        # should also see the catalog they can install from).
+        dependencies=[Depends(RequireScopes(MCP_READ))],
+    )
+    def list_catalog() -> McpCatalogResponse:
+        return _AppServices.mcp(app).list_catalog()
+
+    @app.post(
+        "/v1/mcp/servers/install",
+        response_model=McpServerResponse,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
+    )
+    def install_server(
+        request: Request, payload: InstallMcpServerRequest
+    ) -> McpServerResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=payload.org_id, user_id=payload.user_id
+        )
+        payload = payload.model_copy(
+            update={"org_id": identity.org_id, "user_id": identity.user_id}
+        )
+        try:
+            return _AppServices.mcp(app).install_from_catalog(payload)
+        except ValueError as exc:
+            message = str(exc)
+            # 404 for unknown slug; 422 for the pre-registered-client gate
+            # so the frontend can route to the credentials form vs. show
+            # a "not in catalog" toast.
+            if message.startswith("Unknown catalog entry"):
+                raise HTTPException(status.HTTP_404_NOT_FOUND, message) from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message) from exc
 
     @app.get(
         "/v1/mcp/servers",

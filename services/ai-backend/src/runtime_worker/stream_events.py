@@ -46,6 +46,10 @@ class _Fields:
     GRANT_OPTIONS = "grant_options"
     ACTION_INDEX = "action_index"
     ACTION_COUNT = "action_count"
+    # PR 3.2.5 Phase 3 — persisted on the approval record's metadata so the
+    # resolution handler can detect subagent-scoped pauses without
+    # rescanning the event log. Mirrors the envelope-level field.
+    PARENT_TASK_ID = "parent_task_id"
 
 
 class StreamCustomProcessor:
@@ -158,13 +162,22 @@ class StreamOrchestrator:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
-            await self.create_approval_request(run=run, payload=payload)
-            await self.event_producer.append_api_event(
+            await self.create_approval_request(
+                run=run, payload=payload, parent_task_id=parent_task_id
+            )
+            interrupt_envelope = await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
                 payload=payload,
                 metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
+            await self._maybe_emit_subagent_paused(
+                run=run,
+                metadata=metadata,
+                interrupt_event_type=event_type,
+                interrupt_envelope=interrupt_envelope,
                 parent_task_id=parent_task_id,
             )
         if native_payloads:
@@ -187,13 +200,22 @@ class StreamOrchestrator:
                 RuntimeApiEventType.MCP_AUTH_REQUIRED,
             }:
                 payload = self.payload_with_action_id(event_type, payload)
-                await self.create_approval_request(run=run, payload=payload)
-            await self.event_producer.append_api_event(
+                await self.create_approval_request(
+                    run=run, payload=payload, parent_task_id=parent_task_id
+                )
+            interrupt_envelope = await self.event_producer.append_api_event(
                 run=run,
                 source=self._source_for_event(event_type, namespace),
                 event_type=event_type,
                 payload=payload,
                 metadata=metadata,
+                parent_task_id=parent_task_id,
+            )
+            await self._maybe_emit_subagent_paused(
+                run=run,
+                metadata=metadata,
+                interrupt_event_type=event_type,
+                interrupt_envelope=interrupt_envelope,
                 parent_task_id=parent_task_id,
             )
 
@@ -285,6 +307,7 @@ class StreamOrchestrator:
         *,
         run: RunRecord,
         payload: dict[str, object],
+        parent_task_id: str | None = None,
     ) -> None:
         approval_id = StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_ID))
         if approval_id is None:
@@ -295,6 +318,16 @@ class StreamOrchestrator:
         )
         if existing is not None:
             return
+        # PR 3.2.5 Phase 3 — persist `parent_task_id` on the approval
+        # record so `RuntimeApprovalHandler.handle` can detect when a
+        # resolution targets a subagent-scoped pause and emit
+        # `subagent_resumed` before the LangGraph resume kicks in. We
+        # write it as a sibling key on `metadata` (a copy of the original
+        # event payload) under the same name the chunk metadata uses so
+        # readers don't have to special-case it.
+        metadata: dict[str, object] = dict(payload)
+        if parent_task_id is not None:
+            metadata[_Fields.PARENT_TASK_ID] = parent_task_id
         await self.event_producer.persistence.create_approval_request(
             record=ApprovalRequestRecord(
                 approval_id=approval_id,
@@ -302,7 +335,7 @@ class StreamOrchestrator:
                 conversation_id=run.conversation_id,
                 org_id=run.org_id,
                 user_id=run.user_id,
-                metadata=payload,
+                metadata=metadata,
             )
         )
 
@@ -349,6 +382,67 @@ class StreamOrchestrator:
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
         return normalized
+
+    # PR 3.2.5 Phase 3 — when an interrupt event fires inside a subagent
+    # (i.e. `parent_task_id` resolved to the supervisor's `task`
+    # call_id), emit a sibling `subagent_paused` event so the FE
+    # reducer can flip `SubagentEntry.status` to `paused` without
+    # inferring from "started but never completed". Resume is emitted
+    # separately by the approval handler on resolution.
+    #
+    # `reason` discriminates the FE copy / icon. `MCP_AUTH_REQUIRED` maps
+    # to `mcp_auth`. `APPROVAL_REQUESTED` is further refined by inspecting
+    # the payload's `approval_kind`: `ask_a_question` is its own reason so
+    # the FE can render "Waiting for answer" instead of generic "Waiting on
+    # approval"; everything else (action, mcp_tool) collapses to
+    # `approval`.
+    _SUBAGENT_INTERRUPT_REASONS = {
+        RuntimeApiEventType.APPROVAL_REQUESTED: "approval",
+        RuntimeApiEventType.MCP_AUTH_REQUIRED: "mcp_auth",
+    }
+
+    async def _maybe_emit_subagent_paused(
+        self,
+        *,
+        run: RunRecord,
+        metadata: dict[str, object],
+        interrupt_event_type: RuntimeApiEventType,
+        interrupt_envelope: object,
+        parent_task_id: str | None,
+    ) -> None:
+        if parent_task_id is None:
+            return
+        reason = self._SUBAGENT_INTERRUPT_REASONS.get(interrupt_event_type)
+        if reason is None:
+            return
+        if (
+            interrupt_event_type is RuntimeApiEventType.APPROVAL_REQUESTED
+            and self._approval_kind_for(interrupt_envelope)
+            == ApiValues.ApprovalKind.ASK_A_QUESTION
+        ):
+            reason = "ask_a_question"
+        source_event_id = getattr(interrupt_envelope, "event_id", None)
+        payload: dict[str, object] = {
+            "task_id": parent_task_id,
+            "reason": reason,
+        }
+        if isinstance(source_event_id, str):
+            payload["source_event_id"] = source_event_id
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_PAUSED,
+            payload=payload,
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+        )
+
+    @staticmethod
+    def _approval_kind_for(interrupt_envelope: object) -> str | None:
+        payload = getattr(interrupt_envelope, "payload", None)
+        if not isinstance(payload, Mapping):
+            return None
+        return StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_KIND))
 
     @classmethod
     def native_interrupt_payloads(

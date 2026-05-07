@@ -1,25 +1,19 @@
-// PR 4.4 — MCP catalog "browse + install" wizard.
+// PR 4.4.6 — Manage MCP servers modal.
 //
-// 5-step modal flow per the Atlas design doc:
+// Two tabs:
+//   - Catalog: server-driven grid (`useMcpCatalog`). Each card cross-
+//     references the user's installed servers. Install / Resume install /
+//     Installed states. Inline credentials form for vendors that require
+//     a pre-registered OAuth client.
+//   - Connected: full management (re-auth, skip auth, remove) via the
+//     existing `ConnectorRow` for every authorized server.
 //
-//   1. Browse        — catalog grid of well-known servers + custom URL
-//   2. Auth          — pick auth method (OAuth / API key / no-auth)
-//   3. Scope review  — list of scopes the server will receive
-//   4. Confirm       — summary card + "Add to workspace"
-//   5. Connected     — success state with "Try in chat" / "View in Connectors"
-//
-// v1 reuses ``useConnectors().addServer`` for the create path and
-// ``startMcpAuth`` for the OAuth handoff. Per-tool scope toggles +
-// read-only preset are deferred to the catalog redesign (the schema
-// doesn't carry per-tool scopes yet); the scope step shows the
-// server's ``required_scopes`` so the admin can read them before
-// committing.
-//
-// Test-connection: backend exposes ``/internal/v1/mcp/servers/{id}/test-token``
-// for OAuth servers; v1 wires the call after add+authenticate. The
-// wizard surfaces the result on step 5.
+// Replaces the 5-step wizard from PR 4.4. Reuses primitives from the
+// design-system; the tabs primitive is feature-local (~30 LOC) since
+// it's the only consumer in the app today.
 
 import {
+  AppIcon,
   Badge,
   Button,
   Card,
@@ -28,728 +22,576 @@ import {
 } from "@enterprise-search/design-system";
 import "./mcp-wizard.css";
 import {
+  type FormEvent,
   type ReactElement,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from "react";
-import type { McpServer } from "@enterprise-search/api-types";
+import type {
+  McpCatalogEntry,
+  McpOAuthClientConfigRequest,
+  McpServer,
+} from "@enterprise-search/api-types";
 import { Modal } from "../../settings/Modal";
+import { isOAuthSetupRequired } from "../../../api/mcpErrors";
+import { ConnectorRow } from "../ConnectorRow";
+import { isAuthenticated } from "../authStateDisplay";
 import type { ConnectorState } from "../useConnectors";
-
-/**
- * Hard-coded catalog of well-known MCP servers. Pulls names + URLs +
- * known scope hints into a single source of truth that drives both the
- * browse grid and the scope-review step. A server-driven catalog is a
- * follow-up — the shape here is the contract a future fetch will
- * deserialize into.
- */
-const CATALOG: CatalogEntry[] = [
-  {
-    id: "linear",
-    name: "Linear",
-    url: "https://mcp.linear.app/sse",
-    color: "#5e6ad2",
-    icon: "L",
-    description: "Issues, projects, and cycles. Read-only by default.",
-    auth_method: "oauth",
-    suggested_scopes: ["read:issues", "read:projects"],
-  },
-  {
-    id: "notion",
-    name: "Notion",
-    url: "https://mcp.notion.com/sse",
-    color: "#000000",
-    icon: "N",
-    description: "Workspace pages and databases.",
-    auth_method: "oauth",
-    suggested_scopes: ["read:pages"],
-  },
-  {
-    id: "sentry",
-    name: "Sentry",
-    url: "https://mcp.sentry.dev/sse",
-    color: "#362d59",
-    icon: "S",
-    description: "Issues, releases, and stack traces.",
-    auth_method: "oauth",
-    suggested_scopes: ["event:read", "project:read"],
-  },
-  {
-    id: "github",
-    name: "GitHub",
-    url: "https://mcp.github.com/sse",
-    color: "#0d1117",
-    icon: "G",
-    description: "Repos, issues, pull requests.",
-    auth_method: "oauth",
-    suggested_scopes: ["read:user", "repo"],
-  },
-  {
-    id: "slack",
-    name: "Slack",
-    url: "https://mcp.slack.com/sse",
-    color: "#4a154b",
-    icon: "#",
-    description: "Channels, messages, and threads.",
-    auth_method: "oauth",
-    suggested_scopes: ["channels:read", "chat:write"],
-  },
-  {
-    id: "drive",
-    name: "Google Drive",
-    url: "https://mcp.google.com/drive/sse",
-    color: "#4285f4",
-    icon: "G",
-    description: "Files, comments, and folders.",
-    auth_method: "oauth",
-    suggested_scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-  },
-];
-
-interface CatalogEntry {
-  id: string;
-  name: string;
-  url: string;
-  color: string;
-  icon: string;
-  description: string;
-  auth_method: "oauth" | "api_key" | "none";
-  suggested_scopes: string[];
-}
-
-type Selection =
-  | { kind: "catalog"; entry: CatalogEntry }
-  | { kind: "custom"; url: string; name: string };
-
-type Step =
-  | { kind: "browse" }
-  | { kind: "auth"; selection: Selection }
-  | { kind: "scope"; selection: Selection; auth_method: AuthMethod }
-  | {
-      kind: "confirm";
-      selection: Selection;
-      auth_method: AuthMethod;
-      scopes: string[];
-    }
-  | {
-      kind: "connected";
-      selection: Selection;
-      auth_method: AuthMethod;
-      scopes: string[];
-      server: McpServer;
-    };
-
-type AuthMethod = "oauth" | "api_key" | "none";
+import { useMcpCatalog } from "../useMcpCatalog";
 
 export interface McpOverlayProps {
   open: boolean;
   onClose: () => void;
   connectors: ConnectorState;
-  /** Optional CTA hook for the success state's "Try in chat" link. */
-  onTryInChat?: (server: McpServer) => void;
 }
+
+type TabKey = "catalog" | "connected";
 
 export function McpOverlay({
   open,
   onClose,
   connectors,
-  onTryInChat,
 }: McpOverlayProps): ReactElement {
-  const [step, setStep] = useState<Step>({ kind: "browse" });
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<TabKey>("catalog");
+  const catalog = useMcpCatalog();
 
-  // Reset state every time the modal opens so a re-open doesn't show
-  // the previous run's success / error state.
+  // Reset to the Catalog tab whenever the modal opens so a re-open
+  // doesn't strand the user on an empty Connected tab.
   useEffect(() => {
     if (open) {
-      setStep({ kind: "browse" });
-      setError(null);
-      setBusy(false);
+      setTab("catalog");
     }
   }, [open]);
 
-  const goBrowse = useCallback(() => {
-    setStep({ kind: "browse" });
-    setError(null);
-  }, []);
-
-  const onPickCatalog = useCallback((entry: CatalogEntry) => {
-    setError(null);
-    setStep({ kind: "auth", selection: { kind: "catalog", entry } });
-  }, []);
-
-  const onPickCustom = useCallback((url: string) => {
-    if (!url.trim()) return;
-    setError(null);
-    setStep({
-      kind: "auth",
-      selection: {
-        kind: "custom",
-        url: url.trim(),
-        name: hostnameLabel(url.trim()),
-      },
-    });
-  }, []);
-
-  const onPickAuth = useCallback((method: AuthMethod) => {
-    setStep((current) => {
-      if (current.kind !== "auth") return current;
-      return {
-        kind: "scope",
-        selection: current.selection,
-        auth_method: method,
-      };
-    });
-  }, []);
-
-  const onScopeContinue = useCallback((scopes: string[]) => {
-    setStep((current) => {
-      if (current.kind !== "scope") return current;
-      return {
-        kind: "confirm",
-        selection: current.selection,
-        auth_method: current.auth_method,
-        scopes,
-      };
-    });
-  }, []);
-
-  const onConfirm = useCallback(async () => {
-    if (step.kind !== "confirm") return;
-    setBusy(true);
-    setError(null);
-    try {
-      // ``addServer`` mutates the parent store and resolves once the
-      // server row is created. We need the row itself for the success
-      // state — pull it from the freshly-refreshed list.
-      const url = selectionUrl(step.selection);
-      await connectors.addServer(url);
-      const server = connectors.servers.find((s) => s.url === url);
-      if (!server) {
-        throw new Error(
-          "Server was added but the row didn't appear in the list.",
-        );
-      }
-      setStep({
-        kind: "connected",
-        selection: step.selection,
-        auth_method: step.auth_method,
-        scopes: step.scopes,
-        server,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add connector.");
-    } finally {
-      setBusy(false);
-    }
-  }, [connectors, step]);
-
-  const onAuthenticate = useCallback(async () => {
-    if (step.kind !== "connected") return;
-    setBusy(true);
-    setError(null);
-    try {
-      // ``connectors.authenticate`` redirects to the IdP — the modal
-      // unmounts when the browser navigates. We do NOT close the modal
-      // here so a popup-blocker / preventDefault doesn't leave the user
-      // staring at a confused "connected" screen.
-      await connectors.authenticate(step.server.server_id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start auth.");
-      setBusy(false);
-    }
-  }, [connectors, step]);
-
-  const title = useMemo(() => titleForStep(step), [step]);
-
   return (
-    <Modal open={open} onClose={onClose} title={title}>
-      <div className="mcp-wizard">
-        <StepIndicator step={step} />
-        {error ? (
-          <div className="mcp-wizard__error" role="alert">
-            {error}
-          </div>
-        ) : null}
-        {step.kind === "browse" && (
-          <BrowseStep
-            onPickCatalog={onPickCatalog}
-            onPickCustom={onPickCustom}
-          />
-        )}
-        {step.kind === "auth" && (
-          <AuthStep
-            selection={step.selection}
-            onPick={onPickAuth}
-            onBack={goBrowse}
-          />
-        )}
-        {step.kind === "scope" && (
-          <ScopeStep
-            selection={step.selection}
-            auth_method={step.auth_method}
-            onContinue={onScopeContinue}
-            onBack={() => setStep({ kind: "auth", selection: step.selection })}
-          />
-        )}
-        {step.kind === "confirm" && (
-          <ConfirmStep
-            selection={step.selection}
-            auth_method={step.auth_method}
-            scopes={step.scopes}
-            busy={busy}
-            onConfirm={onConfirm}
-            onBack={() =>
-              setStep({
-                kind: "scope",
-                selection: step.selection,
-                auth_method: step.auth_method,
-              })
-            }
-          />
-        )}
-        {step.kind === "connected" && (
-          <ConnectedStep
-            selection={step.selection}
-            auth_method={step.auth_method}
-            server={step.server}
-            busy={busy}
-            onAuthenticate={onAuthenticate}
-            onTryInChat={onTryInChat}
-            onClose={onClose}
-          />
-        )}
-      </div>
+    <Modal open={open} onClose={onClose} title="Manage MCP servers">
+      <Tabs value={tab} onChange={setTab} />
+      {tab === "catalog" ? (
+        <CatalogTab catalog={catalog} connectors={connectors} />
+      ) : (
+        <ConnectedTab connectors={connectors} />
+      )}
     </Modal>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Step components
-// ---------------------------------------------------------------------------
+// --- Tabs primitive --------------------------------------------------------
 
-function BrowseStep({
-  onPickCatalog,
-  onPickCustom,
+function Tabs({
+  value,
+  onChange,
 }: {
-  onPickCatalog: (entry: CatalogEntry) => void;
-  onPickCustom: (url: string) => void;
+  value: TabKey;
+  onChange: (value: TabKey) => void;
 }): ReactElement {
-  const [filter, setFilter] = useState("");
-  const [customUrl, setCustomUrl] = useState("");
+  return (
+    <div className="mcp-tabs" role="tablist" aria-label="MCP servers view">
+      <Tab value="catalog" current={value} onChange={onChange}>
+        Catalog
+      </Tab>
+      <Tab value="connected" current={value} onChange={onChange}>
+        Connected
+      </Tab>
+    </div>
+  );
+}
+
+function Tab({
+  value,
+  current,
+  onChange,
+  children,
+}: {
+  value: TabKey;
+  current: TabKey;
+  onChange: (value: TabKey) => void;
+  children: ReactNode;
+}): ReactElement {
+  const active = current === value;
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      className={
+        active ? "mcp-tabs__btn mcp-tabs__btn--active" : "mcp-tabs__btn"
+      }
+      onClick={() => onChange(value)}
+    >
+      {children}
+    </button>
+  );
+}
+
+// --- Catalog tab -----------------------------------------------------------
+
+function CatalogTab({
+  catalog,
+  connectors,
+}: {
+  catalog: ReturnType<typeof useMcpCatalog>;
+  connectors: ConnectorState;
+}): ReactElement {
+  const [search, setSearch] = useState("");
+
+  // Cross-reference catalog entries with installed servers by stable
+  // ``server_id == "seed:" + slug``. The same map drives the
+  // Install / Resume install / Installed CTA on each card.
+  const serversBySlug = useMemo(() => {
+    const map = new Map<string, McpServer>();
+    for (const server of connectors.servers) {
+      if (server.server_id.startsWith("seed:")) {
+        map.set(server.server_id.slice("seed:".length), server);
+      }
+    }
+    return map;
+  }, [connectors.servers]);
+
   const filtered = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    if (!needle) return CATALOG;
-    return CATALOG.filter(
-      (entry) =>
-        entry.name.toLowerCase().includes(needle) ||
-        entry.description.toLowerCase().includes(needle),
+    const needle = search.trim().toLowerCase();
+    if (!needle) {
+      return catalog.entries;
+    }
+    return catalog.entries.filter((entry) =>
+      entry.display_name.toLowerCase().includes(needle),
     );
-  }, [filter]);
+  }, [catalog.entries, search]);
 
   return (
-    <div className="mcp-wizard__step mcp-wizard__step--browse">
-      <Field label="Search catalog">
+    <div className="mcp-catalog">
+      <div className="mcp-catalog__head">
         <TextInput
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Linear, Notion, Sentry, …"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search Linear, Notion, Sentry, …"
+          aria-label="Search catalog"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          aria-label="Refresh catalog"
+          onClick={() => void catalog.refresh()}
+        >
+          Refresh
+        </Button>
+      </div>
+
+      {catalog.loading ? (
+        <p className="mcp-catalog__hint">Loading catalog…</p>
+      ) : null}
+      {catalog.error ? <p className="app-error">{catalog.error}</p> : null}
+
+      <div className="mcp-catalog__grid">
+        {filtered.map((entry) => (
+          <CatalogCard
+            key={entry.slug}
+            entry={entry}
+            installed={serversBySlug.get(entry.slug) ?? null}
+            connectors={connectors}
+          />
+        ))}
+        <CustomUrlCard connectors={connectors} />
+      </div>
+    </div>
+  );
+}
+
+// --- Catalog card ----------------------------------------------------------
+
+type InstallStatus =
+  | { kind: "install" }
+  | { kind: "resume"; serverId: string }
+  | { kind: "installed"; serverId: string };
+
+function statusFor(installed: McpServer | null): InstallStatus {
+  if (!installed) {
+    return { kind: "install" };
+  }
+  if (isAuthenticated(installed.auth_state)) {
+    return { kind: "installed", serverId: installed.server_id };
+  }
+  return { kind: "resume", serverId: installed.server_id };
+}
+
+function CatalogCard({
+  entry,
+  installed,
+  connectors,
+}: {
+  entry: McpCatalogEntry;
+  installed: McpServer | null;
+  connectors: ConnectorState;
+}): ReactElement {
+  const status = statusFor(installed);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Inline credentials form — opens automatically for vendors that
+  // require a pre-registered OAuth client, or after an auth-start
+  // attempt fails with ``OAuthSetupRequiredError``.
+  const [setupOpen, setSetupOpen] = useState(false);
+
+  async function handlePrimary(): Promise<void> {
+    if (pending) {
+      return;
+    }
+    if (status.kind === "install" && entry.requires_pre_registered_client) {
+      // Force the credentials form for known-pre-registered vendors.
+      setSetupOpen(true);
+      return;
+    }
+    try {
+      setPending(true);
+      setError(null);
+      if (status.kind === "install") {
+        const server = await connectors.installFromCatalog(entry.slug);
+        await connectors.authenticate(server.server_id);
+      } else if (status.kind === "resume") {
+        await connectors.authenticate(status.serverId);
+      }
+      // ``installed`` branch is greyed; nothing to do here.
+    } catch (err) {
+      if (isOAuthSetupRequired(err)) {
+        // Auth-server doesn't advertise discovery — open the form.
+        setSetupOpen(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Could not install.");
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleSetupSubmit(
+    oauthClient: McpOAuthClientConfigRequest,
+  ): Promise<void> {
+    try {
+      setPending(true);
+      setError(null);
+      const server = await connectors.installFromCatalog(
+        entry.slug,
+        oauthClient,
+      );
+      await connectors.authenticate(server.server_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not install.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <article
+      className="mcp-card"
+      data-status={status.kind}
+      aria-label={`${entry.display_name} catalog card`}
+    >
+      <header className="mcp-card__head">
+        <AppIcon
+          name={entry.slug}
+          color={entry.brand_color ?? undefined}
+          size="lg"
+        />
+        <div className="mcp-card__body">
+          <div className="mcp-card__title">
+            <h4>{entry.display_name}</h4>
+            {entry.verified ? <Badge tone="success">Verified</Badge> : null}
+          </div>
+          <p className="mcp-card__desc">{entry.description}</p>
+          {entry.scopes_summary ? (
+            <p className="mcp-card__scope">{entry.scopes_summary}</p>
+          ) : null}
+          {entry.requires_pre_registered_client ? (
+            <p className="mcp-card__hint">
+              Setup required — pre-registered OAuth client.
+            </p>
+          ) : null}
+        </div>
+        <CatalogCardCta
+          status={status}
+          pending={pending}
+          entry={entry}
+          onPrimary={() => void handlePrimary()}
+        />
+      </header>
+
+      {setupOpen ? (
+        <SetupForm
+          entry={entry}
+          submitting={pending}
+          onSubmit={(payload) => void handleSetupSubmit(payload)}
+          onCancel={() => setSetupOpen(false)}
+        />
+      ) : null}
+
+      {error ? <p className="app-error">{error}</p> : null}
+    </article>
+  );
+}
+
+function CatalogCardCta({
+  status,
+  pending,
+  entry,
+  onPrimary,
+}: {
+  status: InstallStatus;
+  pending: boolean;
+  entry: McpCatalogEntry;
+  onPrimary: () => void;
+}): ReactElement {
+  if (status.kind === "installed") {
+    return <Badge tone="neutral">Installed</Badge>;
+  }
+  return (
+    <Button
+      type="button"
+      variant="primary"
+      disabled={pending}
+      aria-label={
+        status.kind === "resume"
+          ? `Resume ${entry.display_name} install`
+          : `Install ${entry.display_name}`
+      }
+      onClick={onPrimary}
+    >
+      {pending
+        ? "Working…"
+        : status.kind === "resume"
+          ? "Resume install"
+          : "Install"}
+    </Button>
+  );
+}
+
+// --- Setup form (pre-registered OAuth client) -----------------------------
+
+function SetupForm({
+  entry,
+  submitting,
+  onSubmit,
+  onCancel,
+}: {
+  entry: McpCatalogEntry;
+  submitting: boolean;
+  onSubmit: (oauthClient: McpOAuthClientConfigRequest) => void;
+  onCancel: () => void;
+}): ReactElement {
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scope, setScope] = useState("");
+  const [authEndpoint, setAuthEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+
+  function handle(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!clientId.trim()) {
+      return;
+    }
+    const payload: McpOAuthClientConfigRequest = {
+      client_id: clientId.trim(),
+    };
+    if (clientSecret.trim()) {
+      payload.client_secret = clientSecret.trim();
+      payload.token_endpoint_auth_method = "client_secret_post";
+    } else {
+      payload.token_endpoint_auth_method = "none";
+    }
+    if (scope.trim()) payload.scope = scope.trim();
+    if (authEndpoint.trim())
+      payload.authorization_endpoint = authEndpoint.trim();
+    if (tokenEndpoint.trim()) payload.token_endpoint = tokenEndpoint.trim();
+    onSubmit(payload);
+  }
+
+  return (
+    <form
+      className="mcp-setup"
+      onSubmit={handle}
+      aria-label={`OAuth credentials for ${entry.display_name}`}
+    >
+      <p className="mcp-setup__intro">
+        {entry.display_name} doesn&apos;t expose OAuth metadata. Paste a
+        pre-registered client from your {entry.display_name} developer console:
+      </p>
+      <Field label="Client ID">
+        <TextInput
+          value={clientId}
+          onChange={(event) => setClientId(event.target.value)}
+          autoComplete="off"
+          required
         />
       </Field>
-      <ul className="mcp-catalog__grid">
-        {filtered.map((entry) => (
-          <li key={entry.id}>
-            <button
-              type="button"
-              className="mcp-catalog__card"
-              onClick={() => onPickCatalog(entry)}
-              aria-label={`Add ${entry.name}`}
-            >
-              <span
-                className="mcp-catalog__icon"
-                style={{ background: entry.color }}
-                aria-hidden="true"
-              >
-                {entry.icon}
-              </span>
-              <span className="mcp-catalog__name">{entry.name}</span>
-              <span className="mcp-catalog__desc">{entry.description}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      <Card>
-        <h3 className="mcp-wizard__custom-heading">Add a custom server</h3>
-        <p className="mcp-wizard__custom-hint">
-          Have your own MCP endpoint? Paste the URL — we'll auto-detect OAuth +
-          dynamic client registration.
-        </p>
-        <Field label="Server URL">
-          <TextInput
-            value={customUrl}
-            onChange={(e) => setCustomUrl(e.target.value)}
-            placeholder="https://mcp.example.com/sse"
-          />
-        </Field>
-        <div className="mcp-wizard__actions">
-          <Button
-            type="button"
-            variant="primary"
-            disabled={!customUrl.trim()}
-            onClick={() => onPickCustom(customUrl)}
-          >
-            Continue
-          </Button>
+      <Field label="Client secret">
+        <TextInput
+          type="password"
+          autoComplete="new-password"
+          value={clientSecret}
+          onChange={(event) => setClientSecret(event.target.value)}
+        />
+      </Field>
+      <Field label="Scope">
+        <TextInput
+          value={scope}
+          onChange={(event) => setScope(event.target.value)}
+          autoComplete="off"
+          placeholder="e.g. read:issues"
+        />
+      </Field>
+      <Field label="Authorization endpoint" hint="Optional override.">
+        <TextInput
+          type="url"
+          autoComplete="off"
+          value={authEndpoint}
+          onChange={(event) => setAuthEndpoint(event.target.value)}
+        />
+      </Field>
+      <Field label="Token endpoint" hint="Optional override.">
+        <TextInput
+          type="url"
+          autoComplete="off"
+          value={tokenEndpoint}
+          onChange={(event) => setTokenEndpoint(event.target.value)}
+        />
+      </Field>
+      <div className="mcp-setup__actions">
+        <Button type="submit" variant="primary" disabled={submitting}>
+          {submitting ? "Installing…" : "Install with credentials"}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={submitting}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// --- Custom URL card -------------------------------------------------------
+
+function CustomUrlCard({
+  connectors,
+}: {
+  connectors: ConnectorState;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+    if (!url.trim() || pending) {
+      return;
+    }
+    try {
+      setPending(true);
+      setError(null);
+      await connectors.addServer(url.trim());
+      setUrl("");
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add server.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <article className="mcp-card mcp-card--custom">
+      <header className="mcp-card__head">
+        <AppIcon name="custom" />
+        <div className="mcp-card__body">
+          <h4>Add custom URL</h4>
+          <p className="mcp-card__desc">Self-hosted or unlisted MCP server.</p>
         </div>
-      </Card>
-    </div>
-  );
-}
-
-function AuthStep({
-  selection,
-  onPick,
-  onBack,
-}: {
-  selection: Selection;
-  onPick: (method: AuthMethod) => void;
-  onBack: () => void;
-}): ReactElement {
-  const presetMethod: AuthMethod =
-    selection.kind === "catalog" ? selection.entry.auth_method : "oauth";
-  return (
-    <div className="mcp-wizard__step mcp-wizard__step--auth">
-      <p className="mcp-wizard__hint">
-        Choose how this server will authenticate. We pre-selected the method
-        that matches the server's documented mode.
-      </p>
-      <ul className="mcp-wizard__choices">
-        <AuthChoice
-          method="oauth"
-          label="OAuth"
-          description="The server redirects you to its sign-in screen and returns a token."
-          recommended={presetMethod === "oauth"}
-          onPick={onPick}
-        />
-        <AuthChoice
-          method="api_key"
-          label="API key"
-          description="Paste a long-lived secret. Stored encrypted at rest."
-          recommended={presetMethod === "api_key"}
-          onPick={onPick}
-        />
-        <AuthChoice
-          method="none"
-          label="No auth"
-          description="The server is open or scoped to your network."
-          recommended={presetMethod === "none"}
-          onPick={onPick}
-        />
-      </ul>
-      <div className="mcp-wizard__actions mcp-wizard__actions--split">
-        <Button type="button" variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function AuthChoice({
-  method,
-  label,
-  description,
-  recommended,
-  onPick,
-}: {
-  method: AuthMethod;
-  label: string;
-  description: string;
-  recommended: boolean;
-  onPick: (method: AuthMethod) => void;
-}): ReactElement {
-  return (
-    <li>
-      <button
-        type="button"
-        className="mcp-wizard__choice"
-        onClick={() => onPick(method)}
-      >
-        <span className="mcp-wizard__choice-head">
-          <strong>{label}</strong>
-          {recommended ? <Badge tone="accent">Recommended</Badge> : null}
-        </span>
-        <span className="mcp-wizard__choice-desc">{description}</span>
-      </button>
-    </li>
-  );
-}
-
-function ScopeStep({
-  selection,
-  auth_method,
-  onContinue,
-  onBack,
-}: {
-  selection: Selection;
-  auth_method: AuthMethod;
-  onContinue: (scopes: string[]) => void;
-  onBack: () => void;
-}): ReactElement {
-  const initialScopes =
-    selection.kind === "catalog" ? selection.entry.suggested_scopes : [];
-  const [scopes] = useState<string[]>(initialScopes);
-
-  return (
-    <div className="mcp-wizard__step mcp-wizard__step--scope">
-      <p className="mcp-wizard__hint">
-        Scopes the server will request once you authenticate. Per-tool toggles +
-        a read-only preset are coming in a follow-up; v1 commits the server's
-        documented scope list as-is.
-      </p>
-      {scopes.length === 0 ? (
-        <Card>
-          <p className="mcp-wizard__hint">
-            {auth_method === "none"
-              ? "No-auth servers don't carry scopes."
-              : "This server doesn't publish a scope list yet — the workspace defaults will apply."}
-          </p>
-        </Card>
-      ) : (
-        <ul className="mcp-wizard__scopes">
-          {scopes.map((scope) => (
-            <li key={scope}>
-              <code>{scope}</code>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="mcp-wizard__actions mcp-wizard__actions--split">
-        <Button type="button" variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          onClick={() => onContinue(scopes)}
-        >
-          Review
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmStep({
-  selection,
-  auth_method,
-  scopes,
-  busy,
-  onConfirm,
-  onBack,
-}: {
-  selection: Selection;
-  auth_method: AuthMethod;
-  scopes: string[];
-  busy: boolean;
-  onConfirm: () => void;
-  onBack: () => void;
-}): ReactElement {
-  const name = selectionName(selection);
-  const url = selectionUrl(selection);
-  return (
-    <div className="mcp-wizard__step mcp-wizard__step--confirm">
-      <Card>
-        <dl className="mcp-wizard__summary">
-          <dt>Name</dt>
-          <dd>{name}</dd>
-          <dt>URL</dt>
-          <dd>
-            <code>{url}</code>
-          </dd>
-          <dt>Auth</dt>
-          <dd>{authLabel(auth_method)}</dd>
-          <dt>Scopes</dt>
-          <dd>
-            {scopes.length === 0 ? (
-              <em>None requested</em>
-            ) : (
-              <span>
-                {scopes.map((scope, idx) => (
-                  <span key={scope}>
-                    <code>{scope}</code>
-                    {idx < scopes.length - 1 ? ", " : null}
-                  </span>
-                ))}
-              </span>
-            )}
-          </dd>
-        </dl>
-      </Card>
-      <div className="mcp-wizard__actions mcp-wizard__actions--split">
-        <Button type="button" variant="ghost" onClick={onBack} disabled={busy}>
-          Back
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          onClick={onConfirm}
-          disabled={busy}
-        >
-          {busy ? "Adding…" : "Add to workspace"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ConnectedStep({
-  selection,
-  auth_method,
-  server,
-  busy,
-  onAuthenticate,
-  onTryInChat,
-  onClose,
-}: {
-  selection: Selection;
-  auth_method: AuthMethod;
-  server: McpServer;
-  busy: boolean;
-  onAuthenticate: () => void;
-  onTryInChat?: (server: McpServer) => void;
-  onClose: () => void;
-}): ReactElement {
-  const needsAuth =
-    auth_method === "oauth" && server.auth_state !== "authenticated";
-  return (
-    <div className="mcp-wizard__step mcp-wizard__step--connected">
-      <Card>
-        <h3>{selectionName(selection)} added</h3>
-        <p className="mcp-wizard__hint">
-          {needsAuth
-            ? "One more step — authenticate to give the agent live access."
-            : "The connector is live for everyone in your workspace."}
-        </p>
-      </Card>
-      <div className="mcp-wizard__actions mcp-wizard__actions--split">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Done
-        </Button>
-        {needsAuth ? (
+        {!open ? (
           <Button
             type="button"
-            variant="primary"
-            onClick={onAuthenticate}
-            disabled={busy}
+            variant="secondary"
+            onClick={() => setOpen(true)}
           >
-            {busy
-              ? "Starting…"
-              : `Authenticate with ${selectionName(selection)}`}
-          </Button>
-        ) : onTryInChat ? (
-          <Button
-            type="button"
-            variant="primary"
-            onClick={() => {
-              onTryInChat(server);
-              onClose();
-            }}
-          >
-            Try in chat
+            Add
           </Button>
         ) : null}
-      </div>
+      </header>
+      {open ? (
+        <form className="mcp-setup" onSubmit={(e) => void handleSubmit(e)}>
+          <Field label="Server URL">
+            <TextInput
+              type="url"
+              autoComplete="off"
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              placeholder="https://mcp.example.com/mcp"
+              required
+            />
+          </Field>
+          <div className="mcp-setup__actions">
+            <Button type="submit" variant="primary" disabled={pending}>
+              {pending ? "Adding…" : "Add"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={pending}
+              onClick={() => {
+                setOpen(false);
+                setError(null);
+                setUrl("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+          {error ? <p className="app-error">{error}</p> : null}
+        </form>
+      ) : null}
+    </article>
+  );
+}
+
+// --- Connected tab ---------------------------------------------------------
+
+function ConnectedTab({
+  connectors,
+}: {
+  connectors: ConnectorState;
+}): ReactElement {
+  const installed = useMemo(
+    () =>
+      connectors.servers.filter((server) => isAuthenticated(server.auth_state)),
+    [connectors.servers],
+  );
+
+  if (installed.length === 0) {
+    return (
+      <Card className="mcp-empty">
+        <p>
+          No connectors are connected yet. Switch to the{" "}
+          <strong>Catalog</strong> tab to install one.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="mcp-connected-list">
+      {installed.map((server) => (
+        <ConnectorRow
+          key={server.server_id}
+          server={server}
+          connectors={connectors}
+        />
+      ))}
     </div>
   );
 }
-
-function StepIndicator({ step }: { step: Step }): ReactElement {
-  const order: Step["kind"][] = [
-    "browse",
-    "auth",
-    "scope",
-    "confirm",
-    "connected",
-  ];
-  const activeIdx = order.indexOf(step.kind);
-  return (
-    <ol className="mcp-wizard__steps">
-      {order.map((kind, idx) => (
-        <li
-          key={kind}
-          className="mcp-wizard__steps-item"
-          data-active={idx === activeIdx ? "true" : undefined}
-          data-done={idx < activeIdx ? "true" : undefined}
-        >
-          <span className="mcp-wizard__steps-num">{idx + 1}</span>
-          <span className="mcp-wizard__steps-label">{stepLabel(kind)}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function titleForStep(step: Step): string {
-  switch (step.kind) {
-    case "browse":
-      return "Add a connector";
-    case "auth":
-      return `Connect ${selectionName(step.selection)}`;
-    case "scope":
-      return `Review scopes for ${selectionName(step.selection)}`;
-    case "confirm":
-      return `Confirm ${selectionName(step.selection)}`;
-    case "connected":
-      return `${selectionName(step.selection)} ready`;
-  }
-}
-
-function stepLabel(kind: Step["kind"]): string {
-  switch (kind) {
-    case "browse":
-      return "Browse";
-    case "auth":
-      return "Auth";
-    case "scope":
-      return "Scopes";
-    case "confirm":
-      return "Confirm";
-    case "connected":
-      return "Connected";
-  }
-}
-
-function authLabel(method: AuthMethod): string {
-  switch (method) {
-    case "oauth":
-      return "OAuth";
-    case "api_key":
-      return "API key";
-    case "none":
-      return "No auth";
-  }
-}
-
-function selectionUrl(selection: Selection): string {
-  return selection.kind === "catalog" ? selection.entry.url : selection.url;
-}
-
-function selectionName(selection: Selection): string {
-  return selection.kind === "catalog" ? selection.entry.name : selection.name;
-}
-
-function hostnameLabel(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
-
-export const __TESTING__ = {
-  CATALOG,
-};

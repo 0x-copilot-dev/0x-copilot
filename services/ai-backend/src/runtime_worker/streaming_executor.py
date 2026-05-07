@@ -174,8 +174,20 @@ class StreamingExecutor:
             )
             for event in new_events:
                 if event.event_type in cls.action_interrupt_events:
+                    # Phase 2 (`subagent-interrupt-isolation`) — flag the
+                    # run as interrupted but DO NOT return early. The
+                    # previous early-return abandoned the supervisor's
+                    # `astream` mid-iteration, which cancelled parallel
+                    # subagent branches that were healthy and mid-work.
+                    # By continuing to drain the stream, LangGraph keeps
+                    # yielding events from siblings until each finishes
+                    # (`SUBAGENT_COMPLETED`) or itself interrupts. The
+                    # paused branch stays paused via LangGraph's
+                    # checkpoint; the supervisor's blocked `task` tool
+                    # call(s) are resumed by the existing approval
+                    # handler. `action_interrupted=True` still carries
+                    # back the WAITING_FOR_APPROVAL transition.
                     result.action_interrupted = True
-                    return result
                 if track_subagents:
                     if (
                         event.event_type == RuntimeApiEventType.SUBAGENT_STARTED

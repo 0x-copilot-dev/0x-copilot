@@ -107,6 +107,17 @@ class RuntimeApiEventType(StrEnum):
     # `payload.parent_fleet_id` for binding.
     SUBAGENT_FLEET_STARTED = "subagent_fleet_started"
     SUBAGENT_FLEET_FINISHED = "subagent_fleet_finished"
+    # PR 3.2.5 Phase 3 — explicit per-subagent pause/resume signals so the
+    # FE marks a fleet row "paused" without inferring from the absence of
+    # SUBAGENT_COMPLETED. Emitted by `stream_events.append_activity_events`
+    # when an APPROVAL_REQUESTED / MCP_AUTH_REQUIRED / ASK_A_QUESTION
+    # interrupt fires AND `parent_task_id` resolves to a subagent's
+    # supervisor `task` call_id; resumed by the approval handler when the
+    # paused branch's interrupt is resolved. Both events carry
+    # `task_id == parent_task_id == supervisor_call_id` so the existing
+    # `applySubagentEvent` reducer slot finds them by task_id.
+    SUBAGENT_PAUSED = "subagent_paused"
+    SUBAGENT_RESUMED = "subagent_resumed"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
     # PR 1.4 — two-stage approval forwarding. Emitted between

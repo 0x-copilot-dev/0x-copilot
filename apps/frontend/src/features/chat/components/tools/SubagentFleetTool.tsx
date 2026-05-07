@@ -19,6 +19,8 @@ import {
   type SubagentCardStatus,
 } from "../subagents/subagentCardViewModel";
 import { SubagentFleetCard } from "../messages/SubagentFleetCard";
+import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
+import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
 
 type RawNestedChild = {
   readonly type?: string;
@@ -32,12 +34,25 @@ type RawNestedChild = {
 const NON_TERMINAL: ReadonlySet<SubagentCardStatus> = new Set([
   "queued",
   "running",
+  "paused",
 ]);
 
+/** PR 3.2.7 — extra props plumbed by `MessageParts.tsx` so the in-thread
+ *  fleet card can render paused chrome from the workspace reducer's
+ *  truth, expand inline timelines, and jump back to the gating approval
+ *  card. All optional — pre-PR callsites still mount this tool without
+ *  them and degrade to the running-only chrome. */
+export interface SubagentFleetToolExtras {
+  subagentsByTask?: SubagentSnapshotMap;
+  activitiesByTask?: ReadonlyMap<string, readonly SubagentActivityRecord[]>;
+  onJumpToApproval?: (sourceEventId: string) => void;
+}
+
 export function SubagentFleetTool(
-  props: ToolCallMessagePartProps & {
-    nestedChildren?: readonly RawNestedChild[];
-  },
+  props: ToolCallMessagePartProps &
+    SubagentFleetToolExtras & {
+      nestedChildren?: readonly RawNestedChild[];
+    },
 ): ReactElement | null {
   const data = asRecord(props.args);
   const fleetId = stringValue(data.fleet_id);
@@ -61,22 +76,48 @@ export function SubagentFleetTool(
   const rows: ReactElement[] = [];
   for (const child of children) {
     if (!isToolCall(child) || child.toolName !== "run_subagent") continue;
+    const childArgs = asRecord(child.args);
+    const childTaskId = stringValue(childArgs.task_id);
+    // PR 3.2.7 — overlay the workspace reducer's pause state onto the
+    // args-derived view model. The args accumulator only carries the
+    // running/completed status; `subagent_paused` events update the
+    // SubagentEntry, not the tool part. Reading the entry by task_id
+    // gives the row the same paused chrome the pane card renders.
+    const entry =
+      childTaskId !== null
+        ? props.subagentsByTask?.get(childTaskId)
+        : undefined;
+    const pauseOverlay =
+      entry && entry.status === "paused"
+        ? {
+            statusOverride: "paused" as const,
+            pauseReason: entry.pause_reason ?? null,
+            pauseSourceEventId: entry.pause_source_event_id ?? null,
+          }
+        : undefined;
     const view = subagentCardFromArgs(
-      asRecord(child.args),
+      childArgs,
       child.status?.type,
       child.isError,
+      pauseOverlay,
     );
     if (NON_TERMINAL.has(view.status)) {
       running += 1;
     } else {
       done += 1;
     }
-    const progress = numberValue(asRecord(child.args).progress);
+    const progress = numberValue(childArgs.progress);
+    const activities =
+      childTaskId !== null
+        ? props.activitiesByTask?.get(childTaskId)
+        : undefined;
     rows.push(
       <FleetSubagentRow
         key={child.toolCallId ?? view.taskId ?? `row-${rows.length}`}
         view={view}
         progress={progress}
+        activities={activities}
+        onJumpToApproval={props.onJumpToApproval}
       />,
     );
   }

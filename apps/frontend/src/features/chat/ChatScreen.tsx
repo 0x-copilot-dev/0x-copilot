@@ -43,7 +43,7 @@ import type { ConnectorState } from "../connectors/useConnectors";
 import { useConversationConnectors } from "../connectors/useConversationConnectors";
 import {
   activeCount as activeConnectorCount,
-  projectConnectors,
+  projectChatConnectors,
 } from "../connectors/projectConnectors";
 import type { SkillState } from "../skills/useSkills";
 import { ComposerConnectorsButton } from "./components/composer/ComposerConnectorsButton";
@@ -90,6 +90,7 @@ import {
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
+import { scrollChatToCitation } from "./components/citations/scrollChatToCitation";
 import { SourcePreviewProvider } from "./components/citations/SourcePreview";
 import { listSources } from "../../api/agentApi";
 import {
@@ -1262,8 +1263,12 @@ export function ChatScreen({
   // overrides into the four-state row vocabulary the popover renders.
   // Memoised so the popover doesn't re-mount its keyboard-nav handler
   // on every parent render.
+  // PR 4.4.6 — the per-chat popover only shows **Connected** connectors
+  // (installed AND authorized). Catalog availability lives in Settings →
+  // Manage MCP servers; the chat surface never renders disconnected /
+  // workspace-off rows. ``projectChatConnectors`` filters then projects.
   const connectorRows = useMemo(
-    () => projectConnectors(connectors.servers, conversationScopes.scopes),
+    () => projectChatConnectors(connectors.servers, conversationScopes.scopes),
     [connectors.servers, conversationScopes.scopes],
   );
   const connectorsActiveCount = useMemo(
@@ -1664,7 +1669,6 @@ export function ChatScreen({
                         activeCount={connectorsActiveCount}
                         open={connectorsPopover === "composer"}
                         onClick={onComposerConnectorsOpen}
-                        disabled={currentConversation === null}
                       />
                       {connectorsPopover === "composer"
                         ? renderConnectorPopover(composerConnectorsRef, "up")
@@ -1706,6 +1710,9 @@ export function ChatScreen({
               sourcesLoading={sourcesLoading}
               sourcesError={sourcesError}
               sourcesSearching={runUiState.phase === "acting"}
+              onSelectSource={(source) =>
+                scrollChatToCitation(source.citation_id)
+              }
               subagents={subagentsState.subagents}
               subagentsLoading={subagentsState.loading}
               subagentsError={subagentsState.error}

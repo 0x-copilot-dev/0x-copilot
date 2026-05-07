@@ -19,6 +19,8 @@ import { formatAgentName } from "../../utils/toolLabels";
 
 export type SubagentCardStatus = SubagentLifecycleStatus;
 
+export type SubagentPauseReason = "approval" | "mcp_auth" | "ask_a_question";
+
 export interface SubagentCardViewModel {
   /** task_id — used for data-testid + aria. May be null in the thread
    *  callsite if the run_subagent part hasn't been seeded with one. */
@@ -44,6 +46,14 @@ export interface SubagentCardViewModel {
   durationMs: number | null;
   /** Drives danger badge tone in the card. */
   isError: boolean;
+  /** PR 3.2.7 — set when status === "paused". Drives the row/card paused
+   *  copy. Comes from the most recent `subagent_paused` payload merged
+   *  into the entry by `subagentReducer`. */
+  pauseReason?: SubagentPauseReason;
+  /** PR 3.2.7 — event_id of the gating interrupt event on the same
+   *  thread. Used by the row/card "Review approval →" link to
+   *  anchor-scroll. */
+  pauseSourceEventId?: string;
 }
 
 const TASK_MAX = 160;
@@ -125,6 +135,11 @@ export function subagentCardFromArgs(
   args: Record<string, unknown>,
   partStatusType: string | undefined,
   isError: boolean | undefined,
+  pauseOverlay?: {
+    pauseReason?: SubagentPauseReason | null;
+    pauseSourceEventId?: string | null;
+    statusOverride?: SubagentCardStatus | null;
+  },
 ): SubagentCardViewModel {
   const data = asRecord(args);
   const subagentName =
@@ -140,10 +155,21 @@ export function subagentCardFromArgs(
   const durationMs = numberValue(data.duration_ms);
   const dataStatus = stringValue(data.status);
   const errorFlag = Boolean(isError) || data.is_error === true;
-  const status = normaliseStatus(
+  // PR 3.2.7 — the in-thread `run_subagent` tool part doesn't merge
+  // pause/resume payloads into args; the workspace `SubagentEntry`
+  // (kept in sync by `subagentReducer`) does. The fleet tool reads the
+  // entry's `status` / `pause_reason` / `pause_source_event_id` and
+  // hands them in here as an overlay so the in-thread row renders the
+  // same paused chrome the pane card does. Without an overlay we fall
+  // back to args-derived status (preserving pre-PR behavior).
+  const baseStatus = normaliseStatus(
     dataStatus ?? partStatusType ?? null,
     errorFlag,
   );
+  const status =
+    pauseOverlay?.statusOverride && !isTerminalStatus(baseStatus)
+      ? pauseOverlay.statusOverride
+      : baseStatus;
   const terminal = isTerminalStatus(status);
   return {
     taskId,
@@ -166,6 +192,14 @@ export function subagentCardFromArgs(
     completedAt,
     durationMs: durationMs ?? durationFromStarted(startedAt, completedAt),
     isError: errorFlag,
+    pauseReason:
+      status === "paused" && pauseOverlay?.pauseReason
+        ? pauseOverlay.pauseReason
+        : undefined,
+    pauseSourceEventId:
+      status === "paused" && pauseOverlay?.pauseSourceEventId
+        ? pauseOverlay.pauseSourceEventId
+        : undefined,
   };
 }
 
@@ -193,6 +227,14 @@ export function subagentCardFromEntry(
     completedAt: entry.completed_at,
     durationMs: entry.duration_ms,
     isError: errorFlag,
+    pauseReason:
+      status === "paused" && entry.pause_reason
+        ? (entry.pause_reason as SubagentPauseReason)
+        : undefined,
+    pauseSourceEventId:
+      status === "paused" && entry.pause_source_event_id
+        ? entry.pause_source_event_id
+        : undefined,
   };
 }
 

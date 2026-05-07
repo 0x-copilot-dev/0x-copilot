@@ -423,12 +423,16 @@ class PostgresMcpStore:
                       server_id, org_id, user_id, name, display_name, url,
                       transport, auth_mode, auth_state, health, enabled,
                       required_scopes, last_discovery, oauth_client,
+                      logo_url, brand_color, scopes_summary,
+                      default_scopes, admin_managed,
                       created_at, updated_at
                     ) VALUES (
                       %(server_id)s, %(org_id)s, %(user_id)s, %(name)s,
                       %(display_name)s, %(url)s, %(transport)s, %(auth_mode)s,
                       %(auth_state)s, %(health)s, %(enabled)s,
                       %(required_scopes)s, %(last_discovery)s, %(oauth_client)s,
+                      %(logo_url)s, %(brand_color)s, %(scopes_summary)s,
+                      %(default_scopes)s, %(admin_managed)s,
                       %(created_at)s, %(updated_at)s
                     )
                     """,
@@ -455,6 +459,11 @@ class PostgresMcpStore:
                         required_scopes = %(required_scopes)s,
                         last_discovery = %(last_discovery)s,
                         oauth_client = %(oauth_client)s,
+                        logo_url = %(logo_url)s,
+                        brand_color = %(brand_color)s,
+                        scopes_summary = %(scopes_summary)s,
+                        default_scopes = %(default_scopes)s,
+                        admin_managed = %(admin_managed)s,
                         updated_at = %(updated_at)s
                     WHERE org_id = %(org_id)s AND server_id = %(server_id)s
                     """,
@@ -772,6 +781,11 @@ class PostgresMcpStore:
             "oauth_client": json.dumps(record.oauth_client.model_dump())
             if record.oauth_client is not None
             else None,
+            "logo_url": record.logo_url,
+            "brand_color": record.brand_color,
+            "scopes_summary": record.scopes_summary,
+            "default_scopes": json.dumps(list(record.default_scopes)),
+            "admin_managed": record.admin_managed,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
@@ -796,9 +810,21 @@ class PostgresMcpStore:
             oauth_client=McpOAuthClientConfig(**oauth_client_raw)
             if oauth_client_raw
             else None,
+            logo_url=cls._optional_str(row.get("logo_url")),
+            brand_color=cls._optional_str(row.get("brand_color")),
+            scopes_summary=cls._optional_str(row.get("scopes_summary")),
+            default_scopes=tuple(cls._json_list(row.get("default_scopes"))),
+            admin_managed=bool(row.get("admin_managed") or False),
             created_at=cls._datetime(row["created_at"]),
             updated_at=cls._datetime(row["updated_at"]),
         )
+
+    @staticmethod
+    def _optional_str(value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     @classmethod
     def _json_list(cls, value: object) -> list[str]:

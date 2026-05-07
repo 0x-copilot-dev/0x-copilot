@@ -16,7 +16,7 @@ import {
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { ConnectorRow } from "../connectors/ConnectorRow";
+import { ConnectorCard } from "../connectors/ConnectorCard";
 import { JsonEditorPanel } from "../connectors/JsonEditorPanel";
 import { isAuthenticated } from "../connectors/authStateDisplay";
 import type { ConnectorState } from "../connectors/useConnectors";
@@ -585,13 +585,16 @@ function ConnectorsSettings({
   const [manualOpen, setManualOpen] = useState(false);
   const [view, setView] = useState<ConnectorView>("visual");
 
-  // Group servers so the user immediately sees what's live, what needs
-  // attention, and what's available but not yet active. The seeded
-  // disabled catalog (Phase 2) lands in "Available".
+  // PR 4.4.6 — Connected = installed + authorized. Catalog rows the
+  // user hasn't authorized yet live in the McpOverlay modal as
+  // "Install" / "Resume install" cards, never on the Settings page.
   const groups = useMemo(
     () => groupServers(connectors.servers),
     [connectors.servers],
   );
+
+  const activeCount = groups.connected.filter((s) => s.enabled).length;
+  const totalConnected = groups.connected.length + groups.needsAttention.length;
 
   return (
     <div className="settings-section">
@@ -599,8 +602,8 @@ function ConnectorsSettings({
         <div>
           <h2>Connectors</h2>
           <p>
-            Allow the agent to reference other apps and services only after
-            explicit consent.
+            External systems the agent can read from and act on. Each connector
+            is scoped per workspace.
           </p>
         </div>
         <div className="settings-section__header-actions">
@@ -638,13 +641,6 @@ function ConnectorsSettings({
           </div>
           <Button
             type="button"
-            variant="primary"
-            onClick={() => setMcpOverlayOpen(true)}
-          >
-            Browse catalog
-          </Button>
-          <Button
-            type="button"
             variant="secondary"
             aria-label="Refresh connectors"
             onClick={() => void connectors.refresh()}
@@ -674,39 +670,41 @@ function ConnectorsSettings({
             </Card>
           ) : null}
 
-          {!connectors.loading && connectors.servers.length === 0 ? (
-            <Card>
+          {!connectors.loading && totalConnected === 0 ? (
+            <Card className="mcp-empty">
+              <h3>No connectors installed yet</h3>
               <p>
-                No connectors yet. Open <strong>Browse catalog</strong> to
-                install one of the well-known servers, or add a custom URL
-                below.
+                Browse the curated MCP catalog to install one of the well-known
+                servers, or add a custom URL.
               </p>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => setMcpOverlayOpen(true)}
+              >
+                Manage MCP servers
+              </Button>
             </Card>
           ) : null}
 
           <ConnectorGroup
             title="Needs attention"
-            hint="Sign-in failed or interrupted. Retry to bring these online."
+            badge={`${groups.needsAttention.length}`}
+            hint="Sign-in failed or interrupted. Re-authenticate to bring these online."
             servers={groups.needsAttention}
             connectors={connectors}
           />
           <ConnectorGroup
             title="Connected"
-            hint="Signed in and enabled. Available to the agent."
+            badge={`${activeCount} active`}
+            hint="Toggle on to make a connector available to the agent."
             servers={groups.connected}
             connectors={connectors}
           />
-          <ConnectorGroup
-            title="Available"
-            hint="Pre-added but disabled. Toggle on and authenticate to start using them."
-            servers={groups.available}
-            connectors={connectors}
-            emptyMessage={
-              groups.connected.length + groups.needsAttention.length === 0
-                ? undefined
-                : "All caught up."
-            }
-          />
+
+          {totalConnected > 0 ? (
+            <ManageMcpServersCta onOpen={() => setMcpOverlayOpen(true)} />
+          ) : null}
 
           {/* Manual-add form: collapsed by default. The catalog flow
               covers almost every real case; raw URL entry is for
@@ -727,39 +725,62 @@ function ConnectorsSettings({
   );
 }
 
-interface GroupedServers {
-  connected: McpServer[];
-  needsAttention: McpServer[];
-  available: McpServer[];
+function ManageMcpServersCta({ onOpen }: { onOpen: () => void }): ReactElement {
+  return (
+    <Card className="mcp-cta">
+      <div className="mcp-cta__copy">
+        <h3>MCP servers</h3>
+        <p>
+          Custom Model Context Protocol servers — browse the catalog or paste a
+          URL.
+        </p>
+      </div>
+      <Button type="button" variant="primary" onClick={onOpen}>
+        Manage MCP servers
+      </Button>
+    </Card>
+  );
 }
 
+interface GroupedServers {
+  /** Authorized servers — toggle on/off determines runtime exposure. */
+  connected: McpServer[];
+  /** Servers whose last auth attempt failed or is mid-flight. */
+  needsAttention: McpServer[];
+}
+
+// PR 4.4.6 — unauthenticated servers are NOT in either bucket. They
+// live exclusively in the McpOverlay modal as "Install" / "Resume
+// install" cards. This is the architectural rule the PRD enforces:
+// Connected = the user has authorized.
 function groupServers(servers: McpServer[]): GroupedServers {
   const connected: McpServer[] = [];
   const needsAttention: McpServer[] = [];
-  const available: McpServer[] = [];
   for (const server of servers) {
     if (
       server.auth_state === "auth_failed" ||
       server.auth_state === "auth_pending"
     ) {
       needsAttention.push(server);
-    } else if (server.enabled && isAuthenticated(server.auth_state)) {
+    } else if (isAuthenticated(server.auth_state)) {
       connected.push(server);
-    } else {
-      available.push(server);
     }
+    // else: unauthenticated (e.g. install in progress, OAuth cancelled)
+    // — surfaced in McpOverlay Catalog tab, not here.
   }
-  return { connected, needsAttention, available };
+  return { connected, needsAttention };
 }
 
 function ConnectorGroup({
   title,
+  badge,
   hint,
   servers,
   connectors,
   emptyMessage,
 }: {
   title: string;
+  badge?: string;
   hint: string;
   servers: McpServer[];
   connectors: ConnectorState;
@@ -773,7 +794,7 @@ function ConnectorGroup({
       <section className="connector-group">
         <header className="connector-group__head">
           <h3>{title}</h3>
-          <Badge tone="neutral">0</Badge>
+          <Badge tone="neutral">{badge ?? "0"}</Badge>
         </header>
         <p className="connector-group__hint">{emptyMessage}</p>
       </section>
@@ -783,12 +804,12 @@ function ConnectorGroup({
     <section className="connector-group">
       <header className="connector-group__head">
         <h3>{title}</h3>
-        <Badge tone="neutral">{servers.length}</Badge>
+        <Badge tone="neutral">{badge ?? `${servers.length}`}</Badge>
       </header>
       <p className="connector-group__hint">{hint}</p>
-      <div className="connector-settings-list">
+      <div className="connector-card-grid">
         {servers.map((server) => (
-          <ConnectorRow
+          <ConnectorCard
             key={server.server_id}
             server={server}
             connectors={connectors}

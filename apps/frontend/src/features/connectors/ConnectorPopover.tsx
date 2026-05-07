@@ -2,6 +2,13 @@
 // composer `<ComposerConnectorsButton>`. Renders the four-state row
 // vocabulary and round-trips toggles through the PR 1.2 hook the parent
 // owns. The popover is presentational — no fetches, no localStorage.
+//
+// PR 3.4.1 — visual fidelity follow-up. Each row gets a brand favicon
+// (with letter-glyph fallback), a one-line scope subtitle, and either
+// a slider knob (active / paused) or a Connect / Enable pill
+// (disconnected / workspace_off). Header copy adopts the design's
+// "Searching this chat / {n} of {N} connectors active" layout with an
+// inline Manage caret link; the footer becomes an explainer line.
 
 import {
   AppIcon,
@@ -16,7 +23,7 @@ import {
   type ReactElement,
   type RefObject,
 } from "react";
-import type { ConnectorRow } from "./projectConnectors";
+import { activeCount, type ConnectorRow } from "./projectConnectors";
 
 export type ConnectorPopoverPlacement = "down" | "up";
 
@@ -39,7 +46,7 @@ export interface ConnectorPopoverProps {
   onConnect: (server_id: string) => void;
   /** Workspace-off → Enable. Parent routes to Settings → Connectors. */
   onEnableInSettings: (server_id: string) => void;
-  /** Manage link in the footer routes to Settings → Connectors. */
+  /** Manage link in the header routes to Settings → Connectors. */
   onManage: () => void;
   /** Side of the trigger to anchor on. Topbar = "down"; composer = "up". */
   placement?: ConnectorPopoverPlacement;
@@ -47,6 +54,10 @@ export interface ConnectorPopoverProps {
   error?: string | null;
   /** Read-only chrome (e.g. shared-chat recipient view, W6). */
   readOnly?: boolean;
+  /** Viewer's admin status. Non-admins can't enable workspace-off
+   *  rows that are flagged ``admin_managed``; the row's button is
+   *  disabled and a tooltip explains. */
+  isAdmin?: boolean;
 }
 
 const ROW_SELECTOR = '[data-row="true"]';
@@ -72,6 +83,7 @@ export function ConnectorPopover({
   placement = "down",
   error,
   readOnly,
+  isAdmin = true,
 }: ConnectorPopoverProps): ReactElement | null {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +128,9 @@ export function ConnectorPopover({
     return null;
   }
 
+  const total = rows.length;
+  const active = activeCount(rows);
+
   return (
     <Menu
       open={open}
@@ -127,10 +142,25 @@ export function ConnectorPopover({
       aria-label="Per-chat connectors"
     >
       <div className="atlas-connector-popover__head">
-        <span className="atlas-connector-popover__title">Connectors</span>
-        <span className="atlas-connector-popover__sub">
-          Active for this chat
-        </span>
+        <div className="atlas-connector-popover__head-text">
+          <span className="atlas-connector-popover__title">
+            Searching this chat
+          </span>
+          <span className="atlas-connector-popover__sub">
+            {active} of {total} connectors active
+          </span>
+        </div>
+        <button
+          type="button"
+          className="atlas-connector-popover__manage"
+          onClick={() => {
+            onManage();
+            onClose();
+          }}
+        >
+          Manage
+          <ManageCaretIcon />
+        </button>
       </div>
       <div
         ref={listRef}
@@ -147,6 +177,7 @@ export function ConnectorPopover({
               key={row.server_id}
               row={row}
               readOnly={readOnly}
+              isAdmin={isAdmin}
               onToggle={onToggle}
               onConnect={onConnect}
               onEnableInSettings={onEnableInSettings}
@@ -160,17 +191,7 @@ export function ConnectorPopover({
         </div>
       ) : null}
       <div className="atlas-connector-popover__foot">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            onManage();
-            onClose();
-          }}
-        >
-          Manage in Settings →
-        </Button>
+        Per-chat changes don&apos;t affect other conversations.
       </div>
     </Menu>
   );
@@ -179,6 +200,7 @@ export function ConnectorPopover({
 interface RowProps {
   row: ConnectorRow;
   readOnly?: boolean;
+  isAdmin: boolean;
   onToggle: (server_id: string, nextScopes: readonly string[] | null) => void;
   onConnect: (server_id: string) => void;
   onEnableInSettings: (server_id: string) => void;
@@ -187,6 +209,7 @@ interface RowProps {
 function Row({
   row,
   readOnly,
+  isAdmin,
   onToggle,
   onConnect,
   onEnableInSettings,
@@ -196,7 +219,14 @@ function Row({
   const isDisconnected = row.state === "disconnected";
   const isWorkspaceOff = row.state === "workspace_off";
 
+  // Non-admins can't enable a workspace-managed connector; surface a
+  // tooltip and disable the row's activation. Toggle / Connect rows
+  // remain enabled because the user owns those decisions.
+  const blockedByAdminScope = isWorkspaceOff && row.admin_managed && !isAdmin;
+  const disabled = readOnly || blockedByAdminScope;
+
   const stateLabel = LABEL_BY_STATE[row.state];
+  const subtitle = row.scopes_summary ?? FALLBACK_SUBTITLE_BY_STATE[row.state];
   const actionLabel = isToggle
     ? isActive
       ? "Pause"
@@ -205,10 +235,13 @@ function Row({
       ? "Connect"
       : "Enable";
 
-  const ariaLabel = `${row.display_name} — ${stateLabel}. Press Space to ${actionLabel.toLowerCase()}.`;
+  const ariaLabel =
+    `${row.display_name} — ${stateLabel}.` +
+    (subtitle ? ` ${subtitle}` : "") +
+    ` Press Space to ${actionLabel.toLowerCase()}.`;
 
   const onActivate = () => {
-    if (readOnly) {
+    if (disabled) {
       return;
     }
     if (isToggle) {
@@ -225,12 +258,17 @@ function Row({
       type="button"
       data-row="true"
       data-state={row.state}
-      data-disabled={readOnly || undefined}
+      data-disabled={disabled || undefined}
       role={isToggle ? "menuitemcheckbox" : "menuitem"}
       aria-checked={isToggle ? isActive : undefined}
       aria-label={ariaLabel}
+      title={
+        blockedByAdminScope
+          ? `Ask your workspace admin to enable ${row.display_name}.`
+          : undefined
+      }
       tabIndex={-1}
-      disabled={readOnly}
+      disabled={disabled}
       className={classNames(
         "atlas-connector-row",
         `atlas-connector-row--${row.state}`,
@@ -243,15 +281,68 @@ function Row({
         }
       }}
     >
-      <AppIcon name={row.display_name} className="atlas-connector-row__glyph" />
-      <span className="atlas-connector-row__name">{row.display_name}</span>
-      <span className="atlas-connector-row__state" aria-hidden="true">
-        {stateLabel}
-      </span>
-      <span className="atlas-connector-row__action" aria-hidden="true">
-        {actionLabel}
-      </span>
+      <AppIcon
+        name={row.display_name}
+        logoUrl={row.logo_url ?? undefined}
+        color={row.brand_color ?? undefined}
+        className="atlas-connector-row__glyph"
+      />
+      <div className="atlas-connector-row__col">
+        <div className="atlas-connector-row__title">
+          <span className="atlas-connector-row__name">{row.display_name}</span>
+          {isDisconnected && (
+            <span className="atlas-connector-row__badge" aria-hidden="true">
+              Not connected
+            </span>
+          )}
+          {isWorkspaceOff && (
+            <span className="atlas-connector-row__badge" aria-hidden="true">
+              Off · Workspace
+            </span>
+          )}
+        </div>
+        {subtitle && (
+          <div className="atlas-connector-row__subtitle" aria-hidden="true">
+            {subtitle}
+          </div>
+        )}
+      </div>
+      {isToggle ? (
+        <span
+          className="atlas-connector-row__switch"
+          data-checked={isActive || undefined}
+          aria-hidden="true"
+        />
+      ) : (
+        <span
+          className={classNames(
+            "atlas-connector-row__pill",
+            isWorkspaceOff && "atlas-connector-row__pill--ghost",
+          )}
+          aria-hidden="true"
+        >
+          {actionLabel}
+        </span>
+      )}
     </button>
+  );
+}
+
+function ManageCaretIcon(): ReactElement {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h6M6 3l3 3-3 3" />
+    </svg>
   );
 }
 
@@ -261,3 +352,11 @@ const LABEL_BY_STATE: Record<ConnectorRow["state"], string> = {
   disconnected: "Not connected",
   workspace_off: "Workspace off",
 };
+
+const FALLBACK_SUBTITLE_BY_STATE: Record<ConnectorRow["state"], string | null> =
+  {
+    active: null,
+    paused: null,
+    disconnected: "Not connected — Atlas can't read this app yet.",
+    workspace_off: "Disabled by your workspace admin.",
+  };

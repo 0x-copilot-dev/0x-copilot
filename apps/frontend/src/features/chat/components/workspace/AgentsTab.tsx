@@ -26,6 +26,7 @@ import {
   subagentsByRecency,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
+import { scrollChatToEvent } from "../citations/scrollChatToCitation";
 import { SubagentCard } from "../subagents/SubagentCard";
 import { subagentCardFromEntry } from "../subagents/subagentCardViewModel";
 import type {
@@ -40,6 +41,11 @@ export interface AgentsTabProps {
   /** Subagent task_id to scroll into focus on next render. */
   focusTaskId?: string | null;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  /** PR 3.2.7 — fired when the user clicks the "Review approval →" link
+   *  on a paused subagent's card. Default behavior (when omitted) uses
+   *  the `scrollChatToEvent` helper to scroll the gating card into view
+   *  on the chat thread. */
+  onJumpToApproval?: (sourceEventId: string) => void;
   /** PR 3.2.1 — `task_id → activities[]` projected from the chat tree
    *  by `useSubagentActivities`. Hoisted in `ChatScreen` so the pane
    *  and the in-thread `SubagentCard` share one source of truth. */
@@ -56,11 +62,13 @@ export function AgentsTab({
   error,
   focusTaskId,
   onJumpToSubagent,
+  onJumpToApproval,
   activitiesByTask,
   historyGroups,
 }: AgentsTabProps): ReactElement {
   const ordered = mergeOrderedSubagents(subagents, historyGroups ?? []);
   const focusRef = useRef<HTMLLIElement | null>(null);
+  const handleJumpToApproval = onJumpToApproval ?? scrollChatToEvent;
 
   useEffect(() => {
     if (focusTaskId && focusRef.current) {
@@ -116,6 +124,7 @@ export function AgentsTab({
           focusRef,
           activitiesByTask,
           onJumpToSubagent,
+          onJumpToApproval: handleJumpToApproval,
         })}
       </ul>
     </div>
@@ -129,6 +138,7 @@ function renderHistoryGroups({
   focusRef,
   activitiesByTask,
   onJumpToSubagent,
+  onJumpToApproval,
 }: {
   ordered: readonly SubagentEntry[];
   groups: readonly SubagentHistoryGroup[];
@@ -136,6 +146,7 @@ function renderHistoryGroups({
   focusRef: React.MutableRefObject<HTMLLIElement | null>;
   activitiesByTask?: SubagentActivitiesByTask;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  onJumpToApproval: (sourceEventId: string) => void;
 }): ReactElement[] {
   const groupedTaskIds = new Set(
     groups.flatMap((group) => group.entries.map((entry) => entry.task_id)),
@@ -170,6 +181,7 @@ function renderHistoryGroups({
               focusRef,
               activitiesByTask,
               onJumpToSubagent,
+              onJumpToApproval,
             }),
           )}
         </ul>
@@ -185,6 +197,7 @@ function renderHistoryGroups({
         focusRef,
         activitiesByTask,
         onJumpToSubagent,
+        onJumpToApproval,
       }),
     );
   }
@@ -197,12 +210,14 @@ function renderEntry({
   focusRef,
   activitiesByTask,
   onJumpToSubagent,
+  onJumpToApproval,
 }: {
   entry: SubagentEntry;
   focusTaskId?: string | null;
   focusRef: React.MutableRefObject<HTMLLIElement | null>;
   activitiesByTask?: SubagentActivitiesByTask;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  onJumpToApproval: (sourceEventId: string) => void;
 }): ReactElement {
   const isFocused = entry.task_id === focusTaskId;
   const view = subagentCardFromEntry(entry);
@@ -225,6 +240,7 @@ function renderEntry({
         onJumpToThread={
           onJumpToSubagent ? () => onJumpToSubagent(entry) : undefined
         }
+        onJumpToApproval={onJumpToApproval}
         defaultOpen={isFocused}
         compact
       />

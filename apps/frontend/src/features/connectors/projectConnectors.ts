@@ -2,14 +2,27 @@
 // the small presentational shape the ConnectorPopover renders. Pure;
 // table-tested in isolation.
 //
-// The four-state vocabulary maps the three-layer connector model from the
-// design doc (workspace-installed → user-authenticated → active for this
-// chat) onto a single attribute the chip + row visuals key off.
+// PR 3.4.1 — projection now consumes server-supplied brand metadata
+// (``logo_url`` / ``brand_color`` / ``scopes_summary``) and the
+// resume-from-paused payload (``default_scopes``). Resuming a paused
+// connector now restores real tool access instead of flipping it on
+// with the empty fallback PR 3.4 used.
+//
+// PR 4.4.6 — the chat-screen popover renders **Connected** only:
+// servers where the user has actually authorized access
+// (``isAuthenticated(auth_state)``). Catalog availability and
+// half-installed-not-yet-OAuthed rows belong in Settings → Manage MCP
+// servers, not in the per-chat popover. The four-state vocabulary now
+// collapses to two visual states for the chat surface: ``active`` and
+// ``paused``. The other two (``disconnected``, ``workspace_off``)
+// remain in the type so admin surfaces (Settings detail, future
+// audit views) can still consume the projection without re-classifying.
 
 import type {
   ConversationConnectorScopes,
   McpServer,
 } from "@enterprise-search/api-types";
+import { isAuthenticated } from "./authStateDisplay";
 
 export type ConnectorRowState =
   | "active" // workspace-installed + user-authenticated + per-chat scope ≠ null
@@ -25,16 +38,23 @@ export interface ConnectorRow {
   /** Active scopes when `state === "active"`. `null` while paused / not active. */
   current_scopes: readonly string[] | null;
   /**
-   * Server-provided default scopes used as the resume target. The MCP
-   * server contract doesn't expose per-server defaults today, so we fall
-   * back to an empty array — PR 1.2's PATCH semantics treat `[]` as
-   * "active with no extra scopes; let server defaults apply." A future
-   * PR (4.4 — MCP catalog overhaul) may surface real per-server defaults.
+   * Server-supplied resume target. `PATCH /…/connectors` with this value
+   * flips a paused row back to Active with the connector's full default
+   * tool set. Empty array means "loaded with no extra scopes; let server
+   * defaults apply" — same wire semantics as before, but now driven by
+   * the server (PR 3.4.1) instead of an FE-side empty literal.
    */
   default_scopes: readonly string[];
+  /** PR 3.4.1 — brand metadata. */
+  logo_url: string | null;
+  brand_color: string | null;
+  scopes_summary: string | null;
+  /** PR 3.4.1 — popover gates the Enable button for non-admin members
+   *  when the workspace flagged the connector as admin-managed. */
+  admin_managed: boolean;
 }
 
-const RESUME_DEFAULT: readonly string[] = [];
+const EMPTY_SCOPES: readonly string[] = Object.freeze([]);
 
 export function projectConnectors(
   servers: readonly McpServer[],
@@ -44,6 +64,7 @@ export function projectConnectors(
     const installed = server.enabled === true;
     const authenticated = server.auth_state === "authenticated";
     const override = scopes?.[server.server_id];
+    const defaults = server.default_scopes ?? EMPTY_SCOPES;
 
     let state: ConnectorRowState;
     let currentScopes: readonly string[] | null;
@@ -59,8 +80,9 @@ export function projectConnectors(
     } else {
       state = "active";
       // Active with explicit override → honour the override; active with no
-      // override → empty scopes (server applies its defaults).
-      currentScopes = Array.isArray(override) ? override : RESUME_DEFAULT;
+      // override → use server defaults (frozen-at-run-start materializer
+      // applies the same set; see runtime_connector_scopes()).
+      currentScopes = Array.isArray(override) ? override : defaults;
     }
 
     return {
@@ -68,7 +90,11 @@ export function projectConnectors(
       display_name: server.display_name || server.name || server.url,
       state,
       current_scopes: currentScopes,
-      default_scopes: RESUME_DEFAULT,
+      default_scopes: defaults,
+      logo_url: server.logo_url ?? null,
+      brand_color: server.brand_color ?? null,
+      scopes_summary: server.scopes_summary ?? null,
+      admin_managed: server.admin_managed === true,
     };
   });
 }
@@ -76,4 +102,26 @@ export function projectConnectors(
 /** Convenience: count rows that are active in the projection. */
 export function activeCount(rows: readonly ConnectorRow[]): number {
   return rows.reduce((n, row) => (row.state === "active" ? n + 1 : n), 0);
+}
+
+/**
+ * PR 4.4.6 — chat-popover projection.
+ *
+ * Filter the workspace's full server list to those that are actually
+ * "Connected" — installed AND authorized AND not workspace-disabled.
+ * Catalog availability (Install/Resume install) lives behind Settings →
+ * Manage MCP servers; the per-chat popover only deals with active vs.
+ * paused.
+ *
+ * The base ``projectConnectors`` is kept for surfaces that *do* need
+ * the full four-state vocabulary (admin views, future audit panes).
+ */
+export function projectChatConnectors(
+  servers: readonly McpServer[],
+  scopes: ConversationConnectorScopes | undefined,
+): ConnectorRow[] {
+  const filtered = servers.filter(
+    (server) => server.enabled === true && isAuthenticated(server.auth_state),
+  );
+  return projectConnectors(filtered, scopes);
 }

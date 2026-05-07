@@ -108,4 +108,48 @@ describe("SourcesTab", () => {
     expect(screen.queryByText(/Looking for sources/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
+
+  it("renders flat with fewer than 5 sources (no group sections)", () => {
+    const sources = seedSourceMap([
+      source({ source_doc_id: "a", title: "A" }),
+      source({ source_doc_id: "b", title: "B" }),
+      source({ source_doc_id: "c", title: "C" }),
+      source({ source_doc_id: "d", title: "D" }),
+    ]);
+    const { container } = render(<SourcesTab sources={sources} />);
+    expect(
+      container.querySelectorAll("section.atlas-workspace-tab__group"),
+    ).toHaveLength(0);
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("groups by connector when 5+ sources are present", () => {
+    const sources = seedSourceMap([
+      source({
+        source_doc_id: "w1",
+        source_connector: "web_search",
+        title: "W1",
+      }),
+      source({
+        source_doc_id: "w2",
+        source_connector: "web_search",
+        title: "W2",
+      }),
+      source({
+        source_doc_id: "w3",
+        source_connector: "web_search",
+        title: "W3",
+      }),
+      source({ source_doc_id: "n1", source_connector: "notion", title: "N1" }),
+      source({ source_doc_id: "n2", source_connector: "notion", title: "N2" }),
+    ]);
+    const { container } = render(<SourcesTab sources={sources} />);
+    const sections = container.querySelectorAll(
+      "section.atlas-workspace-tab__group",
+    );
+    expect(sections).toHaveLength(2);
+    // Web (3) before Notion (2) by total citation count desc.
+    expect(sections[0].getAttribute("aria-label")).toMatch(/Web search/i);
+    expect(sections[1].getAttribute("aria-label")).toMatch(/Notion/);
+  });
 });
