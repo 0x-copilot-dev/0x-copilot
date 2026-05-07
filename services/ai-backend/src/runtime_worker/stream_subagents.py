@@ -46,6 +46,12 @@ class StreamUpdateProcessor:
         AGENT_IDS = "agent_ids"
         TITLE = "title"
         ELAPSED = "elapsed"
+        # PR 3.2.4 — children's task_ids carried on FLEET_STARTED so the FE
+        # reducer can back-stamp `parent_fleet_id` on `run_subagent` parts
+        # that were emitted earlier by the per-tool streaming path
+        # (`stream_tools._append_task_tool_call_event`) before this fleet
+        # bookend fired. See FE `upsertSubagentFleetPart` for the consumer.
+        TASK_IDS = "task_ids"
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
         self.event_producer = event_producer
@@ -177,6 +183,62 @@ class StreamUpdateProcessor:
             if queue is not None and call_id in queue:
                 queue.remove(call_id)
 
+    def cached_subagent_call_id_for_subgraph(
+        self,
+        *,
+        run_id: str,
+        subgraph_task_id: str | None,
+    ) -> str | None:
+        """Cache-only lookup. Returns ``None`` if not yet linked.
+
+        Used by call sites that must NOT mutate the FIFO queue — e.g.
+        the chunk-level resolution in
+        `stream_events.StreamOrchestrator.append_activity_events`,
+        which fires for every subgraph chunk including subagent
+        lifecycle events. A FIFO pop there would drain the queue before
+        downstream `_track_subagent_lifecycle` can register the next
+        subagent's call_id, breaking parent_task_id resolution for
+        siblings dispatched later in the run.
+
+        `subagent_call_id_for_subgraph` keeps the FIFO fallback for
+        callers (currently `stream_tools.StreamMessageProcessor.process`)
+        that fire only on `messages`-mode chunks where the FIFO race
+        the original docstring describes is acceptable.
+        """
+        if subgraph_task_id is None:
+            return None
+        return self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
+
+    def register_supervisor_call_id_for_subgraph(
+        self,
+        *,
+        run_id: str,
+        subgraph_task_id: str,
+        supervisor_call_id: str,
+    ) -> None:
+        """Pin a `(run_id, subgraph_task_id) → supervisor_call_id` mapping.
+
+        Called by the worker the FIRST time it observes a chunk from a
+        subgraph that carries `supervisor_task_call_id` in its metadata
+        (set by `agent_runtime/execution/atlas_task_tool.py`). Subsequent
+        events from the same subgraph hit the cache via
+        `subagent_call_id_for_subgraph`.
+
+        Idempotent. Once-set wins — a stray metadata mismatch later in
+        the run cannot rewrite the binding. Also removes the call_id
+        from `_unlinked_subagent_call_ids` so a later FIFO fallback
+        cannot re-pop it for a different subgraph.
+        """
+        existing = self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
+        if existing is not None:
+            return
+        self._subagent_call_id_by_subgraph_id[(run_id, subgraph_task_id)] = (
+            supervisor_call_id
+        )
+        queue = self._unlinked_subagent_call_ids.get(run_id)
+        if queue and supervisor_call_id in queue:
+            queue.remove(supervisor_call_id)
+
     def subagent_call_id_for_subgraph(
         self,
         *,
@@ -187,21 +249,17 @@ class StreamUpdateProcessor:
 
         Linking strategy:
 
-        - Once a subgraph is linked, the same supervisor call_id is reused for
-          every subsequent event in that subgraph (cached lookup).
-        - For the FIRST event in a new subgraph, we link to a queued
-          supervisor call_id ONLY when exactly one subagent is currently
-          unlinked. With two or more unlinked subagents a naive FIFO pop is
-          racy: when the supervisor dispatches a fast subagent (e.g. one that
-          calls no internal tools) and a slow research subagent in parallel,
-          the slow subagent's first tool message can arrive at the processor
-          before the fast subagent's `SUBAGENT_COMPLETED` removes it from the
-          queue, and the slow subagent's tools end up wrongly attributed to
-          the fast subagent. Returning None here for ambiguous cases makes
-          early tool events orphan rather than mis-attributed; once one
-          subagent completes (its `_track_subagent_lifecycle` removes it
-          from the queue), the remaining subagent's subsequent tools link
-          correctly via this cache.
+        1. **Cache lookup.** Once `register_supervisor_call_id_for_subgraph`
+           has pinned `(run_id, subgraph_task_id) → call_id` (driven by the
+           `supervisor_task_call_id` chunk metadata our `atlas_task_tool`
+           injects), every subsequent event in that subgraph resolves
+           deterministically — no FIFO involved.
+        2. **Single-unlinked FIFO fallback.** If the cache has nothing AND
+           exactly one subagent is unlinked for this run, we link to it.
+           This covers archive replays of pre-PR runs and any third‑party
+           code path that bypasses our injected metadata.
+        3. **Ambiguous case (≥2 unlinked).** Return None — early events
+           orphan rather than mis-attribute.
         """
 
         if subgraph_task_id is None:
@@ -246,20 +304,6 @@ class StreamUpdateProcessor:
 
         emitted = False
         start_payloads = self.task_tool_call_payloads(data)
-        # PR 3.2.4 debug — log how many task tool calls landed in this
-        # tick. The fleet bookend only fires when >= 2.
-        if start_payloads:
-            import logging
-
-            logging.getLogger(__name__).info(
-                "[PR 3.2.4] task_tool_call_payloads tick: count=%d names=%s run_id=%s",
-                len(start_payloads),
-                [
-                    StreamTextHelper.extract(p.get(self._Fields.SUBAGENT_NAME))
-                    for p in start_payloads
-                ],
-                run.run_id,
-            )
         # PR A2 — when the supervisor dispatches >1 task tool call in the
         # same update tick, emit a SUBAGENT_FLEET_STARTED bookend first and
         # stamp `parent_fleet_id` on each child SUBAGENT_STARTED payload so
@@ -339,16 +383,25 @@ class StreamUpdateProcessor:
         if len(payloads) < 2:
             return None
         agent_ids: list[str] = []
+        task_ids: list[str] = []
         for payload in payloads:
             name = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
             if name is not None:
                 agent_ids.append(name)
+            task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
+            if task_id is not None:
+                task_ids.append(task_id)
         fleet_id = uuid4().hex
         title = self._fleet_title(agent_ids)
         fleet_payload: JsonObject = {
             self._Fields.FLEET_ID: fleet_id,
             self._Fields.TITLE: title,
             self._Fields.AGENT_IDS: tuple(agent_ids),
+            # PR 3.2.4 — give the FE the explicit child set so it can stamp
+            # `parent_fleet_id` on existing `run_subagent` parts that were
+            # emitted by the per-tool streaming path (which fires before
+            # this update tick can group them as a fleet).
+            self._Fields.TASK_IDS: tuple(task_ids),
         }
         self._fleet_started_at[(run.run_id, fleet_id)] = datetime.now(timezone.utc)
         await self.event_producer.append_api_event(

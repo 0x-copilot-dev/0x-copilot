@@ -52,6 +52,15 @@ from agent_runtime.prompts.runtime import (
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
+from agent_runtime.execution.atlas_task_tool import install_atlas_task_tool
+
+# Replace deepagents' built-in `task` tool builder with ours so each
+# subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
+# This makes the (subgraph_task_id → supervisor_call_id) linkage in the
+# worker's stream handlers deterministic and removes the FIFO-pop
+# heuristic that returned None whenever ≥2 subagents were unlinked
+# concurrently (parallel research fleets).
+install_atlas_task_tool()
 
 AgentBuilder = Callable[[DeepAgentBuildRequest], object]
 

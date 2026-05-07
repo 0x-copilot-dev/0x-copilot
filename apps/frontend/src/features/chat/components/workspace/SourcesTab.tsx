@@ -15,10 +15,16 @@ import type { SourceEntry } from "@enterprise-search/api-types";
 import { useEffect, useRef, type ReactElement } from "react";
 
 import {
+  groupSourcesByConnector,
   sourcesByCitationCount,
+  type SourceConnectorGroup,
   type SourceEntryMap,
 } from "../../chatModel/sourcesReducer";
+import { humanizeConnector } from "../citations/connectorLabel";
 import { SourceRow } from "../citations/SourceRow";
+import { SourceSkeletonRow } from "../citations/SourceSkeletonRow";
+
+const GROUP_THRESHOLD = 5;
 
 export interface SourcesTabProps {
   sources: SourceEntryMap;
@@ -26,6 +32,14 @@ export interface SourcesTabProps {
   error?: string | null;
   /** Citation id to scroll into focus on next render. */
   focusCitationId?: string | null;
+  /**
+   * PR 3.7.1 — when true, a source-producing tool call is in flight.
+   * Drives the "Looking for sources…" shimmer row that fills the empty
+   * state so the user sees the panel is alive while results stream in.
+   */
+  searching?: boolean;
+  /** Override label for the shimmer; defaults to "Looking for sources…". */
+  searchingLabel?: string;
   onSelect?: (source: SourceEntry) => void;
 }
 
@@ -34,6 +48,8 @@ export function SourcesTab({
   loading,
   error,
   focusCitationId,
+  searching,
+  searchingLabel,
   onSelect,
 }: SourcesTabProps): ReactElement {
   const ordered = sourcesByCitationCount(sources);
@@ -46,6 +62,13 @@ export function SourcesTab({
   }, [focusCitationId, ordered.length]);
 
   if (ordered.length === 0) {
+    if (searching) {
+      return (
+        <div className="atlas-workspace-tab">
+          <SourceSkeletonRow label={searchingLabel ?? "Looking for sources…"} />
+        </div>
+      );
+    }
     return (
       <div className="atlas-workspace-tab atlas-workspace-tab--empty">
         {loading ? (
@@ -59,6 +82,16 @@ export function SourcesTab({
     );
   }
 
+  // Ordinals are global (per the citation_count sort), so chip ↔ row
+  // numbering stays stable whether we render flat or grouped.
+  const ordinalById = new Map<string, number>();
+  ordered.forEach((source, index) => {
+    ordinalById.set(source.citation_id, index + 1);
+  });
+
+  const groups: readonly SourceConnectorGroup[] | null =
+    ordered.length >= GROUP_THRESHOLD ? groupSourcesByConnector(ordered) : null;
+
   return (
     <div className="atlas-workspace-tab" data-testid="workspace-sources-tab">
       {error ? (
@@ -70,25 +103,57 @@ export function SourcesTab({
           Showing live results — older history failed to load ({error}).
         </p>
       ) : null}
-      <ul
-        className="atlas-workspace-tab__list"
-        aria-live="polite"
-        aria-label="Sources cited in this conversation"
-      >
-        {ordered.map((source, index) => {
-          const isFocused = source.citation_id === focusCitationId;
-          return (
-            <SourceRow
-              key={`${source.source_connector}:${source.source_doc_id}`}
-              ref={isFocused ? focusRef : undefined}
-              source={source}
-              ordinal={index + 1}
-              focused={isFocused}
-              onSelect={onSelect}
-            />
-          );
-        })}
-      </ul>
+      {groups === null ? (
+        <ul
+          className="atlas-workspace-tab__list"
+          aria-live="polite"
+          aria-label="Sources cited in this conversation"
+        >
+          {ordered.map((source) => {
+            const isFocused = source.citation_id === focusCitationId;
+            return (
+              <SourceRow
+                key={`${source.source_connector}:${source.source_doc_id}`}
+                ref={isFocused ? focusRef : undefined}
+                source={source}
+                ordinal={ordinalById.get(source.citation_id) ?? 0}
+                focused={isFocused}
+                onSelect={onSelect}
+              />
+            );
+          })}
+        </ul>
+      ) : (
+        groups.map((group) => (
+          <section
+            key={group.connector}
+            className="atlas-workspace-tab__group"
+            aria-label={`${humanizeConnector(group.connector)} sources`}
+          >
+            <header className="atlas-workspace-tab__group-header">
+              <span>{humanizeConnector(group.connector)}</span>
+              <span className="atlas-workspace-tab__group-count">
+                {group.total}
+              </span>
+            </header>
+            <ul className="atlas-workspace-tab__list" aria-live="polite">
+              {group.rows.map((source) => {
+                const isFocused = source.citation_id === focusCitationId;
+                return (
+                  <SourceRow
+                    key={`${source.source_connector}:${source.source_doc_id}`}
+                    ref={isFocused ? focusRef : undefined}
+                    source={source}
+                    ordinal={ordinalById.get(source.citation_id) ?? 0}
+                    focused={isFocused}
+                    onSelect={onSelect}
+                  />
+                );
+              })}
+            </ul>
+          </section>
+        ))
+      )}
     </div>
   );
 }

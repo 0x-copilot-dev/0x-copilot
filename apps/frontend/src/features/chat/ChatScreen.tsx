@@ -90,6 +90,7 @@ import {
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
+import { SourcePreviewProvider } from "./components/citations/SourcePreview";
 import { listSources } from "../../api/agentApi";
 import {
   applySourceEvent,
@@ -1546,203 +1547,212 @@ export function ChatScreen({
             onArchive={(id) => void onArchiveConversation(id)}
             pinnedIds={pinned.pinnedIds}
           />
-          <AssistantThread
-            topbar={
-              <Topbar
-                workspace={null}
-                folder={currentConversation?.folder ?? null}
-                title={currentConversation?.title ?? null}
-                onRenameTitle={
-                  currentConversation === null
-                    ? undefined
-                    : async (next: string) => {
-                        const renamed = await updateConversation(
-                          currentConversation.conversation_id,
-                          { title: next.trim() === "" ? null : next },
-                          identity,
-                        );
-                        setConversations((current) =>
-                          current.map((entry) =>
-                            entry.conversation_id === renamed.conversation_id
-                              ? renamed
-                              : entry,
-                          ),
-                        );
+          <SourcePreviewProvider>
+            <AssistantThread
+              topbar={
+                <Topbar
+                  workspace={null}
+                  folder={currentConversation?.folder ?? null}
+                  title={currentConversation?.title ?? null}
+                  onRenameTitle={
+                    currentConversation === null
+                      ? undefined
+                      : async (next: string) => {
+                          const renamed = await updateConversation(
+                            currentConversation.conversation_id,
+                            { title: next.trim() === "" ? null : next },
+                            identity,
+                          );
+                          setConversations((current) =>
+                            current.map((entry) =>
+                              entry.conversation_id === renamed.conversation_id
+                                ? renamed
+                                : entry,
+                            ),
+                          );
+                        }
+                  }
+                  runUiState={
+                    historyError !== null
+                      ? { ...runUiState, headerStatus: historyError }
+                      : oauthStatus !== null
+                        ? { ...runUiState, headerStatus: oauthStatus }
+                        : activeRunId === null
+                          ? { ...runUiState, headerStatus: status }
+                          : runUiState
+                  }
+                  sidebarCollapsed={sidebarCollapsed}
+                  onToggleSidebar={() =>
+                    setSidebarCollapsed((current) => !current)
+                  }
+                  panelOpen={paneState.open}
+                  onTogglePanel={() => paneState.toggle()}
+                  connectors={activeConnectorGlyphs}
+                  connectorsOpen={connectorsPopover === "topbar"}
+                  onOpenConnectors={onTopbarConnectorsOpen}
+                  connectorsTriggerRef={topbarConnectorsRef}
+                  connectorsPopover={
+                    connectorsPopover === "topbar"
+                      ? renderConnectorPopover(topbarConnectorsRef, "down")
+                      : null
+                  }
+                  usagePct={null}
+                  onOpenUsage={() => setDetailsPanel("usage")}
+                  models={demoModels}
+                  selectedModel={selectedModelId}
+                  onModelChange={setSelectedModelId}
+                  depth={depth}
+                  onDepthChange={setDepth}
+                  depthVisible={depthVisible}
+                  onShare={() => void onShare()}
+                  shareSlot={
+                    <SharePopover
+                      chatTitle={currentTitle(conversations, conversationId)}
+                      chatUrl={
+                        typeof window !== "undefined"
+                          ? window.location.href
+                          : ""
                       }
-                }
-                runUiState={
-                  historyError !== null
-                    ? { ...runUiState, headerStatus: historyError }
-                    : oauthStatus !== null
-                      ? { ...runUiState, headerStatus: oauthStatus }
-                      : activeRunId === null
-                        ? { ...runUiState, headerStatus: status }
-                        : runUiState
-                }
-                sidebarCollapsed={sidebarCollapsed}
-                onToggleSidebar={() =>
-                  setSidebarCollapsed((current) => !current)
-                }
-                panelOpen={paneState.open}
-                onTogglePanel={() => paneState.toggle()}
-                connectors={activeConnectorGlyphs}
-                connectorsOpen={connectorsPopover === "topbar"}
-                onOpenConnectors={onTopbarConnectorsOpen}
-                connectorsTriggerRef={topbarConnectorsRef}
-                connectorsPopover={
-                  connectorsPopover === "topbar"
-                    ? renderConnectorPopover(topbarConnectorsRef, "down")
-                    : null
-                }
-                usagePct={null}
-                onOpenUsage={() => setDetailsPanel("usage")}
-                models={demoModels}
-                selectedModel={selectedModelId}
-                onModelChange={setSelectedModelId}
-                depth={depth}
-                onDepthChange={setDepth}
-                depthVisible={depthVisible}
-                onShare={() => void onShare()}
-                shareSlot={
-                  <SharePopover
-                    chatTitle={currentTitle(conversations, conversationId)}
-                    chatUrl={
-                      typeof window !== "undefined" ? window.location.href : ""
-                    }
-                    conversationId={conversationId}
-                    identity={identity}
-                    onStatus={(message) => setStatus(message)}
-                  />
-                }
-                onOpenSettings={() => onOpenSettings("profile")}
-              />
-            }
-          >
-            <CitationsProvider
-              citations={activeCitations}
-              byRun={citations}
-              terminalRuns={terminalRuns}
-            >
-              <ThreadBody
-                ref={composerHandleRef}
-                messages={threadMessages}
-                running={activeRunId !== null}
-                disabled={false}
-                attachmentAdapter={attachmentAdapter}
-                editingMessageId={editingMessageId}
-                onEditCancel={() => setEditingMessageId(null)}
-                onEditSave={(sourceMessageId, text) =>
-                  void onEditSave(sourceMessageId, text)
-                }
-                onSubmit={onComposerSubmit}
-                onCancel={() => void onCancel()}
-                connectors={connectors}
-                skills={skills}
-                onMcpAuthConnect={onMcpAuthConnect}
-                onMcpAuthSkip={onMcpAuthSkip}
-                onOpenMcpSettings={() => onOpenSettings("connectors")}
-                onOpenSkillsSettings={() => onOpenSettings("skills")}
-                onShowConnectors={() => setShowConnectorSuggestions(true)}
-                onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
-                onOpenSkillsPanel={() => paneState.openOn("skills")}
-                selectedSkills={selectedComposerSkills}
-                onAttachSkill={onAttachComposerSkill}
-                onRemoveSkill={onRemoveComposerSkill}
-                onClearSkills={onClearComposerSkills}
-                onOpenSources={(citationId) =>
-                  paneState.openOn("sources", { focusCitationId: citationId })
-                }
-                runIndicator={runIndicator}
-                connectorsTrigger={
-                  <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
-                    <ComposerConnectorsButton
-                      ref={composerConnectorsRef}
-                      activeCount={connectorsActiveCount}
-                      open={connectorsPopover === "composer"}
-                      onClick={onComposerConnectorsOpen}
-                      disabled={currentConversation === null}
+                      conversationId={conversationId}
+                      identity={identity}
+                      onStatus={(message) => setStatus(message)}
                     />
-                    {connectorsPopover === "composer"
-                      ? renderConnectorPopover(composerConnectorsRef, "up")
-                      : null}
-                  </span>
-                }
-                activeModelLabel={selectedModel?.name}
-                models={demoModels}
-                selectedModel={selectedModelId}
-                onModelChange={setSelectedModelId}
-                depth={depth}
-                onDepthChange={setDepth}
-                depthVisible={depthVisible}
-                connectorSuggestions={
-                  showConnectorSuggestions && suggestedServers.length > 0 ? (
-                    <ConnectorSuggestionCard
-                      servers={suggestedServers}
-                      onConnect={(serverId) =>
-                        void connectors.authenticate(serverId)
-                      }
-                      onSkip={(serverId) => void connectors.skipAuth(serverId)}
-                      onNone={() => setShowConnectorSuggestions(false)}
-                    />
-                  ) : null
-                }
-                onSelectSuggestion={(prompt) => void onSelectSuggestion(prompt)}
-                onResumeToolCall={handleResumeToolCall}
-                onReload={handleReloadFromAssistant}
-              />
-            </CitationsProvider>
-          </AssistantThread>
-          <WorkspacePane
-            state={paneState}
-            sources={sourcesMap}
-            sourcesLoading={sourcesLoading}
-            sourcesError={sourcesError}
-            subagents={subagentsState.subagents}
-            subagentsLoading={subagentsState.loading}
-            subagentsError={subagentsState.error}
-            subagentActivitiesByTask={subagentActivitiesByTask}
-            subagentHistoryGroups={subagentHistoryGroups}
-            onJumpToSubagent={handleJumpToSubagent}
-            draft={draftsState.latest}
-            draftLoading={draftsState.loading}
-            draftError={draftsState.error}
-            onPatchDraft={(request) =>
-              draftsState.latest === null
-                ? Promise.reject(new Error("No active draft"))
-                : draftsState.patch(draftsState.latest.draft_id, request)
-            }
-            onSendDraft={(request) =>
-              draftsState.latest === null
-                ? Promise.reject(new Error("No active draft"))
-                : draftsState.send(draftsState.latest.draft_id, request)
-            }
-            onDiscardDraft={(request) =>
-              draftsState.latest === null
-                ? Promise.reject(new Error("No active draft"))
-                : draftsState.discard(draftsState.latest.draft_id, request)
-            }
-            approvalsQueue={approvalsQueue}
-            skills={skills.skills}
-            skillsLoading={skills.loading}
-            skillsError={skills.error}
-            onPickSkill={(skill) => {
-              onAttachComposerSkill(skill);
-              if (overlayMode) {
-                paneState.close("viewport");
+                  }
+                  onOpenSettings={() => onOpenSettings("profile")}
+                />
               }
-            }}
-            onOpenSkillSettings={() => onOpenSettings("skills")}
-            overlay={overlayMode}
-          />
-          {detailsPanel !== null ? (
-            <DetailsPanelHost
-              kind={detailsPanel}
-              conversationId={conversationId}
-              identity={identity}
-              citations={activeCitations}
-              onClose={() => setDetailsPanel(null)}
+            >
+              <CitationsProvider
+                citations={activeCitations}
+                byRun={citations}
+                terminalRuns={terminalRuns}
+              >
+                <ThreadBody
+                  ref={composerHandleRef}
+                  messages={threadMessages}
+                  running={activeRunId !== null}
+                  disabled={false}
+                  attachmentAdapter={attachmentAdapter}
+                  editingMessageId={editingMessageId}
+                  onEditCancel={() => setEditingMessageId(null)}
+                  onEditSave={(sourceMessageId, text) =>
+                    void onEditSave(sourceMessageId, text)
+                  }
+                  onSubmit={onComposerSubmit}
+                  onCancel={() => void onCancel()}
+                  connectors={connectors}
+                  skills={skills}
+                  onMcpAuthConnect={onMcpAuthConnect}
+                  onMcpAuthSkip={onMcpAuthSkip}
+                  onOpenMcpSettings={() => onOpenSettings("connectors")}
+                  onOpenSkillsSettings={() => onOpenSettings("skills")}
+                  onShowConnectors={() => setShowConnectorSuggestions(true)}
+                  onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+                  onOpenSkillsPanel={() => paneState.openOn("skills")}
+                  selectedSkills={selectedComposerSkills}
+                  onAttachSkill={onAttachComposerSkill}
+                  onRemoveSkill={onRemoveComposerSkill}
+                  onClearSkills={onClearComposerSkills}
+                  onOpenSources={(citationId) =>
+                    paneState.openOn("sources", { focusCitationId: citationId })
+                  }
+                  runIndicator={runIndicator}
+                  connectorsTrigger={
+                    <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
+                      <ComposerConnectorsButton
+                        ref={composerConnectorsRef}
+                        activeCount={connectorsActiveCount}
+                        open={connectorsPopover === "composer"}
+                        onClick={onComposerConnectorsOpen}
+                        disabled={currentConversation === null}
+                      />
+                      {connectorsPopover === "composer"
+                        ? renderConnectorPopover(composerConnectorsRef, "up")
+                        : null}
+                    </span>
+                  }
+                  activeModelLabel={selectedModel?.name}
+                  models={demoModels}
+                  selectedModel={selectedModelId}
+                  onModelChange={setSelectedModelId}
+                  depth={depth}
+                  onDepthChange={setDepth}
+                  depthVisible={depthVisible}
+                  connectorSuggestions={
+                    showConnectorSuggestions && suggestedServers.length > 0 ? (
+                      <ConnectorSuggestionCard
+                        servers={suggestedServers}
+                        onConnect={(serverId) =>
+                          void connectors.authenticate(serverId)
+                        }
+                        onSkip={(serverId) =>
+                          void connectors.skipAuth(serverId)
+                        }
+                        onNone={() => setShowConnectorSuggestions(false)}
+                      />
+                    ) : null
+                  }
+                  onSelectSuggestion={(prompt) =>
+                    void onSelectSuggestion(prompt)
+                  }
+                  onResumeToolCall={handleResumeToolCall}
+                  onReload={handleReloadFromAssistant}
+                />
+              </CitationsProvider>
+            </AssistantThread>
+            <WorkspacePane
+              state={paneState}
+              sources={sourcesMap}
+              sourcesLoading={sourcesLoading}
+              sourcesError={sourcesError}
+              sourcesSearching={runUiState.phase === "acting"}
+              subagents={subagentsState.subagents}
+              subagentsLoading={subagentsState.loading}
+              subagentsError={subagentsState.error}
+              subagentActivitiesByTask={subagentActivitiesByTask}
+              subagentHistoryGroups={subagentHistoryGroups}
+              onJumpToSubagent={handleJumpToSubagent}
+              draft={draftsState.latest}
+              draftLoading={draftsState.loading}
+              draftError={draftsState.error}
+              onPatchDraft={(request) =>
+                draftsState.latest === null
+                  ? Promise.reject(new Error("No active draft"))
+                  : draftsState.patch(draftsState.latest.draft_id, request)
+              }
+              onSendDraft={(request) =>
+                draftsState.latest === null
+                  ? Promise.reject(new Error("No active draft"))
+                  : draftsState.send(draftsState.latest.draft_id, request)
+              }
+              onDiscardDraft={(request) =>
+                draftsState.latest === null
+                  ? Promise.reject(new Error("No active draft"))
+                  : draftsState.discard(draftsState.latest.draft_id, request)
+              }
+              approvalsQueue={approvalsQueue}
+              skills={skills.skills}
+              skillsLoading={skills.loading}
+              skillsError={skills.error}
+              onPickSkill={(skill) => {
+                onAttachComposerSkill(skill);
+                if (overlayMode) {
+                  paneState.close("viewport");
+                }
+              }}
+              onOpenSkillSettings={() => onOpenSettings("skills")}
+              overlay={overlayMode}
             />
-          ) : null}
+            {detailsPanel !== null ? (
+              <DetailsPanelHost
+                kind={detailsPanel}
+                conversationId={conversationId}
+                identity={identity}
+                sources={sourcesMap}
+                onClose={() => setDetailsPanel(null)}
+              />
+            ) : null}
+          </SourcePreviewProvider>
         </main>
       </ApprovalFocusProvider>
     </>

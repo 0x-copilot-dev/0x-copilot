@@ -1,39 +1,34 @@
 /**
- * Sources panel — PR 1.1 follow-up E.
+ * Sources panel — slash-command (`/sources`) overlay host.
  *
- * Lists every citation the active conversation has accumulated (live during
- * a running turn, sealed after `final_response`). Reads from the same
- * citations registry the inline `<CitationChip />` resolves against — no
- * extra round-trip, no duplicate state.
+ * Reads from the per-source `SourceEntryMap` owned by ChatScreen — the
+ * same map that powers PR 3.2's right-rail Sources tab. Live updates
+ * flow through `applySourceEvent` (PR 1.5) on every `source_ingested`
+ * event; the archive seed comes from `useArchivedSources` (PR 3.1).
  *
- * The full Workspace pane right-rail (W3.2) will eventually host a richer
- * Sources tab alongside Agents / Draft / Approvals / Skills. Until then
- * this panel rides the existing slide-out `DetailsPanelHost` so users have
- * a verifiable view today.
+ * The body uses the shared `<SourceRow />` primitive so the slash overlay
+ * and the right-rail tab render identical rows.
  */
 
-import {
-  Badge,
-  Button,
-  Card,
-  classNames,
-} from "@enterprise-search/design-system";
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import { Button } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 
-import { citationsByOrdinal } from "../../chatModel/citationsRegistry";
-import type { CitationLookup } from "../citations/citationsContext";
+import {
+  sourcesByCitationCount,
+  type SourceEntryMap,
+} from "../../chatModel/sourcesReducer";
+import { SourceRow } from "../citations/SourceRow";
 
 export interface SourcesPanelProps {
-  citations: CitationLookup;
+  sources: SourceEntryMap;
   onClose: () => void;
 }
 
 export function SourcesPanel({
-  citations,
+  sources,
   onClose,
 }: SourcesPanelProps): ReactElement {
-  const ordered = citationsByOrdinal(citations);
+  const ordered = sourcesByCitationCount(sources);
   return (
     <aside className="details-panel" data-testid="sources-panel">
       <header className="details-panel__header">
@@ -63,54 +58,15 @@ export function SourcesPanel({
         </p>
       ) : (
         <ul className="details-panel__list" data-testid="sources-panel-list">
-          {ordered.map((source) => (
-            <SourceRow key={source.citation_id} source={source} />
+          {ordered.map((source, index) => (
+            <SourceRow
+              key={`${source.source_connector}:${source.source_doc_id}`}
+              source={source}
+              ordinal={index + 1}
+            />
           ))}
         </ul>
       )}
     </aside>
   );
-}
-
-function SourceRow({ source }: { source: CitationSourceRef }): ReactElement {
-  const hasUrl = source.source_url !== null && source.source_url.length > 0;
-  return (
-    <li className={classNames("details-panel__list-item")}>
-      <Card tone="default">
-        <div className="details-panel__row">
-          <Badge tone="accent">{`[c${source.ordinal}]`}</Badge>
-          <span className="details-panel__row-title">
-            {hasUrl ? (
-              <a
-                href={source.source_url ?? "#"}
-                rel="noreferrer"
-                target="_blank"
-              >
-                {source.title}
-              </a>
-            ) : (
-              source.title
-            )}
-          </span>
-          <Badge tone="neutral">{source.source_connector}</Badge>
-        </div>
-        {source.snippet ? (
-          <p className="details-panel__subtitle">{source.snippet}</p>
-        ) : null}
-        {source.freshness_at ? (
-          <p className="details-panel__footnote">
-            Updated {formatFreshness(source.freshness_at)}
-          </p>
-        ) : null}
-      </Card>
-    </li>
-  );
-}
-
-function formatFreshness(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  return date.toLocaleString();
 }

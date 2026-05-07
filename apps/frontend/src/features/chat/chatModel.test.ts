@@ -592,6 +592,137 @@ describe("applyRuntimeEvent", () => {
     expect(toolPart(items, "run_subagent")?.args?.activities).toBeUndefined();
   });
 
+  // PR 3.2.4 — `stream_tools._append_task_tool_call_event` emits
+  // SUBAGENT_STARTED for each child *before* `stream_subagents._maybe_emit_fleet_started`
+  // can compute the fleet_id. The children therefore land with no
+  // `parent_fleet_id` in their payload. Once the FLEET_STARTED event
+  // arrives carrying `task_ids: [...]`, the reducer must back-stamp
+  // each existing `run_subagent` part so the renderer can nest them.
+  it("back-stamps parent_fleet_id on existing run_subagent parts when SUBAGENT_FLEET_STARTED arrives with task_ids", () => {
+    let items: ChatItem[] = [];
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "sa_a",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "call_a",
+        subagent_id: "general-purpose",
+        payload: { task_id: "call_a", subagent_name: "general-purpose" },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "sa_b",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "call_b",
+        subagent_id: "general-purpose",
+        payload: { task_id: "call_b", subagent_name: "general-purpose" },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "sa_c",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "call_c",
+        subagent_id: "general-purpose",
+        payload: { task_id: "call_c", subagent_name: "general-purpose" },
+      }),
+    );
+    // Pre-condition: none carry parent_fleet_id yet.
+    const message = assistantMessage(items);
+    for (const part of message.content) {
+      if (part.type === "tool-call" && part.toolName === "run_subagent") {
+        expect(
+          (part.args as Record<string, unknown>).parent_fleet_id,
+        ).toBeNull();
+      }
+    }
+    // Now the fleet bookend arrives with the children's task_ids.
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "fleet_started",
+        event_type: "subagent_fleet_started",
+        activity_kind: "subagent",
+        payload: {
+          fleet_id: "fleet_1",
+          title: "Working in parallel",
+          agent_ids: ["general-purpose", "general-purpose", "general-purpose"],
+          task_ids: ["call_a", "call_b", "call_c"],
+        },
+      }),
+    );
+    // Each child run_subagent part should now carry parent_fleet_id=fleet_1.
+    const updated = assistantMessage(items);
+    const subagentParts = updated.content.filter(
+      (part): part is ThreadToolCallPart =>
+        part.type === "tool-call" && part.toolName === "run_subagent",
+    );
+    expect(subagentParts.map((p) => p.toolCallId)).toEqual([
+      "call_a",
+      "call_b",
+      "call_c",
+    ]);
+    for (const part of subagentParts) {
+      expect((part.args as Record<string, unknown>).parent_fleet_id).toBe(
+        "fleet_1",
+      );
+    }
+    // The fleet bookend itself should also be present.
+    expect(
+      updated.content.some(
+        (part) =>
+          part.type === "tool-call" && part.toolName === "run_subagent_fleet",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not overwrite an existing parent_fleet_id when a different fleet event arrives", () => {
+    let items: ChatItem[] = [];
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "sa_a",
+        event_type: "subagent_started",
+        activity_kind: "subagent",
+        task_id: "call_a",
+        subagent_id: "general-purpose",
+        payload: {
+          task_id: "call_a",
+          subagent_name: "general-purpose",
+          parent_fleet_id: "fleet_first",
+        },
+      }),
+    );
+    items = applyRuntimeEvent(
+      items,
+      event({
+        event_id: "fleet_other",
+        event_type: "subagent_fleet_started",
+        activity_kind: "subagent",
+        payload: {
+          fleet_id: "fleet_second",
+          title: "Different fleet",
+          agent_ids: ["general-purpose"],
+          task_ids: ["call_a"],
+        },
+      }),
+    );
+    // Once-set wins: stays on fleet_first.
+    const subagentPart = assistantMessage(items).content.find(
+      (part): part is ThreadToolCallPart =>
+        part.type === "tool-call" && part.toolName === "run_subagent",
+    );
+    expect(
+      (subagentPart?.args as Record<string, unknown>).parent_fleet_id,
+    ).toBe("fleet_first");
+  });
+
   it("hydrates assistant history from replayed runtime events", () => {
     const replayEvents = [
       event({

@@ -111,7 +111,42 @@ class StreamOrchestrator:
         namespace = StreamPartParser.namespace_for(part)
         data = part[_Fields.DATA]
         metadata = namespace.metadata(stream_type)
-        parent_task_id = namespace.subagent_task_id
+
+        # PR `subagent-call-id-link` — `atlas_task_tool` writes the
+        # supervisor's `task` call_id into each subagent's RunnableConfig
+        # metadata. LangGraph propagates that metadata onto every chunk
+        # the subgraph emits. Read it here and pin a deterministic
+        # `(run_id, subgraph_task_id) → supervisor_call_id` mapping so
+        # downstream emits resolve to the supervisor call_id (which the
+        # FE matches against the `run_subagent` tool part's toolCallId)
+        # instead of the raw LangGraph subgraph UUID.
+        #
+        # Resolution rules:
+        # 1. If chunk metadata gave us the linkage (production path with
+        #    our patched task tool), use the cached supervisor call_id.
+        # 2. If no metadata (legacy / synthetic test fixtures), fall
+        #    back to the raw subgraph_task_id so the historical contract
+        #    holds. The FIFO-pop fallback intentionally stays inside
+        #    `stream_tools.StreamMessageProcessor.process` where it was
+        #    the source of truth — pulling it forward here would drain
+        #    the queue before later subagents' lifecycle events can
+        #    register their call_ids.
+        subgraph_task_id = namespace.subagent_task_id
+        chunk_supervisor_call_id = StreamPartParser.supervisor_task_call_id_for(part)
+        if chunk_supervisor_call_id is not None and subgraph_task_id is not None:
+            self.update_processor.register_supervisor_call_id_for_subgraph(
+                run_id=run.run_id,
+                subgraph_task_id=subgraph_task_id,
+                supervisor_call_id=chunk_supervisor_call_id,
+            )
+
+        cached_call_id = self.update_processor.cached_subagent_call_id_for_subgraph(
+            run_id=run.run_id,
+            subgraph_task_id=subgraph_task_id,
+        )
+        parent_task_id = (
+            cached_call_id if cached_call_id is not None else subgraph_task_id
+        )
         source_tool_call_id = (
             self._source_tool_call_id_for_payload(data)
             if stream_type == _Fields.MESSAGES

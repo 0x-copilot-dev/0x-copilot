@@ -15,6 +15,22 @@ export default defineConfig({
       "/v1": {
         target: process.env.BACKEND_FACADE_URL ?? "http://127.0.0.1:8200",
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (_proxyReq, req) => {
+            console.log("[vite-proxy] →", req.method, req.url);
+          });
+          proxy.on("proxyRes", (proxyRes, req) => {
+            console.log(
+              "[vite-proxy] ←",
+              proxyRes.statusCode,
+              req.method,
+              req.url,
+            );
+          });
+          proxy.on("error", (err, req) => {
+            console.log("[vite-proxy] !", err.message, req.method, req.url);
+          });
+        },
       },
     },
   },

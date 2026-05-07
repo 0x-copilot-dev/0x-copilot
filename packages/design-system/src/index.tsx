@@ -336,6 +336,13 @@ const BRAND_GLYPHS: Record<string, BrandGlyph> = {
   datadog: { label: "Datadog", bg: "#632ca6", fg: "#ffffff", symbol: "D" },
   intercom: { label: "Intercom", bg: "#1f8ded", fg: "#ffffff", symbol: "I" },
   pagerduty: { label: "PagerDuty", bg: "#06ac38", fg: "#ffffff", symbol: "P" },
+  web: { label: "Web", bg: "#0f172a", fg: "#facc15", symbol: "🌐" },
+  web_search: {
+    label: "Web search",
+    bg: "#0f172a",
+    fg: "#facc15",
+    symbol: "🌐",
+  },
 };
 
 export function AppIcon({

@@ -14,9 +14,11 @@ import {
   TextInput,
 } from "@enterprise-search/design-system";
 import type { FormEvent, ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { authTone } from "../connectors/ConnectorConsentCard";
+import { ConnectorRow } from "../connectors/ConnectorRow";
+import { JsonEditorPanel } from "../connectors/JsonEditorPanel";
+import { isAuthenticated } from "../connectors/authStateDisplay";
 import type { ConnectorState } from "../connectors/useConnectors";
 import type { SkillState } from "../skills/useSkills";
 import type { RequestIdentity } from "../../api/config";
@@ -570,54 +572,26 @@ const FALLBACK_IDENTITY: RequestIdentity = {
   userId: "",
 };
 
+type ConnectorView = "visual" | "json";
+
 function ConnectorsSettings({
   connectors,
 }: {
   connectors: ConnectorState;
 }): ReactElement {
-  const [url, setUrl] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [scope, setScope] = useState("");
-  const [authorizationEndpoint, setAuthorizationEndpoint] = useState("");
-  const [tokenEndpoint, setTokenEndpoint] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  // PR 4.4 — catalog wizard. Opens from the section header button; the
-  // existing custom-URL form below stays for power users who already
-  // know the endpoint they're connecting to.
+  // PR 4.4 — catalog wizard. Primary path; the custom-URL form is a
+  // collapsed power-user fallback that opens on demand.
   const [mcpOverlayOpen, setMcpOverlayOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [view, setView] = useState<ConnectorView>("visual");
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!url.trim()) {
-      return;
-    }
-    try {
-      const oauthClient = oauthClientFromForm({
-        clientId,
-        clientSecret,
-        scope,
-        authorizationEndpoint,
-        tokenEndpoint,
-      });
-      setFormError(null);
-      setSubmitting(true);
-      await connectors.addServer(url.trim(), oauthClient);
-      setUrl("");
-      setClientId("");
-      setClientSecret("");
-      setScope("");
-      setAuthorizationEndpoint("");
-      setTokenEndpoint("");
-    } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : "Could not add connector.",
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  // Group servers so the user immediately sees what's live, what needs
+  // attention, and what's available but not yet active. The seeded
+  // disabled catalog (Phase 2) lands in "Available".
+  const groups = useMemo(
+    () => groupServers(connectors.servers),
+    [connectors.servers],
+  );
 
   return (
     <div className="settings-section">
@@ -630,6 +604,38 @@ function ConnectorsSettings({
           </p>
         </div>
         <div className="settings-section__header-actions">
+          <div
+            className="connector-view-toggle"
+            role="tablist"
+            aria-label="Connector view"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "visual"}
+              className={
+                view === "visual"
+                  ? "connector-view-toggle__btn connector-view-toggle__btn--active"
+                  : "connector-view-toggle__btn"
+              }
+              onClick={() => setView("visual")}
+            >
+              Visual
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "json"}
+              className={
+                view === "json"
+                  ? "connector-view-toggle__btn connector-view-toggle__btn--active"
+                  : "connector-view-toggle__btn"
+              }
+              onClick={() => setView("json")}
+            >
+              JSON
+            </button>
+          </div>
           <Button
             type="button"
             variant="primary"
@@ -640,7 +646,7 @@ function ConnectorsSettings({
           <Button
             type="button"
             variant="secondary"
-            title="Refresh connectors"
+            aria-label="Refresh connectors"
             onClick={() => void connectors.refresh()}
           >
             Refresh
@@ -654,91 +660,308 @@ function ConnectorsSettings({
         connectors={connectors}
       />
 
-      <Card>
-        <form
-          className="connector-add-form"
-          onSubmit={(event) => void onSubmit(event)}
-        >
-          <Field
-            label="Add custom connector"
-            hint="For OAuth MCP servers without dynamic client registration, add a pre-registered OAuth client below."
-          >
-            <TextInput
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://mcp.example.com"
-            />
-          </Field>
-          <Field label="OAuth client ID">
-            <TextInput
-              value={clientId}
-              onChange={(event) => setClientId(event.target.value)}
-              placeholder="Optional client_id"
-            />
-          </Field>
-          <Field label="OAuth client secret">
-            <TextInput
-              type="password"
-              value={clientSecret}
-              onChange={(event) => setClientSecret(event.target.value)}
-              placeholder="Optional client_secret"
-            />
-          </Field>
-          <Field label="OAuth scope">
-            <TextInput
-              value={scope}
-              onChange={(event) => setScope(event.target.value)}
-              placeholder="Optional, for example: mcp"
-            />
-          </Field>
-          <Field
-            label="Authorization endpoint"
-            hint="Optional advanced override when the server does not advertise OAuth metadata."
-          >
-            <TextInput
-              value={authorizationEndpoint}
-              onChange={(event) => setAuthorizationEndpoint(event.target.value)}
-              placeholder="https://auth.example.com/authorize"
-            />
-          </Field>
-          <Field label="Token endpoint" hint="Optional advanced override.">
-            <TextInput
-              value={tokenEndpoint}
-              onChange={(event) => setTokenEndpoint(event.target.value)}
-              placeholder="https://auth.example.com/token"
-            />
-          </Field>
-          <Button type="submit" disabled={submitting} title="Add connector">
-            Add connector
-          </Button>
-        </form>
-        {formError ? <p className="app-error">{formError}</p> : null}
-        {connectors.error ? (
-          <p className="app-error">{connectors.error}</p>
-        ) : null}
-      </Card>
+      {connectors.error ? (
+        <p className="app-error">{connectors.error}</p>
+      ) : null}
 
+      {view === "json" ? (
+        <JsonEditorPanel connectors={connectors} />
+      ) : (
+        <>
+          {connectors.loading && connectors.servers.length === 0 ? (
+            <Card>
+              <p>Loading connectors...</p>
+            </Card>
+          ) : null}
+
+          {!connectors.loading && connectors.servers.length === 0 ? (
+            <Card>
+              <p>
+                No connectors yet. Open <strong>Browse catalog</strong> to
+                install one of the well-known servers, or add a custom URL
+                below.
+              </p>
+            </Card>
+          ) : null}
+
+          <ConnectorGroup
+            title="Needs attention"
+            hint="Sign-in failed or interrupted. Retry to bring these online."
+            servers={groups.needsAttention}
+            connectors={connectors}
+          />
+          <ConnectorGroup
+            title="Connected"
+            hint="Signed in and enabled. Available to the agent."
+            servers={groups.connected}
+            connectors={connectors}
+          />
+          <ConnectorGroup
+            title="Available"
+            hint="Pre-added but disabled. Toggle on and authenticate to start using them."
+            servers={groups.available}
+            connectors={connectors}
+            emptyMessage={
+              groups.connected.length + groups.needsAttention.length === 0
+                ? undefined
+                : "All caught up."
+            }
+          />
+
+          {/* Manual-add form: collapsed by default. The catalog flow
+              covers almost every real case; raw URL entry is for
+              unlisted servers. */}
+          <details
+            className="connector-manual-add"
+            open={manualOpen}
+            onToggle={(event) => setManualOpen(event.currentTarget.open)}
+          >
+            <summary className="connector-manual-add__summary">
+              {manualOpen ? "Hide manual add" : "Add manually with URL"}
+            </summary>
+            {manualOpen ? <ManualAddForm connectors={connectors} /> : null}
+          </details>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface GroupedServers {
+  connected: McpServer[];
+  needsAttention: McpServer[];
+  available: McpServer[];
+}
+
+function groupServers(servers: McpServer[]): GroupedServers {
+  const connected: McpServer[] = [];
+  const needsAttention: McpServer[] = [];
+  const available: McpServer[] = [];
+  for (const server of servers) {
+    if (
+      server.auth_state === "auth_failed" ||
+      server.auth_state === "auth_pending"
+    ) {
+      needsAttention.push(server);
+    } else if (server.enabled && isAuthenticated(server.auth_state)) {
+      connected.push(server);
+    } else {
+      available.push(server);
+    }
+  }
+  return { connected, needsAttention, available };
+}
+
+function ConnectorGroup({
+  title,
+  hint,
+  servers,
+  connectors,
+  emptyMessage,
+}: {
+  title: string;
+  hint: string;
+  servers: McpServer[];
+  connectors: ConnectorState;
+  emptyMessage?: string;
+}): ReactElement | null {
+  if (servers.length === 0) {
+    if (!emptyMessage) {
+      return null;
+    }
+    return (
+      <section className="connector-group">
+        <header className="connector-group__head">
+          <h3>{title}</h3>
+          <Badge tone="neutral">0</Badge>
+        </header>
+        <p className="connector-group__hint">{emptyMessage}</p>
+      </section>
+    );
+  }
+  return (
+    <section className="connector-group">
+      <header className="connector-group__head">
+        <h3>{title}</h3>
+        <Badge tone="neutral">{servers.length}</Badge>
+      </header>
+      <p className="connector-group__hint">{hint}</p>
       <div className="connector-settings-list">
-        {connectors.loading ? (
-          <Card>
-            <p>Loading connectors...</p>
-          </Card>
-        ) : null}
-        {!connectors.loading && connectors.servers.length === 0 ? (
-          <Card>
-            <p>No connectors configured yet.</p>
-          </Card>
-        ) : null}
-        {connectors.servers.map((server) => (
-          <ConnectorSettingsRow
+        {servers.map((server) => (
+          <ConnectorRow
             key={server.server_id}
             server={server}
             connectors={connectors}
           />
         ))}
       </div>
-    </div>
+    </section>
   );
+}
+
+function ManualAddForm({
+  connectors,
+}: {
+  connectors: ConnectorState;
+}): ReactElement {
+  const [url, setUrl] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scope, setScope] = useState("");
+  const [authorizationEndpoint, setAuthorizationEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) {
+      return;
+    }
+    if (!isHttpsUrl(trimmedUrl)) {
+      setFormError("Server URL must be a valid https:// URL.");
+      return;
+    }
+    if (submitting) {
+      return;
+    }
+    try {
+      const oauthClient = oauthClientFromForm({
+        clientId,
+        clientSecret,
+        scope,
+        authorizationEndpoint,
+        tokenEndpoint,
+      });
+      setFormError(null);
+      setSubmitting(true);
+      await connectors.addServer(trimmedUrl, oauthClient);
+      setUrl("");
+      setDisplayName("");
+      setClientId("");
+      setClientSecret("");
+      setScope("");
+      setAuthorizationEndpoint("");
+      setTokenEndpoint("");
+      setAdvancedOpen(false);
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Could not add connector.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <form
+        className="connector-add-form"
+        onSubmit={(event) => void onSubmit(event)}
+      >
+        <Field label="Server URL" hint="HTTPS endpoint for the MCP server.">
+          <TextInput
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="https://mcp.example.com"
+            required
+          />
+        </Field>
+        <Field
+          label="Display name"
+          hint="Optional. Defaults to the server's advertised name."
+        >
+          <TextInput
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            placeholder="e.g. Example MCP"
+          />
+        </Field>
+
+        <details
+          className="connector-add-form__advanced"
+          open={advancedOpen}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+        >
+          <summary>
+            Advanced &mdash; pre-registered OAuth client (servers without
+            dynamic client registration)
+          </summary>
+          <div className="connector-add-form__advanced-grid">
+            <Field label="OAuth client ID">
+              <TextInput
+                autoComplete="off"
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                placeholder="client_id"
+              />
+            </Field>
+            <Field label="OAuth client secret">
+              <TextInput
+                type="password"
+                autoComplete="new-password"
+                value={clientSecret}
+                onChange={(event) => setClientSecret(event.target.value)}
+                placeholder="client_secret"
+              />
+            </Field>
+            <Field label="OAuth scope">
+              <TextInput
+                autoComplete="off"
+                value={scope}
+                onChange={(event) => setScope(event.target.value)}
+                placeholder="e.g. mcp"
+              />
+            </Field>
+            <Field
+              label="Authorization endpoint"
+              hint="Override only when the server doesn't advertise OAuth metadata."
+            >
+              <TextInput
+                type="url"
+                autoComplete="off"
+                value={authorizationEndpoint}
+                onChange={(event) =>
+                  setAuthorizationEndpoint(event.target.value)
+                }
+                placeholder="https://auth.example.com/authorize"
+              />
+            </Field>
+            <Field label="Token endpoint" hint="Optional override.">
+              <TextInput
+                type="url"
+                autoComplete="off"
+                value={tokenEndpoint}
+                onChange={(event) => setTokenEndpoint(event.target.value)}
+                placeholder="https://auth.example.com/token"
+              />
+            </Field>
+          </div>
+        </details>
+
+        <Button type="submit" disabled={submitting}>
+          {submitting ? "Adding..." : "Add connector"}
+        </Button>
+      </form>
+      {formError ? <p className="app-error">{formError}</p> : null}
+    </Card>
+  );
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function SkillsSettings({ skills }: { skills: SkillState }): ReactElement {
@@ -1088,61 +1311,6 @@ function oauthClientFromForm({
       : {}),
     ...(trimmedTokenEndpoint ? { token_endpoint: trimmedTokenEndpoint } : {}),
   };
-}
-
-function ConnectorSettingsRow({
-  server,
-  connectors,
-}: {
-  server: McpServer;
-  connectors: ConnectorState;
-}): ReactElement {
-  return (
-    <Card className="connector-settings-row">
-      <div className="connector-settings-row__main">
-        <div>
-          <h3>{server.display_name}</h3>
-          <p>{server.url}</p>
-        </div>
-        <Badge tone={authTone(server.auth_state)}>
-          {server.auth_state.replaceAll("_", " ")}
-        </Badge>
-      </div>
-      <div className="connector-settings-row__controls">
-        <Switch
-          label={server.enabled ? "Enabled" : "Disabled"}
-          checked={server.enabled}
-          onChange={(event) =>
-            void connectors.setEnabled(server.server_id, event.target.checked)
-          }
-        />
-        <Button
-          type="button"
-          variant="secondary"
-          title={`Authenticate ${server.display_name}`}
-          onClick={() => void connectors.authenticate(server.server_id)}
-        >
-          Authenticate
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          title={`Skip authentication for ${server.display_name}`}
-          onClick={() => void connectors.skipAuth(server.server_id)}
-        >
-          Skip auth
-        </Button>
-        <Button
-          type="button"
-          variant="danger"
-          title={`Remove ${server.display_name}`}
-          onClick={() => void connectors.removeServer(server.server_id)}
-        >
-          Remove
-        </Button>
-      </div>
-    </Card>
-  );
 }
 
 function errorMessage(err: unknown, fallback: string): string {

@@ -294,6 +294,12 @@ function upsertSubagentFleetPart(
   if (fleetId === null) {
     return items;
   }
+  // PR 3.2.4 — children's task_ids ride on SUBAGENT_FLEET_STARTED so we
+  // can back-stamp `parent_fleet_id` on `run_subagent` parts that were
+  // already emitted by the per-tool streaming path before the fleet
+  // bookend fired. Without this, the renderer's reshape can't match
+  // children to fleets and they render standalone above the fleet card.
+  const childTaskIds = readStringArray(event.payload, "task_ids");
   return updateAssistantContent(items, event, (content) => {
     const existing = content.find(
       (part): part is ThreadToolCallPart =>
@@ -302,8 +308,48 @@ function upsertSubagentFleetPart(
         part.toolCallId === fleetId,
     );
     const part = subagentFleetPart(event, fleetId, existing);
-    return upsertPart(content, part);
+    const next = upsertPart(content, part);
+    if (childTaskIds.length === 0) {
+      return next;
+    }
+    const childIdSet = new Set(childTaskIds);
+    return next.map((candidate) => {
+      if (
+        !isToolCallPart(candidate) ||
+        candidate.toolName !== "run_subagent" ||
+        candidate.toolCallId === undefined ||
+        !childIdSet.has(candidate.toolCallId)
+      ) {
+        return candidate;
+      }
+      const args = asRecord(candidate.args);
+      // Preserve once-set; never overwrite with a different fleet_id.
+      if (
+        typeof args.parent_fleet_id === "string" &&
+        args.parent_fleet_id.length > 0
+      ) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        args: jsonArgs({ ...args, parent_fleet_id: fleetId }),
+      };
+    });
   });
+}
+
+function readStringArray(
+  payload: RuntimeEventEnvelope["payload"],
+  key: string,
+): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const value = (payload as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.length > 0) out.push(item);
+  }
+  return out;
 }
 
 function fleetIdFromEvent(event: RuntimeEventEnvelope): string | null {

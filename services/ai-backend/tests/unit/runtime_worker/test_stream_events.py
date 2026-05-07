@@ -1268,3 +1268,140 @@ async def test_subagent_completed_without_started_omits_duration_ms() -> None:
 
     completed = producer.events[0]
     assert "duration_ms" not in completed["payload"]
+
+
+async def test_chunk_metadata_links_parallel_subagents_to_supervisor_call_ids() -> None:
+    """Parallel subagents: chunk metadata pins (subgraph_uuid → supervisor call_id).
+
+    Regression for the FIFO-pop race that returned None when ≥2 subagents were
+    unlinked concurrently. The fix ships our `atlas_task_tool` which writes
+    `supervisor_task_call_id` into each subagent's RunnableConfig metadata,
+    then `StreamPartParser.supervisor_task_call_id_for(part)` reads it on the
+    first chunk from a subgraph and pins the link via
+    `register_supervisor_call_id_for_subgraph`. From that point onward, every
+    event from that subgraph resolves deterministically — no ambiguity even
+    when multiple subagents are mid-flight.
+    """
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    # Supervisor dispatches two subagents in the same tick.
+    await orchestrator.update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_supervisor_A",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+    await orchestrator.update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload={
+            "task_id": "call_supervisor_B",
+            "subagent_name": "general-purpose",
+            "status": "queued",
+        },
+        metadata={},
+    )
+
+    # Sub A's first chunk arrives. Carries `supervisor_task_call_id` in
+    # the messages-mode metadata tuple position 1. Pins the link.
+    await orchestrator.append_activity_events(
+        run=run,
+        chunk={
+            "type": "messages",
+            "ns": ("tools:subgraph_A_uuid",),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "web_search",
+                            "id": "call_search_a",
+                            "args": {"query": "topic A"},
+                        },
+                    ),
+                },
+                {"supervisor_task_call_id": "call_supervisor_A"},
+            ),
+        },
+        delta=None,
+    )
+    # Sub B's first chunk — different subgraph UUID, different supervisor
+    # call_id. Even with sub A still un-completed (so the FIFO would have
+    # been racy), this resolves correctly via metadata.
+    await orchestrator.append_activity_events(
+        run=run,
+        chunk={
+            "type": "messages",
+            "ns": ("tools:subgraph_B_uuid",),
+            "data": (
+                {
+                    "tool_call_chunks": (
+                        {
+                            "name": "web_search",
+                            "id": "call_search_b",
+                            "args": {"query": "topic B"},
+                        },
+                    ),
+                },
+                {"supervisor_task_call_id": "call_supervisor_B"},
+            ),
+        },
+        delta=None,
+    )
+
+    tool_starts = [
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    ]
+    assert len(tool_starts) == 2, [
+        (e["payload"].get("tool_name"), e.get("parent_task_id")) for e in tool_starts
+    ]
+    by_call = {e["payload"]["call_id"]: e for e in tool_starts}
+    # Sub A's tool stays attributed to A; sub B's to B. No mis-attribution.
+    assert by_call["call_search_a"]["parent_task_id"] == "call_supervisor_A"
+    assert by_call["call_search_b"]["parent_task_id"] == "call_supervisor_B"
+
+
+async def test_chunk_without_supervisor_metadata_falls_back_to_raw_subgraph_id() -> (
+    None
+):
+    """Legacy / synthetic chunks without our injected metadata still
+    resolve via the raw subgraph UUID for the chunk-level emit path
+    (custom + explicit api_event payloads). Preserves the historical
+    contract for replay flows and synthetic test fixtures that bypass
+    `atlas_task_tool`. The FIFO-pop fallback for messages-mode chunks
+    stays inside `stream_tools.StreamMessageProcessor.process` — see
+    `test_tool_event_inside_subagent_carries_subagent_id`."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+
+    await orchestrator.append_activity_events(
+        run=run,
+        chunk={
+            "type": "custom",
+            "ns": ("tools:legacy_subgraph_uuid",),
+            "data": {
+                "api_event_type": "reasoning_summary_delta",
+                "summary": "Reasoning inside the legacy subgraph.",
+                "delta": "Reasoning inside",
+            },
+        },
+        delta=None,
+    )
+
+    reasoning = [
+        e
+        for e in producer.events
+        if e["event_type"] is RuntimeApiEventType.REASONING_SUMMARY_DELTA
+    ]
+    assert len(reasoning) == 1
+    assert reasoning[0]["parent_task_id"] == "legacy_subgraph_uuid"

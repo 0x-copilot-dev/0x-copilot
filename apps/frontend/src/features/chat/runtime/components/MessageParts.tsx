@@ -136,45 +136,17 @@ function indexSubagentFleets(parts: readonly ContentPart[]): FleetIndex {
 
   const mutable = new Map<number, number[]>();
   const grouped = new Set<number>();
-  // PR 3.2.4 debug — collect diagnostic info so we can see in DEV
-  // whether the reshape is matching children to fleets correctly.
-  const debugSubagents: Array<{
-    index: number;
-    toolCallId: string | null;
-    parent_fleet_id: string | null;
-    matched: boolean;
-  }> = [];
   parts.forEach((part, index) => {
     if (!isSubagentCall(part)) return;
     const fleetId = parentFleetId(part);
-    const parentIndex =
-      fleetId !== null ? fleetIndexById.get(fleetId) : undefined;
-    const matched = parentIndex !== undefined;
-    debugSubagents.push({
-      index,
-      toolCallId: toolCallId(part),
-      parent_fleet_id: fleetId,
-      matched,
-    });
-    if (!fleetId || parentIndex === undefined) return;
+    if (!fleetId) return;
+    const parentIndex = fleetIndexById.get(fleetId);
+    if (parentIndex === undefined) return;
     const children = mutable.get(parentIndex) ?? [];
     children.push(index);
     mutable.set(parentIndex, children);
     grouped.add(index);
   });
-  if (
-    typeof import.meta !== "undefined" &&
-    import.meta.env?.DEV &&
-    (fleetIndexById.size > 0 || debugSubagents.length > 0)
-  ) {
-    // eslint-disable-next-line no-console
-    console.log("[PR 3.2.4 fleet reshape]", {
-      fleetIds: [...fleetIndexById.keys()],
-      fleetIndexes: [...fleetIndexById.values()],
-      subagents: debugSubagents,
-      groupedChildIndexes: [...grouped],
-    });
-  }
 
   return {
     fleetChildrenByIndex: mutable,

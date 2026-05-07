@@ -55,6 +55,7 @@ from backend_app.contracts import (
     Validators,
     _Fields,
 )
+from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
@@ -198,11 +199,73 @@ class McpRegistryService:
         return McpServerResponse.from_record(record)
 
     def list_servers(self, *, org_id: str, user_id: str) -> McpServerListResponse:
+        existing = self.store.list_servers(org_id=org_id, user_id=user_id)
+        # First-time seed: when the user has zero servers, pre-add the
+        # well-known catalog as ``enabled=False`` so the chat agent does
+        # not auto-recommend connectors the user hasn't reviewed. After
+        # the first list, removals are honoured (we never re-seed
+        # automatically); use ``reset_catalog`` for an explicit refresh.
+        if not existing:
+            seeded = self._seed_catalog(org_id=org_id, user_id=user_id)
+            if seeded:
+                existing = self.store.list_servers(org_id=org_id, user_id=user_id)
         return McpServerListResponse(
-            servers=tuple(
-                self._response_from_record(record)
-                for record in self.store.list_servers(org_id=org_id, user_id=user_id)
-            )
+            servers=tuple(self._response_from_record(record) for record in existing)
+        )
+
+    def reset_catalog(self, *, org_id: str, user_id: str) -> McpServerListResponse:
+        """Idempotently re-add any missing catalog entries for the user.
+
+        Honours existing entries (matched by stable ``seed:<slug>`` id)
+        and never overwrites the user's enabled/auth state. Removed
+        catalog entries come back as ``enabled=False``.
+        """
+
+        self._seed_catalog(org_id=org_id, user_id=user_id)
+        return self.list_servers(org_id=org_id, user_id=user_id)
+
+    def _seed_catalog(self, *, org_id: str, user_id: str) -> bool:
+        """Insert any missing catalog entries. Returns True if any rows
+        were added.
+        """
+
+        existing_ids = {
+            record.server_id
+            for record in self.store.list_servers(org_id=org_id, user_id=user_id)
+        }
+        added = False
+        with self.store.transaction() as conn:
+            for entry in DEFAULT_CATALOG:
+                if entry.server_id in existing_ids:
+                    continue
+                record = self._record_from_catalog(
+                    entry, org_id=org_id, user_id=user_id
+                )
+                self.store.create_server(record, conn=conn)
+                self._audit(record, "mcp_server_seeded", conn=conn)
+                added = True
+        return added
+
+    @staticmethod
+    def _record_from_catalog(
+        entry: CatalogEntry, *, org_id: str, user_id: str
+    ) -> McpServerRecord:
+        return McpServerRecord(
+            server_id=entry.server_id,
+            org_id=org_id,
+            user_id=user_id,
+            name=entry.slug.replace("-", "_"),
+            display_name=entry.display_name,
+            url=entry.url,
+            transport=entry.transport,
+            auth_mode=entry.auth_mode,
+            auth_state=(
+                McpAuthState.AUTHENTICATED
+                if entry.auth_mode == McpAuthMode.NONE
+                else McpAuthState.UNAUTHENTICATED
+            ),
+            health=McpServerHealth.DISABLED,
+            enabled=False,
         )
 
     def delete_server(self, *, org_id: str, user_id: str, server_id: str) -> bool:

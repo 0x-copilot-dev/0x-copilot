@@ -82,4 +82,30 @@ describe("SourcesTab", () => {
     );
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
+
+  it("shows the searching shimmer when sources are empty and a tool is in flight", () => {
+    render(<SourcesTab sources={emptySourceMap()} searching />);
+    expect(screen.getByText(/Looking for sources/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Sources will appear here/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("respects a custom searchingLabel override", () => {
+    render(
+      <SourcesTab
+        sources={emptySourceMap()}
+        searching
+        searchingLabel="Searching the web…"
+      />,
+    );
+    expect(screen.getByText(/Searching the web/)).toBeInTheDocument();
+  });
+
+  it("prefers real rows over the shimmer once the first source arrives", () => {
+    const sources = seedSourceMap([source()]);
+    render(<SourcesTab sources={sources} searching />);
+    expect(screen.queryByText(/Looking for sources/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
 });

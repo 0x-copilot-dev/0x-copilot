@@ -9,13 +9,11 @@
 // "feature workflows stay here"); when a third consumer appears, revisit.
 
 import type { SourceEntry } from "@enterprise-search/api-types";
-import {
-  AppIcon,
-  Badge,
-  Card,
-  classNames,
-} from "@enterprise-search/design-system";
+import { Badge, Card, classNames } from "@enterprise-search/design-system";
 import { forwardRef, type ReactElement, type Ref } from "react";
+import { humanizeConnector } from "./connectorLabel";
+import { SourceFavicon } from "./SourceFavicon";
+import { useSourcePreviewTrigger } from "./SourcePreview";
 import { sourceFreshnessLabel } from "./sourceFreshness";
 
 export interface SourceRowProps {
@@ -35,6 +33,7 @@ export const SourceRow = forwardRef(function SourceRow(
   const handleSelect = (): void => {
     onSelect?.(source);
   };
+  const previewProps = useSourcePreviewTrigger(source);
   return (
     <li
       ref={ref}
@@ -53,11 +52,17 @@ export const SourceRow = forwardRef(function SourceRow(
           aria-label={`Open citation ${ordinal} — ${title} from ${source.source_connector}`}
         >
           <Badge tone="accent">{`[${ordinal}]`}</Badge>
-          <AppIcon
-            name={source.source_connector}
-            size="sm"
-            className="atlas-source-row__glyph"
-          />
+          <span
+            className="atlas-source-row__glyph-trigger"
+            tabIndex={0}
+            {...previewProps}
+          >
+            <SourceFavicon
+              source={source}
+              size="sm"
+              className="atlas-source-row__glyph"
+            />
+          </span>
           <span className="atlas-source-row__title">
             {hasUrl ? (
               <a
@@ -72,7 +77,9 @@ export const SourceRow = forwardRef(function SourceRow(
               title
             )}
           </span>
-          <Badge tone="neutral">{source.source_connector}</Badge>
+          <Badge tone="neutral">
+            {humanizeConnector(source.source_connector)}
+          </Badge>
         </button>
         {source.snippet ? (
           <p className="atlas-source-row__snippet">{source.snippet}</p>

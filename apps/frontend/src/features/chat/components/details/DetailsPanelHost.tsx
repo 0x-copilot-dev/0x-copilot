@@ -8,7 +8,7 @@
 
 import type { ReactElement } from "react";
 import type { RequestIdentity } from "../../../../api/config";
-import type { CitationLookup } from "../citations/citationsContext";
+import type { SourceEntryMap } from "../../chatModel/sourcesReducer";
 import { ContextPanel } from "./ContextPanel";
 import { SourcesPanel } from "./SourcesPanel";
 import { UsagePanel } from "./UsagePanel";
@@ -19,7 +19,7 @@ export interface DetailsPanelHostProps {
   kind: DetailsPanelKind;
   conversationId: string | null;
   identity: RequestIdentity;
-  citations: CitationLookup;
+  sources: SourceEntryMap;
   onClose: () => void;
 }
 
@@ -27,11 +27,11 @@ export function DetailsPanelHost({
   kind,
   conversationId,
   identity,
-  citations,
+  sources,
   onClose,
 }: DetailsPanelHostProps): ReactElement | null {
   if (kind === "sources") {
-    return <SourcesPanel citations={citations} onClose={onClose} />;
+    return <SourcesPanel sources={sources} onClose={onClose} />;
   }
   if (kind === "context") {
     if (conversationId === null) {

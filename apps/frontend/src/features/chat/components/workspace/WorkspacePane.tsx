@@ -44,6 +44,8 @@ export interface WorkspacePaneProps {
   sources: SourceEntryMap;
   sourcesLoading?: boolean;
   sourcesError?: string | null;
+  /** PR 3.7.1 — derived from runUiState; drives the "Looking for sources…" shimmer. */
+  sourcesSearching?: boolean;
   onSelectSource?: (source: SourceEntry) => void;
   /** Agents tab inputs (PR 1.5 reducer + PR 3.2 archive). */
   subagents: SubagentSnapshotMap;
@@ -83,6 +85,7 @@ export function WorkspacePane({
   sources,
   sourcesLoading,
   sourcesError,
+  sourcesSearching,
   onSelectSource,
   subagents,
   subagentsLoading,
@@ -191,6 +194,7 @@ export function WorkspacePane({
             loading={sourcesLoading}
             error={sourcesError ?? null}
             focusCitationId={state.focus.citationId ?? null}
+            searching={sourcesSearching}
             onSelect={onSelectSource}
           />
         ) : null}
