@@ -77,10 +77,21 @@ function clearLegacyLocalOverrides(slugs: readonly string[]): void {
   }
 }
 
+// Defensive read for backend payloads that may pre-date the
+// ``discoverable_connectors`` field. An older backend deploy returns
+// the prefs blob without this key; treating that as empty keeps the
+// hook honest about server state without throwing on
+// ``undefined.overrides``.
+function readOverrides(prefs: {
+  discoverable_connectors?: { overrides?: Record<string, boolean> };
+}): Overrides {
+  return { ...(prefs.discoverable_connectors?.overrides ?? {}) };
+}
+
 async function bootstrap(): Promise<void> {
   try {
     const prefs = await getMyPreferences();
-    SHARED.overrides = { ...prefs.discoverable_connectors.overrides };
+    SHARED.overrides = readOverrides(prefs);
 
     // One-time migration: any legacy localStorage entries not present
     // in the backend are PATCHed across, then deleted. The merge is
@@ -97,14 +108,14 @@ async function bootstrap(): Promise<void> {
       const updated = await updateMyPreferences({
         discoverable_connectors: { overrides: toMigrate },
       });
-      SHARED.overrides = { ...updated.discoverable_connectors.overrides };
+      SHARED.overrides = readOverrides(updated);
     }
     clearLegacyLocalOverrides(Object.keys(legacy));
   } catch {
-    // Bootstrap failure leaves SHARED.overrides empty — the hook will
-    // report catalog defaults until the next setEnabled retries. No
-    // fallback to localStorage by design (avoids two sources of
-    // truth diverging silently).
+    // Bootstrap failure (older backend, network blip, etc.) leaves
+    // SHARED.overrides empty — the hook will report catalog defaults
+    // until the next setEnabled retries. No fallback to localStorage
+    // by design (avoids two sources of truth diverging silently).
     SHARED.overrides = {};
   }
 }
@@ -124,16 +135,26 @@ function publish(next: Overrides): void {
 }
 
 async function persist(slug: string, enabled: boolean): Promise<void> {
-  // Optimistic local update; the backend PATCH echoes the merged
-  // shape and we replace the cache from the response so two
-  // concurrent flips on different slugs both land cleanly.
+  // Optimistic local update.
   const optimistic = { ...SHARED.overrides, [slug]: enabled };
   publish(optimistic);
   try {
     const updated = await updateMyPreferences({
       discoverable_connectors: { overrides: { [slug]: enabled } },
     });
-    publish({ ...updated.discoverable_connectors.overrides });
+    // Each PATCH is authoritative ONLY for the slug it sent. Trusting
+    // the response's full ``overrides`` map would clobber other slugs'
+    // optimistic state when two toggles fire in quick succession: the
+    // first PATCH's response is built before the server has seen the
+    // second PATCH, so it omits the second slug. The visible symptom
+    // is "second toggle flips back on briefly". Merge the response's
+    // value for our slug onto the live map and leave everything else
+    // alone.
+    const echoed = updated.discoverable_connectors?.overrides?.[slug];
+    publish({
+      ...SHARED.overrides,
+      [slug]: typeof echoed === "boolean" ? echoed : enabled,
+    });
   } catch {
     // Network failure — revert by re-fetching via bootstrap. Cheap and
     // keeps the UI honest about server state.

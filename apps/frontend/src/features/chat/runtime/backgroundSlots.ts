@@ -1,6 +1,11 @@
 import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import { applyCitationEvent } from "../chatModel/citationReducer";
 import {
+  applyCitationLinkEvent,
+  emptyCitationLinkRegistry,
+  type CitationLinkRegistryByRun,
+} from "../chatModel/citationLinkReducer";
+import {
   emptyCitationRegistry,
   type CitationRegistryByRun,
 } from "../chatModel/citationsRegistry";
@@ -37,6 +42,9 @@ import { isRunUiEvent } from "../chatRunState";
 export interface BackgroundSlot {
   items: ChatItem[];
   citations: CitationRegistryByRun;
+  // PR 1.1-rev2 — model-declared citation links registry, frozen
+  // alongside the legacy citation registry so warm-thaw restores both.
+  citationLinks: CitationLinkRegistryByRun;
   sources: SourceEntryMap;
   activeRunId: string | null;
   latestRunEvent: RuntimeEventEnvelope | null;
@@ -54,6 +62,7 @@ export function emptySlot(): BackgroundSlot {
   return {
     items: [],
     citations: emptyCitationRegistry(),
+    citationLinks: emptyCitationLinkRegistry(),
     sources: emptySourceMap(),
     activeRunId: null,
     latestRunEvent: null,
@@ -90,6 +99,7 @@ export function applyEventToSlot(
       parentMessageId,
     ),
     citations: applyCitationEvent(slot.citations, event),
+    citationLinks: applyCitationLinkEvent(slot.citationLinks, event),
     sources: applySourceEvent(slot.sources, event),
     latestRunEvent: isRunUiEvent(event) ? event : slot.latestRunEvent,
     latestSequenceByRunId,

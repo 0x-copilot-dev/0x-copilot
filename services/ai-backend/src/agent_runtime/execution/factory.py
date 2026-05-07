@@ -133,12 +133,15 @@ def create_agent_runtime(
             runtime_context=runtime_context,
             mcp_discovery_enabled=runtime_dependencies.mcp_discovery_enabled,
         )
-        model_instructions = _instructions_with_skill_cards(
-            instructions=_instructions_with_mcp_cards(
-                instructions=instructions,
-                mcp_servers=mcp_servers,
+        model_instructions = _instructions_with_suggested_connectors(
+            instructions=_instructions_with_skill_cards(
+                instructions=_instructions_with_mcp_cards(
+                    instructions=instructions,
+                    mcp_servers=mcp_servers,
+                ),
+                skill_cards=skill_cards,
             ),
-            skill_cards=skill_cards,
+            suggestions=runtime_context.suggested_connectors,
         )
         # PR 4.3 — compute workspace-policy kwargs (e.g. training opt-out
         # provider headers) once per build and thread them through every
@@ -383,6 +386,49 @@ def _skill_cards(
     if not callable(list_available):
         return ()
     return tuple(list_available(runtime_context))
+
+
+def _instructions_with_suggested_connectors(
+    *, instructions: str, suggestions: Sequence[object]
+) -> str:
+    """PR 4.4.7 Phase 2 (Slice B) — render the catalog suggestions
+    section.
+
+    Renders only when ``suggestions`` is non-empty so a run with no
+    suggestible catalog entries pays no token tax. Each row carries
+    just the slug, display name, and a one-line scope/description so
+    the agent has enough context to map a user request to a relevant
+    suggestion via the existing ``suggest_mcp_connector`` tool.
+    """
+
+    if not suggestions:
+        return instructions
+    lines = []
+    for entry in suggestions:
+        slug = getattr(entry, "slug", str(entry))
+        display_name = getattr(entry, "display_name", slug)
+        summary = getattr(entry, "scopes_summary", None) or getattr(
+            entry, "description", ""
+        )
+        if summary:
+            lines.append(f"- {slug} ({display_name}): {summary}")
+        else:
+            lines.append(f"- {slug} ({display_name})")
+    return "\n\n".join(
+        (
+            instructions,
+            (
+                "## Suggestable integrations the user has not yet connected\n\n"
+                "The capabilities below are available in the workspace catalog "
+                "but are NOT installed for the current user. If the user's "
+                "intent maps to one of these, call ``suggest_mcp_connector`` "
+                "with the slug, a one-sentence ``reason``, and a one-line "
+                "``expected_value``. Do NOT pretend you can already access "
+                "these tools — you cannot. Suggest at most one per turn."
+            ),
+            "\n".join(lines),
+        )
+    )
 
 
 def _instructions_with_skill_cards(

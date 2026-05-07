@@ -1,12 +1,44 @@
 import type { ReactNode } from "react";
 import {
-  compactRecord,
   displayToolResult,
   formatToolValue,
   hasVisibleValue,
+  parseJsonValue,
   stringValue,
 } from "../../utils/jsonUtils";
 import { formatDetailValue } from "./formatDetailValue";
+
+// Recursively un-stringify nested JSON (MCP tool results often wrap the
+// real payload as a JSON-stringified ``text`` field). Bounded depth so
+// pathological inputs don't loop.
+function deepUnescapeJson(value: unknown, depth = 0): unknown {
+  if (depth > 6) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      const parsed = parseJsonValue(trimmed);
+      if (parsed !== null) {
+        return deepUnescapeJson(parsed, depth + 1);
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepUnescapeJson(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      out[key] = deepUnescapeJson(item, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
 
 export function approvalDetailsContent(
   args: Record<string, unknown>,
@@ -14,20 +46,8 @@ export function approvalDetailsContent(
 ): ReactNode | null {
   const reason = stringValue(args.reason);
   const toolArgs = args.arguments;
-  const debug = compactRecord({
-    server_id: args.server_id,
-    server_name: args.server_name,
-    tool_name: args.tool_name,
-    approval_id: args.approval_id,
-  });
-  const renderedResult =
-    result !== undefined ? (
-      <>
-        <small>Decision</small>
-        <pre>{formatToolValue(displayToolResult(result))}</pre>
-      </>
-    ) : null;
-  if (!reason && toolArgs === undefined && !renderedResult && !debug) {
+  const decision = result !== undefined ? deepUnescapeJson(result) : undefined;
+  if (!reason && !hasVisibleValue(toolArgs) && decision === undefined) {
     return null;
   }
   return (
@@ -41,16 +61,17 @@ export function approvalDetailsContent(
       {hasVisibleValue(toolArgs) ? (
         <>
           <small>Arguments</small>
-          {formatDetailValue(toolArgs)}
+          {formatDetailValue(deepUnescapeJson(toolArgs))}
         </>
       ) : null}
-      {debug ? (
+      {decision !== undefined ? (
         <>
-          <small>Debug</small>
-          <pre>{formatToolValue(debug)}</pre>
+          <small>Decision</small>
+          <pre>
+            {formatToolValue(deepUnescapeJson(displayToolResult(decision)))}
+          </pre>
         </>
       ) : null}
-      {renderedResult}
     </>
   );
 }

@@ -1,38 +1,50 @@
 import type { ReactNode } from "react";
 import {
-  compactRecord,
   displayToolResult,
   formatToolValue,
+  parseJsonValue,
 } from "../../utils/jsonUtils";
 
-export function mcpAuthDetails(
-  args: Record<string, unknown>,
-  result: unknown,
-): ReactNode | null {
-  const debug = compactRecord({
-    server_id: args.server_id,
-    server_name: args.server_name,
-    approval_id: args.approval_id ?? args.action_id,
-  });
-  const renderedResult =
-    result !== undefined ? (
-      <>
-        <small>Result</small>
-        <pre>{formatToolValue(displayToolResult(result))}</pre>
-      </>
-    ) : null;
-  if (!debug && !renderedResult) {
+// Recursively un-stringify nested JSON. Mirrors the helper in
+// ``toolDetailsContent`` — kept local to avoid a cross-module utility
+// just for this. Bounded depth so pathological inputs don't loop.
+function deepUnescapeJson(value: unknown, depth = 0): unknown {
+  if (depth > 6) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      const parsed = parseJsonValue(trimmed);
+      if (parsed !== null) {
+        return deepUnescapeJson(parsed, depth + 1);
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepUnescapeJson(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      out[key] = deepUnescapeJson(item, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function mcpAuthDetails(result: unknown): ReactNode | null {
+  if (result === undefined) {
     return null;
   }
   return (
     <>
-      {debug ? (
-        <>
-          <small>Debug</small>
-          <pre>{formatToolValue(debug)}</pre>
-        </>
-      ) : null}
-      {renderedResult}
+      <small>Result</small>
+      <pre>{formatToolValue(deepUnescapeJson(displayToolResult(result)))}</pre>
     </>
   );
 }

@@ -20,13 +20,21 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import type {
+  CitationLink,
+  CitationSourceRef,
+} from "@enterprise-search/api-types";
 import {
   citationsByOrdinal,
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
 } from "../../chatModel/citationsRegistry";
+import {
+  anyLinkForOrdinalInRun,
+  emptyCitationLinkRegistry,
+  type CitationLinkRegistryByRun,
+} from "../../chatModel/citationLinkReducer";
 
 export type CitationLookup = ReadonlyMap<string, CitationSourceRef>;
 
@@ -37,6 +45,13 @@ interface CitationsContextValue {
   byRun: CitationRegistryByRun;
   /** Run ids whose final_response has sealed (used as the `sealedOnly` gate). */
   terminalRuns: ReadonlySet<string>;
+  // PR 1.1-rev2 — model-declared citation links keyed by run + message_id.
+  // Resolves the new ``[[N]]`` chip format. Coexists with ``active`` /
+  // ``byRun`` during the parallel rollout window.
+  linksByRun: CitationLinkRegistryByRun;
+  /** The run whose chips are currently being rendered — used by ordinal
+   *  lookups so the correct run's link map is consulted. */
+  activeRunId: string | null;
 }
 
 const EMPTY_LOOKUP: CitationLookup = new Map();
@@ -45,6 +60,8 @@ const DEFAULT_VALUE: CitationsContextValue = {
   active: EMPTY_LOOKUP,
   byRun: emptyCitationRegistry(),
   terminalRuns: EMPTY_TERMINAL,
+  linksByRun: emptyCitationLinkRegistry(),
+  activeRunId: null,
 };
 const EMPTY_CITATIONS: readonly CitationSourceRef[] = [];
 
@@ -65,6 +82,18 @@ export interface CitationsProviderProps {
    * always returns empty.
    */
   terminalRuns?: ReadonlySet<string>;
+  /**
+   * PR 1.1-rev2 — full per-run citation link registry (``[[N]]`` chips).
+   * Optional so call sites that only render legacy chips keep compiling.
+   */
+  linksByRun?: CitationLinkRegistryByRun;
+  /**
+   * PR 1.1-rev2 — the run whose chips are currently being rendered. Used
+   * by ``useOrdinalCitation`` to look up the right run's link map.
+   * Optional; defaults to ``null`` in which case the ordinal hook
+   * returns ``undefined``.
+   */
+  activeRunId?: string | null;
   children: ReactNode;
 }
 
@@ -72,6 +101,8 @@ export function CitationsProvider({
   citations,
   byRun,
   terminalRuns,
+  linksByRun,
+  activeRunId,
   children,
 }: CitationsProviderProps): ReactElement {
   const value = useMemo<CitationsContextValue>(
@@ -79,8 +110,10 @@ export function CitationsProvider({
       active: citations,
       byRun: byRun ?? emptyCitationRegistry(),
       terminalRuns: terminalRuns ?? EMPTY_TERMINAL,
+      linksByRun: linksByRun ?? emptyCitationLinkRegistry(),
+      activeRunId: activeRunId ?? null,
     }),
-    [citations, byRun, terminalRuns],
+    [citations, byRun, terminalRuns, linksByRun, activeRunId],
   );
   return (
     <CitationsContext.Provider value={value}>
@@ -122,4 +155,25 @@ export function useRunCitations(
     }
     return citationsByOrdinal(map);
   }, [byRun, options.sealedOnly, runId, terminalRuns]);
+}
+
+/**
+ * PR 1.1-rev2 — resolve an ordinal-keyed citation in the active run.
+ *
+ * Returns the underlying ``CitationLink`` (with the cited
+ * ``source_tool_call_id``) when the resolver has fired a
+ * ``citation_made`` event for this ordinal in the active run, or
+ * ``undefined`` for hallucinated / unresolved ordinals. The chip
+ * renders a muted placeholder for the latter.
+ */
+export function useOrdinalCitation(
+  conversationOrdinal: number,
+): CitationLink | undefined {
+  const { linksByRun, activeRunId } = useContext(CitationsContext);
+  return useMemo(() => {
+    if (activeRunId === null) {
+      return undefined;
+    }
+    return anyLinkForOrdinalInRun(linksByRun, activeRunId, conversationOrdinal);
+  }, [linksByRun, activeRunId, conversationOrdinal]);
 }

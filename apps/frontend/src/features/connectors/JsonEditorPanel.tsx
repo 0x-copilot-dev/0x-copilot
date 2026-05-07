@@ -90,10 +90,9 @@ export function JsonEditorPanel({
         if (update.patch.enabled !== undefined) {
           await connectors.setEnabled(update.id, update.patch.enabled);
         }
-        // display_name updates aren't wired through ``ConnectorState``
-        // yet — the backend supports it via PATCH but the hook only
-        // exposes ``setEnabled``. Surface a non-fatal note so users
-        // know what was skipped.
+        if (update.patch.display_name !== undefined) {
+          await connectors.setDisplayName(update.id, update.patch.display_name);
+        }
       }
       await connectors.refresh();
     } catch (err) {

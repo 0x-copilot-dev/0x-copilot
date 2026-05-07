@@ -859,7 +859,7 @@ function ManualAddForm({
       });
       setFormError(null);
       setSubmitting(true);
-      await connectors.addServer(trimmedUrl, oauthClient);
+      const server = await connectors.addServer(trimmedUrl, oauthClient);
       setUrl("");
       setDisplayName("");
       setClientId("");
@@ -868,6 +868,17 @@ function ManualAddForm({
       setAuthorizationEndpoint("");
       setTokenEndpoint("");
       setAdvancedOpen(false);
+      // Mirror the catalog Install path: a freshly-created server lands
+      // in ``auth_pending`` and is otherwise hard to find (the page's
+      // active list filters on ``isAuthenticated``). Kick off OAuth so
+      // the user ends connected, not stranded.
+      if (
+        server.auth_mode !== "none" &&
+        server.auth_state !== "auth_unsupported" &&
+        server.auth_state !== "authenticated"
+      ) {
+        await connectors.authenticate(server.server_id);
+      }
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Could not add connector.",

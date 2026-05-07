@@ -32,9 +32,16 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Protocol
 
 from agent_runtime.api.constants import Keys, Messages
-from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
+from agent_runtime.capabilities.mcp.cards import (
+    McpAuthMode,
+    McpAuthState,
+    McpServerCard,
+    McpServerHealth,
+    McpTransport,
+)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    CatalogSuggestionCard,
     JsonObject,
     StreamEventSource,
 )
@@ -58,6 +65,42 @@ class McpServerLookup(Protocol):
         """Return the per-context catalog already authorized for the run."""
 
 
+# PR 4.4.7 Phase 2 (Slice C) — sentinel surfaced on the
+# ``mcp_auth_required`` payload when the suggestion came from the
+# catalog (uninstalled). The FE reads this and routes the Connect
+# button to ``McpOverlay?install=<slug>`` instead of the
+# already-installed-server OAuth path.
+_CATALOG_SLUG_FIELD = "catalog_slug"
+
+
+def _synthesize_catalog_card(suggestion: CatalogSuggestionCard) -> McpServerCard:
+    """Build a minimal McpServerCard from a catalog suggestion.
+
+    The synthesized card is only consumed by ``McpDiscoveryService``
+    locally — it never enters the registry, never reaches the agent's
+    ``list_available_servers``, never reaches MCP loaders. We pin
+    ``health=HEALTHY`` and ``auth_state=UNAUTHENTICATED`` because the
+    discovery flow's only branches on this card check ``enabled`` and
+    ``auth_state`` (skip emit when authenticated). ``server_id`` uses
+    the ``seed:`` prefix so it round-trips through the FE's existing
+    install matching.
+    """
+
+    seed_id = f"seed:{suggestion.slug}"
+    return McpServerCard(
+        name=suggestion.slug,
+        server_id=seed_id,
+        display_name=suggestion.display_name,
+        short_description=suggestion.description or suggestion.display_name,
+        transport=McpTransport.HTTP,
+        auth_mode=McpAuthMode.OAUTH2,
+        auth_state=McpAuthState.UNAUTHENTICATED,
+        health=McpServerHealth.HEALTHY,
+        load_cost=1,
+        enabled=True,
+    )
+
+
 class _Results:
     """Tool-facing result-status strings. Stable for replay parity."""
 
@@ -67,6 +110,16 @@ class _Results:
     UNKNOWN_SERVER = "unknown_server"
     SERVER_DISABLED = "server_disabled"
     DISCOVERY_DISABLED = "discovery_disabled"
+    # PR 4.4.7 Phase 2 — per-turn cap status. The PRD's open question
+    # set the recommended default to one suggestion per turn so the
+    # user never sees a wall of CTAs.
+    PER_TURN_CAP_REACHED = "per_turn_cap_reached"
+
+
+# PR 4.4.7 Phase 2 — at most one suggestion per turn. A "turn" maps to
+# one ``McpDiscoveryService`` instance: the worker creates a fresh
+# instance per run, the run is one user → assistant cycle.
+_SUGGESTIONS_PER_TURN = 1
 
 
 class McpDiscoveryService:
@@ -136,13 +189,29 @@ class McpDiscoveryService:
                 Keys.Field.APPROVAL_ID: cached_approval,
             }
 
-        card = self._lookup_card(normalized_id)
-        if card is None:
+        # PR 4.4.7 Phase 2 — soft per-turn cap. The system prompt asks
+        # the agent to suggest at most one connector per turn; this is
+        # the runtime backstop for when the model ignores that.
+        # Idempotent re-calls for the same slug (above) are NOT subject
+        # to the cap because they're no-ops, but a *new* slug after the
+        # cap returns ``per_turn_cap_reached`` so the agent reports
+        # back to the user in plain text instead of stacking a wall of
+        # cards. Cap is checked before any side-effect (no event, no
+        # audit) so cap state never pollutes the audit chain.
+        if len(self._suggested) >= _SUGGESTIONS_PER_TURN:
+            return {
+                "status": _Results.PER_TURN_CAP_REACHED,
+                "server_id": normalized_id,
+            }
+
+        lookup = self._lookup_card_with_source(normalized_id)
+        if lookup is None:
             # Not in the per-run catalog — never emit a card for a server
             # the model only thinks exists. Audit nothing (no resource
             # was touched). The tool returns the status so the agent can
             # course-correct without retrying.
             return {"status": _Results.UNKNOWN_SERVER, "server_id": normalized_id}
+        card, lookup_source = lookup
 
         if not card.enabled:
             await self._audit(
@@ -167,6 +236,7 @@ class McpDiscoveryService:
             approval_id=approval_id,
             reason=reason,
             expected_value=expected_value,
+            lookup_source=lookup_source,
         )
         await self._audit(
             server_id=normalized_id,
@@ -231,8 +301,46 @@ class McpDiscoveryService:
         return _MCP_DISCOVERY_CTX.get(None)
 
     def _lookup_card(self, server_id: str) -> McpServerCard | None:
+        result = self._lookup_card_with_source(server_id)
+        return result[0] if result is not None else None
+
+    def _lookup_card_with_source(
+        self, server_id: str
+    ) -> tuple[McpServerCard, str] | None:
+        """Resolve a server_id to a card, tagging the lookup source.
+
+        Source is ``"registry"`` when the card came from the user's
+        installed servers, ``"catalog"`` when synthesized from
+        ``runtime_context.suggested_connectors``. The FE-facing
+        ``catalog_slug`` sentinel is only stamped on catalog hits so a
+        registry-hit doesn't mis-route the Connect button to the
+        install overlay.
+        """
+
         for card in self._registry.list_available_servers(self._runtime_context):
             if (card.server_id or card.name) == server_id:
+                return (card, "registry")
+        # PR 4.4.7 Phase 2 (Slice C) — fall back to the catalog
+        # suggestions snapshot. These are uninstalled connectors the
+        # backend pre-filtered (paused / muted excluded), so a synthesized
+        # ``McpServerCard`` is the right "this connector exists in the
+        # workspace catalog but the user hasn't connected it yet" signal.
+        # The card carries ``auth_state=UNAUTHENTICATED`` so the
+        # ``ALREADY_AUTHENTICATED`` short-circuit in ``suggest`` doesn't
+        # fire; the FE branches on the catalog_slug payload field to
+        # route Connect through the install flow rather than raw OAuth.
+        suggestion = self._lookup_suggestion(server_id)
+        if suggestion is not None:
+            return (_synthesize_catalog_card(suggestion), "catalog")
+        return None
+
+    def _lookup_suggestion(self, server_id: str) -> CatalogSuggestionCard | None:
+        normalized = server_id.strip().lower()
+        bare = (
+            normalized[len("seed:") :] if normalized.startswith("seed:") else normalized
+        )
+        for card in self._runtime_context.suggested_connectors:
+            if card.slug == bare:
                 return card
         return None
 
@@ -243,6 +351,7 @@ class McpDiscoveryService:
         approval_id: str,
         reason: str,
         expected_value: str,
+        lookup_source: str = "registry",
     ) -> JsonObject:
         # The discovery card needs the same wire fields as the blocking
         # auth gate so the FE can re-use ConnectorAuthTool with a single
@@ -266,7 +375,7 @@ class McpDiscoveryService:
             auth_url = session.auth_url
             expires_at = session.expires_at.isoformat()
             display_name = session.display_name or display_name
-        return {
+        payload: dict[str, object] = {
             Keys.Field.API_EVENT_TYPE: RuntimeApiEventType.MCP_AUTH_REQUIRED.value,
             Keys.Field.EVENT_TYPE: RuntimeApiEventType.MCP_AUTH_REQUIRED.value,
             Keys.Field.APPROVAL_ID: approval_id,
@@ -281,6 +390,16 @@ class McpDiscoveryService:
             Keys.Field.DISCOVERY_REASON: reason,
             Keys.Field.EXPECTED_VALUE: expected_value,
         }
+        # PR 4.4.7 Phase 2 (Slice C) — flag uninstalled catalog
+        # suggestions so the FE deep-links the Connect button to the
+        # catalog's install flow instead of starting OAuth against a
+        # server row that doesn't exist yet. Stamped *only* when the
+        # lookup hit the catalog fallback; a registry hit (server is
+        # installed) keeps the existing OAuth flow even if the same
+        # slug also appears in ``suggested_connectors``.
+        if lookup_source == "catalog":
+            payload[_CATALOG_SLUG_FIELD] = card.name
+        return payload
 
     def _approval_id(self, server_id: str) -> str:
         # Deterministic across replays — the FE reducer is keyed by

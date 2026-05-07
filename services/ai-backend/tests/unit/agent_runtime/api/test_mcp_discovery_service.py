@@ -133,7 +133,9 @@ class _StubRegistry:
         return tuple(self._cards)
 
 
-def _runtime_context() -> AgentRuntimeContext:
+def _runtime_context(
+    *, suggested_connectors: tuple[Any, ...] = ()
+) -> AgentRuntimeContext:
     return AgentRuntimeContext(
         user_id="user_disc",
         org_id="org_disc",
@@ -146,12 +148,13 @@ def _runtime_context() -> AgentRuntimeContext:
             "temperature": 0,
             "supports_streaming": True,
         },
+        suggested_connectors=suggested_connectors,
         run_id="run_disc",
         trace_id="trace_disc",
     )
 
 
-def _run_record() -> RunRecord:
+def _run_record(*, suggested_connectors: tuple[Any, ...] = ()) -> RunRecord:
     return RunRecord(
         run_id="run_disc",
         conversation_id="conv_disc",
@@ -161,7 +164,7 @@ def _run_record() -> RunRecord:
         trace_id="trace_disc",
         model_provider="openai",
         model_name="gpt-5.4-mini",
-        runtime_context=_runtime_context(),
+        runtime_context=_runtime_context(suggested_connectors=suggested_connectors),
     )
 
 
@@ -196,6 +199,7 @@ class DiscoveryFixtureMixin:
         *,
         cards: list[McpServerCard] | None = None,
         with_auth_creator: bool = True,
+        suggested_connectors: tuple[Any, ...] = (),
     ) -> tuple[
         McpDiscoveryService,
         _RecordingEventStore,
@@ -212,8 +216,8 @@ class DiscoveryFixtureMixin:
         )
         audit = WorkerAuditEmitter(persistence=persistence)
         service = McpDiscoveryService(
-            run=_run_record(),
-            runtime_context=_runtime_context(),
+            run=_run_record(suggested_connectors=suggested_connectors),
+            runtime_context=_runtime_context(suggested_connectors=suggested_connectors),
             producer=producer,
             audit_emitter=audit,
             registry=_StubRegistry(cards),
@@ -411,3 +415,190 @@ class TestSuggestNoAuthSessionCreator(DiscoveryFixtureMixin):
         assert Keys.Field.EXPIRES_AT not in payload
         # Discovery fields still present.
         assert payload[Keys.Field.DISCOVERY_REASON] == "fetch ticket statuses"
+
+
+# ---------------------------------------------------------------------------
+# PR 4.4.7 Phase 2 (Slice C) — catalog-only suggestion fallback
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestCatalogFallback(DiscoveryFixtureMixin):
+    """When the user hasn't installed the connector but the catalog
+    flagged it discoverable, ``runtime_context.suggested_connectors``
+    carries the snapshot. The discovery service synthesizes a card on
+    the fly, emits the same wire event the FE already renders, and
+    stamps ``catalog_slug`` on the payload so the FE routes Connect
+    through the install flow rather than OAuth against a row that
+    doesn't exist yet.
+    """
+
+    def _suggestion(self, *, slug: str = "linear"):
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        return CatalogSuggestionCard(
+            slug=slug,
+            display_name=slug.title(),
+            description="Issues, projects, and cycles.",
+            scopes_summary="Read issues, projects, and cycles.",
+            brand_color="#5E6AD2",
+        )
+
+    def test_suggestion_in_runtime_context_emits_catalog_event(self) -> None:
+        # No card in the registry — the user hasn't installed Linear.
+        # The catalog snapshot on the runtime context is the lookup
+        # source.
+        service, events, persistence = self._build(
+            cards=[],
+            suggested_connectors=(self._suggestion(),),
+        )
+
+        result = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims about progress",
+            )
+        )
+
+        assert result["status"] == "emitted"
+        assert len(events.drafts) == 1
+        payload = events.drafts[0].payload
+        assert payload[Keys.Field.SERVER_ID] == "seed:linear"
+        assert payload[Keys.Field.DISCOVERY_REASON] == "fetch ticket statuses"
+        # The new sentinel field — FE branches Connect on this.
+        assert payload["catalog_slug"] == "linear"
+        # An audit row was still emitted (the run took an action).
+        assert len(persistence.audit_records) == 1
+
+    def test_suggestion_id_works_with_seed_prefix_too(self) -> None:
+        # The agent might call the tool with the bare slug OR the
+        # ``seed:<slug>`` form. Both should resolve to the same
+        # synthesized card.
+        service, events, _ = self._build(
+            cards=[],
+            suggested_connectors=(self._suggestion(),),
+        )
+        result = asyncio.run(
+            service.suggest(
+                server_id="seed:linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+        assert result["status"] == "emitted"
+        assert len(events.drafts) == 1
+        assert events.drafts[0].payload["catalog_slug"] == "linear"
+
+    def test_unknown_slug_not_in_suggestions_returns_unknown(self) -> None:
+        # Snapshot has Linear; agent asked for Notion. The catalog
+        # fallback is bounded by the snapshot — anything outside it is
+        # an "unknown_server" result with no event emitted.
+        service, events, persistence = self._build(
+            cards=[],
+            suggested_connectors=(self._suggestion(slug="linear"),),
+        )
+
+        result = asyncio.run(
+            service.suggest(
+                server_id="notion",
+                reason="fetch pages",
+                expected_value="ground claims",
+            )
+        )
+
+        assert result["status"] == "unknown_server"
+        assert len(events.drafts) == 0
+        assert len(persistence.audit_records) == 0
+
+    def test_registry_takes_precedence_over_catalog_fallback(self) -> None:
+        # When the user HAS installed Linear (registry hit), the
+        # catalog snapshot is irrelevant. ``catalog_slug`` is NOT set
+        # on the payload so the FE keeps the existing OAuth flow.
+        service, events, _ = self._build(
+            cards=[_card(name="linear")],
+            suggested_connectors=(self._suggestion(),),
+        )
+
+        result = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+
+        assert result["status"] == "emitted"
+        assert len(events.drafts) == 1
+        payload = events.drafts[0].payload
+        assert "catalog_slug" not in payload
+
+
+class TestSuggestPerTurnCap(DiscoveryFixtureMixin):
+    """PR 4.4.7 Phase 2 — at most one suggestion per turn so the user
+    never sees a wall of CTAs. Re-calls for the same slug are still
+    no-ops (idempotency wins); a *different* slug after the cap is the
+    case the cap exists to gate."""
+
+    def test_second_unique_suggestion_in_same_turn_is_capped(self) -> None:
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        service, events, persistence = self._build(
+            cards=[],
+            suggested_connectors=(
+                CatalogSuggestionCard(slug="linear", display_name="Linear"),
+                CatalogSuggestionCard(slug="notion", display_name="Notion"),
+            ),
+        )
+
+        first = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+        second = asyncio.run(
+            service.suggest(
+                server_id="notion",
+                reason="fetch pages",
+                expected_value="ground claims",
+            )
+        )
+
+        assert first["status"] == "emitted"
+        assert second["status"] == "per_turn_cap_reached"
+        # Exactly one event — the second call did not emit.
+        assert len(events.drafts) == 1
+        # No audit row for the capped call (no resource was touched).
+        assert len(persistence.audit_records) == 1
+
+    def test_re_suggesting_the_same_slug_is_idempotent_not_capped(self) -> None:
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        service, events, _ = self._build(
+            cards=[],
+            suggested_connectors=(
+                CatalogSuggestionCard(slug="linear", display_name="Linear"),
+            ),
+        )
+
+        first = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims",
+            )
+        )
+        second = asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses again",
+                expected_value="ground claims",
+            )
+        )
+
+        assert first["status"] == "emitted"
+        # Same slug after cap was hit — idempotency check fires first,
+        # so the agent gets the original approval_id, not a cap status.
+        assert second["status"] == "already_suggested"
+        assert len(events.drafts) == 1

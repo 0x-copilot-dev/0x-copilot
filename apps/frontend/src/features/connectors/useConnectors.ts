@@ -24,13 +24,21 @@ export interface ConnectorState {
   addServer: (
     url: string,
     oauthClient?: McpOAuthClientConfigRequest,
-  ) => Promise<void>;
+  ) => Promise<McpServer>;
   installFromCatalog: (
     slug: string,
     oauthClient?: McpOAuthClientConfigRequest,
   ) => Promise<McpServer>;
   removeServer: (serverId: string) => Promise<void>;
   setEnabled: (serverId: string, enabled: boolean) => Promise<void>;
+  /**
+   * PR 4.4.7 — rename a connector. The backend's
+   * ``PATCH /v1/mcp/servers/{id}`` already accepts ``display_name``;
+   * the JSON editor and the future visual rename affordance share
+   * this hook so they stay in sync. Returns the server with its
+   * updated display_name.
+   */
+  setDisplayName: (serverId: string, displayName: string) => Promise<McpServer>;
   authenticate: (serverId: string) => Promise<void>;
   skipAuth: (serverId: string) => Promise<void>;
 }
@@ -49,9 +57,14 @@ export function useConnectors(
       async addServer(
         url: string,
         oauthClient?: McpOAuthClientConfigRequest,
-      ): Promise<void> {
-        await createMcpServer(url, requireIdentity(identity), oauthClient);
+      ): Promise<McpServer> {
+        const server = await createMcpServer(
+          url,
+          requireIdentity(identity),
+          oauthClient,
+        );
         await refresh();
+        return server;
       },
       async installFromCatalog(
         slug: string,
@@ -76,6 +89,18 @@ export function useConnectors(
       async setEnabled(serverId: string, enabled: boolean): Promise<void> {
         await updateMcpServer(serverId, { enabled }, requireIdentity(identity));
         await refresh();
+      },
+      async setDisplayName(
+        serverId: string,
+        displayName: string,
+      ): Promise<McpServer> {
+        const server = await updateMcpServer(
+          serverId,
+          { display_name: displayName },
+          requireIdentity(identity),
+        );
+        await refresh();
+        return server;
       },
       async authenticate(serverId: string): Promise<void> {
         try {

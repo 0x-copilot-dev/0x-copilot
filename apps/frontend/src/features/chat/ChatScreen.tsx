@@ -38,8 +38,10 @@ import {
   type AgentEventStream,
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
+import { updateMyPreferences } from "../../api/meApi";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import { ConnectorPopover } from "../connectors/ConnectorPopover";
+import { McpOverlay } from "../connectors/mcp/McpOverlay";
 import type { ConnectorState } from "../connectors/useConnectors";
 import { useConversationConnectors } from "../connectors/useConversationConnectors";
 import {
@@ -52,7 +54,7 @@ import {
   DetailsPanelHost,
   type DetailsPanelKind,
 } from "./components/details/DetailsPanelHost";
-import { Topbar, activeConnectorsFromScopes } from "./components/shell";
+import { Topbar } from "./components/shell";
 import { SharePopover } from "../share/SharePopover";
 import {
   DEFAULT_THINKING_DEPTH,
@@ -84,6 +86,12 @@ import {
   buildCitationRegistry,
 } from "./chatModel/citationReducer";
 import {
+  applyCitationLinkEvent,
+  buildCitationLinkRegistry,
+  emptyCitationLinkRegistry,
+  type CitationLinkRegistryByRun,
+} from "./chatModel/citationLinkReducer";
+import {
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
@@ -104,6 +112,10 @@ import {
   seedSourceMap,
   type SourceEntryMap,
 } from "./chatModel/sourcesReducer";
+import {
+  citedToolSources,
+  toolInvocationIndex,
+} from "./chatModel/citedToolSources";
 import { WorkspacePane } from "./components/workspace/WorkspacePane";
 import { useWorkspacePaneState } from "./components/workspace/useWorkspacePaneState";
 import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
@@ -200,6 +212,12 @@ export function ChatScreen({
   const [citations, setCitations] = useState<CitationRegistryByRun>(
     emptyCitationRegistry,
   );
+  // PR 1.1-rev2 — model-declared citation link registry. Built from
+  // `citation_made` events as the model emits ``[[N]]`` markers.
+  // Lives in parallel with `citations` during the rollout window.
+  const [citationLinks, setCitationLinks] = useState<CitationLinkRegistryByRun>(
+    emptyCitationLinkRegistry,
+  );
   // PR 3.2 — Sources tab snapshot. Seeded from
   // `GET /v1/agent/conversations/{id}/sources` on conversation switch,
   // overlaid live by `applySourceEvent`. Conversation-scoped, not run-
@@ -285,6 +303,7 @@ export function ChatScreen({
       replayFailed: boolean;
       latestSequenceByRunId: Map<string, number>;
       citations: CitationRegistryByRun;
+      citationLinks: CitationLinkRegistryByRun;
     }> => {
       const history = await listMessages(nextConversationId, identity);
       const replay = await replayEventsForMessages(history.messages, identity);
@@ -299,6 +318,11 @@ export function ChatScreen({
         replayFailed: replay.replayFailed,
         latestSequenceByRunId: latestSequenceByRunId(replay.eventsByRunId),
         citations: buildCitationRegistry(allEvents),
+        // PR 1.1-rev2 — rebuild model-declared link registry on history
+        // load so `[[N]]` chips render after a page reload / OAuth
+        // restore / new-chat / conversation-switch, just like the
+        // legacy `[c<id>]` registry.
+        citationLinks: buildCitationLinkRegistry(allEvents),
       };
     },
     [identity],
@@ -322,6 +346,7 @@ export function ChatScreen({
           latestReplaySequenceByRunRef.current = new Map();
           setItems([]);
           setCitations(emptyCitationRegistry());
+          setCitationLinks(emptyCitationLinkRegistry());
           setStatus("Ready");
           setHistoryError(null);
           setInitialHistoryLoaded(true);
@@ -333,6 +358,7 @@ export function ChatScreen({
           latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
           setItems(history.items);
           setCitations(history.citations);
+          setCitationLinks(history.citationLinks);
           setStatus(history.replayFailed ? historyReplayWarning : "Ready");
           setHistoryError(null);
         }
@@ -446,6 +472,7 @@ export function ChatScreen({
         ),
       );
       setCitations((current) => applyCitationEvent(current, event));
+      setCitationLinks((current) => applyCitationLinkEvent(current, event));
       // PR 3.2 — Sources / Agents / Draft live overlays. Each reducer
       // is a no-op for events it doesn't recognize, so the dispatch
       // table stays flat.
@@ -596,6 +623,12 @@ export function ChatScreen({
             current,
           ),
         );
+        setCitationLinks((current) =>
+          events.reduce(
+            (next, event) => applyCitationLinkEvent(next, event),
+            current,
+          ),
+        );
         latestSequenceRef.current = latestSequence;
         if (latestEvent && isTerminalRunEvent(latestEvent)) {
           streamRef.current?.close();
@@ -654,6 +687,7 @@ export function ChatScreen({
           snapshot: {
             items,
             citations,
+            citationLinks,
             sources: sourcesMap,
             activeRunId,
             latestRunEvent,
@@ -682,6 +716,7 @@ export function ChatScreen({
         setConversationId(nextConversationId);
         setItems(warm.items);
         setCitations(warm.citations);
+        setCitationLinks(warm.citationLinks);
         setSourcesMap(warm.sources);
         setActiveRunId(warm.activeRunId);
         setLatestRunEvent(warm.latestRunEvent);
@@ -710,6 +745,7 @@ export function ChatScreen({
         latestReplaySequenceByRunRef.current = history.latestSequenceByRunId;
         setItems(history.items);
         setCitations(history.citations);
+        setCitationLinks(history.citationLinks);
         setLatestRunEvent(null);
         setActiveRunId(null);
         setShowConnectorSuggestions(false);
@@ -941,6 +977,7 @@ export function ChatScreen({
         snapshot: {
           items,
           citations,
+          citationLinks,
           sources: sourcesMap,
           activeRunId,
           latestRunEvent,
@@ -959,6 +996,7 @@ export function ChatScreen({
     setConversationId(null);
     setItems([]);
     setCitations(emptyCitationRegistry());
+    setCitationLinks(emptyCitationLinkRegistry());
     // PR 3.2 — clear workspace-pane data feeds so a stale conversation's
     // sources / drafts don't leak into the empty welcome state.
     setSourcesMap(emptySourceMap());
@@ -1080,6 +1118,36 @@ export function ChatScreen({
     [connectors],
   );
 
+  // PR 4.4.7 Phase 2 (Slice C) — chat-mounted McpOverlay for the
+  // progressive-discovery deep-link. Owns its own (open, slug) tuple
+  // so the user stays in the chat surface — no detour through Settings
+  // — when the agent surfaces a catalog suggestion via
+  // ``suggest_mcp_connector`` and the user clicks Connect.
+  const [chatMcpOverlay, setChatMcpOverlay] = useState<{
+    open: boolean;
+    slug: string | null;
+  }>({ open: false, slug: null });
+  const onMcpInstallCatalog = useCallback(({ slug }: { slug: string }) => {
+    setChatMcpOverlay({ open: true, slug });
+  }, []);
+  // PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the user's
+  // discoverable preference so the agent never re-suggests this
+  // connector. We PATCH the preferences endpoint directly rather than
+  // going through ``useDiscoverablePref`` so the chat surface doesn't
+  // have to render a hook for every potential slug. Failures are
+  // silent — the worst case is the agent re-suggests and the user
+  // skips again.
+  const onMcpMuteCatalogSuggestion = useCallback(
+    ({ slug }: { slug: string }) => {
+      void updateMyPreferences({
+        discoverable_connectors: { overrides: { [slug]: false } },
+      }).catch(() => {
+        /* see comment above — best effort */
+      });
+    },
+    [],
+  );
+
   async function onMcpAuthDecision(
     approvalId: string,
     decision: ApprovalDecision,
@@ -1176,6 +1244,42 @@ export function ChatScreen({
     return citationsForRun(citations, fallbackRunId);
   }, [activeRunId, citations, items]);
 
+  // PR 1.1-rev2 / Phase 4e/4f — merge legacy sources with cited tool
+  // invocations so the right-rail SourcesTab populates from the new
+  // ``[[N]]`` path even when no ``source_ingested`` events fire (the
+  // common case for MCP servers + DuckDuckGo, where the legacy
+  // projector's shape detection misses).
+  //
+  // Tool invocations are derived from the existing ``items`` content
+  // tree; cited entries are projected into ``SourceEntry`` shape and
+  // unioned with the legacy map. Synthetic ``citation_id`` /
+  // ``source_doc_id`` prefixes (``tool:`` / ``tool-call:``) keep the
+  // two paths from key-colliding.
+  const toolIndex = useMemo(() => toolInvocationIndex(items), [items]);
+  const sourcesWithToolCitations = useMemo<SourceEntryMap>(() => {
+    const fallbackRunId =
+      activeRunId ?? mostRecentAssistantRunId(items) ?? null;
+    const cited = citedToolSources({
+      runId: fallbackRunId,
+      citationLinks,
+      toolIndex,
+    });
+    if (cited.length === 0) {
+      return sourcesMap;
+    }
+    const merged = new Map(sourcesMap);
+    for (const entry of cited) {
+      const key = `${entry.source_connector}:${entry.source_doc_id}`;
+      // Legacy entries take precedence — their ``source_ingested``
+      // payload carries richer metadata (URL, freshness) that the
+      // tool snapshot can't reproduce.
+      if (!merged.has(key)) {
+        merged.set(key, entry);
+      }
+    }
+    return merged;
+  }, [activeRunId, citationLinks, items, sourcesMap, toolIndex]);
+
   // PR 3.5 / G9 — set of runIds whose assistant message has reached a
   // terminal status (complete/incomplete). Used by `useRunCitations` so
   // `MessageSourcesStrip` only renders once the run is sealed; the inline
@@ -1259,11 +1363,6 @@ export function ChatScreen({
     currentConversation,
     identity,
   );
-  const activeConnectorGlyphs = useMemo(
-    () =>
-      activeConnectorsFromScopes(connectors.servers, conversationScopes.scopes),
-    [connectors.servers, conversationScopes.scopes],
-  );
   // PR 3.4 — projection of the workspace-installed catalog + per-chat
   // overrides into the four-state row vocabulary the popover renders.
   // Memoised so the popover doesn't re-mount its keyboard-nav handler
@@ -1282,31 +1381,24 @@ export function ChatScreen({
   );
 
   // PR 3.4 — single open-state owner for the per-chat ConnectorPopover.
-  // The same popover serves the topbar pill (anchored down) and the
-  // composer button (anchored up). Only one is open at a time.
-  const [connectorsPopover, setConnectorsPopover] = useState<
-    null | "topbar" | "composer"
-  >(null);
-  const topbarConnectorsRef = useRef<HTMLButtonElement | null>(null);
+  // The popover is anchored to the composer button (the topbar pill was
+  // removed — connectors live in the composer only). Boolean is
+  // sufficient now that there's a single anchor.
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
   const composerConnectorsRef = useRef<HTMLButtonElement | null>(null);
   const closeConnectorsPopover = useCallback(
-    () => setConnectorsPopover(null),
-    [],
-  );
-  const onTopbarConnectorsOpen = useCallback(
-    () => setConnectorsPopover((prev) => (prev === "topbar" ? null : "topbar")),
+    () => setConnectorsOpen(false),
     [],
   );
   const onComposerConnectorsOpen = useCallback(
-    () =>
-      setConnectorsPopover((prev) => (prev === "composer" ? null : "composer")),
+    () => setConnectorsOpen((prev) => !prev),
     [],
   );
   // Close the popover when the conversation switches — the rows are
   // about to change underneath the user, and the per-chat scopes would
   // momentarily disagree with the open popover's state.
   useEffect(() => {
-    setConnectorsPopover(null);
+    setConnectorsOpen(false);
   }, [conversationId]);
 
   const renderConnectorPopover = useCallback(
@@ -1614,15 +1706,6 @@ export function ChatScreen({
                   }
                   panelOpen={paneState.open}
                   onTogglePanel={() => paneState.toggle()}
-                  connectors={activeConnectorGlyphs}
-                  connectorsOpen={connectorsPopover === "topbar"}
-                  onOpenConnectors={onTopbarConnectorsOpen}
-                  connectorsTriggerRef={topbarConnectorsRef}
-                  connectorsPopover={
-                    connectorsPopover === "topbar"
-                      ? renderConnectorPopover(topbarConnectorsRef, "down")
-                      : null
-                  }
                   usagePct={null}
                   onOpenUsage={() => setDetailsPanel("usage")}
                   models={demoModels}
@@ -1653,6 +1736,8 @@ export function ChatScreen({
                 citations={activeCitations}
                 byRun={citations}
                 terminalRuns={terminalRuns}
+                linksByRun={citationLinks}
+                activeRunId={activeRunId}
               >
                 <SubagentFleetProvider
                   value={{
@@ -1679,6 +1764,8 @@ export function ChatScreen({
                     skills={skills}
                     onMcpAuthConnect={onMcpAuthConnect}
                     onMcpAuthSkip={onMcpAuthSkip}
+                    onMcpInstallCatalog={onMcpInstallCatalog}
+                    onMcpMuteCatalogSuggestion={onMcpMuteCatalogSuggestion}
                     onOpenMcpSettings={() => onOpenSettings("connectors")}
                     onOpenSkillsSettings={() => onOpenSettings("skills")}
                     onShowConnectors={() => setShowConnectorSuggestions(true)}
@@ -1699,10 +1786,10 @@ export function ChatScreen({
                         <ComposerConnectorsButton
                           ref={composerConnectorsRef}
                           activeCount={connectorsActiveCount}
-                          open={connectorsPopover === "composer"}
+                          open={connectorsOpen}
                           onClick={onComposerConnectorsOpen}
                         />
-                        {connectorsPopover === "composer"
+                        {connectorsOpen
                           ? renderConnectorPopover(composerConnectorsRef, "up")
                           : null}
                       </span>
@@ -1741,7 +1828,7 @@ export function ChatScreen({
             </AssistantThread>
             <WorkspacePane
               state={paneState}
-              sources={sourcesMap}
+              sources={sourcesWithToolCitations}
               sourcesLoading={sourcesLoading}
               sourcesError={sourcesError}
               sourcesSearching={runUiState.phase === "acting"}
@@ -1790,13 +1877,19 @@ export function ChatScreen({
                 kind={detailsPanel}
                 conversationId={conversationId}
                 identity={identity}
-                sources={sourcesMap}
+                sources={sourcesWithToolCitations}
                 onClose={() => setDetailsPanel(null)}
               />
             ) : null}
           </SourcePreviewProvider>
         </main>
       </ApprovalFocusProvider>
+      <McpOverlay
+        open={chatMcpOverlay.open}
+        installSlug={chatMcpOverlay.slug}
+        onClose={() => setChatMcpOverlay({ open: false, slug: null })}
+        connectors={connectors}
+      />
     </>
   );
 }

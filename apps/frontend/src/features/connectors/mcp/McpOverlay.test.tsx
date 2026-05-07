@@ -5,11 +5,20 @@
  *   - Catalog tab renders one card per `useMcpCatalog` entry.
  *   - Install on a 1-click vendor calls installFromCatalog → authenticate.
  *   - Install on a pre-registered vendor opens the credentials form first.
- *   - Connected tab lists only `isAuthenticated` servers.
+ *   - Connected tab lists every added server (including ones still in
+ *     ``auth_pending``) so a manual Add custom URL doesn't disappear.
+ *   - Add custom URL kicks off OAuth on the freshly-created server so
+ *     the user lands connected, not stranded in ``auth_pending``.
  *   - Search filters the catalog grid.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -77,10 +86,11 @@ function makeConnectors(
     loading: false,
     error: null,
     refresh: vi.fn().mockResolvedValue(undefined),
-    addServer: vi.fn().mockResolvedValue(undefined),
+    addServer: vi.fn().mockResolvedValue(makeServer()),
     installFromCatalog: vi.fn().mockResolvedValue(makeServer()),
     removeServer: vi.fn().mockResolvedValue(undefined),
     setEnabled: vi.fn().mockResolvedValue(undefined),
+    setDisplayName: vi.fn().mockResolvedValue(makeServer()),
     authenticate: vi.fn().mockResolvedValue(undefined),
     skipAuth: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -188,7 +198,11 @@ describe("McpOverlay", () => {
     expect(authenticate).toHaveBeenCalledWith("seed:atlassian");
   });
 
-  it("Connected tab shows only authenticated servers, hides unauthenticated", async () => {
+  it("Connected tab lists every added server, including ones still pending OAuth", async () => {
+    // Regression: a manually-added URL lands in ``auth_pending`` and
+    // used to be hidden from both tabs (Catalog cross-references seeds
+    // only; Connected used to filter on ``isAuthenticated``). The user
+    // should always be able to find a server they explicitly added.
     mockCatalog([]);
     const connectors = makeConnectors({
       servers: [
@@ -198,9 +212,9 @@ describe("McpOverlay", () => {
           auth_state: "authenticated",
         }),
         makeServer({
-          server_id: "seed:notion",
-          display_name: "Notion",
-          auth_state: "unauthenticated",
+          server_id: "manual:clickup",
+          display_name: "ClickUp",
+          auth_state: "auth_pending",
         }),
       ],
     });
@@ -210,7 +224,45 @@ describe("McpOverlay", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Connected" }));
 
     expect(screen.getByText("Linear")).toBeInTheDocument();
-    expect(screen.queryByText("Notion")).toBeNull();
+    expect(screen.getByText("ClickUp")).toBeInTheDocument();
+    // The pending row exposes "Sign in" instead of "Re-auth" so the
+    // user can resume an interrupted OAuth flow.
+    expect(
+      screen.getByRole("button", { name: /^Sign in$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("Add custom URL submits and kicks off OAuth on the new server", async () => {
+    mockCatalog([]);
+    const newServer = makeServer({
+      server_id: "manual:clickup",
+      display_name: "ClickUp",
+      auth_state: "auth_pending",
+    });
+    const addServer = vi.fn().mockResolvedValue(newServer);
+    const authenticate = vi.fn().mockResolvedValue(undefined);
+    const connectors = makeConnectors({ addServer, authenticate });
+
+    render(<McpOverlay open onClose={vi.fn()} connectors={connectors} />);
+
+    // The "Add custom URL" card has an "Add" CTA that opens the form
+    // dialog. Once the dialog is open both the card and the dialog
+    // expose an "Add" button — scope queries via ``within(dialog)``.
+    await userEvent.click(await screen.findByRole("button", { name: /^Add$/ }));
+    const dialog = await screen.findByRole("dialog", {
+      name: /Add custom MCP server/i,
+    });
+    fireEvent.change(within(dialog).getByLabelText("Server URL"), {
+      target: { value: "https://mcp.clickup.com/mcp" },
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Add$/ }),
+    );
+
+    await waitFor(() => {
+      expect(addServer).toHaveBeenCalledWith("https://mcp.clickup.com/mcp");
+    });
+    expect(authenticate).toHaveBeenCalledWith("manual:clickup");
   });
 
   it("filters the Catalog grid by search input", async () => {
@@ -232,5 +284,103 @@ describe("McpOverlay", () => {
     });
     expect(screen.getByLabelText("Sentry catalog card")).toBeInTheDocument();
     expect(screen.queryByLabelText("Notion catalog card")).toBeNull();
+  });
+
+  // PR 4.4.7 Phase 2 (Slice C) — chat-driven deep-link.
+  describe("installSlug deep-link", () => {
+    it("scrolls the matching catalog card into view and pulses it", async () => {
+      mockCatalog([
+        makeCatalogEntry({ slug: "linear", display_name: "Linear" }),
+        makeCatalogEntry({ slug: "notion", display_name: "Notion" }),
+      ]);
+
+      // Capture which element ``scrollIntoView`` was called on so the
+      // assertion is independent of jsdom's lack of layout. The
+      // setup.ts shim is a no-op; we replace it for this test only.
+      const calls: HTMLElement[] = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy(
+        this: HTMLElement,
+      ) {
+        calls.push(this);
+      } as typeof Element.prototype.scrollIntoView;
+
+      try {
+        render(
+          <McpOverlay
+            open
+            onClose={vi.fn()}
+            connectors={makeConnectors()}
+            installSlug="linear"
+          />,
+        );
+
+        const card = await screen.findByLabelText("Linear catalog card");
+        await waitFor(() => {
+          expect(calls).toContain(card);
+        });
+        // Pulse class lives on the same article so CSS animation
+        // fires alongside the scroll.
+        expect(card.className).toMatch(/mcp-card--highlight/);
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    it("does not pulse other catalog cards when installSlug picks one", async () => {
+      mockCatalog([
+        makeCatalogEntry({ slug: "linear", display_name: "Linear" }),
+        makeCatalogEntry({ slug: "notion", display_name: "Notion" }),
+      ]);
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView =
+        function () {} as typeof Element.prototype.scrollIntoView;
+      try {
+        render(
+          <McpOverlay
+            open
+            onClose={vi.fn()}
+            connectors={makeConnectors()}
+            installSlug="linear"
+          />,
+        );
+
+        const linear = await screen.findByLabelText("Linear catalog card");
+        const notion = await screen.findByLabelText("Notion catalog card");
+        expect(linear.className).toMatch(/mcp-card--highlight/);
+        expect(notion.className).not.toMatch(/mcp-card--highlight/);
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    it("no-op when installSlug is null (regular catalog open)", async () => {
+      mockCatalog([
+        makeCatalogEntry({ slug: "linear", display_name: "Linear" }),
+      ]);
+      const calls: HTMLElement[] = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy(
+        this: HTMLElement,
+      ) {
+        calls.push(this);
+      } as typeof Element.prototype.scrollIntoView;
+      try {
+        render(
+          <McpOverlay
+            open
+            onClose={vi.fn()}
+            connectors={makeConnectors()}
+            installSlug={null}
+          />,
+        );
+        const card = await screen.findByLabelText("Linear catalog card");
+        // No scroll, no highlight class.
+        expect(calls).not.toContain(card);
+        expect(card.className).not.toMatch(/mcp-card--highlight/);
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
   });
 });

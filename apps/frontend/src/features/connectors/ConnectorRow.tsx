@@ -17,7 +17,7 @@ import { AppIcon, Badge, Switch } from "@enterprise-search/design-system";
 import type { McpServer } from "@enterprise-search/api-types";
 import { type ReactElement, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { isAuthenticated } from "./authStateDisplay";
+import { authStateDisplay, isAuthenticated } from "./authStateDisplay";
 import type { ConnectorState } from "./useConnectors";
 
 interface ConnectorRowProps {
@@ -36,12 +36,15 @@ export function ConnectorRow({
   const [confirm, setConfirm] = useState<null | "remove">(null);
   const authed = isAuthenticated(server.auth_state);
   const busy = pending !== null;
+  const display = authStateDisplay(server.auth_state);
 
-  // The Connected tab only renders authenticated servers (parent
-  // `<ConnectedTab>` filters), so subtitle is the scope summary the
-  // catalog supplied. Fall back to the URL only if the catalog row
-  // didn't carry a summary (legacy installs).
-  const subtitle = server.scopes_summary ?? server.description ?? server.url;
+  // For non-authed rows the catalog scope summary is not what's
+  // load-bearing — the user needs to know *why* the row isn't usable
+  // (e.g. "OAuth flow started — finish in the popup window"). Fall back
+  // to the catalog/URL line only when there's nothing actionable to say.
+  const subtitle = authed
+    ? (server.scopes_summary ?? server.description ?? server.url)
+    : display.hint;
 
   async function run(
     kind: Exclude<Pending, null>,
@@ -76,10 +79,10 @@ export function ConnectorRow({
       <div className="mcp-card__main">
         <div className="mcp-card__title-row">
           <h4 className="mcp-card__title">{server.display_name}</h4>
-          <Badge tone="success" className="mcp-card__pill">
-            Connected
+          <Badge tone={display.tone} className="mcp-card__pill">
+            {display.label}
           </Badge>
-          {!server.enabled ? (
+          {authed && !server.enabled ? (
             <span className="mcp-card__setup-note" title="Disabled by you">
               · Disabled
             </span>
@@ -94,7 +97,7 @@ export function ConnectorRow({
         <Switch
           label=""
           checked={server.enabled}
-          disabled={busy}
+          disabled={busy || !authed}
           onChange={(event) =>
             void run("toggle", () =>
               connectors.setEnabled(server.server_id, event.target.checked),
@@ -103,6 +106,11 @@ export function ConnectorRow({
           aria-label={`${server.enabled ? "Disable" : "Enable"} ${
             server.display_name
           }`}
+          title={
+            authed
+              ? undefined
+              : "Finish sign-in before toggling — agent can't call this connector yet."
+          }
         />
         {server.auth_mode !== "none" &&
         server.auth_state !== "auth_unsupported" ? (
@@ -114,7 +122,7 @@ export function ConnectorRow({
               void run("auth", () => connectors.authenticate(server.server_id))
             }
           >
-            {pending === "auth" ? "Starting…" : "Re-auth"}
+            {pending === "auth" ? "Starting…" : authed ? "Re-auth" : "Sign in"}
           </button>
         ) : null}
         <button

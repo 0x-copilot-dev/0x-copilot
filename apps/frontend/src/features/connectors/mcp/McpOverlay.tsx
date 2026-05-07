@@ -28,6 +28,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -47,6 +48,15 @@ export interface McpOverlayProps {
   open: boolean;
   onClose: () => void;
   connectors: ConnectorState;
+  /**
+   * PR 4.4.7 Phase 2 (Slice C) — when set, the modal opens on the
+   * Catalog tab and scrolls the matching catalog card into view. Used
+   * by the chat surface's progressive-discovery flow: the agent
+   * suggests Linear via ``suggest_mcp_connector``, the user clicks
+   * Connect, the chat opens this modal with ``installSlug='linear'``
+   * so the user lands directly on the right install button.
+   */
+  installSlug?: string | null;
 }
 
 type TabKey = "catalog" | "connected";
@@ -55,6 +65,7 @@ export function McpOverlay({
   open,
   onClose,
   connectors,
+  installSlug,
 }: McpOverlayProps): ReactElement {
   const [tab, setTab] = useState<TabKey>("catalog");
   const catalog = useMcpCatalog();
@@ -67,12 +78,11 @@ export function McpOverlay({
     }
   }, [open]);
 
-  const connectedCount = useMemo(
-    () =>
-      connectors.servers.filter((server) => isAuthenticated(server.auth_state))
-        .length,
-    [connectors.servers],
-  );
+  // Tab badge counts every added server so a manually-added URL still
+  // pending OAuth (or a seed install the user never finished) is
+  // discoverable. The page-level "N active" pill outside the modal
+  // continues to count only authenticated servers.
+  const connectedCount = connectors.servers.length;
 
   return (
     <Modal open={open} onClose={onClose} title="Manage MCP servers" size="lg">
@@ -83,7 +93,11 @@ export function McpOverlay({
         connectedCount={connectedCount}
       />
       {tab === "catalog" ? (
-        <CatalogTab catalog={catalog} connectors={connectors} />
+        <CatalogTab
+          catalog={catalog}
+          connectors={connectors}
+          installSlug={installSlug ?? null}
+        />
       ) : (
         <ConnectedTab connectors={connectors} />
       )}
@@ -163,9 +177,12 @@ function Tab({
 function CatalogTab({
   catalog,
   connectors,
+  installSlug,
 }: {
   catalog: ReturnType<typeof useMcpCatalog>;
   connectors: ConnectorState;
+  /** Slug to scroll-and-highlight on first render (PR 4.4.7 deep-link). */
+  installSlug: string | null;
 }): ReactElement {
   const [search, setSearch] = useState("");
 
@@ -240,6 +257,7 @@ function CatalogTab({
             entry={entry}
             installed={serversBySlug.get(entry.slug) ?? null}
             connectors={connectors}
+            highlight={installSlug !== null && entry.slug === installSlug}
           />
         ))}
         <CustomUrlCard connectors={connectors} />
@@ -269,10 +287,14 @@ function CatalogCard({
   entry,
   installed,
   connectors,
+  highlight,
 }: {
   entry: McpCatalogEntry;
   installed: McpServer | null;
   connectors: ConnectorState;
+  /** PR 4.4.7 Phase 2 (Slice C) — chat deep-linked this slug; scroll +
+   *  pulse so the user lands on the right card. */
+  highlight: boolean;
 }): ReactElement {
   const status = statusFor(installed);
   const [pending, setPending] = useState(false);
@@ -281,6 +303,15 @@ function CatalogCard({
   // require a pre-registered OAuth client, or after an auth-start
   // attempt fails with ``OAuthSetupRequiredError``.
   const [setupOpen, setSetupOpen] = useState(false);
+  const cardRef = useRef<HTMLElement | null>(null);
+  // Scroll the highlighted card into view on first paint after the
+  // catalog grid mounts. The catalog endpoint resolves before mount
+  // when the cache is warm, so a single ``useEffect`` keyed on
+  // ``highlight`` is enough — no observer wiring required.
+  useEffect(() => {
+    if (!highlight || cardRef.current === null) return;
+    cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlight]);
   // PR 4.4.7 — Phase 1 toggle for progressive discovery. Reads the
   // catalog default and overlays a per-user override from local
   // storage. No runtime effect yet (Phase 2 wires it).
@@ -342,7 +373,8 @@ function CatalogCard({
   return (
     <>
       <article
-        className="mcp-card"
+        ref={cardRef}
+        className={highlight ? "mcp-card mcp-card--highlight" : "mcp-card"}
         data-status={status.kind}
         aria-label={`${entry.display_name} catalog card`}
       >
@@ -618,9 +650,21 @@ function CustomUrlCard({
     try {
       setPending(true);
       setError(null);
-      await connectors.addServer(url.trim());
+      const server = await connectors.addServer(url.trim());
       setUrl("");
       setOpen(false);
+      // Mirror the catalog Install path: a new server lands in
+      // ``auth_pending`` and would otherwise be invisible (Catalog only
+      // cross-references seeds; Connected used to filter on
+      // ``isAuthenticated``). Kick off OAuth immediately so the user
+      // ends the flow connected, not stranded.
+      if (
+        server.auth_mode !== "none" &&
+        server.auth_state !== "auth_unsupported" &&
+        server.auth_state !== "authenticated"
+      ) {
+        await connectors.authenticate(server.server_id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add server.");
     } finally {
@@ -699,18 +743,21 @@ function ConnectedTab({
 }: {
   connectors: ConnectorState;
 }): ReactElement {
-  const installed = useMemo(
-    () =>
-      connectors.servers.filter((server) => isAuthenticated(server.auth_state)),
-    [connectors.servers],
-  );
+  // Show every server the user has added, including ones that haven't
+  // completed OAuth yet (``auth_pending`` / ``auth_failed`` /
+  // ``unauthenticated``). Filtering on ``isAuthenticated`` here used to
+  // hide manually-added URLs entirely — the Catalog tab also doesn't
+  // show non-seed installs, so a custom server in ``auth_pending``
+  // could become invisible. ``ConnectorRow`` renders the right status
+  // and exposes Re-auth / Remove for non-authed rows.
+  const installed = connectors.servers;
 
   if (installed.length === 0) {
     return (
       <Card className="mcp-empty">
         <p>
-          No connectors are connected yet. Switch to the{" "}
-          <strong>Catalog</strong> tab to install one.
+          No connectors added yet. Switch to the <strong>Catalog</strong> tab to
+          install one, or use <strong>Add custom URL</strong>.
         </p>
       </Card>
     );

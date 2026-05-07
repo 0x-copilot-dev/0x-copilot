@@ -37,9 +37,6 @@ const baseProps = {
   onToggleSidebar: () => undefined,
   panelOpen: true,
   onTogglePanel: () => undefined,
-  connectors: [],
-  connectorsOpen: false,
-  onOpenConnectors: () => undefined,
   usagePct: 64,
   onOpenUsage: () => undefined,
   models,
@@ -96,13 +93,16 @@ describe("Topbar", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("propagates chromeDisabled to interactive pills", () => {
-    // PR 8.0.2 — model + depth no longer in topbar; chrome-disabled
-    // now applies to the connectors pill (and any other interactive
-    // pill that lands here in the future).
-    render(<Topbar {...baseProps} chromeDisabled />);
-    const connectors = screen.getByLabelText(/Connect a tool|Connectors —/);
-    expect(connectors).toBeDisabled();
+  it("propagates chromeDisabled to the topbar root", () => {
+    // The connectors pill moved to the composer, so the topbar carries
+    // identity + status + share/settings only. ``chromeDisabled`` now
+    // surfaces via the ``data-chrome-disabled`` attribute and the
+    // disabled rename affordance on `<ConversationTitle>`.
+    const { container } = render(<Topbar {...baseProps} chromeDisabled />);
+    expect(container.querySelector(".atlas-topbar")).toHaveAttribute(
+      "data-chrome-disabled",
+      "true",
+    );
   });
 
   describe("depth announcement", () => {

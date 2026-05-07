@@ -149,6 +149,12 @@ class RuntimeApiEventType(StrEnum):
     # CitationLedger registers; payload carries `CitationSourceRef` under
     # `payload.citation` and projects to RuntimeActivityKind.TOOL.
     SOURCE_INGESTED = "source_ingested"
+    # PR 1.1-rev2 — model-declared citation. Emitted by CitationResolver each
+    # time a `[[N]]` token in the streamed assistant text resolves to a
+    # tool invocation by `conversation_ordinal`. Payload carries `CitationLink`
+    # under `payload.link` (message_id + prose_offset/length + ordinal +
+    # source_tool_call_id). Projects to RuntimeActivityKind.TOOL.
+    CITATION_MADE = "citation_made"
     # PR A1 — context-compression note. Emitted by the compression hook
     # when the context window manager redacts older messages to keep
     # the run efficient. Payload carries

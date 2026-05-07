@@ -10,11 +10,12 @@ import { toolDetailsContent } from "../details/toolDetailsContent";
 export function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
   const data = asRecord(props.args);
   const presentation = presentationFromArgs(data);
+  const details = toolDetailsContent(props.argsText, props.result);
   if (presentation) {
     return (
       <GeneratedPresentationCard
         presentation={presentation}
-        details={toolDetailsContent(props.argsText, props.result)}
+        details={details}
       />
     );
   }
@@ -28,7 +29,7 @@ export function ProgressTool(props: ToolCallMessagePartProps): ReactElement {
       status={status}
       variant="progress"
       description={typeof data.summary === "string" ? data.summary : undefined}
-      details={toolDetailsContent(props.argsText, props.result)}
+      details={details}
     />
   );
 }

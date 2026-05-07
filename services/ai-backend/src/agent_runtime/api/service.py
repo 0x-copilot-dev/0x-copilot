@@ -11,6 +11,7 @@ from starlette import status
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    CatalogSuggestionCard,
     RuntimeErrorCode,
     StreamEventSource,
 )
@@ -27,6 +28,10 @@ from agent_runtime.api.notifications import (
 from agent_runtime.api.user_policies_resolver import (
     NullUserPoliciesResolver,
     UserPoliciesResolver,
+)
+from agent_runtime.api.suggestible_connectors_resolver import (
+    NullSuggestibleConnectorsResolver,
+    SuggestibleConnectorsResolver,
 )
 from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.observability.approval_metrics import (
@@ -125,6 +130,11 @@ class RuntimeApiService:
         # returns ``{}`` (= deployment defaults) so the runtime never
         # refuses on a missing resolver.
         user_policies_resolver: "UserPoliciesResolver | None" = None,
+        # PR 4.4.7 Phase 2 (Slice B) — catalog suggestions resolver.
+        # Same lifecycle as the policy resolver; default falls back to
+        # an empty tuple so tests + dev runs don't surface suggestions
+        # until the trusted-backend lane is configured.
+        suggestible_connectors_resolver: "SuggestibleConnectorsResolver | None" = None,
     ) -> None:
         # The service is uniformly async on the inside. Sync ports get
         # wrapped via to_thread; async ports pass through. This way every
@@ -162,6 +172,9 @@ class RuntimeApiService:
         # app factory.
         self._user_policies_resolver: UserPoliciesResolver = (
             user_policies_resolver or NullUserPoliciesResolver()
+        )
+        self._suggestible_connectors_resolver: SuggestibleConnectorsResolver = (
+            suggestible_connectors_resolver or NullSuggestibleConnectorsResolver()
         )
         # PR 1.4.1 Gap #9 — three OTel signals (forward_total,
         # forward_invalid_total, chain_resolution_seconds). Best-effort:
@@ -628,10 +641,21 @@ class RuntimeApiService:
         user_policies_json = await self._resolve_user_policies(
             org_id=request.org_id, user_id=request.user_id
         )
+        # PR 4.4.7 Phase 2 (Slice B) — fetch the per-(org, user)
+        # suggestible-catalog snapshot once, after the per-chat fallback
+        # has applied so paused connectors are filtered out before the
+        # backend joins them. Failure modes are swallowed inside the
+        # resolver — empty tuple is the "no suggestions surfaced" no-op.
+        suggested_connectors = await self._resolve_suggested_connectors(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            paused_connectors=request.request_context.paused_connectors,
+        )
         request = self._request_with_runtime_context(
             request,
             workspace_behavior_overrides=workspace_overrides,
             user_policies_json=user_policies_json,
+            suggested_connectors=suggested_connectors,
         )
         context = request.runtime_context
         if context is None:
@@ -1585,6 +1609,29 @@ class RuntimeApiService:
             org_id=org_id, user_id=user_id
         )
 
+    async def _resolve_suggested_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        paused_connectors: tuple[str, ...],
+    ) -> tuple[CatalogSuggestionCard, ...]:
+        """PR 4.4.7 Phase 2 (Slice B) — fetch the catalog suggestions
+        the agent may surface this run.
+
+        Returns the catalog entries the user could be progressively
+        introduced to (paused / installed / muted entries already
+        filtered server-side). Empty tuple means "no suggestions" — the
+        runtime's system prompt section is skipped, so there is no
+        token cost on runs that have nothing to suggest.
+        """
+
+        return await self._suggestible_connectors_resolver.resolve(
+            org_id=org_id,
+            user_id=user_id,
+            exclude_paused=paused_connectors,
+        )
+
     async def _resolve_workspace_behavior_overrides(
         self, *, org_id: str
     ) -> dict[str, object]:
@@ -1615,6 +1662,7 @@ class RuntimeApiService:
         *,
         workspace_behavior_overrides: dict[str, object] | None = None,
         user_policies_json: dict[str, object] | None = None,
+        suggested_connectors: tuple[CatalogSuggestionCard, ...] = (),
     ) -> CreateRunRequest:
         try:
             model = request.model
@@ -1687,6 +1735,8 @@ class RuntimeApiService:
             roles=context.roles,
             permission_scopes=context.permission_scopes,
             connector_scopes=context.connector_scopes,
+            paused_connectors=context.paused_connectors,
+            suggested_connectors=suggested_connectors,
             model_profile=model_config,
             max_parallel_tasks=self.settings.execution.max_parallel_tasks,
             trace_metadata=trace_metadata,

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
-import { CITATION_HREF_PREFIX, remarkCitations } from "./citationRemarkPlugin";
+import {
+  CITATION_HREF_PREFIX,
+  CITATION_ORDINAL_HREF_PREFIX,
+  remarkCitations,
+} from "./citationRemarkPlugin";
 
 function transform(input: string): string {
   return unified()
@@ -46,5 +50,46 @@ describe("remarkCitations", () => {
   it("does not chip inside inline code", () => {
     const out = transform("Code looks like `[c1]` literally.");
     expect(out).not.toContain(CITATION_HREF_PREFIX);
+  });
+
+  // PR 1.1-rev2 — model-declared `[[N]]` chip format.
+
+  it("rewrites a closed [[N]] token into an ordinal citation link", () => {
+    const out = transform("Per the strategy [[3]] and the timing.");
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}3)`);
+  });
+
+  it("rewrites multiple ordinal tokens", () => {
+    const out = transform("[[1]] then [[2]] then [[10]].");
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}1)`);
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}2)`);
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}10)`);
+  });
+
+  it("normalizes leading zeros on ordinals", () => {
+    const out = transform("Hi [[007]] there.");
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}7)`);
+    expect(out).not.toContain(`(${CITATION_ORDINAL_HREF_PREFIX}007)`);
+  });
+
+  it("leaves partial [[N tokens alone (streaming-safe)", () => {
+    const out = transform("Per [[3");
+    expect(out).not.toContain(CITATION_ORDINAL_HREF_PREFIX);
+  });
+
+  it("leaves single bracket non-tokens alone", () => {
+    const out = transform("step [3] not a citation.");
+    expect(out).not.toContain(CITATION_ORDINAL_HREF_PREFIX);
+  });
+
+  it("does not chip ordinal tokens inside inline code", () => {
+    const out = transform("Code says `[[3]]` literally.");
+    expect(out).not.toContain(CITATION_ORDINAL_HREF_PREFIX);
+  });
+
+  it("supports both formats in the same paragraph", () => {
+    const out = transform("Legacy [c1] and modern [[2]] coexist.");
+    expect(out).toContain(`(${CITATION_HREF_PREFIX}c1)`);
+    expect(out).toContain(`(${CITATION_ORDINAL_HREF_PREFIX}2)`);
   });
 });

@@ -147,6 +147,16 @@ class RuntimeRequestContext(RuntimeContract):
     roles: tuple[str, ...] = ("employee",)
     permission_scopes: tuple[str, ...] = ()
     connector_scopes: JsonObject = Field(default_factory=dict)
+    # PR 4.4.6.2 — server_ids the user explicitly paused for this run.
+    # Populated by ``_apply_conversation_scope_fallback`` from the
+    # conversation column's null entries; downstream
+    # ``_request_with_runtime_context`` threads it onto
+    # ``AgentRuntimeContext.paused_connectors`` so MCP gates see the
+    # signal at every layer (visibility, load, call). Without the field
+    # declared here, ``RuntimeContract.extra='forbid'`` would silently
+    # drop it on ``model_copy(update=...)``, which was the original
+    # leak.
+    paused_connectors: tuple[str, ...] = ()
     context: JsonObject = Field(default_factory=dict)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: tuple[str, ...] = ()
@@ -160,6 +170,24 @@ class RuntimeRequestContext(RuntimeContract):
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
         return ObservabilityRedactor.redact_json_object(value)
+
+    @field_validator("paused_connectors", mode="before")
+    @classmethod
+    def _normalize_paused_connectors(cls, value: object) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, (str, bytes)):
+            raise ValueError("paused_connectors must be an iterable")
+        try:
+            iterable = list(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise ValueError("paused_connectors must be an iterable") from exc
+        normalized: list[str] = []
+        for item in iterable:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("paused_connectors items must be non-empty strings")
+            normalized.append(item.strip())
+        return tuple(normalized)
 
 
 class CreateRunRequest(RuntimeContract):

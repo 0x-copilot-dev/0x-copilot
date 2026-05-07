@@ -9,6 +9,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from agent_runtime.capabilities.citation_capturing_tool import _CitationHint
+from agent_runtime.capabilities.conversation_ordinals import (
+    ConversationOrdinalAllocator,
+)
 from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
 )
@@ -136,6 +140,36 @@ class CallMcpTool:
             tool_call_id=self.runtime_context.trace_id,
             result=output,
         )
+
+        # PR 1.1-rev2 — allocate a conversation-scoped ordinal and add a
+        # citation hint to the MCP output the model reads. The hint
+        # piggybacks on the standard MCP ``content`` array as a text
+        # block; servers without that shape get a top-level
+        # ``_citation_hint`` field. Best-effort: when no allocator is
+        # bound (replay/eval) the output is returned unchanged.
+        try:
+            allocator = ConversationOrdinalAllocator.active()
+            if allocator is not None:
+                tool_call_id = (
+                    self.runtime_context.trace_id
+                    if isinstance(self.runtime_context.trace_id, str)
+                    and self.runtime_context.trace_id
+                    else None
+                )
+                ordinal = (
+                    allocator.allocate_for_tool_call(tool_call_id=tool_call_id)
+                    if tool_call_id
+                    else allocator.allocate()
+                )
+                hinted = _CitationHint.append_to(
+                    output,
+                    ordinal=ordinal,
+                    tool_name=f"{parsed_input.server_name}.{parsed_input.tool_name}",
+                )
+                if isinstance(hinted, dict):
+                    output = hinted
+        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
+            pass
 
         return McpToolCallResult.ok(
             server_name=parsed_input.server_name,

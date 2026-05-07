@@ -345,6 +345,15 @@ class Messages:
 
         SOURCE_INGESTED = "Cited a source"
 
+        @classmethod
+        def citation_made_title(cls, ordinal: int) -> str:
+            # PR 1.1-rev2 — model-declared citation pointer. Display title
+            # used by `_display_title_for(CITATION_MADE)`; the chip resolves
+            # to the cited tool invocation in the FE registry.
+            return f"Cited tool call #{ordinal}"
+
+        CITATION_MADE = "Cited a tool call"
+
     class Validation:
         @classmethod
         def id_contains_unsupported_characters(cls, field_name: str) -> str:

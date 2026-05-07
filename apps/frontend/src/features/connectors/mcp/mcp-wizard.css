@@ -562,6 +562,26 @@
   border-style: dashed;
 }
 
+/* PR 4.4.7 Phase 2 (Slice C) — deep-link target. The chat surface
+   asked us to install a specific catalog entry; pulse the matching
+   card briefly so the user lands on the right one. */
+.mcp-card--highlight {
+  animation: mcp-card-pulse 1.6s ease-out 1;
+  border-color: var(--color-accent);
+}
+
+@keyframes mcp-card-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0);
+  }
+  35% {
+    box-shadow: 0 0 0 6px rgba(217, 119, 87, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0);
+  }
+}
+
 .mcp-setup {
   display: grid;
   gap: var(--space-sm);

@@ -49,6 +49,14 @@ class _Fields:
     ACTIVITY_KIND = "activity_kind"
     CITATION = "citation"
     CITATIONS = "citations"
+    # PR 1.1-rev2 — model-declared citation pointer payload key.
+    LINK = "link"
+    CITED_ORDINALS = "cited_ordinals"
+    CONVERSATION_ORDINAL = "conversation_ordinal"
+    MESSAGE_ID = "message_id"
+    PROSE_OFFSET = "prose_offset"
+    PROSE_LENGTH = "prose_length"
+    SOURCE_TOOL_CALL_ID = "source_tool_call_id"
 
 
 class RuntimeEventPresentationProjector:
@@ -123,6 +131,8 @@ class RuntimeEventPresentationProjector:
             return cls._approval_forwarded_payload(payload)
         if event_type is RuntimeApiEventType.SOURCE_INGESTED:
             return cls._source_ingested_payload(payload)
+        if event_type is RuntimeApiEventType.CITATION_MADE:
+            return cls._citation_made_payload(payload)
         return payload
 
     @classmethod
@@ -236,6 +246,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
             RuntimeApiEventType.SOURCE_INGESTED,
+            RuntimeApiEventType.CITATION_MADE,
         }:
             return RuntimeActivityKind.TOOL
         if source is StreamEventSource.SUBAGENT or event_type in {
@@ -393,6 +404,13 @@ class RuntimeEventPresentationProjector:
                 if title is not None:
                     return Messages.Event.source_cited_title(title)
             return Messages.Event.SOURCE_INGESTED
+        if event_type is RuntimeApiEventType.CITATION_MADE:
+            link = payload.get(_Fields.LINK)
+            if isinstance(link, dict):
+                ordinal = link.get(_Fields.CONVERSATION_ORDINAL)
+                if isinstance(ordinal, int) and ordinal > 0:
+                    return Messages.Event.citation_made_title(ordinal)
+            return Messages.Event.CITATION_MADE
         return None
 
     @classmethod
@@ -439,6 +457,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.SUBAGENT_COMPLETED,
             RuntimeApiEventType.FINAL_RESPONSE,
             RuntimeApiEventType.SOURCE_INGESTED,
+            RuntimeApiEventType.CITATION_MADE,
         }:
             return Values.Status.COMPLETED
         # PR 1.4 — forwarded approvals project as a non-terminal "waiting"
@@ -473,6 +492,12 @@ class RuntimeEventPresentationProjector:
             Keys.Field.SOURCE_TOOL_CALL_ID,
             Keys.Field.DISCOVERY_REASON,
             Keys.Field.EXPECTED_VALUE,
+            # PR 4.4.7 Phase 2 (Slice C) — present iff the suggestion
+            # came from the catalog (uninstalled connector). The FE
+            # branches Connect on this so it routes to the install
+            # overlay rather than starting OAuth against a server row
+            # that doesn't exist yet.
+            "catalog_slug",
         ):
             value = cls._text(payload.get(key))
             if value is not None:
@@ -516,6 +541,36 @@ class RuntimeEventPresentationProjector:
         if isinstance(ordinal, int) and ordinal > 0:
             safe_citation["ordinal"] = ordinal
         return {_Fields.CITATION: safe_citation}
+
+    @classmethod
+    def _citation_made_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``citation_made`` payloads through a strict allow-list.
+
+        The CitationResolver is the only intended emitter and always supplies
+        the full ``CitationLink`` shape (conversation_ordinal, message_id,
+        prose offsets, source_tool_call_id). We whitelist defensively so a
+        future emitter can't over-share.
+        """
+
+        link = payload.get(_Fields.LINK)
+        if not isinstance(link, dict):
+            return {}
+        safe_link: JsonObject = {}
+        ordinal = link.get(_Fields.CONVERSATION_ORDINAL)
+        if isinstance(ordinal, int) and ordinal > 0:
+            safe_link[_Fields.CONVERSATION_ORDINAL] = ordinal
+        for text_key in (
+            _Fields.MESSAGE_ID,
+            _Fields.SOURCE_TOOL_CALL_ID,
+        ):
+            value = link.get(text_key)
+            if isinstance(value, str) and value.strip():
+                safe_link[text_key] = value
+        for offset_key in (_Fields.PROSE_OFFSET, _Fields.PROSE_LENGTH):
+            value = link.get(offset_key)
+            if isinstance(value, int) and value >= 0:
+                safe_link[offset_key] = value
+        return {_Fields.LINK: safe_link}
 
     @classmethod
     def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:

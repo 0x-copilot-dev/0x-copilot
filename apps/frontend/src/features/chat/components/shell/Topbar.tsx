@@ -10,14 +10,12 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
-  type Ref,
 } from "react";
 import type { RunUiState, RunUiPhase } from "../../chatRunState";
 import { depthLabelForModel, type ThinkingDepth } from "../../depth";
 import { LogoMark } from "../thread/LogoMark";
 import { Crumb } from "./Crumb";
 import { ConversationTitle } from "./ConversationTitle";
-import { ConnectorsPill, type ActiveConnectorGlyph } from "./ConnectorsPill";
 import { UsageMeter } from "./UsageMeter";
 
 export interface TopbarProps {
@@ -35,25 +33,6 @@ export interface TopbarProps {
   onToggleSidebar: () => void;
   panelOpen: boolean;
   onTogglePanel: () => void;
-
-  /* connectors */
-  connectors: ActiveConnectorGlyph[];
-  connectorsOpen: boolean;
-  onOpenConnectors: () => void;
-  /**
-   * PR 3.4 — `<Menu>` from design-system reads `anchorRef.current` to
-   * suppress pointerdown-outside dismissal. Forwarded to the underlying
-   * `<ConnectorsPill>` button so the popover stays open while the user
-   * clicks the trigger that opened it.
-   */
-  connectorsTriggerRef?: Ref<HTMLButtonElement>;
-  /**
-   * PR 3.4 — slot for the per-chat ConnectorPopover. Mounted as a
-   * sibling of the trigger inside the topbar's positioned anchor so
-   * `Menu`'s CSS-anchored side="down" positioning lines up with the
-   * pill. Parent (ChatScreen) owns the popover's open state.
-   */
-  connectorsPopover?: ReactNode;
 
   /* usage */
   usagePct: number | null;
@@ -117,11 +96,6 @@ export function Topbar(props: TopbarProps): ReactElement {
     onToggleSidebar,
     panelOpen,
     onTogglePanel,
-    connectors,
-    connectorsOpen,
-    onOpenConnectors,
-    connectorsTriggerRef,
-    connectorsPopover,
     usagePct,
     onOpenUsage,
     models,
@@ -201,16 +175,6 @@ export function Topbar(props: TopbarProps): ReactElement {
             aria-live="polite"
             className="atlas-topbar__status"
           />
-          <span className="atlas-connectors-anchor">
-            <ConnectorsPill
-              ref={connectorsTriggerRef}
-              active={connectors}
-              onOpen={onOpenConnectors}
-              open={connectorsOpen}
-              disabled={chromeDisabled}
-            />
-            {connectorsPopover}
-          </span>
           <UsageMeter pct={usagePct} onOpen={onOpenUsage} />
           {shareSlot ?? (
             <IconButton

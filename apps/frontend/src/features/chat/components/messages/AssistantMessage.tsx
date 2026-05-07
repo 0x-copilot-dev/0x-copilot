@@ -9,7 +9,6 @@ import { useRunCitations } from "../citations/citationsContext";
 import { MarkdownText } from "../markdown/MarkdownText";
 import { Reasoning } from "../markdown/Reasoning";
 import { ReasoningGroup } from "../markdown/ReasoningGroup";
-import { LogoMark } from "../thread/LogoMark";
 import { ApprovalTool } from "../tools/ApprovalTool";
 import { ConnectorAuthTool } from "../tools/ConnectorAuthTool";
 import { McpTool } from "../tools/McpTool";
@@ -25,6 +24,8 @@ export function AssistantMessage({
   message,
   onMcpAuthConnect,
   onMcpAuthSkip,
+  onMcpInstallCatalog,
+  onMcpMuteCatalogSuggestion,
   onOpenSources,
   onResumeToolCall,
   onReload,
@@ -40,6 +41,17 @@ export function AssistantMessage({
     approvalId: string;
     serverId: string;
   }) => Promise<void>;
+  /**
+   * PR 4.4.7 Phase 2 (Slice C) — invoked when the discovery card was
+   * emitted for a catalog-only suggestion (uninstalled). The host
+   * (ChatScreen) routes this to opening the McpOverlay deep-linked to
+   * the matching slug. Optional so old call-sites keep working.
+   */
+  onMcpInstallCatalog?: (payload: { slug: string }) => void;
+  /** PR 4.4.7 Phase 2 — Skip on a catalog discovery card writes
+   *  ``discoverable_connectors[slug] = false`` to the user's prefs
+   *  so the agent never re-suggests this connector in future runs. */
+  onMcpMuteCatalogSuggestion?: (payload: { slug: string }) => void;
   /**
    * PR 3.5 / G9 — fires when a chip in the post-prose Sources strip is
    * clicked. The host (`ChatScreen`) routes it to
@@ -89,9 +101,6 @@ export function AssistantMessage({
       className="aui-message aui-message--assistant"
       onResumeToolCall={onResumeToolCall}
     >
-      <span className="aui-message__avatar" aria-hidden="true">
-        <LogoMark compact />
-      </span>
       <div className="aui-message__body">
         <MessageParts
           components={{
@@ -116,6 +125,8 @@ export function AssistantMessage({
                     {...props}
                     onConnect={onMcpAuthConnect}
                     onSkip={onMcpAuthSkip}
+                    onInstallCatalog={onMcpInstallCatalog}
+                    onMuteCatalogSuggestion={onMcpMuteCatalogSuggestion}
                   />
                 ),
               },

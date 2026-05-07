@@ -215,3 +215,198 @@ class TestRunCreateConsumesConversationScope(ConnectorScopeRouteFixtureMixin):
         assert record.runtime_context.connector_scopes == {
             "notion": frozenset({"read"}),
         }
+
+
+class TestPausedConnectorsLandOnRuntimeContext(ConnectorScopeRouteFixtureMixin):
+    """PR 4.4.6.2 / 4.4.7 — pin the latent leak fix where
+    ``RuntimeRequestContext.paused_connectors`` was missing the field
+    declaration AND ``_request_with_runtime_context`` wasn't threading
+    it onto the ``AgentRuntimeContext`` consumed by the MCP gate. End-
+    to-end assertion through ``create_run``."""
+
+    def test_paused_slug_lands_on_runtime_context_paused_connectors(
+        self,
+    ) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+
+        # Pause Linear at the chat level. ``runtime_connector_scopes``
+        # drops the entry so ``connector_scopes`` is empty; the FIX
+        # under test is that ``paused_connectors`` carries the slug
+        # explicitly so the MCP gate can read it.
+        self.patch_scopes(client, conversation_id, {"seed:linear": None})
+
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(conversation_id, connector_scopes={}),
+        )
+        assert run.status_code == 200, run.text
+        record = store.runs[run.json()["run_id"]]
+
+        assert "seed:linear" in record.runtime_context.paused_connectors
+        # Connector scopes filters out the paused entry — invariant
+        # preserved by Phase 1.
+        assert "seed:linear" not in record.runtime_context.connector_scopes
+
+    def test_paused_set_carries_through_when_header_drives_scopes(
+        self,
+    ) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+        # Two-shape scope: Slack actively scoped at the chat level,
+        # Linear paused at the chat level. The header pre-supplies a
+        # third connector (Notion). Header wins on connector_scopes;
+        # the chat's pause set still applies.
+        self.patch_scopes(
+            client,
+            conversation_id,
+            {"seed:slack": ["read"], "seed:linear": None},
+        )
+
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(
+                conversation_id,
+                connector_scopes={"notion": ["read"]},
+            ),
+        )
+        assert run.status_code == 200, run.text
+        record = store.runs[run.json()["run_id"]]
+
+        # Header drove ``connector_scopes`` (Notion only).
+        assert record.runtime_context.connector_scopes == {
+            "notion": frozenset({"read"}),
+        }
+        # But the conversation's paused set still applies — service-to-
+        # service callers don't bypass the user's per-chat mute.
+        assert "seed:linear" in record.runtime_context.paused_connectors
+
+
+class TestSuggestedConnectorsLandOnRuntimeContext(ConnectorScopeRouteFixtureMixin):
+    """PR 4.4.7 Phase 2 (Slice B) — assert the suggestible-connectors
+    snapshot is materialised onto ``AgentRuntimeContext`` at run-create
+    so the system prompt section + discovery service can consume it.
+
+    The default ``Null`` resolver returns empty (no
+    ``BACKEND_BASE_URL``/``ENTERPRISE_SERVICE_TOKEN`` configured in the
+    test env). The TEST FIX is that the empty tuple lands cleanly
+    rather than raising or producing a missing-field defect, AND that a
+    concrete resolver injecting a card flows through unchanged.
+    """
+
+    def test_default_null_resolver_yields_empty_tuple(self) -> None:
+        client, store = self.create_client()
+        conversation_id = self.create_conversation(client)
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(conversation_id, connector_scopes={}),
+        )
+        assert run.status_code == 200, run.text
+        record = store.runs[run.json()["run_id"]]
+        assert record.runtime_context.suggested_connectors == ()
+
+    def test_resolver_cards_land_on_context(self) -> None:
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        class _StubResolver:
+            async def resolve(
+                self,
+                *,
+                org_id: str,
+                user_id: str,
+                exclude_paused,
+            ):
+                return (
+                    CatalogSuggestionCard(
+                        slug="linear",
+                        display_name="Linear",
+                        description="Issues, projects, and cycles.",
+                    ),
+                )
+
+        # Build a service explicitly so we can inject the resolver.
+        # ``ConnectorScopeRouteFixtureMixin.create_client`` builds the
+        # service inline; here we replicate the bits we need.
+        store = InMemoryRuntimeApiStore()
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+            suggestible_connectors_resolver=_StubResolver(),  # type: ignore[arg-type]
+        )
+        app = RuntimeApiAppFactory.create_app(service)
+        client = TestClient(app)
+        conversation_id = self.create_conversation(client)
+
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(conversation_id, connector_scopes={}),
+        )
+        assert run.status_code == 200, run.text
+        record = store.runs[run.json()["run_id"]]
+        assert len(record.runtime_context.suggested_connectors) == 1
+        card = record.runtime_context.suggested_connectors[0]
+        assert card.slug == "linear"
+        assert card.display_name == "Linear"
+
+    def test_suggestible_resolver_receives_paused_set(self) -> None:
+        # The resolver gets the conversation's paused server_ids so the
+        # backend can pre-filter them out. Without this the agent would
+        # see paused entries as "discoverable" and re-suggest them.
+        from agent_runtime.execution.contracts import CatalogSuggestionCard
+
+        observed_paused: list[tuple[str, ...]] = []
+
+        class _CapturingResolver:
+            async def resolve(self, *, org_id, user_id, exclude_paused):
+                observed_paused.append(tuple(exclude_paused))
+                return (
+                    CatalogSuggestionCard(
+                        slug="linear",
+                        display_name="Linear",
+                    ),
+                )
+
+        store = InMemoryRuntimeApiStore()
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        service = RuntimeApiService(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            settings=settings,
+            suggestible_connectors_resolver=_CapturingResolver(),  # type: ignore[arg-type]
+        )
+        app = RuntimeApiAppFactory.create_app(service)
+        client = TestClient(app)
+        conversation_id = self.create_conversation(client)
+        # Pause two connectors at the chat level.
+        self.patch_scopes(
+            client,
+            conversation_id,
+            {"seed:linear": None, "seed:atlassian": None},
+        )
+
+        run = client.post(
+            "/v1/agent/runs",
+            json=self.run_payload(conversation_id, connector_scopes={}),
+        )
+        assert run.status_code == 200, run.text
+        # The resolver was called with the conversation's paused set.
+        assert observed_paused, "resolver was not called"
+        observed = set(observed_paused[0])
+        assert "seed:linear" in observed
+        assert "seed:atlassian" in observed

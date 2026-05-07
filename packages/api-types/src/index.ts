@@ -243,6 +243,7 @@ export type RuntimeApiEventType =
   | "budget_warning"
   | "run_rejected"
   | "source_ingested"
+  | "citation_made"
   | "draft_updated"
   | "compression_note"
   | "subagent_fleet_started"
@@ -296,6 +297,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "budget_warning",
   "run_rejected",
   "source_ingested",
+  "citation_made",
   "draft_updated",
   "compression_note",
   "subagent_fleet_started",
@@ -1399,11 +1401,42 @@ export interface SourceIngestedPayload {
   [key: string]: unknown;
 }
 
+// PR 1.1-rev2 — model-declared, conversation-scoped citation pointers.
+// The model emits opaque tokens of the form `[[N]]` where N is the
+// `conversation_ordinal` of a tool invocation. The runtime resolves each
+// occurrence to a tool invocation and emits one `citation_made` event per
+// resolved marker — no separate per-source registry, no shape parsing of
+// tool results. Designed to coexist with PR 1.1's `[c<id>]` chips during
+// rollout; the legacy types remain until the cut-over completes.
+export interface CitationLink {
+  /** `tool_invocations.conversation_ordinal` — monotonic per conversation,
+   *  stable across turns. The inline token is `[[<conversation_ordinal>]]`. */
+  conversation_ordinal: number;
+  /** Assistant message that contains the resolved chip. */
+  message_id: string;
+  /** 0-based char offset of "[[" in the assembled assistant text. */
+  prose_offset: number;
+  /** Length of the matched token (e.g. `[[12]]` is length 6). */
+  prose_length: number;
+  /** Denormalized for FE convenience; same as the cited tool invocation's
+   *  `tool_call_id`. Resolves the chip to a tool card without an extra fetch. */
+  source_tool_call_id: string;
+}
+
+export interface CitationMadePayload {
+  link: CitationLink;
+  [key: string]: unknown;
+}
+
 // `final_response` is `RuntimeTextPayload` + the sealed citation list, so
 // archived reads and the share-recipient view can rebuild chips without
 // replaying every `source_ingested` event for the run.
 export interface RuntimeFinalResponsePayload extends RuntimeTextPayload {
   citations?: CitationSourceRef[];
+  /** PR 1.1-rev2 — sealed list of conversation_ordinals referenced in the
+   *  assistant's final text, in first-occurrence order. Carries integers,
+   *  not payloads — source detail lives in the tool invocation log. */
+  cited_ordinals?: number[];
 }
 
 export interface ReasoningSummaryPayload {
@@ -1582,6 +1615,7 @@ export interface RuntimeEventPayloadByType {
   budget_warning: BudgetWarningPayload;
   run_rejected: RunRejectedPayload;
   source_ingested: SourceIngestedPayload;
+  citation_made: CitationMadePayload;
   draft_updated: DraftUpdatedPayload;
   /** PR A1 — context-compression note. Server-emitted when the
    * memory-compression hook redacts older context; FE renders an
@@ -2424,6 +2458,40 @@ export function isSourceIngestedPayload(
     return false;
   }
   return isCitationSourceRef((payload as Record<string, unknown>).citation);
+}
+
+export function isCitationLink(value: unknown): value is CitationLink {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.conversation_ordinal === "number" &&
+    Number.isInteger(candidate.conversation_ordinal) &&
+    candidate.conversation_ordinal > 0 &&
+    typeof candidate.message_id === "string" &&
+    candidate.message_id.length > 0 &&
+    typeof candidate.prose_offset === "number" &&
+    Number.isInteger(candidate.prose_offset) &&
+    candidate.prose_offset >= 0 &&
+    typeof candidate.prose_length === "number" &&
+    Number.isInteger(candidate.prose_length) &&
+    candidate.prose_length > 0 &&
+    typeof candidate.source_tool_call_id === "string"
+  );
+}
+
+export function isCitationMadePayload(
+  payload: unknown,
+): payload is CitationMadePayload {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return false;
+  }
+  return isCitationLink((payload as Record<string, unknown>).link);
 }
 
 // -----------------------------------------------------------------------------

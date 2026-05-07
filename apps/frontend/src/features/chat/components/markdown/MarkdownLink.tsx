@@ -5,15 +5,29 @@ import {
   citationIdFromHref,
   isCitationHref,
 } from "../citations/CitationChip";
+import {
+  OrdinalCitationChip,
+  isOrdinalCitationHref,
+  ordinalFromHref,
+} from "../citations/OrdinalCitationChip";
 
 export function MarkdownLink({
   children,
   href,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
-  // The citation remark plugin rewrites [c<id>] tokens to `#cite:<id>`
-  // anchors. Routing through the existing link slot keeps Streamdown's
+  // The citation remark plugin rewrites tokens to citation anchors.
+  // Routing through the existing link slot keeps Streamdown's
   // streaming-safe parsing while letting us swap in a chip renderer.
+  // Two formats coexist during the rollout: PR 1.1 `[c<id>]` chips
+  // resolve via `#cite:<id>`, and PR 1.1-rev2 `[[N]]` chips resolve
+  // via `#cite-ord:<n>`.
+  if (isOrdinalCitationHref(href)) {
+    const ordinal = ordinalFromHref(href as string);
+    if (ordinal !== null) {
+      return <OrdinalCitationChip conversationOrdinal={ordinal} />;
+    }
+  }
   if (isCitationHref(href)) {
     const id = citationIdFromHref(href as string);
     if (id !== null) {

@@ -153,6 +153,47 @@ describe("useDiscoverablePref", () => {
     });
   });
 
+  // Regression: when two toggles flip in quick succession, each
+  // PATCH's response only echoes its own slug (the first PATCH
+  // resolves before the server has seen the second). The hook must
+  // NOT trust the response's full overrides map — that would clobber
+  // the second slug's optimistic state. Instead each PATCH is
+  // authoritative only for the slug it sent.
+  it("two consecutive toggles both stay off (no clobber from response)", async () => {
+    mockGet.mockResolvedValueOnce(BASE);
+    // First PATCH (asana) returns ONLY {asana: false} — the realistic
+    // shape when the second PATCH hasn't been processed yet.
+    mockPut.mockResolvedValueOnce(withOverrides({ asana: false }));
+    // Second PATCH (linear) returns the full merged shape.
+    mockPut.mockResolvedValueOnce(
+      withOverrides({ asana: false, linear: false }),
+    );
+
+    const asana = renderHook(() => useDiscoverablePref("asana", true));
+    const linear = renderHook(() => useDiscoverablePref("linear", true));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
+
+    act(() => {
+      asana.result.current.setEnabled(false);
+    });
+    act(() => {
+      linear.result.current.setEnabled(false);
+    });
+
+    // Both PATCHes flush.
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledTimes(2);
+    });
+
+    // Both toggles remained off — the bug would have flipped Linear
+    // back to ``enabled`` while the asana PATCH's response was being
+    // applied.
+    await waitFor(() => {
+      expect(asana.result.current.enabled).toBe(false);
+      expect(linear.result.current.enabled).toBe(false);
+    });
+  });
+
   it("migrates legacy localStorage overrides to the backend, then clears them", async () => {
     window.localStorage.setItem("enterprise.discoverable.linear", "off");
     window.localStorage.setItem("enterprise.discoverable.notion", "on");

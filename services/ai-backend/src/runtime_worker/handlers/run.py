@@ -18,7 +18,12 @@ from agent_runtime.budgets import (
     BudgetPreflightWarn,
 )
 from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
+from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.citations import CitationLedger
+from agent_runtime.capabilities.conversation_ordinals import (
+    ConversationOrdinalAllocator,
+    ConversationOrdinalSeeder,
+)
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.execution.contracts import (
@@ -220,6 +225,30 @@ class RuntimeRunHandler:
         ledger_token = (
             CitationLedger.bind_for_run(ledger) if ledger is not None else None
         )
+        # PR 1.1-rev2 — model-declared citation pointers.
+        #
+        # The ordinal allocator owns a per-conversation monotonic counter
+        # used by tool wrappers to prefix each tool result with
+        # ``[Tool call #N — cite as [[N]]]`` so the model has a stable
+        # pointer to embed in its prose. The seeder counts prior
+        # ``TOOL_CALL_STARTED`` events on the active branch so the new
+        # run's ordinals don't collide with anything already persisted.
+        #
+        # The resolver watches streamed assistant text for ``[[N]]``
+        # markers and emits one ``citation_made`` event per resolved
+        # marker — same wire as every other event, no parallel pipe.
+        allocator = await self._bind_conversation_ordinal_allocator(command, run)
+        allocator_token = (
+            ConversationOrdinalAllocator.bind_for_run(allocator)
+            if allocator is not None
+            else None
+        )
+        citation_resolver = self._bind_citation_resolver(run, allocator)
+        resolver_token = (
+            CitationResolver.bind_for_run(citation_resolver)
+            if citation_resolver is not None
+            else None
+        )
         # B8 — per-tool budget guard. Loads the org's
         # ``runtime_tool_budgets`` snapshot, binds it alongside the
         # in-flight ``ToolCallLedger`` so every LangChain
@@ -331,6 +360,16 @@ class RuntimeRunHandler:
                     sealed = ledger.sealed_payloads()
                     if sealed:
                         final_payload["citations"] = sealed
+                # PR 1.1-rev2 — sealed list of ordinals the model cited
+                # in this turn's prose, in first-occurrence order. The
+                # FE consumes this for the share-recipient view and the
+                # archive replay path so chips render before any
+                # ``citation_made`` events arrive (the events are still
+                # the live truth; this is a convenience snapshot).
+                if citation_resolver is not None:
+                    cited_ordinals = citation_resolver.sealed_ordinals()
+                    if cited_ordinals:
+                        final_payload["cited_ordinals"] = cited_ordinals
                 await self._append_lifecycle(
                     run,
                     RuntimeApiEventType.FINAL_RESPONSE,
@@ -401,6 +440,10 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if resolver_token is not None:
+                CitationResolver.unbind(resolver_token)
+            if allocator_token is not None:
+                ConversationOrdinalAllocator.unbind(allocator_token)
             if ledger_token is not None:
                 CitationLedger.unbind(ledger_token)
             if budget_token is not None:
@@ -1121,6 +1164,11 @@ class RuntimeRunHandler:
                 citation_pipeline=CitationStreamPipeline.for_provider(
                     command.runtime_context.model_profile.provider
                 ),
+                # PR 1.1-rev2 — resolver was bound by the run-level
+                # try-block; the executor pulls it from the active
+                # ContextVar through the same mechanism every other
+                # bound capability uses.
+                citation_resolver=CitationResolver.active(),
             )
         return StreamingExecutor.compose_final(result)
 
@@ -1248,6 +1296,61 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
+        )
+
+    async def _bind_conversation_ordinal_allocator(
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+    ) -> ConversationOrdinalAllocator:
+        """Build the per-conversation ordinal allocator seeded from the event log.
+
+        The seed equals the count of ``TOOL_CALL_STARTED`` events already
+        persisted on the active branch's prior runs, so the new run's
+        first allocation is strictly greater than any ordinal that has
+        already been embedded into a tool result message in this
+        conversation. This is the property that makes ``[[N]]`` markers
+        stable across turns.
+        """
+
+        records = await self.persistence.list_messages(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            limit=200,
+        )
+        selected = self._selected_message_chain(records, run.user_message_id)
+        prior_run_ids = ToolObservationIndexBuilder._prior_run_ids(selected, run.run_id)
+        seed = await ConversationOrdinalSeeder.seed_from_event_log(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            prior_run_ids=prior_run_ids,
+            event_store=self.event_store,
+        )
+        return ConversationOrdinalAllocator(
+            conversation_id=command.conversation_id,
+            starting_ordinal=seed.starting_ordinal,
+            ordinal_to_tool_call_id=seed.ordinal_to_tool_call_id,
+        )
+
+    def _bind_citation_resolver(
+        self,
+        run: RunRecord,
+        allocator: ConversationOrdinalAllocator,
+    ) -> CitationResolver:
+        """Build the per-run :class:`CitationResolver`.
+
+        Tagged with ``StreamEventSource.MODEL`` because the marker that
+        produces a ``citation_made`` event lives in the model's
+        streamed text — the resolver is observing the model's output,
+        not a tool's. The cited tool invocation is referenced by
+        ``link.source_tool_call_id`` in the payload.
+        """
+
+        return CitationResolver(
+            run=run,
+            allocator=allocator,
+            producer=self.event_producer,
+            source=StreamEventSource.MODEL,
         )
 
     def _bind_mcp_discovery_service(

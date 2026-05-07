@@ -41,7 +41,18 @@ DEFAULT_INSTRUCTIONS = (
     "the next line.\n\n"
     "Use only links that came from the user, conversation context, or tool "
     "results. Do not fabricate destination URLs. Do not place raw URLs on "
-    "their own lines unless the user explicitly asks to see the full URL."
+    "their own lines unless the user explicitly asks to see the full URL.\n\n"
+    # PR 1.1-rev2 — model-declared citation pointers.
+    "Cite tool calls inline. Each tool result you read contains a pointer "
+    "in the form `[Tool call #N — <tool_name> — cite as [[N]] when "
+    "referencing this result.]`. When you ground any factual claim in a "
+    "tool result — including from earlier turns whose observations are "
+    "summarized in the system context — append `[[N]]` immediately after "
+    "the claim, where N is the matching tool call number. The marker "
+    "must use double square brackets with a positive integer (e.g. "
+    "`[[3]]`, `[[47]]`), with no spaces inside the brackets. Do not "
+    "invent ordinals that were not shown to you; if no pointer was "
+    "provided for the source you used, omit the marker."
 )
 
 NO_MCP_SERVER_CARDS_INSTRUCTIONS = (

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from agent_runtime.api.async_ports import AsyncEventStorePort
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.observability.usage_attribution import UsageAttributionResolver
@@ -111,6 +112,7 @@ class StreamingExecutor:
         attribution: UsageAttributionResolver | None = None,
         track_subagents: bool = False,
         citation_pipeline: CitationStreamPipeline | None = None,
+        citation_resolver: CitationResolver | None = None,
     ) -> StreamingResult:
         result = StreamingResult()
         active_subagent_tasks: set[str] = set()
@@ -216,6 +218,21 @@ class StreamingExecutor:
                 payload={_Fields.DELTA: delta, _Fields.MESSAGE: delta},
                 summary=delta,
             )
+            # PR 1.1-rev2 — feed the streamed delta to the citation
+            # resolver so any `[[N]]` markers the model emits resolve to
+            # ``citation_made`` events on the same wire (with monotonic
+            # ``sequence_no``). The resolver is best-effort and never
+            # raises into the streaming path; an unbound resolver
+            # (citations disabled, replay path) is a no-op.
+            if (
+                citation_resolver is not None
+                and chunk_message_id is not None
+                and not active_subagent_tasks
+            ):
+                await citation_resolver.observe_delta(
+                    message_id=chunk_message_id,
+                    delta_text=delta,
+                )
         return result
 
     @classmethod

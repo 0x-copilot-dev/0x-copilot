@@ -83,6 +83,14 @@ export const ThreadBody = forwardRef<
       approvalId: string;
       serverId: string;
     }) => Promise<void>;
+    /** PR 4.4.7 Phase 2 (Slice C) — discovery card for an uninstalled
+     *  catalog entry routes here instead of OAuth. Optional so older
+     *  test harnesses keep working. */
+    onMcpInstallCatalog?: (payload: { slug: string }) => void;
+    /** PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the
+     *  user's discoverable preference so the agent never resurfaces
+     *  the same suggestion in a future run. */
+    onMcpMuteCatalogSuggestion?: (payload: { slug: string }) => void;
     onOpenMcpSettings: () => void;
     onOpenSkillsSettings: () => void;
     onShowConnectors: () => void;
@@ -131,6 +139,8 @@ export const ThreadBody = forwardRef<
     runIndicator,
     onMcpAuthConnect,
     onMcpAuthSkip,
+    onMcpInstallCatalog,
+    onMcpMuteCatalogSuggestion,
     onOpenMcpSettings,
     onOpenSkillsSettings,
     onShowConnectors,
@@ -217,6 +227,8 @@ export const ThreadBody = forwardRef<
                 message={message}
                 onMcpAuthConnect={onMcpAuthConnect}
                 onMcpAuthSkip={onMcpAuthSkip}
+                onMcpInstallCatalog={onMcpInstallCatalog}
+                onMcpMuteCatalogSuggestion={onMcpMuteCatalogSuggestion}
                 onOpenSources={onOpenSources}
                 onResumeToolCall={onResumeToolCall}
                 onReload={

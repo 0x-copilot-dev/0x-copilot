@@ -32,9 +32,92 @@ from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 
 from agent_runtime.capabilities.citation_projection import CitationProjector
+from agent_runtime.capabilities.conversation_ordinals import (
+    ConversationOrdinalAllocator,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _CitationHint:
+    """Render the per-tool-call citation hint appended to result text.
+
+    PR 1.1-rev2 — every tool result the model reads gets a one-line
+    suffix that names a stable ``[[N]]`` pointer the model can cite when
+    grounding any factual claim in this result. The suffix is rendered
+    by a class so the format is testable and the only consumer (the
+    wrapper's ``_arun``) imports a single name.
+
+    Result types:
+
+    - ``str`` — append ``\\n\\n[Tool call #N — <tool> — cite as [[N]]…]``.
+    - ``list`` of strings — append the hint to the last string entry, or
+      append a new string entry when the list is empty / has no string
+      tail. (LangChain occasionally returns ``list[str]`` for tools that
+      stream multi-part text outputs.)
+    - any other shape — return unchanged. Structured tool results
+      (dicts, MCP-shaped content) are handled by the MCP middleware
+      (see ``cite_mcp.py``); the generic LangChain tool path here only
+      knows how to extend text.
+    """
+
+    HINT_TEMPLATE = (
+        "[Tool call #{ordinal} — {tool_name} — "
+        "cite as [[{ordinal}]] when referencing this result.]"
+    )
+    SEPARATOR = "\n\n"
+    # Top-level key added to dict-shaped results (MCP, internal APIs)
+    # when no ``content`` text block exists to extend. The model sees
+    # this as part of the JSON-encoded tool result and learns to cite.
+    DICT_HINT_KEY = "_citation_hint"
+    # MCP standard envelope keys.
+    MCP_CONTENT_KEY = "content"
+    MCP_BLOCK_TYPE_KEY = "type"
+    MCP_TEXT_VALUE = "text"
+
+    @classmethod
+    def render(cls, *, ordinal: int, tool_name: str) -> str:
+        return cls.HINT_TEMPLATE.format(ordinal=ordinal, tool_name=tool_name)
+
+    @classmethod
+    def append_to(cls, result: object, *, ordinal: int, tool_name: str) -> object:
+        rendered = cls.render(ordinal=ordinal, tool_name=tool_name)
+        suffix = cls.SEPARATOR + rendered
+        if isinstance(result, str):
+            return result + suffix
+        if isinstance(result, list):
+            updated = list(result)
+            for idx in range(len(updated) - 1, -1, -1):
+                if isinstance(updated[idx], str):
+                    updated[idx] = updated[idx] + suffix
+                    return updated
+            # No string entry found — append the hint as its own entry
+            # so the model still sees a stable pointer.
+            updated.append(suffix.lstrip())
+            return updated
+        if isinstance(result, dict):
+            updated_dict = dict(result)
+            content = updated_dict.get(cls.MCP_CONTENT_KEY)
+            if isinstance(content, list):
+                # MCP CallToolResult shape — append a TextContent block
+                # so the hint rides the same content array the server's
+                # data uses, keeping the model's view consistent.
+                updated_content = list(content)
+                updated_content.append(
+                    {
+                        cls.MCP_BLOCK_TYPE_KEY: cls.MCP_TEXT_VALUE,
+                        cls.MCP_TEXT_VALUE: rendered,
+                    }
+                )
+                updated_dict[cls.MCP_CONTENT_KEY] = updated_content
+                return updated_dict
+            # Generic dict (internal API, custom tool) — surface the
+            # hint as a dedicated top-level field so consumers that
+            # JSON-render the result still expose it to the model.
+            updated_dict[cls.DICT_HINT_KEY] = rendered
+            return updated_dict
+        return result
 
 
 class CitationCapturingTool(BaseTool):
@@ -61,11 +144,42 @@ class CitationCapturingTool(BaseTool):
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         result = await self.inner._arun(*args, **kwargs)
+        tool_call_id = self._extract_tool_call_id(kwargs)
+        # Legacy PR 1.1 path — pattern-matches the result against a
+        # fixed set of shapes and registers any sources via the
+        # ``CitationLedger``. Best-effort, never raises into the tool
+        # path. Kept during rollout so existing ``[c<id>]`` chips
+        # continue to render for the shapes the projector recognizes.
         await CitationProjector.project(
             connector=self.name,
-            tool_call_id=self._extract_tool_call_id(kwargs),
+            tool_call_id=tool_call_id,
             result=result,
         )
+        # PR 1.1-rev2 path — allocate a conversation-scoped ordinal,
+        # bind it to the tool_call_id (when known) so the
+        # ``CitationResolver`` can populate ``source_tool_call_id`` on
+        # emit, and append a single-line hint to the result text the
+        # model reads. The model embeds ``[[N]]`` in its prose; the
+        # resolver fires ``citation_made`` events from the streamed
+        # output. When no allocator is bound (replay/eval), the result
+        # is returned unchanged.
+        try:
+            allocator = ConversationOrdinalAllocator.active()
+            if allocator is not None:
+                ordinal = (
+                    allocator.allocate_for_tool_call(tool_call_id=tool_call_id)
+                    if tool_call_id
+                    else allocator.allocate()
+                )
+                result = _CitationHint.append_to(
+                    result, ordinal=ordinal, tool_name=self.name
+                )
+        except Exception:  # noqa: BLE001 - best-effort, never break the tool path
+            _LOGGER.warning(
+                "citation hint append raised on %s; returning unmodified result",
+                self.name,
+                exc_info=True,
+            )
         return result
 
     @staticmethod

@@ -18,6 +18,8 @@ export function ConnectorAuthTool({
   result,
   onConnect,
   onSkip,
+  onInstallCatalog,
+  onMuteCatalogSuggestion,
   resume,
 }: ToolCallMessagePartProps<Record<string, unknown>> & {
   onConnect: (payload: {
@@ -25,6 +27,19 @@ export function ConnectorAuthTool({
     serverId: string;
   }) => Promise<void>;
   onSkip: (payload: { approvalId: string; serverId: string }) => Promise<void>;
+  // PR 4.4.7 Phase 2 (Slice C) — invoked instead of ``onConnect`` when
+  // the discovery card was emitted for a *catalog-only* connector
+  // (uninstalled). The chat surface deep-links the McpOverlay to the
+  // matching slug so the user completes install + OAuth via the catalog
+  // flow rather than starting OAuth against a server row that doesn't
+  // exist yet. Optional so old call sites / tests keep working.
+  onInstallCatalog?: (payload: { slug: string }) => void;
+  // PR 4.4.7 Phase 2 — Skip on a catalog suggestion writes the user's
+  // ``discoverable_connectors[slug] = false`` preference so the agent
+  // never re-suggests it in this OR future conversations. Optional so
+  // older call sites (and the blocking auth-gate variant) keep
+  // working without it.
+  onMuteCatalogSuggestion?: (payload: { slug: string }) => void;
 }): ReactElement {
   const presentation = presentationFromArgs(args);
   const [pendingAction, setPendingAction] = useState<"connect" | "skip" | null>(
@@ -44,6 +59,12 @@ export function ConnectorAuthTool({
   const discoveryReason = stringValue(args.discovery_reason);
   const expectedValue = stringValue(args.expected_value);
   const isDiscovery = discoveryReason !== null;
+  // PR 4.4.7 Phase 2 (Slice C) — when the suggestion is for a catalog
+  // entry the user hasn't installed yet, the backend stamps
+  // ``catalog_slug`` onto the payload. Connect routes to the install
+  // overlay instead of OAuth.
+  const catalogSlug = stringValue(args.catalog_slug);
+  const isCatalogSuggestion = catalogSlug !== null;
   const message = isDiscovery
     ? (expectedValue ?? `${displayName} could improve this answer.`)
     : (stringValue(args.message) ??
@@ -61,7 +82,15 @@ export function ConnectorAuthTool({
     setPendingAction(action);
     try {
       if (action === "connect") {
-        await onConnect({ approvalId, serverId });
+        if (isCatalogSuggestion && onInstallCatalog && catalogSlug) {
+          // Catalog-only suggestion: open the install overlay rather
+          // than starting OAuth against a server that doesn't exist
+          // yet. Resolution of the discovery card itself is left to
+          // the install flow + a follow-up turn.
+          onInstallCatalog({ slug: catalogSlug });
+        } else {
+          await onConnect({ approvalId, serverId });
+        }
       } else {
         await onSkip({ approvalId, serverId });
         // PR 3.3 — discovery skips carry a sentinel reason so the audit
@@ -77,6 +106,15 @@ export function ConnectorAuthTool({
           ...(isDiscovery ? { reason: MCP_DISCOVERY_SKIPPED_REASON } : {}),
         };
         resume(result);
+        // PR 4.4.7 Phase 2 — Skip on a catalog suggestion is the
+        // user's signal that they don't want this surfaced again. The
+        // host writes ``discoverable_connectors[slug] = false`` so the
+        // suggestible-connectors endpoint excludes it from future
+        // runs. Per-turn dedup (in McpDiscoveryService) handles the
+        // current run; this PATCH handles all future ones.
+        if (isCatalogSuggestion && onMuteCatalogSuggestion && catalogSlug) {
+          onMuteCatalogSuggestion({ slug: catalogSlug });
+        }
       }
     } finally {
       setPendingAction(null);
@@ -122,8 +160,7 @@ export function ConnectorAuthTool({
           ? [{ label: "Link expires", value: formatDateTime(expiresAt) }]
           : []
       }
-      details={mcpAuthDetails(args, result)}
-      detailsLabel={presentation?.debug_label ?? "Tool details"}
+      details={mcpAuthDetails(result)}
     >
       {!resolved ? (
         <div

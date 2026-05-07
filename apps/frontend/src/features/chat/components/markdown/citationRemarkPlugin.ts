@@ -1,19 +1,33 @@
-// PR 1.1 — remark plugin that turns inline [c<id>] tokens into citation chips.
+// Remark plugin that turns inline citation tokens into citation chips.
 //
-// We rewrite each token to an mdast `link` node with `href="#cite:<id>"`
-// rather than introducing a new node type. The existing `MarkdownLink`
-// component (registered as `components.a`) detects the `#cite:` prefix and
-// renders a `CitationChip` — so the FE keeps a single inline-element
-// component slot regardless of whether the rendered content is a link or
-// a citation. Streaming-safe: only matches *closed* tokens, so partial
-// `[c` / `[c3` chunks render as plain text until the closing `]` arrives.
+// Two token formats are recognized:
+//
+// - PR 1.1 (legacy)   `[c<base36>]`  — per-run citation_id from the
+//   ``CitationLedger``. Resolves against the per-run citation registry.
+// - PR 1.1-rev2       `[[<int>]]`    — conversation_ordinal of a tool
+//   invocation. Resolves against the tool invocation registry by
+//   ordinal. Stable across turns (cross-turn citation works).
+//
+// We rewrite each match to an mdast `link` node so the existing
+// ``MarkdownLink`` component (registered as `components.a`) can detect
+// the prefix and render a ``CitationChip`` — the FE keeps a single
+// inline-element component slot regardless of which token format is in
+// flight. Streaming-safe: only *closed* tokens match, so partial
+// ``[c`` / ``[c3`` / ``[[`` / ``[[4`` chunks render as plain text until
+// the closing bracket arrives.
 
 import type { Plugin } from "unified";
 import type { Root, Text, PhrasingContent, Parent } from "mdast";
 import { visit } from "unist-util-visit";
 
-const TOKEN_PATTERN = /\[c([0-9a-z]+)\]/g;
+// Combined pattern: matches either ``[c<base36>]`` or ``[[<digits>]]``.
+// The two captures are mutually exclusive — exactly one of group 1
+// (legacy id) and group 2 (conversation_ordinal) is non-undefined per
+// match, which the rewriter uses to pick the right href prefix.
+const TOKEN_PATTERN = /\[c([0-9a-z]+)\]|\[\[(\d+)\]\]/g;
 export const CITATION_HREF_PREFIX = "#cite:";
+// PR 1.1-rev2 — separate prefix so MarkdownLink can dispatch by ordinal.
+export const CITATION_ORDINAL_HREF_PREFIX = "#cite-ord:";
 
 const SKIPPED_PARENT_TYPES = new Set([
   "link",
@@ -60,10 +74,20 @@ function splitCitationTokens(value: string): PhrasingContent[] | null {
     if (match.index > cursor) {
       out.push({ type: "text", value: value.slice(cursor, match.index) });
     }
-    const id = `c${match[1]}`;
+    const legacyId = match[1];
+    const ordinalText = match[2];
+    let url: string;
+    if (legacyId !== undefined) {
+      url = `${CITATION_HREF_PREFIX}c${legacyId}`;
+    } else {
+      // PR 1.1-rev2 — strip leading zeros so the href and the
+      // resolver agree on the canonical ordinal form.
+      const ordinal = String(parseInt(ordinalText ?? "0", 10));
+      url = `${CITATION_ORDINAL_HREF_PREFIX}${ordinal}`;
+    }
     out.push({
       type: "link",
-      url: `${CITATION_HREF_PREFIX}${id}`,
+      url,
       title: null,
       children: [{ type: "text", value: match[0] }],
     });
