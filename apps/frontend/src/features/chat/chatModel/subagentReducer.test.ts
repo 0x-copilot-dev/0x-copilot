@@ -171,8 +171,17 @@ describe("applySubagentEvent", () => {
   });
 
   it("returns the same map identity when paused replays on an already-paused entry", () => {
+    // PR 3.2.7 — identity-stable replay requires the cached
+    // `pause_reason` and `pause_source_event_id` to match the event's,
+    // since the reducer projects those onto the entry. A genuine
+    // duplicate replay carries the same shape; we seed it that way.
     const seeded = seedSubagentMap([
-      entry({ task_id: "task_1", status: "paused" }),
+      entry({
+        task_id: "task_1",
+        status: "paused",
+        pause_reason: "approval",
+        pause_source_event_id: null,
+      }),
     ]);
     const next = applySubagentEvent(
       seeded,

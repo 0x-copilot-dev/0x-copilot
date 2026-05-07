@@ -38,7 +38,7 @@ OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
 make docker-dev-down
 ```
 
-Production build (validates required secrets, refuses with `DEV_AUTH_BYPASS=true`):
+Production build (validates required secrets, refuses to register the dev IdP routes when `BACKEND_ENVIRONMENT != development`):
 
 ```bash
 ENTERPRISE_AUTH_SECRET=... ENTERPRISE_SERVICE_TOKEN=... MCP_TOKEN_VAULT_SECRET=... OPENAI_API_KEY=... make prod
@@ -83,7 +83,7 @@ Lint/format runs through pre-commit (ruff + ruff-format for Python, prettier for
 
 **Streaming model:** events are persisted with monotonic `sequence_no` per run. Clients open `GET /v1/agent/runs/{run_id}/stream?after_sequence=N` and reconnect with the highest received `sequence_no` to resume without replay. Replay-only is `GET /v1/agent/runs/{run_id}/events`. Backend projects events into `activity_kind`/`display_title`/`summary`/`status` for the frontend; do not derive activity types from event-name prefixes.
 
-**Auth in dev:** `DEV_AUTH_BYPASS=true` only honored when `FACADE_ENVIRONMENT=development`. Uses `FACADE_DEV_ORG_ID` / `FACADE_DEV_USER_ID`. Production fails closed if `ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` is missing. With `ENTERPRISE_SERVICE_TOKEN` set, internal callers must also send `x-enterprise-org-id` and `x-enterprise-user-id`. Treat caller-supplied identity/role/scope/tenant as untrusted unless derived from verified session/token.
+**Auth in dev (W0.1 dev IdP):** `DEV_AUTH_BYPASS` no longer exists. Dev sessions go through a real signed bearer minted by `POST /v1/dev/identity/mint` (only registered when `BACKEND_ENVIRONMENT=development`). The frontend's `AuthContext` auto-mints on 401 via `_devEnsureBearer` for the active persona (`enterprise.dev.persona_slug` in localStorage; default `sarah_acme`). The bearer is signed with `ENTERPRISE_AUTH_SECRET` and verified by the same path production uses — no separate bypass code. `make dev-bearer PERSONA=...` mints one for curl. Production fails closed if `ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` is missing. With `ENTERPRISE_SERVICE_TOKEN` set, internal callers must also send `x-enterprise-org-id` and `x-enterprise-user-id`. Treat caller-supplied identity/role/scope/tenant as untrusted unless derived from a verified session/token.
 
 **MCP OAuth:** discovery + dynamic client registration when supported; per-server pre-registered client fields (`client_id`, `client_secret`, `scope`, `authorization_endpoint`, `token_endpoint`) when not. Secrets stored via `TokenVault` (local for dev only — production must inject a managed adapter and a persistent MCP registry store).
 

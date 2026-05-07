@@ -9,10 +9,13 @@ import type {
 } from "@enterprise-search/api-types";
 import {
   ACCENT_SCHEMES,
+  type AccentScheme,
   Card,
   Field,
   TextInput,
+  type ThemeScheme,
   classNames,
+  useTheme,
 } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -68,6 +71,14 @@ export function Appearance({
 }): ReactElement {
   const data = preferences.data;
   const debounceRef = useRef<number | null>(null);
+  // Optimistic theme update — the previous flow waited for a 300 ms
+  // debounce + server round-trip before any visual change, which made
+  // swatch clicks feel broken (and silently failed if the network was
+  // down). Pull setScheme/setAccent from the provider so the click
+  // re-themes instantly; the debounced save then persists. If the save
+  // fails, useThemeSync will reconcile back to the persisted value on
+  // the next preferences refresh.
+  const { setScheme, setAccent } = useTheme();
 
   // Cancel any pending debounced save on unmount so a stray timeout
   // doesn't fire after the section is closed.
@@ -79,8 +90,39 @@ export function Appearance({
     };
   }, []);
 
+  const applyAppearanceLocally = useCallback(
+    (patch: Partial<AppearancePreferences>): void => {
+      if (typeof document === "undefined") {
+        return;
+      }
+      const root = document.documentElement;
+      if (patch.theme !== undefined) {
+        // Mirror useThemeSync's "system" → "dark" mapping.
+        const scheme: ThemeScheme =
+          patch.theme === "light" || patch.theme === "slate"
+            ? patch.theme
+            : "dark";
+        setScheme(scheme);
+      }
+      if (patch.accent !== undefined) {
+        setAccent(patch.accent as AccentScheme);
+      }
+      if (patch.density !== undefined) {
+        root.dataset.density = patch.density;
+      }
+      if (patch.reduce_motion !== undefined) {
+        root.dataset.reduceMotion = patch.reduce_motion;
+      }
+    },
+    [setScheme, setAccent],
+  );
+
   const scheduleSave = useCallback(
     (patch: UpdateUserPreferencesRequest) => {
+      // Apply the visual change immediately. Server save is debounced.
+      if (patch.appearance !== undefined) {
+        applyAppearanceLocally(patch.appearance);
+      }
       if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
       }
@@ -91,7 +133,7 @@ export function Appearance({
         });
       }, SAVE_DEBOUNCE_MS);
     },
-    [preferences],
+    [preferences, applyAppearanceLocally],
   );
 
   if (preferences.loading && data === null) {

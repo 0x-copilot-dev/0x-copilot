@@ -96,9 +96,13 @@ export function ConnectorRow({
           </Button>
         ) : null}
 
-        {/* Skip auth: only meaningful when not yet signed in. Hidden once
-            authenticated or already skipped. */}
-        {!authed ? (
+        {/* Skip auth: only meaningful when not yet signed in AND the
+            server doesn't actually require OAuth. PR 4.4.6 — for an
+            ``auth_mode === "oauth2"`` row the agent will fail every
+            tool call without a token, so skipping auth is a foot-gun.
+            Hide it. The user can either complete OAuth or remove the
+            row entirely. */}
+        {!authed && server.auth_mode !== "oauth2" ? (
           <Button
             type="button"
             variant="ghost"

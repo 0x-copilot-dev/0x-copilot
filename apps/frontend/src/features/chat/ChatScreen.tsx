@@ -90,8 +90,12 @@ import {
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
-import { scrollChatToCitation } from "./components/citations/scrollChatToCitation";
+import {
+  scrollChatToCitation,
+  scrollChatToEvent,
+} from "./components/citations/scrollChatToCitation";
 import { SourcePreviewProvider } from "./components/citations/SourcePreview";
+import { SubagentFleetProvider } from "./components/subagents/SubagentFleetContext";
 import { listSources } from "../../api/agentApi";
 import {
   applySourceEvent,
@@ -1632,76 +1636,87 @@ export function ChatScreen({
                 byRun={citations}
                 terminalRuns={terminalRuns}
               >
-                <ThreadBody
-                  ref={composerHandleRef}
-                  messages={threadMessages}
-                  running={activeRunId !== null}
-                  disabled={false}
-                  attachmentAdapter={attachmentAdapter}
-                  editingMessageId={editingMessageId}
-                  onEditCancel={() => setEditingMessageId(null)}
-                  onEditSave={(sourceMessageId, text) =>
-                    void onEditSave(sourceMessageId, text)
-                  }
-                  onSubmit={onComposerSubmit}
-                  onCancel={() => void onCancel()}
-                  connectors={connectors}
-                  skills={skills}
-                  onMcpAuthConnect={onMcpAuthConnect}
-                  onMcpAuthSkip={onMcpAuthSkip}
-                  onOpenMcpSettings={() => onOpenSettings("connectors")}
-                  onOpenSkillsSettings={() => onOpenSettings("skills")}
-                  onShowConnectors={() => setShowConnectorSuggestions(true)}
-                  onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
-                  onOpenSkillsPanel={() => paneState.openOn("skills")}
-                  selectedSkills={selectedComposerSkills}
-                  onAttachSkill={onAttachComposerSkill}
-                  onRemoveSkill={onRemoveComposerSkill}
-                  onClearSkills={onClearComposerSkills}
-                  onOpenSources={(citationId) =>
-                    paneState.openOn("sources", { focusCitationId: citationId })
-                  }
-                  runIndicator={runIndicator}
-                  connectorsTrigger={
-                    <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
-                      <ComposerConnectorsButton
-                        ref={composerConnectorsRef}
-                        activeCount={connectorsActiveCount}
-                        open={connectorsPopover === "composer"}
-                        onClick={onComposerConnectorsOpen}
-                      />
-                      {connectorsPopover === "composer"
-                        ? renderConnectorPopover(composerConnectorsRef, "up")
-                        : null}
-                    </span>
-                  }
-                  activeModelLabel={selectedModel?.name}
-                  models={demoModels}
-                  selectedModel={selectedModelId}
-                  onModelChange={setSelectedModelId}
-                  depth={depth}
-                  onDepthChange={setDepth}
-                  depthVisible={depthVisible}
-                  connectorSuggestions={
-                    showConnectorSuggestions && suggestedServers.length > 0 ? (
-                      <ConnectorSuggestionCard
-                        servers={suggestedServers}
-                        onConnect={(serverId) =>
-                          void connectors.authenticate(serverId)
-                        }
-                        onSkip={(serverId) =>
-                          void connectors.skipAuth(serverId)
-                        }
-                        onNone={() => setShowConnectorSuggestions(false)}
-                      />
-                    ) : null
-                  }
-                  onSelectSuggestion={(prompt) =>
-                    void onSelectSuggestion(prompt)
-                  }
-                  onResumeToolCall={handleResumeToolCall}
-                  onReload={handleReloadFromAssistant}
-                />
+                <SubagentFleetProvider
+                  value={{
+                    subagentsByTask: subagentsState.subagents,
+                    activitiesByTask: subagentActivitiesByTask,
+                    onJumpToApproval: scrollChatToEvent,
+                  }}
+                >
+                  <ThreadBody
+                    ref={composerHandleRef}
+                    messages={threadMessages}
+                    running={activeRunId !== null}
+                    disabled={false}
+                    attachmentAdapter={attachmentAdapter}
+                    editingMessageId={editingMessageId}
+                    onEditCancel={() => setEditingMessageId(null)}
+                    onEditSave={(sourceMessageId, text) =>
+                      void onEditSave(sourceMessageId, text)
+                    }
+                    onSubmit={onComposerSubmit}
+                    onCancel={() => void onCancel()}
+                    connectors={connectors}
+                    skills={skills}
+                    onMcpAuthConnect={onMcpAuthConnect}
+                    onMcpAuthSkip={onMcpAuthSkip}
+                    onOpenMcpSettings={() => onOpenSettings("connectors")}
+                    onOpenSkillsSettings={() => onOpenSettings("skills")}
+                    onShowConnectors={() => setShowConnectorSuggestions(true)}
+                    onOpenDetailsPanel={(kind) => setDetailsPanel(kind)}
+                    onOpenSkillsPanel={() => paneState.openOn("skills")}
+                    selectedSkills={selectedComposerSkills}
+                    onAttachSkill={onAttachComposerSkill}
+                    onRemoveSkill={onRemoveComposerSkill}
+                    onClearSkills={onClearComposerSkills}
+                    onOpenSources={(citationId) =>
+                      paneState.openOn("sources", {
+                        focusCitationId: citationId,
+                      })
+                    }
+                    runIndicator={runIndicator}
+                    connectorsTrigger={
+                      <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
+                        <ComposerConnectorsButton
+                          ref={composerConnectorsRef}
+                          activeCount={connectorsActiveCount}
+                          open={connectorsPopover === "composer"}
+                          onClick={onComposerConnectorsOpen}
+                        />
+                        {connectorsPopover === "composer"
+                          ? renderConnectorPopover(composerConnectorsRef, "up")
+                          : null}
+                      </span>
+                    }
+                    activeModelLabel={selectedModel?.name}
+                    models={demoModels}
+                    selectedModel={selectedModelId}
+                    onModelChange={setSelectedModelId}
+                    depth={depth}
+                    onDepthChange={setDepth}
+                    depthVisible={depthVisible}
+                    connectorSuggestions={
+                      showConnectorSuggestions &&
+                      suggestedServers.length > 0 ? (
+                        <ConnectorSuggestionCard
+                          servers={suggestedServers}
+                          onConnect={(serverId) =>
+                            void connectors.authenticate(serverId)
+                          }
+                          onSkip={(serverId) =>
+                            void connectors.skipAuth(serverId)
+                          }
+                          onNone={() => setShowConnectorSuggestions(false)}
+                        />
+                      ) : null
+                    }
+                    onSelectSuggestion={(prompt) =>
+                      void onSelectSuggestion(prompt)
+                    }
+                    onResumeToolCall={handleResumeToolCall}
+                    onReload={handleReloadFromAssistant}
+                  />
+                </SubagentFleetProvider>
               </CitationsProvider>
             </AssistantThread>
             <WorkspacePane

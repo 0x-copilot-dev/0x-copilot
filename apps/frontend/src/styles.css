@@ -135,7 +135,7 @@ p {
 .assistant-markdown :where([data-streamdown="strong"]),
 .reasoning-markdown :where([data-streamdown="strong"]) {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .assistant-markdown :where([data-streamdown="emphasis"]),
@@ -188,7 +188,7 @@ p {
   color: var(--color-text-muted);
   display: flex;
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   grid-column: 1;
   grid-row: 1;
   min-height: 1.75rem;
@@ -270,7 +270,7 @@ p {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text);
-  font-size: 0.86rem;
+  font-size: var(--font-size-sm);
   grid-column: 1 / -1;
   line-height: 1.55;
   max-height: min(32rem, 60vh);
@@ -341,7 +341,7 @@ p {
 .assistant-markdown :where(h1, h2, h3, h4, h5, h6),
 .reasoning-markdown :where(h1, h2, h3, h4, h5, h6) {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
   line-height: 1.3;
   margin: var(--space-lg) 0 var(--space-sm);
@@ -353,23 +353,23 @@ p {
 }
 
 .assistant-markdown :where(h1) {
-  font-size: 1.5rem;
+  font-size: var(--font-size-2xl);
 }
 
 .assistant-markdown :where(h2) {
-  font-size: 1.3rem;
+  font-size: var(--font-size-2xl);
 }
 
 .assistant-markdown :where(h3) {
-  font-size: 1.15rem;
+  font-size: var(--font-size-xl);
 }
 
 .assistant-markdown :where(h4, h5, h6) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
 }
 
 .reasoning-markdown :where(h1, h2, h3, h4, h5, h6) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   margin: var(--space-sm) 0 var(--space-xs);
 }
 
@@ -494,7 +494,7 @@ p {
 .app-eyebrow {
   color: var(--color-text-subtle);
   display: inline-flex;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   font-weight: 800;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -535,22 +535,14 @@ p {
 }
 
 .aui-workspace {
-  --color-bg: #0a0a0a;
-  --color-bg-elevated: #09090b;
-  --color-surface: #18181b;
-  --color-surface-muted: #27272a;
-  --color-border: #27272a;
-  --color-border-strong: #3f3f46;
-  --color-text: #fafafa;
-  --color-text-muted: #a1a1aa;
-  --color-text-subtle: #71717a;
-  --color-accent: #d8b46a;
-  --color-accent-strong: #f0ca7a;
-  --color-accent-contrast: #1c160a;
+  /* No local --color-* overrides — those would shadow the
+   * :root[data-theme] / :root[data-accent] tokens that Settings →
+   * Appearance writes to. Inherit from :root so theme + accent changes
+   * actually visibly retheme the chat shell. */
   background: var(--color-bg);
   color: var(--color-text);
   display: grid;
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   grid-template-columns: 16rem minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
@@ -613,14 +605,14 @@ p {
 
 .aui-sidebar h1,
 .aui-chat-header h2 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   margin: var(--space-xs) 0 0;
 }
 
 .aui-kicker {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -629,8 +621,8 @@ p {
   align-items: center;
   color: var(--color-text);
   display: inline-flex;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.01em;
   gap: var(--space-sm);
   min-width: 0;
@@ -647,8 +639,8 @@ p {
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
   color: var(--color-accent-contrast);
   display: inline-flex;
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
   height: 1.625rem;
   justify-content: center;
   letter-spacing: -0.04em;
@@ -656,12 +648,12 @@ p {
 }
 
 .aui-logo__wordmark {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .aui-sidebar__note {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -703,7 +695,7 @@ p {
   border-color: var(--color-border);
   color: var(--color-text);
   display: flex;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   /* Label hugs the left, chord chip hugs the right; the gap keeps
    * the two from touching when the button is narrow. */
   justify-content: space-between;
@@ -729,8 +721,8 @@ p {
   color: var(--color-text-subtle);
   display: inline-flex;
   flex: none;
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   height: 1.1rem;
   letter-spacing: 0.02em;
   padding: 0 0.35rem;
@@ -786,8 +778,8 @@ p {
 .aui-conversation-row__title {
   color: var(--color-text);
   flex: 1 1 auto;
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -826,7 +818,7 @@ p {
 .aui-conversation-row__time {
   color: var(--color-text-subtle);
   flex: 0 0 1.5rem;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   line-height: 1;
   text-align: right;
 }
@@ -859,7 +851,7 @@ p {
 
 .aui-conversation-row__pin {
   color: var(--color-accent);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   margin-right: 0.3rem;
   vertical-align: 0.1em;
 }
@@ -889,7 +881,7 @@ p {
   color: var(--color-text-subtle);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.95rem;
+  font-size: var(--font-size-md);
   height: 1.4rem;
   justify-content: center;
   line-height: 1;
@@ -908,7 +900,7 @@ p {
   border-radius: var(--radius-md);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
   display: grid;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   margin-top: 4px;
   min-width: 9rem;
   padding: 0.25rem;
@@ -997,7 +989,7 @@ p {
   color: inherit;
   flex: 1;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   outline: none;
   padding: 0.45rem 0;
 }
@@ -1037,7 +1029,7 @@ p {
 .aui-user-card__trigger > [aria-hidden="true"]:last-child {
   color: var(--color-text-subtle);
   flex: none;
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   line-height: 1;
 }
 
@@ -1049,20 +1041,13 @@ p {
  * `.ui-dropdown__menu` rule; we only need to paint the contents. */
 
 .aui-user-card__menu {
-  /* Sized to fit inside the sidebar. The sidebar uses
-   * `overflow: hidden` to keep the conversation list scrolling
-   * cleanly, which means the popover cannot extend past the
-   * sidebar's right edge — a wider `min-width` here clips the
-   * persona select and Sign-out button at the sidebar boundary.
-   * `width: 100%` of the user-card container, plus the
-   * design-system's default `min-width: 15rem` floor, keeps the
-   * popover inside the chrome. The persona select has its own
-   * ellipsis fallback for very long display names. */
-  width: 100%;
-  /* Reset the design-system 15rem default so the popover never
-   * exceeds the user-card width. The card's own width (set by
-   * `.aui-user-card__trigger { width: 100% }`) provides the floor. */
-  min-width: 0;
+  /* Width is owned by the design-system Menu primitive, which portals
+   * the popover to <body> and pins min-width to the trigger's
+   * bounding rect — so the popover naturally matches the user-card
+   * width without any percentage rules here. Previously this had
+   * `width: 100%` referring to the sidebar parent; after the portal
+   * change that resolved to the viewport and blew the popover
+   * full-screen. Don't reintroduce. */
   padding: var(--space-md);
   gap: var(--space-md);
 }
@@ -1074,8 +1059,8 @@ p {
 
 .aui-user-card__menu-heading {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   margin: 0;
   text-transform: uppercase;
@@ -1083,7 +1068,7 @@ p {
 
 .aui-user-card__menu-error {
   color: var(--color-danger);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -1115,7 +1100,7 @@ p {
   color: var(--color-text);
   cursor: pointer;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   padding: 0.45rem 1.75rem 0.45rem 0.625rem;
   width: 100%;
 }
@@ -1146,7 +1131,7 @@ p {
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   gap: 0.4rem;
   justify-content: center;
   min-height: 2rem;
@@ -1168,13 +1153,13 @@ p {
 /* ─── Workspace picker (inside the user-card menu) ─────────────────── */
 .aui-workspace-picker__note {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
 .aui-workspace-picker__error {
   color: var(--color-danger);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -1216,8 +1201,8 @@ p {
 
 .aui-workspace-picker__name {
   color: var(--color-text);
-  font-size: 0.82rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1225,7 +1210,7 @@ p {
 
 .aui-workspace-picker__sub {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1238,8 +1223,8 @@ p {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
   flex: none;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
   height: 1.5rem;
   width: 1.5rem;
   letter-spacing: 0;
@@ -1254,8 +1239,8 @@ p {
 
 .aui-user-card__name {
   color: var(--color-text);
-  font-size: 0.82rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1264,7 +1249,7 @@ p {
 
 .aui-user-card__sub {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1291,8 +1276,8 @@ p {
 
 .aui-conversation-group__heading {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   margin: 0 0 0.25rem;
   padding: 0 0.625rem;
@@ -1422,7 +1407,7 @@ p {
 
 .aui-welcome__greeting {
   font-size: clamp(1.75rem, 3.6vw, 2.25rem);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.025em;
   line-height: 1.1;
   margin: 0;
@@ -1476,8 +1461,8 @@ p {
 
 .aui-welcome-card__eyebrow {
   color: var(--color-text-subtle);
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1496,14 +1481,14 @@ p {
 }
 
 .aui-welcome-card__title {
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   line-height: 1.35;
 }
 
 .aui-welcome-card__sub {
   color: var(--color-text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-md);
   line-height: 1.4;
 }
 
@@ -1557,7 +1542,7 @@ p {
 }
 
 .aui-message__avatar .aui-logo__mark {
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   height: 1.4rem;
   width: 1.4rem;
 }
@@ -1607,7 +1592,7 @@ p {
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   min-height: 1.5rem;
   padding: 0.25rem 0.4rem;
 }
@@ -1738,7 +1723,7 @@ p {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
   color: var(--color-text);
   display: grid;
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   gap: 0.25rem;
   left: 0;
   max-width: min(12rem, calc(100vw - 2rem));
@@ -1777,8 +1762,8 @@ p {
 .aui-message-metrics__row strong {
   color: var(--color-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
 }
 
 .aui-footer-icon-button:hover {
@@ -1834,7 +1819,7 @@ p {
 .aui-ghost-button,
 .aui-icon-button {
   color: var(--color-text-muted);
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   padding: 0.45rem 0.625rem;
 }
 
@@ -1878,7 +1863,7 @@ p {
   border: 0;
   color: var(--color-text);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   min-height: 2.1rem;
   outline: none;
 }
@@ -1888,7 +1873,7 @@ p {
   border: 1px solid transparent;
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   padding: 0.5rem 0.75rem;
 }
 
@@ -1983,7 +1968,8 @@ p {
 .aui-composer-focus-meta {
   color: var(--color-text-muted);
   flex: 0 1 auto;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-regular);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2009,8 +1995,8 @@ p {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
   color: var(--color-accent-strong);
   display: inline-flex;
-  font-size: 0.74rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   gap: 0.3rem;
   left: 0.25rem;
   padding: 0.25rem 0.5rem;
@@ -2023,7 +2009,7 @@ p {
   border-radius: 4px;
   color: var(--color-accent-strong);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   padding: 0 0.28rem;
 }
 
@@ -2064,7 +2050,7 @@ p {
 .aui-composer-add-attachment,
 .aui-composer-send {
   border-radius: var(--radius-full);
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   height: 2rem;
   min-height: 2rem;
   min-width: 2rem;
@@ -2076,17 +2062,27 @@ p {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  bottom: calc(100% + var(--space-sm));
   box-shadow: 0 18px 48px rgb(0 0 0 / 0.32);
+  /* Portaled to <body> — reference design-system tokens explicitly so
+   * the popup matches the rest of the app regardless of where it
+   * mounts. Theme + accent are owned by :root[data-theme]/[data-accent]
+   * which Settings → Appearance writes to. */
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-snug);
   display: grid;
   gap: var(--space-xs);
-  left: 0;
   max-height: min(20rem, 60vh);
   overflow-y: auto;
   padding: var(--space-sm);
-  position: absolute;
+  /* The popup is rendered inside an `<AnchoredPlusMenu>` portal that
+   * applies `position: fixed` + viewport coords from the `+` button.
+   * The popup itself is just a styled box; positioning lives in the
+   * wrapper so we escape the composer card's `overflow: hidden`. */
+  position: relative;
   width: min(22rem, calc(100vw - 2rem));
-  z-index: 40;
 }
 
 .aui-plus-menu__section {
@@ -2098,13 +2094,13 @@ p {
 
 .aui-plus-menu__section > strong {
   color: var(--color-text);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   padding: var(--space-xs) var(--space-sm);
 }
 
 .aui-plus-menu__section > span {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   padding: var(--space-xs) var(--space-sm);
 }
 
@@ -2114,7 +2110,7 @@ p {
   color: var(--color-text);
   display: block;
   flex: 0 0 var(--composer-input-height);
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   height: var(--composer-input-height);
   line-height: 1.25rem;
   max-height: 8rem;
@@ -2154,9 +2150,10 @@ p {
   color: var(--color-text-subtle);
   display: flex;
   flex-wrap: wrap;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-regular);
   gap: 0.5rem;
-  line-height: 1.2;
+  line-height: var(--line-height-tight);
   max-height: 2.25rem;
   overflow: hidden;
   padding: 0.45rem 0.75rem;
@@ -2183,7 +2180,7 @@ p {
   border-radius: 4px;
   color: var(--color-text-muted);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   margin: 0 0.1rem;
   padding: 0.05rem 0.35rem;
 }
@@ -2212,7 +2209,7 @@ p {
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   justify-content: center;
   min-height: 2rem;
   min-width: 2rem;
@@ -2263,7 +2260,7 @@ p {
 .aui-quote-preview,
 .aui-dictation-preview {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .aui-quote-preview {
@@ -2290,7 +2287,7 @@ p {
 
 .aui-attachment-pill small {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .aui-skill-pill {
@@ -2309,12 +2306,12 @@ p {
 .aui-skill-pill code {
   color: var(--color-accent-strong);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-skill-pill span {
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2387,11 +2384,20 @@ p {
 .aui-plus-menu__item > strong {
   grid-row: 1;
   grid-column: 2;
+  /* <strong> defaults to weight 700 which reads as a different family
+   * next to the rest of the app's 600-weight UI titles. Pin to the
+   * design-system token. Size + line-height also tokenized so popups
+   * stay coherent if the type scale shifts. */
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
 }
 
 .aui-plus-menu__item > span {
   grid-row: 2;
   grid-column: 2;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-snug);
 }
 
 .aui-plus-menu__item:hover .aui-plus-menu__icon,
@@ -2406,7 +2412,7 @@ p {
 
 .aui-trigger-popover__item span {
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .aui-selection-toolbar {
@@ -2442,7 +2448,7 @@ p {
   align-items: center;
   cursor: pointer;
   display: flex;
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   gap: var(--space-xs);
   padding: var(--space-sm) var(--space-md);
 }
@@ -2470,8 +2476,8 @@ p {
   color: var(--color-text-subtle);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   gap: var(--space-sm);
   list-style: none;
   padding: var(--space-2xs) var(--space-sm);
@@ -2517,7 +2523,7 @@ p {
 
 .aui-reasoning-group__time {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
   margin-left: var(--space-xs);
 }
@@ -2533,7 +2539,7 @@ p {
   border-top: 0;
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.84rem;
+  font-size: var(--font-size-xs);
   font-style: italic;
   gap: var(--space-sm);
   line-height: 1.65;
@@ -2545,7 +2551,7 @@ p {
 .aui-reasoning-group__content :where(strong, em) {
   color: var(--color-text);
   font-style: normal;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 .aui-reasoning-group[data-status="running"]
@@ -2724,7 +2730,7 @@ p {
 
 .aui-activity-card__param dt {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   font-weight: 750;
   text-transform: uppercase;
 }
@@ -2761,7 +2767,7 @@ p {
 .aui-collapsible__trigger {
   color: var(--color-text-subtle);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   width: max-content;
 }
 
@@ -2782,8 +2788,8 @@ p {
 
 .aui-activity-card__details-content small {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-activity-item {
@@ -2833,7 +2839,7 @@ p {
 }
 
 .aui-activity-item__mark {
-  font-size: 0.68rem;
+  font-size: var(--font-size-2xs);
   font-weight: 800;
   line-height: 1;
 }
@@ -2893,7 +2899,7 @@ p {
   border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
   border-radius: var(--radius-full);
   color: var(--color-text-subtle);
-  font-size: 0.74rem;
+  font-size: var(--font-size-2xs);
   font-weight: 650;
   padding: 0.12rem 0.45rem;
   text-transform: lowercase;
@@ -2936,7 +2942,7 @@ p {
 
 .aui-presentation-result__text p {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   line-height: 1.35;
   margin: 0;
 }
@@ -2955,8 +2961,8 @@ p {
 
 .aui-activity-item__details-content small {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-tool-card--activity {
@@ -2969,7 +2975,7 @@ p {
 
 .aui-tool-card__header span {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
 }
 
@@ -3004,7 +3010,7 @@ p {
 
 .aui-tool-card__meta {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .aui-tool-card__notice {
@@ -3054,19 +3060,19 @@ p {
 
 .aui-mcp-result-preview__primary small {
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   line-height: 1.35;
 }
 
 .aui-mcp-result-preview__list a {
   color: var(--color-accent-strong);
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
 }
 
 .aui-tool-card__details summary {
   color: var(--color-text-subtle);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   width: max-content;
 }
 
@@ -3077,8 +3083,8 @@ p {
 
 .aui-tool-card__details small {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-tool-card__activity-summary {
@@ -3092,7 +3098,7 @@ p {
 
 .aui-tool-card__activity-summary span {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
 }
 
@@ -3104,8 +3110,8 @@ p {
 
 .aui-tool-card__activity-content small {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-tool-card__empty {
@@ -3152,7 +3158,7 @@ p {
 
 .aui-tool-card__timeline-item > span {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
 }
 
@@ -3169,8 +3175,8 @@ p {
 
 .aui-tool-card__field dt {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-tool-card__field dd {
@@ -3242,8 +3248,8 @@ p {
   color: var(--color-accent);
   display: inline-flex;
   flex: none;
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
   height: 1.5rem;
   justify-content: center;
   width: 1.5rem;
@@ -3259,19 +3265,19 @@ p {
   align-items: center;
   color: var(--color-text-muted);
   display: flex;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   gap: 0.5rem;
   padding-left: calc(1.5rem + var(--space-sm));
 }
 
 .aui-question-card__resolved-check {
   color: var(--color-success);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
 }
 
 .aui-question-card__resolved strong {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .aui-question-card__free-text {
@@ -3288,7 +3294,7 @@ p {
   color: var(--color-text);
   flex: 1 1 auto;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   min-width: 0;
   outline: none;
   padding: 0.45rem 0.85rem;
@@ -3354,7 +3360,7 @@ p {
 }
 
 .aui-question-card__chip-flag {
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.02em;
   opacity: 0.75;
   text-transform: uppercase;
@@ -3362,7 +3368,7 @@ p {
 
 .aui-question-card__chip-description {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   padding: 0 0.25rem;
 }
 
@@ -3475,22 +3481,14 @@ p {
 }
 
 .settings-shell {
-  --color-bg: #0a0a0a;
-  --color-bg-elevated: #09090b;
-  --color-surface: #18181b;
-  --color-surface-muted: #27272a;
-  --color-border: #27272a;
-  --color-border-strong: #3f3f46;
-  --color-text: #fafafa;
-  --color-text-muted: #a1a1aa;
-  --color-text-subtle: #71717a;
-  --color-accent: #d8b46a;
-  --color-accent-strong: #f0ca7a;
-  --color-accent-contrast: #1c160a;
+  /* No local --color-* overrides — those would shadow the
+   * :root[data-theme] / :root[data-accent] tokens that Settings →
+   * Appearance writes to. Inherit from :root so theme + accent changes
+   * actually visibly retheme the settings shell. */
   background: var(--color-bg);
   color: var(--color-text);
   display: grid;
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
   grid-template-rows: auto 1fr;
   height: 100dvh;
   min-height: 100vh;
@@ -3538,7 +3536,7 @@ p {
 
 .settings-chrome__crumb {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   letter-spacing: 0.005em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3547,7 +3545,7 @@ p {
 
 .settings-chrome__crumb strong {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .settings-chrome__crumb-sep {
@@ -3573,8 +3571,8 @@ p {
   border-radius: 999px;
   color: var(--color-accent-contrast);
   display: inline-flex;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   height: 1.5rem;
   justify-content: center;
   width: 1.5rem;
@@ -3582,7 +3580,7 @@ p {
 
 .settings-chrome__email {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .settings-nav {
@@ -3646,8 +3644,8 @@ p {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   padding: 0.05rem 0.45rem;
 }
 
@@ -3679,7 +3677,7 @@ p {
 }
 
 .settings-section h2 {
-  font-size: 2rem;
+  font-size: var(--font-size-3xl);
   margin: 0 0 var(--space-xs);
 }
 
@@ -3759,14 +3757,14 @@ p {
 
 .connector-settings-row__title p {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
   overflow-wrap: anywhere;
 }
 
 .connector-settings-row__hint {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -3792,13 +3790,14 @@ p {
 }
 
 .connector-group__head h3 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
   margin: 0;
 }
 
 .connector-group__hint {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0 0 var(--space-sm);
 }
 
@@ -3851,14 +3850,14 @@ p {
 }
 
 .connector-card__name {
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   margin: 0 0 2px;
 }
 
 .connector-card__sub {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-sm);
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3888,13 +3887,14 @@ p {
 }
 
 .mcp-cta__copy h3 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
   margin: 0 0 var(--space-xs);
 }
 
 .mcp-cta__copy p {
   color: var(--color-text-muted);
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -3911,7 +3911,7 @@ p {
 
 .connector-manual-add__summary {
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   list-style: none;
   outline: none;
 }
@@ -3940,7 +3940,7 @@ p {
 .connector-add-form__advanced > summary {
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   list-style: none;
 }
 
@@ -3989,8 +3989,8 @@ p {
   border-radius: calc(var(--radius-md) - 2px);
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   padding: 0.35rem 0.85rem;
   transition:
     background 0.15s ease,
@@ -4040,7 +4040,7 @@ p {
 }
 
 .json-editor__diff-section h4 {
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
   margin: 0 0 var(--space-xs);
 }
 
@@ -4050,14 +4050,14 @@ p {
 
 .json-editor__diff-section ul {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
   padding-left: 1.25rem;
 }
 
 .settings-meta {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
 }
 
 @media (max-width: 760px) {
@@ -4179,14 +4179,14 @@ p {
 
 .auth-screen__header h1 {
   margin: 0 0 var(--space-xs);
-  font-size: 1.4rem;
+  font-size: var(--font-size-2xl);
   letter-spacing: -0.01em;
 }
 
 .auth-screen__header p {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
 }
 
 .auth-screen__field {
@@ -4219,7 +4219,7 @@ p {
   gap: var(--space-sm);
   margin: var(--space-sm) 0;
   color: var(--color-text-subtle);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -4247,7 +4247,7 @@ p {
     transparent
   );
   color: var(--color-danger, #b3261e);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .auth-screen__webauthn-status {
@@ -4257,7 +4257,7 @@ p {
   background-color: var(--color-surface-muted);
   color: var(--color-text-muted);
   text-align: center;
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
 }
 
 .auth-screen__back {
@@ -4268,7 +4268,7 @@ p {
 .auth-screen__self-service {
   margin-top: var(--space-md);
   text-align: center;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
 }
 
@@ -4300,12 +4300,12 @@ p {
 
 .sessions-panel__header h2 {
   margin: 0 0 var(--space-2xs);
-  font-size: 1.05rem;
+  font-size: var(--font-size-lg);
 }
 
 .sessions-panel__subtitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
   max-width: 36rem;
 }
@@ -4313,7 +4313,7 @@ p {
 .sessions-panel__alert,
 .sessions-panel__empty {
   padding: var(--space-md) var(--space-lg);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
 }
 
 .sessions-panel__list {
@@ -4353,12 +4353,12 @@ p {
 
 .sessions-panel__row-detail {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
 .sessions-panel__badge {
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 /* Slash-command side panel host (B5 /context, B6 /usage). */
@@ -4387,7 +4387,7 @@ p {
 }
 
 .details-panel__header h2 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   margin: 0;
 }
 
@@ -4398,13 +4398,13 @@ p {
 
 .details-panel__subtitle {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   margin: var(--space-xs) 0 0;
 }
 
 .details-panel__alert,
 .details-panel__empty {
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .details-panel__body {
@@ -4420,7 +4420,7 @@ p {
 }
 
 .details-panel__section h3 {
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -4435,11 +4435,11 @@ p {
 
 .details-panel__detail {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
 }
 
 .details-panel__badge {
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 .details-panel__metrics {
@@ -4456,13 +4456,13 @@ p {
 
 .details-panel__metric dt {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .details-panel__metric dd {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   margin: 0;
 }
 
@@ -4474,7 +4474,7 @@ p {
 
 .details-panel__gauge--unknown {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
 }
 
 .details-panel__gauge-track {
@@ -4491,23 +4491,23 @@ p {
 }
 
 .details-panel__gauge-fill--warning {
-  background: #f59e0b;
+  background: var(--color-warning);
 }
 
 .details-panel__gauge-fill--danger {
-  background: #ef4444;
+  background: var(--color-danger);
 }
 
 .details-panel__gauge-legend {
   color: var(--color-text-muted);
   display: flex;
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   justify-content: space-between;
 }
 
 .details-panel__table {
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   width: 100%;
 }
 
@@ -4520,9 +4520,9 @@ p {
 
 .details-panel__table th {
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.04em;
 }
 
@@ -4533,7 +4533,7 @@ p {
 .details-panel__list {
   display: flex;
   flex-direction: column;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   gap: var(--space-xs);
   list-style: none;
   margin: 0;
@@ -4548,7 +4548,7 @@ p {
 
 .details-panel__footnote {
   color: var(--color-text-subtle);
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   margin: 0;
 }
 
@@ -4569,8 +4569,8 @@ p {
   color: var(--color-accent);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   justify-content: center;
   line-height: 1;
   margin: 0 0.15em;
@@ -4629,7 +4629,7 @@ p {
   cursor: pointer;
   display: grid;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   gap: 0.5rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 0.5rem 0.75rem;
@@ -4639,11 +4639,11 @@ p {
 
 .aui-activity-group__icon {
   color: var(--color-text-subtle);
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
 }
 
 .aui-activity-group__summary {
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4651,7 +4651,7 @@ p {
 
 .aui-activity-group__hint {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .aui-activity-group__body {
@@ -4679,7 +4679,7 @@ p {
 }
 
 .atlas-sources-strip__label {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-subtle);
@@ -4695,7 +4695,7 @@ p {
   border: 1px solid var(--color-line);
   border-radius: 999px;
   color: var(--color-text);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition:
     background-color 80ms,
@@ -4720,8 +4720,8 @@ p {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-accent);
   background: color-mix(in oklab, var(--color-accent) 18%, transparent);
 }
@@ -4785,7 +4785,7 @@ p {
 .atlas-source-row--skeleton .atlas-source-row__title--skeleton {
   color: var(--color-text-subtle);
   font-style: italic;
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 .atlas-source-row__snippet--skeleton {
@@ -4841,7 +4841,7 @@ p {
   color: var(--color-text);
   display: flex;
   flex-direction: column;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   gap: 8px;
   max-height: 220px;
   padding: 12px;
@@ -4857,7 +4857,7 @@ p {
 
 .source-preview-card__title {
   flex: 1;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4876,7 +4876,7 @@ p {
 .source-preview-card__snippet {
   color: var(--color-text-muted);
   display: -webkit-box;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
@@ -4886,7 +4886,7 @@ p {
 
 .source-preview-card__footer {
   color: var(--color-text-subtle);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .atlas-source-row__glyph-trigger {
@@ -4911,8 +4911,8 @@ p {
   border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
   color: var(--color-text-muted);
   display: flex;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   gap: 8px;
   letter-spacing: 0.04em;
   padding: 10px 4px 6px;
@@ -4928,7 +4928,7 @@ p {
   background: var(--color-surface-muted);
   border-radius: 999px;
   color: var(--color-text);
-  font-size: 0.65rem;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0;
   padding: 2px 8px;
   text-transform: none;
@@ -4955,7 +4955,7 @@ p {
 .atlas-source-row__title {
   flex: 1;
   min-width: 0;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4972,14 +4972,14 @@ p {
 
 .atlas-source-row__snippet {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
   line-height: 1.5;
 }
 
 .atlas-source-row__footnote {
   margin: 6px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-subtle);
 }
 
@@ -4997,7 +4997,7 @@ p {
   justify-content: center;
   text-align: center;
   color: var(--color-text-subtle);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   padding: 24px 14px;
 }
 
@@ -5038,7 +5038,7 @@ p {
 
 .atlas-workspace-agent-group__header time {
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 .atlas-workspace-agent-group__list {
@@ -5050,7 +5050,7 @@ p {
 .atlas-workspace-tab__stale {
   margin: 0;
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-warn, var(--color-text-subtle));
   background: color-mix(
     in oklab,
@@ -5159,8 +5159,8 @@ p {
   background: var(--color-surface-muted);
   border-radius: 999px;
   color: var(--color-text-muted);
-  font-size: 0.625rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   line-height: 1;
   padding: 2px 6px;
 }
@@ -5213,7 +5213,7 @@ p {
 
 .atlas-workspace-agent__name {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -5225,13 +5225,13 @@ p {
 .atlas-workspace-agent__result,
 .atlas-workspace-agent__meta {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
 .atlas-workspace-agent__working {
   color: var(--color-accent-strong);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 /* PR 3.2.1 — expandable per-subagent timeline inside the Agents tab. */
@@ -5262,7 +5262,7 @@ p {
 
 .atlas-workspace-agent__disclosure-hint {
   color: var(--color-text-subtle);
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   transition: transform 120ms ease;
 }
 
@@ -5282,7 +5282,7 @@ p {
   /* Composes with `aui-tool-card__timeline`. Pane-narrow tweaks: tighter
      rows, smaller font, narrower left rail. The base in-thread styling
      (dot + connector via ::before) is preserved. */
-  font-size: 11.5px;
+  font-size: var(--font-size-xs);
   margin-top: 6px;
   padding-left: 16px;
 }
@@ -5316,7 +5316,7 @@ p {
   border-radius: var(--radius-md);
   color: var(--color-accent-strong);
   display: inline-flex;
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
   height: 2rem;
   justify-content: center;
   width: 2rem;
@@ -5324,7 +5324,7 @@ p {
 
 .aui-fleet-card__title {
   color: var(--color-text);
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 650;
   min-width: 0;
   overflow: hidden;
@@ -5335,14 +5335,14 @@ p {
 .aui-fleet-card__count,
 .aui-fleet-card__elapsed {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
 
 .aui-fleet-card__sub {
   color: var(--color-text-muted);
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -5356,7 +5356,7 @@ p {
   color: var(--color-text-muted);
   display: flex;
   flex-wrap: wrap;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   gap: var(--space-sm);
 }
 
@@ -5371,7 +5371,7 @@ p {
   color: var(--color-accent-strong);
   cursor: pointer;
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   padding: 0;
 }
 
@@ -5400,7 +5400,7 @@ p {
 }
 
 .aui-fleet-card .subagent-card__name {
-  font-size: 0.92rem;
+  font-size: var(--font-size-md);
   grid-column: 2;
   grid-row: 1;
   letter-spacing: 0;
@@ -5419,7 +5419,7 @@ p {
 .aui-fleet-card .subagent-card__task,
 .aui-fleet-card .subagent-card__finding {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   grid-column: 2;
   grid-row: 2;
   line-clamp: 1;
@@ -5453,7 +5453,7 @@ p {
   align-self: center;
   color: var(--color-text-muted);
   flex: initial;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   grid-column: 4;
   grid-row: 1 / span 2;
   justify-self: end;
@@ -5490,19 +5490,19 @@ p {
   align-items: center;
   display: flex;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .subagent-card__status-badge {
-  font-size: 0.62rem;
+  font-size: var(--font-size-2xs);
   line-height: 1;
   padding: 2px 6px;
 }
 
 .subagent-card[data-compact="true"] .subagent-card__status-badge {
-  font-size: 0.58rem;
+  font-size: var(--font-size-2xs);
   padding: 1px 5px;
 }
 
@@ -5517,7 +5517,7 @@ p {
 
 .subagent-card__name {
   flex: 1 1 auto;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5529,7 +5529,7 @@ p {
   border: 0;
   color: var(--color-text-subtle);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1;
   padding: 2px 4px;
   border-radius: 4px;
@@ -5545,7 +5545,7 @@ p {
 .subagent-card__task {
   color: var(--color-text);
   display: -webkit-box;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.45;
   margin: 0;
   overflow: hidden;
@@ -5557,7 +5557,7 @@ p {
 .subagent-card__finding {
   color: var(--color-text-muted);
   display: -webkit-box;
-  font-size: 12.5px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   margin: 0;
   overflow: hidden;
@@ -5574,7 +5574,7 @@ p {
   align-items: center;
   cursor: pointer;
   display: flex;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-subtle);
   gap: 6px;
   justify-content: space-between;
@@ -5609,7 +5609,7 @@ p {
   color: var(--color-text-subtle);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   height: 1.45rem;
   justify-content: center;
   line-height: 1;
@@ -5640,7 +5640,7 @@ p {
 
 .subagent-card__empty {
   color: var(--color-text-subtle);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-style: italic;
   margin: 0;
 }
@@ -5650,7 +5650,7 @@ p {
   border-radius: var(--radius-sm);
   color: var(--color-text);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
+  font-size: var(--font-size-xs);
   margin: 0;
   max-height: 240px;
   overflow: auto;
@@ -5663,19 +5663,40 @@ p {
 .subagent-fleet-row {
   align-items: center;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 96px 64px;
+  /* PR 3.2.7 — extra `auto` slot between progress and elapsed reserves
+   *  space for the optional paused chip; collapses to 0 width when the
+   *  chip isn't rendered, so non-paused rows look identical to PR 3.2.4. */
+  grid-template-columns: 16px minmax(0, 1fr) 96px auto 64px;
   gap: 12px;
   padding: 8px 0;
 }
 
-.subagent-fleet-row + .subagent-fleet-row {
+.subagent-fleet-row + .subagent-fleet-row,
+.subagent-fleet-row__inline-timeline + .subagent-fleet-row {
   border-top: 1px solid var(--color-border-subtle);
+}
+
+.subagent-fleet-row--clickable {
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  transition: background-color 120ms ease;
+}
+.subagent-fleet-row--clickable:hover,
+.subagent-fleet-row--clickable:focus-visible {
+  background: var(--color-surface-raised);
+}
+.subagent-fleet-row--clickable:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-accent-strong));
+  outline-offset: 2px;
 }
 
 .subagent-fleet-row__indicator {
   align-items: center;
   display: inline-flex;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   height: 16px;
   justify-content: center;
   line-height: 1;
@@ -5704,8 +5725,8 @@ p {
 
 .subagent-fleet-row__name {
   color: var(--color-text);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5713,7 +5734,7 @@ p {
 
 .subagent-fleet-row__task {
   color: var(--color-text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-xs);
   line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5762,11 +5783,134 @@ p {
   transform: scaleX(1);
 }
 
+/* PR 3.2.7 — paused chrome. Amber indicator + frozen progress + chip. */
+.subagent-fleet-row[data-status="paused"] .subagent-fleet-row__indicator {
+  color: var(--color-warning);
+  animation: subagent-fleet-row-paused-pulse 1.6s ease-in-out infinite;
+}
+.subagent-fleet-row[data-paused="true"] .subagent-fleet-row__progress-fill {
+  /* Frozen at the last reported width (inline `transform: scaleX(...)`).
+   * No movement animation; only a subtle opacity pulse signals "this
+   * isn't progressing forward". */
+  background: var(--color-warning);
+  animation: subagent-fleet-row-paused-progress 2s ease-in-out infinite;
+}
+.subagent-fleet-row[data-status="paused"]
+  .subagent-fleet-row__progress-fill:not([style]) {
+  /* When the worker never reported a numeric progress before the pause,
+   * give the bar enough fill to communicate "in flight when paused". */
+  transform: scaleX(0.18);
+}
+
+.subagent-fleet-row__paused-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .subagent-fleet-row__elapsed {
   color: var(--color-text-subtle);
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+/* PR 3.2.7 — inline timeline disclosure under the row. Independent
+ * per-row state (no accordion); appears below the toggling row. */
+.subagent-fleet-row__inline-timeline {
+  background: var(--color-surface-raised);
+  border-radius: 6px;
+  margin: 4px -8px 8px;
+  padding: 8px 12px 10px calc(12px + 16px);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.subagent-fleet-row__activity-list {
+  margin: 0;
+}
+
+.subagent-fleet-row__empty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  margin: 0;
+}
+
+.subagent-fleet-row__jump-link {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  margin-top: 8px;
+  padding: 2px 0;
+}
+.subagent-fleet-row__jump-link:hover,
+.subagent-fleet-row__jump-link:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-fleet-row[data-status="paused"] .subagent-fleet-row__indicator,
+  .subagent-fleet-row[data-paused="true"] .subagent-fleet-row__progress-fill {
+    animation: none;
+  }
+}
+
+@keyframes subagent-fleet-row-paused-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes subagent-fleet-row-paused-progress {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* PR 3.2.7 — pane-card paused jump button. */
+.subagent-card__jump-to-approval {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  margin: 4px 0 6px;
+  padding: 2px 0;
+}
+.subagent-card__jump-to-approval:hover,
+.subagent-card__jump-to-approval:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+/* PR 3.2.7 — flash highlight applied by `scrollChatToEvent` so a
+ * jumped-to approval/auth/question card briefly stands out. */
+[data-flash-highlight="true"] {
+  animation: atlas-flash-highlight 1.2s ease-out;
+}
+
+@keyframes atlas-flash-highlight {
+  0% {
+    box-shadow: 0 0 0 3px var(--color-warning, #f5a623);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 @keyframes subagent-fleet-row-pulse {
@@ -5826,12 +5970,12 @@ p {
 .atlas-workspace-draft-tab__version {
   color: var(--color-text-subtle);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 .atlas-workspace-draft-tab__title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   margin-bottom: var(--space-xs);
   width: 100%;
 }
@@ -5843,7 +5987,7 @@ p {
   color: var(--color-text);
   font: inherit;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   padding: var(--space-sm);
   resize: vertical;
@@ -5852,7 +5996,7 @@ p {
 
 .atlas-workspace-draft-tab__error {
   color: var(--color-danger, #d97777);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   margin: var(--space-xs) 0 0;
 }
 
@@ -5869,8 +6013,8 @@ p {
 }
 
 .atlas-workspace-approvals-section h3 {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   margin: 0 0 4px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -5879,7 +6023,7 @@ p {
 
 .atlas-workspace-approvals-section header p {
   color: var(--color-text-subtle);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   margin: 0 0 var(--space-xs);
 }
 
@@ -5905,7 +6049,7 @@ p {
 }
 
 .atlas-workspace-approvals-row__title {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -5916,7 +6060,7 @@ p {
 .atlas-workspace-approvals-row__summary,
 .atlas-workspace-approvals-row__resolved {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -5951,19 +6095,19 @@ p {
   border-radius: var(--radius-sm, 4px);
   color: var(--color-accent-strong);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   padding: 1px 6px;
 }
 
 .atlas-workspace-skill-row__title {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   margin: 0;
 }
 
 .atlas-workspace-skill-row__description {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -6044,7 +6188,7 @@ p {
   max-width: 220px;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
@@ -6061,8 +6205,8 @@ p {
 /* Title */
 .atlas-title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   line-height: 1.3;
   color: var(--color-text);
   overflow: hidden;
@@ -6110,12 +6254,12 @@ p {
 
 .atlas-connectors-pill__overflow {
   margin-left: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
 .atlas-connectors-pill__empty {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
@@ -6136,18 +6280,18 @@ p {
 }
 
 .atlas-connectors-pill__plus {
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
   line-height: 1;
 }
 
 .atlas-connectors-pill__cta {
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
 }
 
 .atlas-connectors-pill__caret {
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
@@ -6194,8 +6338,8 @@ p {
   border-radius: 999px;
   background: var(--color-accent);
   color: var(--color-bg);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
   line-height: 16px;
   text-align: center;
   box-shadow: 0 0 0 2px var(--color-bg);
@@ -6206,6 +6350,12 @@ p {
  * rules style the inner content. PR 3.4.1 widened the popover so the
  * scope subtitles fit on a single line for the catalog connectors. */
 .atlas-connector-popover {
+  /* Portaled via the Menu primitive — explicit tokens so the popup
+   * doesn't depend on inheriting font/color from a parent that no
+   * longer exists in its DOM tree. Single source of truth lives at
+   * :root[data-theme]/[data-accent]. */
+  color: var(--color-text);
+  font-family: var(--font-sans);
   width: 340px;
   padding: var(--space-xs) 0;
   z-index: 12;
@@ -6227,13 +6377,13 @@ p {
 }
 
 .atlas-connector-popover__title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
 
 .atlas-connector-popover__sub {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
@@ -6246,8 +6396,8 @@ p {
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   gap: 4px;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
@@ -6266,7 +6416,7 @@ p {
 
 .atlas-connector-popover__empty {
   padding: var(--space-sm);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
@@ -6277,7 +6427,7 @@ p {
   background: var(--color-bg-elevated-strong, var(--color-bg-elevated));
   border: 1px solid var(--color-danger, #d97777);
   color: var(--color-danger, #d97777);
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 /* PR 3.4.1 — footer becomes informational copy ("per-chat changes
@@ -6286,7 +6436,7 @@ p {
   padding: var(--space-2xs) var(--space-sm) 0;
   border-top: 1px solid var(--color-border-soft, var(--color-border));
   margin-top: var(--space-2xs);
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
@@ -6323,7 +6473,7 @@ p {
 .atlas-connector-row__glyph {
   width: 28px;
   height: 28px;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   border-radius: var(--radius-sm);
 }
 
@@ -6342,8 +6492,8 @@ p {
 }
 
 .atlas-connector-row__name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6351,8 +6501,8 @@ p {
 
 .atlas-connector-row__badge {
   flex: none;
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 2px 6px;
@@ -6363,7 +6513,7 @@ p {
 }
 
 .atlas-connector-row__subtitle {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -6415,8 +6565,8 @@ p {
   align-items: center;
   padding: 4px 10px;
   border-radius: var(--radius-full, 999px);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-accent);
   border: 1px solid color-mix(in srgb, var(--color-accent) 36%, transparent);
@@ -6469,7 +6619,7 @@ p {
 }
 
 .atlas-usage-meter__pct {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -6491,7 +6641,8 @@ p {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   color: var(--color-text);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   outline: none;
   transition:
@@ -6528,7 +6679,7 @@ p {
 }
 
 .atlas-model-pill__name {
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   line-height: 1;
   min-width: 0;
   overflow: hidden;
@@ -6538,7 +6689,7 @@ p {
 
 .atlas-model-pill__caret {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
 }
 
 .atlas-model-pill__menu {
@@ -6551,7 +6702,8 @@ p {
 }
 
 .atlas-model-pill__head {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-muted);
@@ -6600,13 +6752,22 @@ p {
   gap: var(--space-xs);
 }
 
+.atlas-model-pill__row > strong {
+  /* Same normalization as `.aui-plus-menu__item > strong` — pin to
+   * design-system tokens so weight matches the rest of the UI titles. */
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+}
+
 .atlas-model-pill__sub {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
 .atlas-model-pill__badge {
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   padding: 1px 6px;
   border-radius: 999px;
   background: color-mix(in oklab, var(--color-accent) 16%, transparent);
@@ -6616,7 +6777,7 @@ p {
 }
 
 .atlas-model-pill__provider {
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-subtle);
 }
 
@@ -6637,11 +6798,12 @@ p {
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   padding: 4px 12px;
   border-radius: 999px;
   cursor: pointer;
-  line-height: 1.1;
+  line-height: var(--line-height-tight);
 }
 
 .atlas-depth__chip:hover:not([disabled]) {
@@ -6689,8 +6851,8 @@ p {
 
 .settings-nav-group {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   margin: var(--space-md) 0 var(--space-xs) var(--space-sm);
   text-transform: uppercase;
@@ -6718,8 +6880,8 @@ p {
    plus the Appearance Region & language card. The card title sits inside
    the design-system <Card> so it doesn't collide with the section h2. */
 .me-form__card-title {
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.005em;
   margin: 0 0 var(--space-md);
 }
@@ -6840,6 +7002,10 @@ p {
 }
 
 .me-form__mfa-qr {
+  /* MFA QR codes need a literal white background regardless of theme —
+   * the QR scanner expects the standard black-on-white contrast. This
+   * is intentional: NOT a candidate for var(--color-bg) because that
+   * goes dark in dark mode and breaks scanning. */
   background: #fff;
   border-radius: var(--radius-md);
   padding: var(--space-sm);
@@ -6920,8 +7086,8 @@ p {
   color: var(--color-text);
   display: inline-flex;
   flex-shrink: 0;
-  font-size: 1.6rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
   height: 4rem;
   justify-content: center;
   overflow: hidden;
@@ -6958,7 +7124,7 @@ p {
 }
 
 .me-form__sign-out-row strong {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .me-form__inline-field {
@@ -7003,7 +7169,7 @@ p {
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   padding: 0.4rem 0.85rem;
 }
 
@@ -7061,7 +7227,7 @@ p {
 }
 
 .me-accent-swatch__label {
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .me-shortcuts-card {
@@ -7071,8 +7237,8 @@ p {
 
 .me-shortcuts-category {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   margin: 0;
   text-transform: uppercase;
@@ -7098,7 +7264,7 @@ p {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   padding: 0.25rem 0.55rem;
 }
 
@@ -7132,8 +7298,8 @@ p {
 .me-notifications-grid__label,
 .me-notifications-grid__channel {
   color: var(--color-text-subtle);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -7145,7 +7311,7 @@ p {
 
 .me-notifications-grid__event small {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .me-notifications-grid__cell {
@@ -7162,7 +7328,7 @@ p {
   border-radius: var(--radius-md);
   color: var(--color-text);
   font: inherit;
-  font-size: 0.92rem;
+  font-size: var(--font-size-md);
   line-height: 1.45;
   min-height: 4.5rem;
   outline: none;
@@ -7202,7 +7368,7 @@ p {
   color: var(--color-text);
   cursor: pointer;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   padding: 0.32rem 0.7rem;
   transition:
     border-color 120ms ease,
@@ -7234,7 +7400,7 @@ p {
 
 .settings-readonly-value {
   color: var(--color-text-muted, var(--color-text));
-  font-size: 0.92rem;
+  font-size: var(--font-size-md);
 }
 
 .settings-retention-list {
@@ -7248,7 +7414,7 @@ p {
 .settings-retention-list li {
   align-items: center;
   display: flex;
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   justify-content: space-between;
 }
 
@@ -7267,7 +7433,7 @@ p {
 
 .settings-danger-message {
   color: var(--color-warn, var(--color-text));
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin-top: var(--space-xs);
 }
 
@@ -7354,11 +7520,11 @@ p {
   flex-direction: column;
   gap: 0.3rem;
   color: var(--color-text-subtle, #7e7e84);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 .share-popover__fieldset legend {
   padding: 0;
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-subtle, #7e7e84);
@@ -7377,7 +7543,7 @@ p {
   align-items: center;
   gap: 0.55rem;
   padding: 0.35rem 0.6rem;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   color: var(--color-text-subtle, #7e7e84);
 }
 .share-popover__toggle[data-disabled="true"] {
@@ -7387,7 +7553,7 @@ p {
 .share-popover__hint {
   display: block;
   padding: 0.2rem 0.6rem 0.4rem;
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-subtle, #7e7e84);
 }
 
@@ -7455,12 +7621,12 @@ body.login-body {
   color: var(--color-bg);
   display: grid;
   place-items: center;
-  font-weight: 700;
-  font-size: 0.95rem;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
   letter-spacing: -0.02em;
 }
 .login-brand__name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.01em;
 }
 
@@ -7469,7 +7635,7 @@ body.login-body {
   margin: var(--space-2xl) 0;
 }
 .login-brand__eyebrow {
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-text-subtle);
@@ -7489,7 +7655,7 @@ body.login-body {
 .login-brand__lede {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.95rem;
+  font-size: var(--font-size-md);
   max-width: 30rem;
 }
 
@@ -7499,7 +7665,7 @@ body.login-body {
   gap: var(--space-md);
   align-items: center;
   flex-wrap: wrap;
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-subtle);
 }
 .login-brand__compliance {
@@ -7549,13 +7715,13 @@ body.login-body {
 
 .login-card__head h2 {
   margin: 0 0 var(--space-xs);
-  font-size: 1.3rem;
+  font-size: var(--font-size-2xl);
   letter-spacing: -0.01em;
 }
 .login-card__head p {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
 }
 
 .login-card__form {
@@ -7574,7 +7740,7 @@ body.login-body {
 }
 .login-card__hint {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
 .login-card__error {
@@ -7587,7 +7753,7 @@ body.login-body {
     transparent
   );
   color: var(--color-danger, #b3261e);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .login-discovery {
@@ -7600,11 +7766,11 @@ body.login-body {
   background: var(--color-surface-2, var(--color-surface));
 }
 .login-discovery__row {
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   color: var(--color-text);
 }
 .login-discovery__org {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .login-discovery__domain,
 .login-discovery__members {
@@ -7613,11 +7779,11 @@ body.login-body {
 .login-discovery__hint {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 .login-discovery__badge {
   align-self: flex-start;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   padding: 0.2rem 0.5rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
@@ -7625,7 +7791,7 @@ body.login-body {
   color: var(--color-accent);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .login-discovery--blocked {
   border-color: color-mix(
@@ -7678,7 +7844,7 @@ body.login-body {
   color: var(--color-text);
   display: grid;
   place-items: center;
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   letter-spacing: -0.02em;
 }
 .login-pick__col {
@@ -7687,16 +7853,16 @@ body.login-body {
   min-width: 0;
 }
 .login-pick__name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .login-pick__sub {
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
 }
 .login-pick__chev {
   color: var(--color-text-subtle);
-  font-size: 1.1rem;
+  font-size: var(--font-size-xl);
 }

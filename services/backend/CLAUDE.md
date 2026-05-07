@@ -19,7 +19,7 @@ Update [packages/api-types](../../packages/api-types) when public app-facing pay
 
 ## Auth
 
-- `DEV_AUTH_BYPASS=true` is honored only when `FACADE_ENVIRONMENT=development`. Production fails closed without `ENTERPRISE_AUTH_SECRET` and `ENTERPRISE_SERVICE_TOKEN`.
+- Dev sessions go through the W0.1 dev IdP (`POST /v1/dev/identity/mint`), only registered when `BACKEND_ENVIRONMENT=development`. The mint signs a real HMAC bearer with `ENTERPRISE_AUTH_SECRET` so the verification path is shared with production. There is no `DEV_AUTH_BYPASS` shortcut. Production fails closed without `ENTERPRISE_AUTH_SECRET` and `ENTERPRISE_SERVICE_TOKEN`.
 - With `ENTERPRISE_SERVICE_TOKEN` set, internal callers must also send `x-enterprise-org-id` and `x-enterprise-user-id`.
 - Treat caller-supplied identity, role, scope, tenant as untrusted unless derived from a verified session, token, mTLS identity, or IdP claim.
 

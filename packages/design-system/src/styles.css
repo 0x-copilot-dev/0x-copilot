@@ -5,6 +5,39 @@
     "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
 
+  /* Typography token tier — single source of truth for type scale and
+   * weight, the same way :root[data-accent] is the source of truth for
+   * colour. Components reference these instead of hard-coding rems /
+   * weights so density (Settings → Appearance), accent rotation, and
+   * future themes all stay coherent.
+   *
+   * Sizes hit the 5 most common values in the existing app (≈11/13/14/16/19 px).
+   * Headings use --font-size-xl/2xl/3xl. Body and UI labels use sm/md/lg.
+   * Captions and badges use 2xs/xs.
+   *
+   * Weights follow the standard 4-step ladder. <strong> defaults to
+   * 700; pin it to --font-weight-semibold inside UI surfaces so heading
+   * text doesn't read as a different family next to the rest of the app
+   * (root cause of the "+ menu vs GPT-5.4 Nano pill" mismatch). */
+  --font-size-2xs: 0.7rem; /* 11.2px — badge, kbd */
+  --font-size-xs: 0.78rem; /* 12.5px — hint, caption */
+  --font-size-sm: 0.85rem; /* 13.6px — secondary body */
+  --font-size-md: 0.875rem; /* 14.0px — UI label / item title */
+  --font-size-lg: 1rem; /* 16.0px — body */
+  --font-size-xl: 1.125rem; /* 18.0px — section title */
+  --font-size-2xl: 1.4rem; /* 22.4px — page heading */
+  --font-size-3xl: 2rem; /* 32.0px — display heading */
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-snug: 1.35;
+  --line-height-base: 1.5;
+  --line-height-loose: 1.7;
+
   --space-2xs: 0.125rem;
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
@@ -91,6 +124,35 @@
   --color-success-bg: #1a2f23;
   --color-warning: #d9a857;
   --color-warning-bg: #322615;
+}
+
+/* Token aliases — semantic names used by various features that resolve
+ * to canonical tokens. Defined on :root so they inherit through every
+ * theme block automatically. Without these, every `var(--color-foo,
+ * #fallback)` reference in feature code silently rendered the
+ * hardcoded fallback regardless of theme. They live outside the theme
+ * blocks because the inner ``var(--color-…)`` resolves at use-site, so
+ * changing a base token under [data-theme="light"] reflows the alias
+ * downstream automatically. */
+:root {
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  --color-bg-accent-subtle: color-mix(
+    in srgb,
+    var(--color-accent) 8%,
+    transparent
+  );
+  --color-bg-danger-subtle: var(--color-danger-bg);
+  --color-bg-elevated-strong: var(--color-surface);
+  --color-bg-warn-subtle: var(--color-warning-bg);
+  --color-border-soft: var(--color-border);
+  --color-border-subtle: var(--color-border);
+  --color-focus-ring: var(--color-accent);
+  --color-line: var(--color-border);
+  --color-line-soft: var(--color-border);
+  --color-surface-2: var(--color-surface-muted);
+  --color-surface-raised: var(--color-surface);
+  --color-text-danger: var(--color-danger);
+  --color-warn: var(--color-warning);
 }
 
 /* Accent swatches — picked in Settings → Appearance.
@@ -218,6 +280,9 @@ textarea {
   border-radius: var(--radius-md);
   cursor: pointer;
   display: inline-flex;
+  /* Heavier than --font-weight-semibold (600) for the call-to-action
+   * register. Kept as 650 for the brand vocabulary (sits between
+   * semibold and bold; intentional — the app's "press me" affordance). */
   font-weight: 650;
   gap: var(--space-sm);
   justify-content: center;
@@ -335,7 +400,7 @@ textarea {
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   font-weight: 650;
   min-height: 1.65rem;
   padding: 0.2rem 0.65rem;
@@ -388,7 +453,7 @@ textarea {
 .ui-field {
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.88rem;
+  font-size: var(--font-size-sm);
   gap: var(--space-sm);
 }
 
@@ -489,7 +554,7 @@ textarea {
 }
 
 .ui-dialog h2 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   margin: 0;
 }
 
@@ -531,6 +596,15 @@ textarea {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
+  /* Portaled to <body>; reference the design tokens explicitly so the
+   * popup is consistent regardless of where in the DOM it lives. The
+   * single source of truth for these is :root[data-theme]/[data-accent]
+   * (Settings → Appearance writes to those attributes). */
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-snug);
   display: grid;
   gap: var(--space-xs);
   min-width: 15rem;
@@ -567,7 +641,7 @@ textarea {
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   gap: 0.4rem;
   line-height: 1;
   padding: 0.25rem 0.65rem;
@@ -613,8 +687,8 @@ textarea {
   color: var(--color-text);
   display: inline-flex;
   flex: none;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
   height: 1.25rem;
   justify-content: center;
   line-height: 1;
@@ -624,19 +698,19 @@ textarea {
 .ui-app-icon--lg {
   height: 1.5rem;
   width: 1.5rem;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 /* PR 8.0.1 — brand-aware variants override the fallback surface colour
  * via inline style; keep the shared shape rules here so a brand glyph
  * matches the letter-circle's footprint. */
 .ui-app-icon--brand {
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   text-transform: none;
 }
 
 .ui-app-icon--drive {
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 /* PR 3.4.1 — server-supplied logo URL variant. The chip surface is set
@@ -661,7 +735,7 @@ textarea {
   border-radius: var(--radius-full);
   color: var(--color-text);
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   gap: 0.4rem;
   padding: 0.2rem 0.65rem 0.2rem 0.25rem;
   white-space: nowrap;
@@ -696,7 +770,7 @@ textarea {
   display: inline-flex;
   flex-wrap: wrap;
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  font-size: 0.75rem;
+  font-size: var(--font-size-2xs);
   gap: 0.5rem;
   line-height: 1.3;
   max-width: 100%;
@@ -709,7 +783,7 @@ textarea {
   justify-content: center;
   width: 0.85rem;
   height: 0.85rem;
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   flex: none;
 }
 .ui-harness-row[data-status="done"] .ui-harness-row__glyph {
@@ -733,7 +807,7 @@ textarea {
 }
 .ui-harness-row__tool {
   color: var(--color-text);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 .ui-harness-row__args {
   color: var(--color-text-subtle);
@@ -754,7 +828,7 @@ textarea {
   align-items: baseline;
   color: var(--color-text-subtle);
   display: flex;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   font-style: italic;
   gap: 0.45rem;
   line-height: 1.5;
@@ -781,7 +855,7 @@ textarea {
   padding: 0.5rem;
   min-width: 200px;
   max-width: min(360px, calc(100vw - 16px));
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   outline: none;
   z-index: 60;
   animation: ds-popover-fade 120ms ease-out;

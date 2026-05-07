@@ -45,10 +45,19 @@ export interface UsageWorkspaceChartProps {
   budgets: BudgetMeResponse | null;
 }
 
-const ACCENT = "var(--color-accent, #d97757)";
-const ACCENT_FILL = "var(--color-accent-soft, rgba(217, 119, 87, 0.18))";
-const GRID = "var(--color-border-soft, #232325)";
-const TEXT_DIM = "var(--color-text-subtle, #7e7e84)";
+// Theme-driven chart palette. Use the canonical design-system tokens
+// directly — earlier this file referenced `--color-accent-soft`,
+// `--color-border-soft`, `--color-surface-2`, none of which exist in
+// the design system, so the chart always rendered the fallback hex
+// regardless of the user's accent / theme. Fixed by pointing at real
+// tokens.
+const ACCENT = "var(--color-accent)";
+// 18 % accent over a transparent base — same recipe used by the chip
+// patterns in styles.css so accent rotation rethemes the chart fill
+// alongside everything else.
+const ACCENT_FILL = "color-mix(in srgb, var(--color-accent) 18%, transparent)";
+const GRID = "var(--color-border)";
+const TEXT_DIM = "var(--color-text-subtle)";
 
 export function UsageWorkspaceChart({
   orgUsage,
@@ -127,12 +136,12 @@ export function UsageWorkspaceChart({
             {planLimit ? (
               <ReferenceLine
                 y={planLimit.value}
-                stroke="var(--color-warn, #d9a857)"
+                stroke="var(--color-warning)"
                 strokeDasharray="4 4"
                 label={{
                   value: planLimitLabel(planLimit.value, planLimit.unit),
                   position: "insideTopRight",
-                  fill: "var(--color-warn, #d9a857)",
+                  fill: "var(--color-warning)",
                   fontSize: 11,
                 }}
               />
@@ -184,11 +193,11 @@ function tooltipFormat(value: number, unit: ChartUnit): [string, string] {
 
 function tooltipStyle(): React.CSSProperties {
   return {
-    background: "var(--color-surface-2, #222224)",
-    border: "1px solid var(--color-border, #2a2a2c)",
+    background: "var(--color-surface-muted)",
+    border: "1px solid var(--color-border)",
     borderRadius: 6,
     fontSize: 12,
-    color: "var(--color-text, #ededee)",
+    color: "var(--color-text)",
     padding: "6px 10px",
     boxShadow: "0 4px 12px rgba(0,0,0,0.32)",
   };

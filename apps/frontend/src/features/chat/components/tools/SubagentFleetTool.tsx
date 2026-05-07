@@ -19,6 +19,8 @@ import {
   type SubagentCardStatus,
 } from "../subagents/subagentCardViewModel";
 import { SubagentFleetCard } from "../messages/SubagentFleetCard";
+import { useSubagentFleetContext } from "../subagents/SubagentFleetContext";
+import { scrollChatToEvent } from "../citations/scrollChatToCitation";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
 
@@ -54,6 +56,20 @@ export function SubagentFleetTool(
       nestedChildren?: readonly RawNestedChild[];
     },
 ): ReactElement | null {
+  // PR 3.2.7 — read context fallbacks. Explicit props win when provided
+  // (Storybook / tests / future direct callers). The context is the
+  // standard production path: `ChatScreen` wraps the tree with
+  // `<SubagentFleetProvider>` so any nested `SubagentFleetTool` can read
+  // workspace state without re-threading every renderer in
+  // `MessageParts.tsx`.
+  const fleetContext = useSubagentFleetContext();
+  const subagentsByTask = props.subagentsByTask ?? fleetContext.subagentsByTask;
+  const activitiesByTask =
+    props.activitiesByTask ?? fleetContext.activitiesByTask;
+  const onJumpToApproval =
+    props.onJumpToApproval ??
+    fleetContext.onJumpToApproval ??
+    scrollChatToEvent;
   const data = asRecord(props.args);
   const fleetId = stringValue(data.fleet_id);
   if (fleetId === null) {
@@ -84,9 +100,7 @@ export function SubagentFleetTool(
     // SubagentEntry, not the tool part. Reading the entry by task_id
     // gives the row the same paused chrome the pane card renders.
     const entry =
-      childTaskId !== null
-        ? props.subagentsByTask?.get(childTaskId)
-        : undefined;
+      childTaskId !== null ? subagentsByTask?.get(childTaskId) : undefined;
     const pauseOverlay =
       entry && entry.status === "paused"
         ? {
@@ -108,16 +122,14 @@ export function SubagentFleetTool(
     }
     const progress = numberValue(childArgs.progress);
     const activities =
-      childTaskId !== null
-        ? props.activitiesByTask?.get(childTaskId)
-        : undefined;
+      childTaskId !== null ? activitiesByTask?.get(childTaskId) : undefined;
     rows.push(
       <FleetSubagentRow
         key={child.toolCallId ?? view.taskId ?? `row-${rows.length}`}
         view={view}
         progress={progress}
         activities={activities}
-        onJumpToApproval={props.onJumpToApproval}
+        onJumpToApproval={onJumpToApproval}
       />,
     );
   }

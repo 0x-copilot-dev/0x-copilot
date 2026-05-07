@@ -66,9 +66,21 @@ export function McpOverlay({
     }
   }, [open]);
 
+  const connectedCount = useMemo(
+    () =>
+      connectors.servers.filter((server) => isAuthenticated(server.auth_state))
+        .length,
+    [connectors.servers],
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title="Manage MCP servers">
-      <Tabs value={tab} onChange={setTab} />
+    <Modal open={open} onClose={onClose} title="Manage MCP servers" size="lg">
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        catalogCount={catalog.entries.length}
+        connectedCount={connectedCount}
+      />
       {tab === "catalog" ? (
         <CatalogTab catalog={catalog} connectors={connectors} />
       ) : (
@@ -83,16 +95,30 @@ export function McpOverlay({
 function Tabs({
   value,
   onChange,
+  catalogCount,
+  connectedCount,
 }: {
   value: TabKey;
   onChange: (value: TabKey) => void;
+  catalogCount: number;
+  connectedCount: number;
 }): ReactElement {
   return (
     <div className="mcp-tabs" role="tablist" aria-label="MCP servers view">
-      <Tab value="catalog" current={value} onChange={onChange}>
+      <Tab
+        value="catalog"
+        current={value}
+        onChange={onChange}
+        count={catalogCount}
+      >
         Catalog
       </Tab>
-      <Tab value="connected" current={value} onChange={onChange}>
+      <Tab
+        value="connected"
+        current={value}
+        onChange={onChange}
+        count={connectedCount}
+      >
         Connected
       </Tab>
     </div>
@@ -103,11 +129,13 @@ function Tab({
   value,
   current,
   onChange,
+  count,
   children,
 }: {
   value: TabKey;
   current: TabKey;
   onChange: (value: TabKey) => void;
+  count: number;
   children: ReactNode;
 }): ReactElement {
   const active = current === value;
@@ -121,7 +149,10 @@ function Tab({
       }
       onClick={() => onChange(value)}
     >
-      {children}
+      <span>{children}</span>
+      <span className="mcp-tabs__count" aria-hidden="true">
+        {count}
+      </span>
     </button>
   );
 }
@@ -164,25 +195,42 @@ function CatalogTab({
     <div className="mcp-catalog">
       <div className="mcp-catalog__head">
         <TextInput
+          className="mcp-catalog__search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search Linear, Notion, Sentry, …"
           aria-label="Search catalog"
         />
-        <Button
+        <button
           type="button"
-          variant="ghost"
+          className="mcp-catalog__refresh"
           aria-label="Refresh catalog"
           onClick={() => void catalog.refresh()}
         >
           Refresh
-        </Button>
+        </button>
       </div>
 
-      {catalog.loading ? (
+      {catalog.loading && catalog.entries.length === 0 ? (
         <p className="mcp-catalog__hint">Loading catalog…</p>
       ) : null}
-      {catalog.error ? <p className="app-error">{catalog.error}</p> : null}
+      {catalog.error ? (
+        <Card className="mcp-catalog__error">
+          <h4>Catalog unavailable</h4>
+          <p>
+            We couldn&apos;t load the curated MCP server list. The Custom URL
+            card below still works — paste a server URL to install.
+          </p>
+          <p className="mcp-catalog__error-detail">{catalog.error}</p>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void catalog.refresh()}
+          >
+            Try again
+          </Button>
+        </Card>
+      ) : null}
 
       <div className="mcp-catalog__grid">
         {filtered.map((entry) => (
@@ -275,6 +323,7 @@ function CatalogCard({
         oauthClient,
       );
       await connectors.authenticate(server.server_id);
+      setSetupOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not install.");
     } finally {
@@ -283,31 +332,42 @@ function CatalogCard({
   }
 
   return (
-    <article
-      className="mcp-card"
-      data-status={status.kind}
-      aria-label={`${entry.display_name} catalog card`}
-    >
-      <header className="mcp-card__head">
+    <>
+      <article
+        className="mcp-card"
+        data-status={status.kind}
+        aria-label={`${entry.display_name} catalog card`}
+      >
+        {/* Pass slug only — BRAND_GLYPHS in the design-system maps every
+            catalog vendor to its surface + symbol. Passing `color` would
+            short-circuit the map and force a generic first-letter chip. */}
         <AppIcon
           name={entry.slug}
-          color={entry.brand_color ?? undefined}
+          logoUrl={entry.logo_url ?? null}
           size="lg"
+          className="mcp-card__icon"
         />
-        <div className="mcp-card__body">
-          <div className="mcp-card__title">
-            <h4>{entry.display_name}</h4>
-            {entry.verified ? <Badge tone="success">Verified</Badge> : null}
+        <div className="mcp-card__main">
+          <div className="mcp-card__title-row">
+            <h4 className="mcp-card__title">{entry.display_name}</h4>
+            {entry.verified ? (
+              <Badge tone="success" className="mcp-card__pill">
+                Verified
+              </Badge>
+            ) : null}
+            {entry.requires_pre_registered_client ? (
+              <span
+                className="mcp-card__setup-note"
+                title="Requires a pre-registered OAuth client"
+              >
+                · Setup required
+              </span>
+            ) : null}
           </div>
-          <p className="mcp-card__desc">{entry.description}</p>
-          {entry.scopes_summary ? (
-            <p className="mcp-card__scope">{entry.scopes_summary}</p>
-          ) : null}
-          {entry.requires_pre_registered_client ? (
-            <p className="mcp-card__hint">
-              Setup required — pre-registered OAuth client.
-            </p>
-          ) : null}
+          <p className="mcp-card__desc">
+            {entry.scopes_summary ?? entry.description}
+          </p>
+          {error ? <p className="app-error mcp-card__error">{error}</p> : null}
         </div>
         <CatalogCardCta
           status={status}
@@ -315,19 +375,16 @@ function CatalogCard({
           entry={entry}
           onPrimary={() => void handlePrimary()}
         />
-      </header>
+      </article>
 
-      {setupOpen ? (
-        <SetupForm
-          entry={entry}
-          submitting={pending}
-          onSubmit={(payload) => void handleSetupSubmit(payload)}
-          onCancel={() => setSetupOpen(false)}
-        />
-      ) : null}
-
-      {error ? <p className="app-error">{error}</p> : null}
-    </article>
+      <SetupModal
+        open={setupOpen}
+        entry={entry}
+        submitting={pending}
+        onSubmit={(payload) => void handleSetupSubmit(payload)}
+        onClose={() => setSetupOpen(false)}
+      />
+    </>
   );
 }
 
@@ -343,12 +400,16 @@ function CatalogCardCta({
   onPrimary: () => void;
 }): ReactElement {
   if (status.kind === "installed") {
-    return <Badge tone="neutral">Installed</Badge>;
+    return (
+      <Badge tone="neutral" className="mcp-card__cta-badge">
+        Installed
+      </Badge>
+    );
   }
   return (
-    <Button
+    <button
       type="button"
-      variant="primary"
+      className="mcp-card__cta"
       disabled={pending}
       aria-label={
         status.kind === "resume"
@@ -357,27 +418,30 @@ function CatalogCardCta({
       }
       onClick={onPrimary}
     >
-      {pending
-        ? "Working…"
-        : status.kind === "resume"
-          ? "Resume install"
-          : "Install"}
-    </Button>
+      {pending ? "Working…" : status.kind === "resume" ? "Resume" : "Install"}
+    </button>
   );
 }
 
-// --- Setup form (pre-registered OAuth client) -----------------------------
+// --- Setup modal (pre-registered OAuth client) ----------------------------
+//
+// Lifted out of CatalogCard in PR 4.4.6.1 — expanding the form inline made
+// one card 3× taller than the others, breaking the grid and pushing the
+// install button below the fold. A separate dialog keeps every catalog
+// card the same height.
 
-function SetupForm({
+function SetupModal({
+  open,
   entry,
   submitting,
   onSubmit,
-  onCancel,
+  onClose,
 }: {
+  open: boolean;
   entry: McpCatalogEntry;
   submitting: boolean;
   onSubmit: (oauthClient: McpOAuthClientConfigRequest) => void;
-  onCancel: () => void;
+  onClose: () => void;
 }): ReactElement {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
@@ -407,69 +471,72 @@ function SetupForm({
   }
 
   return (
-    <form
-      className="mcp-setup"
-      onSubmit={handle}
-      aria-label={`OAuth credentials for ${entry.display_name}`}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Connect ${entry.display_name}`}
+      description={`${entry.display_name} doesn't expose OAuth metadata. Paste a pre-registered client from your ${entry.display_name} developer console.`}
     >
-      <p className="mcp-setup__intro">
-        {entry.display_name} doesn&apos;t expose OAuth metadata. Paste a
-        pre-registered client from your {entry.display_name} developer console:
-      </p>
-      <Field label="Client ID">
-        <TextInput
-          value={clientId}
-          onChange={(event) => setClientId(event.target.value)}
-          autoComplete="off"
-          required
-        />
-      </Field>
-      <Field label="Client secret">
-        <TextInput
-          type="password"
-          autoComplete="new-password"
-          value={clientSecret}
-          onChange={(event) => setClientSecret(event.target.value)}
-        />
-      </Field>
-      <Field label="Scope">
-        <TextInput
-          value={scope}
-          onChange={(event) => setScope(event.target.value)}
-          autoComplete="off"
-          placeholder="e.g. read:issues"
-        />
-      </Field>
-      <Field label="Authorization endpoint" hint="Optional override.">
-        <TextInput
-          type="url"
-          autoComplete="off"
-          value={authEndpoint}
-          onChange={(event) => setAuthEndpoint(event.target.value)}
-        />
-      </Field>
-      <Field label="Token endpoint" hint="Optional override.">
-        <TextInput
-          type="url"
-          autoComplete="off"
-          value={tokenEndpoint}
-          onChange={(event) => setTokenEndpoint(event.target.value)}
-        />
-      </Field>
-      <div className="mcp-setup__actions">
-        <Button type="submit" variant="primary" disabled={submitting}>
-          {submitting ? "Installing…" : "Install with credentials"}
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={submitting}
-          onClick={onCancel}
-        >
-          Cancel
-        </Button>
-      </div>
-    </form>
+      <form
+        className="mcp-setup"
+        onSubmit={handle}
+        aria-label={`OAuth credentials for ${entry.display_name}`}
+      >
+        <Field label="Client ID">
+          <TextInput
+            value={clientId}
+            onChange={(event) => setClientId(event.target.value)}
+            autoComplete="off"
+            required
+          />
+        </Field>
+        <Field label="Client secret">
+          <TextInput
+            type="password"
+            autoComplete="new-password"
+            value={clientSecret}
+            onChange={(event) => setClientSecret(event.target.value)}
+          />
+        </Field>
+        <Field label="Scope">
+          <TextInput
+            value={scope}
+            onChange={(event) => setScope(event.target.value)}
+            autoComplete="off"
+            placeholder="e.g. read:issues"
+          />
+        </Field>
+        <Field label="Authorization endpoint" hint="Optional override.">
+          <TextInput
+            type="url"
+            autoComplete="off"
+            value={authEndpoint}
+            onChange={(event) => setAuthEndpoint(event.target.value)}
+          />
+        </Field>
+        <Field label="Token endpoint" hint="Optional override.">
+          <TextInput
+            type="url"
+            autoComplete="off"
+            value={tokenEndpoint}
+            onChange={(event) => setTokenEndpoint(event.target.value)}
+          />
+        </Field>
+        <div className="mcp-setup__actions">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={submitting}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" disabled={submitting}>
+            {submitting ? "Installing…" : "Install with credentials"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

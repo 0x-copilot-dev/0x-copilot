@@ -1,5 +1,6 @@
 import type {
   ButtonHTMLAttributes,
+  CSSProperties,
   HTMLAttributes,
   InputHTMLAttributes,
   LabelHTMLAttributes,
@@ -12,10 +13,12 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 export {
   Popover,
@@ -357,6 +360,29 @@ const BRAND_GLYPHS: Record<string, BrandGlyph> = {
   datadog: { label: "Datadog", bg: "#632ca6", fg: "#ffffff", symbol: "D" },
   intercom: { label: "Intercom", bg: "#1f8ded", fg: "#ffffff", symbol: "I" },
   pagerduty: { label: "PagerDuty", bg: "#06ac38", fg: "#ffffff", symbol: "P" },
+  // PR 4.4.6 — catalog vendors that the chat surface and Catalog tab
+  // both need. Distinct symbols disambiguate same-initial vendors
+  // (e.g. Cloudflare Bindings vs. Cloudflare Observability).
+  asana: { label: "Asana", bg: "#f06a6a", fg: "#ffffff", symbol: "A" },
+  atlassian: { label: "Atlassian", bg: "#2684ff", fg: "#ffffff", symbol: "A" },
+  "cloudflare-bindings": {
+    label: "Cloudflare Bindings",
+    bg: "#f38020",
+    fg: "#ffffff",
+    symbol: "⚡",
+  },
+  "cloudflare-observability": {
+    label: "Cloudflare Observability",
+    bg: "#f38020",
+    fg: "#ffffff",
+    symbol: "◈",
+  },
+  paypal: { label: "PayPal", bg: "#003087", fg: "#ffffff", symbol: "P" },
+  plaid: { label: "Plaid", bg: "#111111", fg: "#ffffff", symbol: "P" },
+  sentry: { label: "Sentry", bg: "#362d59", fg: "#ffffff", symbol: "S" },
+  square: { label: "Square", bg: "#000000", fg: "#ffffff", symbol: "□" },
+  zapier: { label: "Zapier", bg: "#ff4a00", fg: "#ffffff", symbol: "Z" },
+  custom: { label: "Custom", bg: "#1f1f1f", fg: "#facc15", symbol: "+" },
   web: { label: "Web", bg: "#0f172a", fg: "#facc15", symbol: "🌐" },
   web_search: {
     label: "Web search",
@@ -592,6 +618,7 @@ export function Menu({
   ...props
 }: MenuProps): ReactElement | null {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
 
   useEffect(() => {
     if (!open) {
@@ -615,22 +642,80 @@ export function Menu({
         onClose();
       }
     }
+    // Reposition / dismiss on viewport changes. Recomputing on scroll is
+    // cheap and avoids "menu detached from anchor" jank when the page
+    // moves underneath it (e.g. the chat thread auto-scrolling).
+    function onResizeOrScroll(): void {
+      computePosition();
+    }
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onResizeOrScroll);
+    window.addEventListener("scroll", onResizeOrScroll, true);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onResizeOrScroll);
+      window.removeEventListener("scroll", onResizeOrScroll, true);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, onClose, anchorRef]);
+
+  // Compute fixed-viewport coordinates from the anchor's bounding rect.
+  // Use ``position: fixed`` so the menu escapes any ancestor with
+  // ``overflow: hidden`` (the chat composer card is the offender that
+  // motivated this — it has fixed height + overflow:hidden, which
+  // would otherwise clip an absolutely-positioned popup to inside the
+  // card).
+  function computePosition(): void {
+    const anchor = anchorRef?.current;
+    if (!anchor) {
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const SPACE = 8; // matches --space-sm
+    const next: CSSProperties = { position: "fixed", zIndex: 50 };
+    if (side === "up") {
+      next.bottom = window.innerHeight - rect.top + SPACE;
+    } else {
+      next.top = rect.bottom + SPACE;
+    }
+    if (align === "right") {
+      next.right = window.innerWidth - rect.right;
+    } else {
+      next.left = rect.left;
+    }
+    // Anchor-width default — once portaled to <body>, percentage widths
+    // (e.g. ``width: 100%`` on .aui-user-card__menu) would otherwise
+    // resolve against the viewport, blowing the popup full-width. Pin
+    // the popup's minimum width to the trigger's so dropdowns
+    // naturally match their button. Consumers that want a wider popup
+    // (model picker, plus menu) set their own ``min-width`` / ``width``
+    // class which still wins via the cascade.
+    next.minWidth = `${rect.width}px`;
+    next.maxWidth = "min(32rem, calc(100vw - 2rem))";
+    setAnchorStyle(next);
+  }
+
+  useLayoutEffect(() => {
+    if (open) {
+      computePosition();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, side, align]);
 
   if (!open) {
     return null;
   }
+  if (typeof document === "undefined") {
+    return null;
+  }
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
       role="menu"
+      style={anchorStyle}
       className={classNames(
         "ui-dropdown__menu",
         `ui-dropdown__menu--${side}`,
@@ -640,6 +725,7 @@ export function Menu({
       {...props}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }

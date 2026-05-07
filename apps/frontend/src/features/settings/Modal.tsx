@@ -24,6 +24,8 @@ export interface ModalProps {
   closeLabel?: string;
   /** A hint id used for `aria-describedby`. */
   describedById?: string;
+  /** "md" (default, 32rem) or "lg" (56rem) for grid-bearing modals. */
+  size?: "md" | "lg";
 }
 
 export function Modal({
@@ -35,6 +37,7 @@ export function Modal({
   footer,
   closeLabel = "Close",
   describedById,
+  size = "md",
 }: ModalProps): ReactElement | null {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +71,9 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         aria-describedby={describedById}
-        className="settings-modal"
+        className={
+          size === "lg" ? "settings-modal settings-modal--lg" : "settings-modal"
+        }
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="settings-modal__head">

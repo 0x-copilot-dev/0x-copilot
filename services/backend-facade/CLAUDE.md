@@ -19,7 +19,7 @@ Update [packages/api-types](../../packages/api-types) when app-facing payloads o
 
 ## Auth (untrusted input)
 
-- `DEV_AUTH_BYPASS=true` is honored only when `FACADE_ENVIRONMENT=development`. Uses `FACADE_DEV_ORG_ID` / `FACADE_DEV_USER_ID`.
+- Dev auth uses the W0.1 backend dev IdP, proxied through the facade at `/v1/dev/personas` and `/v1/dev/identity/mint`. The frontend auto-mints a signed bearer on 401 in dev. There is no `DEV_AUTH_BYPASS` shortcut anymore — every request, dev or prod, carries a real bearer that the facade verifies the same way.
 - Production fails closed if `ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` is missing.
 - Treat caller-supplied identity, role, scope, tenant, org, and user as untrusted unless derived from a verified session, token, mTLS identity, or IdP claim.
 

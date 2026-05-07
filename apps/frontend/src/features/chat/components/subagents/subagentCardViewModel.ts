@@ -125,6 +125,11 @@ function normaliseStatus(
     return "completed";
   }
   if (lc === "queued") return "queued";
+  // PR 3.2.7 — preserve the paused literal that `subagentReducer`
+  // projects into `SubagentEntry.status`. Otherwise `subagentCardFromEntry`
+  // would silently downgrade paused entries to "running" and the row /
+  // card would never see the paused chrome.
+  if (lc === "paused") return "paused";
   return "running";
 }
 

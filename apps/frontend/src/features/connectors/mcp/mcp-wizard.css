@@ -16,7 +16,7 @@
 
 .mcp-wizard__hint {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0 0 var(--space-sm);
 }
 
@@ -45,7 +45,7 @@
   color: var(--color-text-subtle);
   display: flex;
   flex: 1;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   gap: 0.4em;
   opacity: 0.6;
 }
@@ -57,7 +57,7 @@
 
 .mcp-wizard__steps-item[data-active="true"] {
   color: var(--color-accent, var(--color-text));
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mcp-wizard__steps-num {
@@ -67,7 +67,7 @@
   border-radius: 50%;
   display: flex;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   height: 1.5em;
   justify-content: center;
   width: 1.5em;
@@ -116,7 +116,7 @@
   color: white;
   display: flex;
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   height: 2em;
   justify-content: center;
   width: 2em;
@@ -124,23 +124,23 @@
 
 .mcp-catalog__name {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mcp-catalog__desc {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
 }
 
 .mcp-wizard__custom-heading {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   margin: 0 0 var(--space-xs);
 }
 
 .mcp-wizard__custom-hint {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0 0 var(--space-sm);
 }
 
@@ -182,7 +182,7 @@
 
 .mcp-wizard__choice-desc {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 /* Scope step + Confirm step — code-style scope list. */
@@ -200,7 +200,7 @@
   background: var(--color-surface-2, var(--color-surface));
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   padding: 0.1em 0.4em;
 }
 
@@ -213,7 +213,7 @@
 
 .mcp-wizard__summary dt {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -221,4 +221,234 @@
 .mcp-wizard__summary dd {
   color: var(--color-text);
   margin: 0;
+}
+
+/* PR 4.4.6 — tabs + catalog grid + setup form. Replaces the wizard's
+   step-by-step layout with two tabs (Catalog / Connected) backed by
+   the server-driven `useMcpCatalog` hook. */
+
+.mcp-tabs {
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-lg);
+  margin: 0 0 var(--space-md);
+}
+
+.mcp-tabs__btn {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  gap: 0.4rem;
+  margin-bottom: -1px;
+  padding: var(--space-sm) 0;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.mcp-tabs__btn:hover {
+  color: var(--color-text);
+}
+
+.mcp-tabs__btn--active {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.mcp-tabs__count {
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  min-width: 1.5em;
+  padding: 0.25em 0.5em;
+  text-align: center;
+}
+
+.mcp-tabs__btn--active .mcp-tabs__count {
+  background: var(--color-bg-accent-subtle, var(--color-surface-muted));
+  color: var(--color-text);
+}
+
+.mcp-catalog {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.mcp-catalog__head {
+  align-items: center;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mcp-catalog__search {
+  width: 100%;
+}
+
+.mcp-catalog__refresh {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.mcp-catalog__refresh:hover,
+.mcp-catalog__refresh:focus-visible {
+  color: var(--color-text);
+  outline: none;
+  text-decoration: underline;
+}
+
+.mcp-catalog__hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.mcp-catalog__grid {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 600px) {
+  .mcp-catalog__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 960px) {
+  .mcp-catalog__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.mcp-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  height: 100%;
+  padding: var(--space-md);
+  transition: border-color 0.15s ease;
+}
+
+.mcp-card:hover {
+  border-color: var(--color-border-strong, var(--color-text-muted));
+}
+
+.mcp-card[data-status="installed"] {
+  opacity: 0.65;
+}
+
+.mcp-card__head {
+  align-items: flex-start;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.mcp-card__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mcp-card__title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-card__meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mcp-card__pill {
+  font-size: var(--font-size-2xs);
+}
+
+.mcp-card__desc {
+  color: var(--color-text-muted);
+  flex: 1;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  margin: 0;
+}
+
+.mcp-card__foot {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+.mcp-card--custom {
+  border-style: dashed;
+}
+
+.mcp-setup {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-sm);
+  padding-top: var(--space-md);
+}
+
+.mcp-setup__intro {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.mcp-setup__actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.mcp-connected-list {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.mcp-empty {
+  text-align: center;
+}
+
+.mcp-catalog__error {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.mcp-catalog__error h4 {
+  font-size: var(--font-size-md);
+  margin: 0;
+}
+
+.mcp-catalog__error-detail {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  margin: 0;
+  word-break: break-word;
 }

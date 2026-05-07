@@ -6,14 +6,14 @@
 
 .settings-section__hint {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
 .settings-nav-group {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   margin-top: var(--space-md);
   padding: 0 var(--space-md);
@@ -56,8 +56,8 @@
 
 .settings-table th {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -71,7 +71,7 @@
 .member-row__title,
 .member-row__source {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .member-row__no-role {
@@ -93,8 +93,8 @@
 
 .member-row__menu-label {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   padding: 0 var(--space-xs);
   text-transform: uppercase;
@@ -125,7 +125,7 @@
 
 .member-row__menu-error {
   color: var(--color-danger);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   padding: 0 var(--space-xs);
 }
 
@@ -147,14 +147,14 @@
 }
 
 .invitations-list__email {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .invitations-list__meta {
   align-items: center;
   color: var(--color-text-subtle);
   display: flex;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   gap: var(--space-sm);
 }
 
@@ -178,7 +178,7 @@
   background: var(--color-surface-muted);
   border-radius: var(--radius-sm);
   display: block;
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   overflow-x: auto;
   padding: var(--space-sm);
   white-space: nowrap;
@@ -187,7 +187,7 @@
 
 .invite-form__hint {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -207,15 +207,15 @@
 
 .billing-card__eyebrow {
   color: var(--color-text-subtle);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .billing-card__contact {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .billing-seats {
@@ -230,8 +230,8 @@
 }
 
 .billing-seats__used {
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
 }
 
 .billing-seats__limit {
@@ -254,7 +254,7 @@
 
 .billing-seats__removed {
   color: var(--color-text-subtle);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   margin: 0;
 }
 
@@ -298,6 +298,12 @@
   width: calc(100vw - 4rem);
 }
 
+/* Grid-bearing modals (e.g. MCP catalog) need ~2× the width to host
+   a 2-column card grid without text wrapping into 4 lines. */
+.settings-modal--lg {
+  max-width: 56rem;
+}
+
 .settings-modal__head {
   align-items: flex-start;
   display: flex;
@@ -311,7 +317,7 @@
 
 .settings-modal__description {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -354,7 +360,7 @@
 .audit-log__error,
 .audit-log__warning {
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   margin-bottom: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
 }
@@ -371,12 +377,12 @@
 
 .audit-log__action {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .audit-log__resource {
   color: var(--color-text-subtle);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .audit-log__cell--muted {

@@ -169,4 +169,71 @@ describe("subagentCardFromArgs", () => {
     // return a stable "Subagent" placeholder so the card head still renders.
     expect(vm.name).toBe("Subagent");
   });
+
+  // PR 3.2.7 — pause overlay derived from the workspace `SubagentEntry`.
+  describe("pause overlay (PR 3.2.7)", () => {
+    it("projects pause_reason + pause_source_event_id from a paused entry", () => {
+      const vm = subagentCardFromEntry(
+        entry({
+          status: "paused",
+          pause_reason: "approval",
+          pause_source_event_id: "evt_42",
+        }),
+      );
+      expect(vm.status).toBe("paused");
+      expect(vm.pauseReason).toBe("approval");
+      expect(vm.pauseSourceEventId).toBe("evt_42");
+    });
+
+    it("clears pauseReason when the entry has terminal status (paused→completed)", () => {
+      const vm = subagentCardFromEntry(
+        entry({
+          status: "completed",
+          pause_reason: "approval",
+          pause_source_event_id: "evt_42",
+        }),
+      );
+      expect(vm.status).toBe("completed");
+      expect(vm.pauseReason).toBeUndefined();
+      expect(vm.pauseSourceEventId).toBeUndefined();
+    });
+
+    it("subagentCardFromArgs honours an explicit pause overlay (status + reason + source)", () => {
+      const vm = subagentCardFromArgs(
+        { subagent_name: "research", task_id: "t1" },
+        "running",
+        false,
+        {
+          statusOverride: "paused",
+          pauseReason: "mcp_auth",
+          pauseSourceEventId: "evt_99",
+        },
+      );
+      expect(vm.status).toBe("paused");
+      expect(vm.pauseReason).toBe("mcp_auth");
+      expect(vm.pauseSourceEventId).toBe("evt_99");
+    });
+
+    it("subagentCardFromArgs ignores the overlay when args report a terminal status", () => {
+      // Terminal wins: a completed args row never re-paints as paused.
+      const vm = subagentCardFromArgs(
+        { subagent_name: "research", status: "completed" },
+        "complete",
+        false,
+        { statusOverride: "paused", pauseReason: "approval" },
+      );
+      expect(vm.status).toBe("completed");
+      expect(vm.pauseReason).toBeUndefined();
+    });
+
+    it("subagentCardFromArgs without overlay yields no pause hints", () => {
+      const vm = subagentCardFromArgs(
+        { subagent_name: "research" },
+        "running",
+        false,
+      );
+      expect(vm.pauseReason).toBeUndefined();
+      expect(vm.pauseSourceEventId).toBeUndefined();
+    });
+  });
 });

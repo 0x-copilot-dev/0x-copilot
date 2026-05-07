@@ -43,7 +43,12 @@ export async function assertOk(response: Response): Promise<void> {
   if (response.ok) {
     return;
   }
-  const detail = await response.text();
+  const body = await response.text();
+  // FastAPI / Starlette serialise errors as ``{"detail": "..."}``.
+  // Pull the message out so consumers don't render raw JSON. Falls
+  // through to the body verbatim when it isn't JSON (proxy timeouts,
+  // HTML error pages, etc.).
+  const message = parseErrorMessage(body) ?? body;
   if (response.status === 401) {
     // Notify AuthContext (or any registered handler) before throwing so
     // the caller's catch can still surface a useful message — the
@@ -53,9 +58,24 @@ export async function assertOk(response: Response): Promise<void> {
     } catch {
       /* handler errors must not mask the original 401 */
     }
-    throw new UnauthorizedError(detail);
+    throw new UnauthorizedError(message);
   }
-  throw new Error(detail || `Request failed with ${response.status}`);
+  throw new Error(message || `Request failed with ${response.status}`);
+}
+
+function parseErrorMessage(body: string): string | null {
+  if (!body || body[0] !== "{") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim() !== "") {
+      return parsed.detail;
+    }
+  } catch {
+    /* not JSON; fall through */
+  }
+  return null;
 }
 
 export function newRequestId(): string {

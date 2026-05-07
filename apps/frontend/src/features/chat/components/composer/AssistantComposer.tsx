@@ -7,12 +7,15 @@ import {
   forwardRef,
   useEffect,
   useCallback,
+  useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { ThinkingDepth } from "../../depth";
 import {
   mcpServerInstructionPrompt,
@@ -296,7 +299,7 @@ export const AssistantComposer = forwardRef<
               >
                 +
               </button>
-              {menuOpen ? (
+              <AnchoredPlusMenu open={menuOpen} anchorRef={menuRef}>
                 <ComposerPlusMenu
                   view={menuView}
                   connectors={connectors}
@@ -320,7 +323,7 @@ export const AssistantComposer = forwardRef<
                   }
                   onUseSkill={(skill) => attachSkill(skill)}
                 />
-              ) : null}
+              </AnchoredPlusMenu>
             </div>
             {connectorsTrigger ?? null}
             <button
@@ -425,3 +428,59 @@ export const AssistantComposer = forwardRef<
     />
   );
 });
+
+/**
+ * Portal + fixed-position wrapper for the `+` plus-menu popup.
+ *
+ * The composer card has ``overflow: hidden`` and a fixed
+ * ``--composer-shell-height``, so an absolutely-positioned popup
+ * inside the card gets clipped (or worse, overlays the textarea
+ * because the card is tall enough to "fit" it). Rendering the popup
+ * at ``document.body`` with ``position: fixed`` coords computed from
+ * the anchor's bounding rect lets it escape the composer entirely
+ * and sit above the card the way every other dropdown in the app
+ * does.
+ *
+ * Mirrors the design-system ``Menu`` primitive's positioning logic
+ * (PR 4.4.6 fix) — kept inline here because ``ComposerPlusMenu``
+ * isn't built on top of ``Menu`` and rolling its own fixed-position
+ * shell beats refactoring its 200-line body.
+ */
+function AnchoredPlusMenu({
+  open,
+  anchorRef,
+  children,
+}: {
+  open: boolean;
+  anchorRef: { current: HTMLElement | null };
+  children: ReactNode;
+}): ReactElement | null {
+  const [style, setStyle] = useState<CSSProperties>({});
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const compute = (): void => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const SPACE = 8;
+      setStyle({
+        position: "fixed",
+        bottom: window.innerHeight - rect.top + SPACE,
+        left: rect.left,
+        zIndex: 50,
+      });
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
+  }, [open, anchorRef]);
+
+  if (!open) return null;
+  if (typeof document === "undefined") return null;
+  return createPortal(<div style={style}>{children}</div>, document.body);
+}
