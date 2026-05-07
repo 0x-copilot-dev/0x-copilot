@@ -404,26 +404,28 @@ export const AssistantComposer = forwardRef<
           ) : null}
         </div>
       )}
+      // Hint row is stateless info — render it unconditionally. Do
+      // NOT gate on `running` (or any other run-state flag); hiding
+      // shortcuts mid-flight makes the composer look broken. See
+      // apps/frontend/CLAUDE.md → "Composer hint row".
       hint={
-        running ? null : (
-          <div className="aui-composer__hint" aria-hidden="false">
-            <span>
-              <kbd>↵</kbd> send
-            </span>
-            <span className="aui-composer__hint-sep" aria-hidden="true" />
-            <span>
-              <kbd>⇧</kbd>+<kbd>↵</kbd> new line
-            </span>
-            <span className="aui-composer__hint-sep" aria-hidden="true" />
-            <span>
-              <kbd>/</kbd> skills
-            </span>
-            <span className="aui-composer__hint-grow" />
-            <span className="aui-composer__hint-meta">
-              {activeModelLabel ?? "Atlas"} · Sources cited inline
-            </span>
-          </div>
-        )
+        <div className="aui-composer__hint" aria-hidden="false">
+          <span>
+            <kbd>↵</kbd> send
+          </span>
+          <span className="aui-composer__hint-sep" aria-hidden="true" />
+          <span>
+            <kbd>⇧</kbd>+<kbd>↵</kbd> new line
+          </span>
+          <span className="aui-composer__hint-sep" aria-hidden="true" />
+          <span>
+            <kbd>/</kbd> skills
+          </span>
+          <span className="aui-composer__hint-grow" />
+          <span className="aui-composer__hint-meta">
+            {activeModelLabel ?? "Atlas"} · Sources cited inline
+          </span>
+        </div>
       }
     />
   );

@@ -2,18 +2,36 @@ import type { ToolCallMessagePartProps } from "../../runtime/types";
 import type {
   ApprovalDecision,
   ApprovalForwardTarget,
+  McpApprovalCategory,
+  McpApprovalParam,
+  McpApprovalReasonCode,
 } from "@enterprise-search/api-types";
-import { Badge, Button } from "@enterprise-search/design-system";
-import { Fragment, useEffect, useState, type ReactElement } from "react";
+import { Button } from "@enterprise-search/design-system";
+import {
+  Fragment,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useApprovalFocus } from "../../approval/ApprovalFocusContext";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
 import {
   humanizeIdentifier,
+  mcpApprovalActionTitle,
+  mcpApprovalCategory,
   mcpApprovalDescription,
+  mcpApprovalReason,
+  mcpApprovalReassurance,
   safeConnectorDisplayName,
   toolActionName,
 } from "../../utils/toolLabels";
 import { ActivityCard } from "../activity/ActivityCard";
+import { ApprovalCard } from "../activity/ApprovalCard";
+import {
+  ApprovalReceipt,
+  type ApprovalReceiptKind,
+} from "../activity/ApprovalReceipt";
 import { PresentationResultRows } from "../activity/PresentationResultRows";
 import { presentationFromArgs } from "../activity/presentationHelpers";
 import { approvalDetailsContent } from "../details/approvalDetailsContent";
@@ -34,6 +52,14 @@ export interface ApprovalToolExtraProps {
   /** Optional: the caller's own user_id, excluded from the forward
    * picker so they can't pick themselves (server also rejects with 422). */
   selfUserId?: string;
+  /** PR 4.4.6.4 — invoked when the user clicks "Undo" inside the 60s
+   * reversibility window. Caller posts to
+   * ``/v1/agent/approvals/{approval_id}/undo``. Returns the audited
+   * timestamps so the caller can update the receipt's persisted state.
+   * Side-channel to the approve/reject ``resume`` flow. */
+  onRequestUndo?: (
+    approvalId: string,
+  ) => Promise<{ undo_requested_at: string }>;
 }
 
 export function ApprovalTool({
@@ -42,6 +68,7 @@ export function ApprovalTool({
   resume,
   loadWorkspaceMembers,
   selfUserId,
+  onRequestUndo,
 }: ToolCallMessagePartProps<Record<string, unknown>> &
   ApprovalToolExtraProps): ReactElement {
   const presentation = presentationFromArgs(args);
@@ -242,85 +269,298 @@ export function ApprovalTool({
     presentation?.result_preview && presentation.result_preview.length > 0 ? (
       <PresentationResultRows rows={presentation.result_preview} />
     ) : undefined;
+  const detailsLabel = presentation?.debug_label ?? "Tool details";
+  const detailsBody = approvalDetailsContent(args, result);
   // PR 1.4 — only `action` and `mcp_tool` kinds are forwardable in v1.
   // ask_a_question is handled in its own component above; mcp_auth is a
   // user-specific OAuth flow we deliberately don't bounce between users.
   const canForward = !resolved && !isMcpApproval && approvalKind !== "mcp_auth";
+
+  // PR 4.4.6.1 — settled approvals collapse to a one-line receipt so
+  // scrollback stays readable. The full args + result remain in the
+  // <details> dropdown for auditing.
+  if (resolved) {
+    if (isMcpApproval && !isCancelled && !isForwarded) {
+      const receiptKind: ApprovalReceiptKind = isChainFinal
+        ? chainLeafDecision === "rejected"
+          ? "chain-rejected"
+          : "chain-approved"
+        : stringValue(resultRecord.decision) === "rejected"
+          ? "rejected"
+          : "approved";
+      const receiptTitle =
+        presentation?.title ??
+        (displayName
+          ? `${capitalize(actionName)} ${displayName}`
+          : "Connector action");
+      // PR 4.4.6.4 — only approved + reversible decisions carry an
+      // undo window. The decision response stashes ``undo_expires_at``
+      // on the result record; local state tracks the optimistic flip
+      // after a successful POST so scrollback shows "Undo requested".
+      const undoUntilIso = stringValue(resultRecord.undo_expires_at);
+      const undoRequestedFromServer = stringValue(
+        resultRecord.undo_requested_at,
+      );
+      return (
+        <UndoableReceipt
+          kind={receiptKind}
+          title={receiptTitle}
+          details={detailsBody}
+          detailsLabel={detailsLabel}
+          undoUntilIso={receiptKind === "approved" ? undoUntilIso : null}
+          undoRequestedFromServer={undoRequestedFromServer}
+          approvalId={approvalId}
+          onRequestUndo={onRequestUndo}
+        />
+      );
+    }
+    // Forwarded / cancelled / non-MCP approvals keep the existing
+    // ActivityCard rendering — those flows have richer chain UX
+    // (MentionLabel, chain-final dl) that the receipt doesn't model yet.
+    return (
+      <ActivityCard
+        title={cardTitle}
+        status={cardStatus}
+        variant="approval"
+        description={cardDescription}
+        result={cardResult}
+        details={detailsBody}
+        detailsLabel={detailsLabel}
+      />
+    );
+  }
+
+  // Unresolved + MCP — the redesigned consent surface.
+  if (isMcpApproval) {
+    // PR 4.4.6.2 — server-supplied structured payload wins; falls
+    // through to the Phase-1 synthesisers when the wire is silent.
+    const serverVendor = stringValue(args.vendor);
+    const serverCategory = stringValue(
+      args.category,
+    ) as McpApprovalCategory | null;
+    const serverReasonCode = stringValue(
+      args.reason_code,
+    ) as McpApprovalReasonCode | null;
+    const serverParams = readApprovalParams(args.params);
+    const category = mcpApprovalCategory(displayName, readOnly, {
+      vendor: serverVendor,
+      category: serverCategory,
+    });
+    const titleCopy = mcpApprovalActionTitle(toolName, displayName, readOnly);
+    const reasonCopy = mcpApprovalReason(
+      readOnly,
+      riskLevel,
+      args.message,
+      serverReasonCode,
+    );
+    const reassuranceCopy = mcpApprovalReassurance(readOnly);
+    const params =
+      serverParams.length > 0
+        ? serverParams.map((row) => ({ label: row.label, value: row.value }))
+        : [
+            ...(riskLevel
+              ? [{ label: "Risk", value: capitalize(riskLevel) }]
+              : []),
+            ...(readOnly !== null
+              ? [
+                  {
+                    label: "Access",
+                    value: readOnly ? "Read-only" : "May change data",
+                  },
+                ]
+              : []),
+          ];
+    return (
+      <ApprovalCard
+        title={presentation?.title ?? titleCopy}
+        reason={presentation?.summary ?? reasonCopy}
+        category={category}
+        params={params}
+        result={cardResult}
+        reassurance={reassuranceCopy}
+        details={detailsBody}
+        detailsLabel={detailsLabel}
+        actions={
+          <>
+            <Button
+              type="button"
+              size="sm"
+              title="Allow this connector action once"
+              onClick={() => submit("approved")}
+            >
+              ✓ Approve & continue
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              title="Deny this connector action"
+              onClick={() => submit("rejected")}
+            >
+              Skip this step
+            </Button>
+          </>
+        }
+      />
+    );
+  }
+
+  // Unresolved non-MCP approvals (forwardable actions). These keep the
+  // ActivityCard surface for now because they need the WorkspaceMemberPicker
+  // inline; redesign tracks separately.
   return (
     <ActivityCard
       title={cardTitle}
       status={cardStatus}
       variant="approval"
       description={cardDescription}
-      params={
-        isMcpApproval
-          ? [
-              ...(riskLevel
-                ? [{ label: "Risk", value: <Badge>{riskLevel}</Badge> }]
-                : []),
-              ...(readOnly !== null
-                ? [
-                    {
-                      label: "Access",
-                      value: readOnly ? "Read-only" : "May change data",
-                    },
-                  ]
-                : []),
-            ]
-          : []
-      }
       result={cardResult}
-      details={approvalDetailsContent(args, result)}
-      detailsLabel={presentation?.debug_label ?? "Tool details"}
+      details={detailsBody}
+      detailsLabel={detailsLabel}
     >
-      {!resolved ? (
-        <div className="aui-tool-card__actions">
-          <Button
-            type="button"
-            size="sm"
-            title={isMcpApproval ? "Allow this connector action" : "Approve"}
-            onClick={() => submit("approved")}
-          >
-            {isMcpApproval ? "Allow once" : "Approve"}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            title={isMcpApproval ? "Deny this connector action" : "Reject"}
-            onClick={() => submit("rejected")}
-          >
-            {isMcpApproval ? "Deny" : "Reject"}
-          </Button>
-          {canForward ? (
-            forwarding ? (
-              <WorkspaceMemberPicker
-                loadMembers={loadWorkspaceMembers}
-                excludeUserIds={
-                  selfUserId !== undefined ? [selfUserId] : undefined
-                }
-                onPick={(member) => {
-                  submitForward(member);
-                  setForwarding(false);
-                }}
-                onCancel={() => setForwarding(false)}
-              />
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                title="Forward this decision to a teammate"
-                onClick={() => setForwarding(true)}
-              >
-                Approve & forward to…
-              </Button>
-            )
-          ) : null}
-        </div>
-      ) : null}
+      <div className="aui-tool-card__actions">
+        <Button
+          type="button"
+          size="sm"
+          title="Approve"
+          onClick={() => submit("approved")}
+        >
+          Approve
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          title="Reject"
+          onClick={() => submit("rejected")}
+        >
+          Reject
+        </Button>
+        {canForward ? (
+          forwarding ? (
+            <WorkspaceMemberPicker
+              loadMembers={loadWorkspaceMembers}
+              excludeUserIds={
+                selfUserId !== undefined ? [selfUserId] : undefined
+              }
+              onPick={(member) => {
+                submitForward(member);
+                setForwarding(false);
+              }}
+              onCancel={() => setForwarding(false)}
+            />
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              title="Forward this decision to a teammate"
+              onClick={() => setForwarding(true)}
+            >
+              Approve & forward to…
+            </Button>
+          )
+        ) : null}
+      </div>
     </ActivityCard>
   );
+}
+
+function capitalize(value: string): string {
+  return value.length === 0
+    ? value
+    : value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+// PR 4.4.6.4 — local-state wrapper around ApprovalReceipt that owns
+// the optimistic undo flip. We keep this in ApprovalTool's module
+// (not in ApprovalReceipt) because the receipt is also used in
+// audit / inbox surfaces that don't want the side-channel POST wired.
+function UndoableReceipt({
+  kind,
+  title,
+  details,
+  detailsLabel,
+  undoUntilIso,
+  undoRequestedFromServer,
+  approvalId,
+  onRequestUndo,
+}: {
+  kind: ApprovalReceiptKind;
+  title: string;
+  details: ReactNode;
+  detailsLabel: string;
+  undoUntilIso: string | null;
+  undoRequestedFromServer: string | null;
+  approvalId: string;
+  onRequestUndo?: (
+    approvalId: string,
+  ) => Promise<{ undo_requested_at: string }>;
+}): ReactElement {
+  const [pending, setPending] = useState(false);
+  const [requestedAtIso, setRequestedAtIso] = useState<string | null>(
+    undoRequestedFromServer,
+  );
+
+  async function handleUndo(): Promise<void> {
+    if (pending || onRequestUndo === undefined) {
+      return;
+    }
+    try {
+      setPending(true);
+      const out = await onRequestUndo(approvalId);
+      setRequestedAtIso(out.undo_requested_at);
+    } catch {
+      // FE recovery: leave the button enabled. The server is
+      // authoritative on window expiry; double-click is harmless
+      // (audit captures every legitimate request).
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <ApprovalReceipt
+      kind={kind}
+      title={title}
+      details={details}
+      detailsLabel={detailsLabel}
+      undoUntil={undoUntilIso !== null ? new Date(undoUntilIso) : null}
+      undoRequestedAt={
+        requestedAtIso !== null ? new Date(requestedAtIso) : null
+      }
+      onUndo={onRequestUndo !== undefined ? () => void handleUndo() : undefined}
+      undoPending={pending}
+    />
+  );
+}
+
+// PR 4.4.6.2 — defensively read server-supplied ``params`` from the
+// approval event's args bag. The wire is JsonObject; we trust only
+// shape, not values, and cap at 6 rows to mirror the server's
+// ``APPROVAL_MAX_PARAMS``.
+function readApprovalParams(value: unknown): McpApprovalParam[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: McpApprovalParam[] = [];
+  for (const item of value) {
+    if (out.length >= 6) {
+      break;
+    }
+    if (item === null || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const label = stringValue(record.label);
+    const display = stringValue(record.value);
+    if (!label || !display) {
+      continue;
+    }
+    const hint = stringValue(record.hint);
+    out.push({ label, value: display, hint });
+  }
+  return out;
 }
 
 function formatTimeShort(iso: string): string {

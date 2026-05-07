@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys, Messages
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
+    ApprovalCategory,
     ApprovalDecision,
+    ApprovalReasonCode,
+    ApprovalReversible,
     ApprovalStatus,
 )
 
@@ -139,6 +148,30 @@ class ApprovalDecisionResponse(RuntimeContract):
     # FE uses this to render "Waiting on @marcus" without an extra fetch.
     forwarded_to_user_id: str | None = None
     child_approval_id: str | None = None
+    # PR 4.4.6.4 — non-null only when status==APPROVED AND the original
+    # request was tagged reversible=YES. Computed by the service layer
+    # at decision time; persisted via the existing decision metadata.
+    undo_expires_at: datetime | None = None
+
+
+# PR 4.4.6.4 — reversibility window. Server constant, not configurable
+# per vendor; widening it would lower the consent bar without lowering
+# the cost (the audit chain has the same shape regardless of seconds).
+UNDO_WINDOW_SECONDS: int = 60
+
+
+class ApprovalUndoResponse(RuntimeContract):
+    """Result of a successful (or idempotent) undo request.
+
+    The server is authoritative on ``undo_expires_at`` — even though the
+    FE has the same value already, returning it lets the client trust
+    the response without consulting its own clock.
+    """
+
+    approval_id: str
+    run_id: str
+    undo_requested_at: datetime
+    undo_expires_at: datetime
 
 
 class AssignedApproval(RuntimeContract):
@@ -169,3 +202,46 @@ class AssignedApprovalsResponse(RuntimeContract):
 
     approvals: tuple[AssignedApproval, ...] = Field(default_factory=tuple)
     next_cursor: str | None = None
+
+
+# PR 4.4.6.2 — structured consent-card payload for ``approval_kind ==
+# "mcp_tool"``. ``McpApprovalMetadata`` round-trips through the existing
+# ``ApprovalRequestRecord.metadata`` JsonObject — no schema migration.
+# Validated on emit (worker) and on read (API layer) so the FE never
+# sees malformed payloads. Forward-compatible: ``extra="allow"`` keeps
+# unrelated keys (e.g. existing flat fields) intact through round-trip.
+
+_PARAM_LABEL = Annotated[str, StringConstraints(min_length=1, max_length=24)]
+_PARAM_VALUE = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+_PARAM_HINT = Annotated[str, StringConstraints(max_length=80)]
+_VENDOR_TOKEN = Annotated[str, StringConstraints(min_length=1, max_length=32)]
+
+# Cap stops a malicious model from packing the consent card with 50 rows.
+APPROVAL_MAX_PARAMS = 6
+
+
+class ApprovalParam(RuntimeContract):
+    """One row in the consent-card params frame."""
+
+    label: _PARAM_LABEL
+    value: _PARAM_VALUE
+    hint: _PARAM_HINT | None = None
+
+
+class McpApprovalMetadata(RuntimeContract):
+    """Structured payload nested inside ``ApprovalRequestRecord.metadata``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    vendor: _VENDOR_TOKEN
+    category: ApprovalCategory
+    reason_code: ApprovalReasonCode
+    reversible: ApprovalReversible = ApprovalReversible.NOT_APPLICABLE
+    params: tuple[ApprovalParam, ...] = ()
+
+    @field_validator("params")
+    @classmethod
+    def _max_six(cls, value: tuple[ApprovalParam, ...]) -> tuple[ApprovalParam, ...]:
+        if len(value) > APPROVAL_MAX_PARAMS:
+            raise ValueError(f"approval params capped at {APPROVAL_MAX_PARAMS} rows")
+        return value

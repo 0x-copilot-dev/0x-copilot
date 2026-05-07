@@ -34,6 +34,10 @@ export interface SubagentFleetContextValue {
   /** Handler invoked by the row's "Review approval →" link. Defaults
    *  to `scrollChatToEvent` if absent. */
   onJumpToApproval?: (sourceEventId: string) => void;
+  /** PR 4.4.7 — opens the workspace pane on the Agents tab. Used by the
+   *  fleet card's "View in workspace →" footer link. Optional so old
+   *  tests / Storybook still render without the link. */
+  onOpenWorkspace?: () => void;
 }
 
 const SubagentFleetContext = createContext<SubagentFleetContextValue>({});

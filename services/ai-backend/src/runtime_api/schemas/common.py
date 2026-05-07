@@ -125,6 +125,10 @@ class RuntimeApiEventType(StrEnum):
     # APPROVAL_REQUESTED on the child so the FE can transform the original
     # in-thread card into a "Waiting on @marcus" pill in one reducer step.
     APPROVAL_FORWARDED = "approval_forwarded"
+    # PR 4.4.6.4 — user requested undo of an approved write within the
+    # 60s reversibility window. Emitted alongside the audit row; replay
+    # via ?after_sequence=N retains it like any other run event.
+    APPROVAL_UNDO_REQUESTED = "approval_undo_requested"
     OBSERVATION = "observation"
     ERROR = "error"
     MODEL_CALL_STARTED = "model_call_started"
@@ -208,3 +212,42 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
+
+
+# PR 4.4.6.2 — structured consent-card payload for ``approval_kind ==
+# "mcp_tool"``. The runtime worker projects connector / tool / call-arg
+# context into this vocabulary so the FE renders without inferring from
+# Booleans. All three enums are ``StrEnum`` so wire serialisation is the
+# enum value itself; api-types mirrors the same string literals.
+
+
+class ApprovalCategory(StrEnum):
+    """Access category for the right-hand vendor pill."""
+
+    READ = "read"
+    WRITE = "write"
+    ACTION = "action"
+
+
+class ApprovalReasonCode(StrEnum):
+    """Why the user is being asked. Drives the FE's reason sentence.
+
+    Open-ended on purpose — unrecognised values fall back to
+    ``DEFAULT`` on the FE so a server can ship new variants ahead of a
+    bundle without breaking old clients.
+    """
+
+    READ_ONLY_FIRST_USE = "read_only_first_use"
+    WRITES_OUT_OF_WORKSPACE = "writes_out_of_workspace"
+    RISK_HIGH = "risk_high"
+    IRREVERSIBLE = "irreversible"
+    DEFAULT = "default"
+
+
+class ApprovalReversible(StrEnum):
+    """Tri-state reversibility marker. ``NOT_APPLICABLE`` for read-only
+    actions where the question doesn't make sense."""
+
+    YES = "yes"
+    NO = "no"
+    NOT_APPLICABLE = "n/a"

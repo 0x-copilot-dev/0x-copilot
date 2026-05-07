@@ -8,7 +8,7 @@ User types in an empty chat composer (no conversation loaded), hits Enter, and g
 
 ## Preconditions
 
-- User is authenticated, or `DEV_AUTH_BYPASS=true` in development.
+- User is authenticated. In dev that means a bearer minted by the W0.1 dev IdP (`POST /v1/dev/identity/mint`) — see `docs/dev-testing.md`. There is no `DEV_AUTH_BYPASS` shortcut.
 - `apps/frontend` reaches `backend-facade:8200` for `/v1/*`.
 - A `runtime_worker` is running (separate process, or in-process via `RUNTIME_START_IN_PROCESS_WORKER=true`).
 - React state: `conversationId === null`, `activeRunId === null`.

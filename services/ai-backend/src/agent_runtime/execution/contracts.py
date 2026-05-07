@@ -248,6 +248,36 @@ class RuntimeRunHandle(RuntimeContract):
         )
 
 
+class CatalogSuggestionCard(RuntimeContract):
+    """PR 4.4.7 Phase 2 — one catalog entry the agent may suggest.
+
+    Materialised at run-create from
+    ``backend.McpRegistryService.list_suggestible_connectors``. Tight
+    Pydantic shape so the system prompt and discovery tool see the
+    same fields without re-parsing the wire payload.
+    """
+
+    slug: str
+    display_name: str
+    description: str = ""
+    scopes_summary: str | None = None
+    brand_color: str | None = None
+
+    @field_validator("slug")
+    @classmethod
+    def _normalize_slug(cls, value: str) -> str:
+        normalized = _normalize_nonempty_string(value, "slug").lower()
+        if not normalized:
+            msg = "slug must be a non-empty string"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str) -> str:
+        return _normalize_nonempty_string(value, "display_name")
+
+
 class AgentRuntimeContext(RuntimeContract):
     """Request-level identity, authorization, model, and trace context."""
 
@@ -256,6 +286,27 @@ class AgentRuntimeContext(RuntimeContract):
     roles: frozenset[str]
     permission_scopes: frozenset[str] = Field(default_factory=frozenset)
     connector_scopes: dict[str, frozenset[str]] = Field(default_factory=dict)
+    # PR 4.4.6.2 — server_ids the user explicitly paused for this run
+    # (popover toggle ⇒ ``enabled_connectors[server_id] = null``). Kept
+    # separate from ``connector_scopes`` because the latter only carries
+    # *active* entries: an empty ``connector_scopes`` is ambiguous
+    # between "no per-chat override" and "everything paused". This set
+    # gives MCP permission gates and the call-tool path an explicit
+    # signal so a paused MCP server is invisible AND unloadable AND
+    # uncallable for the duration of this run.
+    paused_connectors: frozenset[str] = Field(default_factory=frozenset)
+    # PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may
+    # surface as progressive-discovery suggestions in this run. These
+    # are *uninstalled* connectors filtered server-side by
+    # ``backend.McpRegistryService.list_suggestible_connectors`` (paused
+    # excluded, user mutes excluded, catalog-level
+    # ``discoverable=false`` excluded unless user overrode). Suggesting
+    # a slug that isn't in this tuple is a no-op via the discovery
+    # service's permission gate. Empty tuple ⇒ system prompt skips the
+    # section and the agent doesn't surface any suggestions.
+    suggested_connectors: tuple["CatalogSuggestionCard", ...] = Field(
+        default_factory=tuple
+    )
     model_profile: ModelConfig
     request_id: str = Field(default_factory=lambda: uuid4().hex)
     run_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -306,20 +357,91 @@ class AgentRuntimeContext(RuntimeContract):
     @field_validator("connector_scopes", mode="before")
     @classmethod
     def _normalize_connector_scopes(cls, value: object) -> dict[str, frozenset[str]]:
+        # Keys here are connector ids from
+        # ``ConversationConnectorScopes`` (e.g. ``"seed:linear"``) — the
+        # conversation column accepts any non-empty trimmed string and
+        # the runtime registry validates *existence*, not lexical
+        # form. Lowercase + trim to match the historic case-insensitive
+        # semantics, but accept colons / other characters that the
+        # strict slug pattern would reject so an active per-chat scope
+        # override for a catalog-seeded server actually materialises
+        # onto the context instead of failing pydantic validation.
         if value is None:
             return {}
         if not isinstance(value, Mapping):
-            msg = "connector_scopes must be a mapping of connector slug to scopes"
+            msg = "connector_scopes must be a mapping of connector id to scopes"
             raise ValueError(msg)
 
         normalized: dict[str, frozenset[str]] = {}
         for connector, scopes in value.items():
-            connector_slug = _normalize_slug(connector, "connector_scopes key")
-            normalized[connector_slug] = _normalize_scope_set(
+            if not isinstance(connector, str) or not connector.strip():
+                msg = "connector_scopes keys must be non-empty strings"
+                raise ValueError(msg)
+            connector_id = connector.strip().lower()
+            normalized[connector_id] = _normalize_scope_set(
                 scopes,
-                f"connector_scopes.{connector_slug}",
+                f"connector_scopes.{connector_id}",
             )
         return normalized
+
+    @field_validator("suggested_connectors", mode="before")
+    @classmethod
+    def _normalize_suggested_connectors(
+        cls, value: object
+    ) -> tuple["CatalogSuggestionCard", ...]:
+        # Accept either a sequence of ``CatalogSuggestionCard`` (Python
+        # caller path) or a sequence of dicts (HTTP-deserialised path).
+        # ``None`` collapses to empty so older request shapes still
+        # validate.
+        if value is None:
+            return ()
+        if isinstance(value, (str, bytes)):
+            msg = "suggested_connectors must be an iterable of cards"
+            raise ValueError(msg)
+        try:
+            iterable = list(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            msg = "suggested_connectors must be an iterable of cards"
+            raise ValueError(msg) from exc
+        cards: list[CatalogSuggestionCard] = []
+        for item in iterable:
+            if isinstance(item, CatalogSuggestionCard):
+                cards.append(item)
+            elif isinstance(item, Mapping):
+                cards.append(CatalogSuggestionCard.model_validate(dict(item)))
+            else:
+                msg = "suggested_connectors items must be cards or dicts"
+                raise ValueError(msg)
+        return tuple(cards)
+
+    @field_validator("paused_connectors", mode="before")
+    @classmethod
+    def _normalize_paused_connectors(cls, value: object) -> frozenset[str]:
+        # Accept the conversation column's connector-id shape (any
+        # non-empty trimmed string) rather than the strict
+        # ``[a-z0-9_-]`` slug — server_ids include a ``seed:`` prefix
+        # ("seed:linear"), and ``ConversationConnectorScopes`` is the
+        # source of truth here per
+        # ``ConnectorScopeValidator._coerce_connector_id``. Validating
+        # connector existence is the runtime registry's job, not this
+        # contract's.
+        if value is None:
+            return frozenset()
+        if isinstance(value, (str, bytes)):
+            msg = "paused_connectors must be an iterable of connector ids"
+            raise ValueError(msg)
+        try:
+            iterable = list(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            msg = "paused_connectors must be an iterable of connector ids"
+            raise ValueError(msg) from exc
+        normalized: list[str] = []
+        for item in iterable:
+            if not isinstance(item, str) or not item.strip():
+                msg = "paused_connectors items must be non-empty strings"
+                raise ValueError(msg)
+            normalized.append(item.strip())
+        return frozenset(normalized)
 
     @field_validator("request_id", "run_id", "trace_id", mode="before")
     @classmethod

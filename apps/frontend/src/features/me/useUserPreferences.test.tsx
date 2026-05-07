@@ -39,6 +39,9 @@ const SEED: UserPreferences = {
       weekly_digest: { email: true, slack: false, desktop: false },
     },
   },
+  // PR 4.4.7 Phase 2 (Slice A) — empty by default; absent slugs
+  // inherit the catalog entry's ``discoverable`` flag.
+  discoverable_connectors: { overrides: {} },
   updated_at: "2026-05-05T16:01:14Z",
 };
 

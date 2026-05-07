@@ -1,6 +1,7 @@
 import type {
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  ApprovalUndoResponse,
   AssignedApprovalsResponse,
   CancelRunRequest,
   CancelRunResponse,
@@ -469,6 +470,32 @@ export function decideApproval(
       throw new Error(detail || `Request failed with ${response.status}`);
     }
     return (await response.json()) as ApprovalDecisionResponse;
+  });
+}
+
+// PR 4.4.6.4 — record an undo request inside the 60s reversibility
+// window. Server returns 200 with the audited timestamps, 410 when the
+// window has expired, 422 if the approval was never reversible.
+export function requestApprovalUndo(
+  approvalId: string,
+  identity: RequestIdentity,
+): Promise<ApprovalUndoResponse> {
+  const params = new URLSearchParams({
+    org_id: identity.orgId,
+    user_id: identity.userId,
+  });
+  return fetch(
+    `/v1/agent/approvals/${encodeURIComponent(approvalId)}/undo?${params}`,
+    {
+      method: "POST",
+      headers: { ...correlationHeaders() },
+    },
+  ).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Request failed with ${response.status}`);
+    }
+    return (await response.json()) as ApprovalUndoResponse;
   });
 }
 

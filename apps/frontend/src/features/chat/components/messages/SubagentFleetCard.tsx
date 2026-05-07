@@ -57,7 +57,7 @@ export function SubagentFleetCard({
     >
       <header className="aui-fleet-card__head">
         <span className="aui-fleet-card__icon" aria-hidden="true">
-          ⌘
+          <FleetBotIcon />
         </span>
         <span className="aui-fleet-card__title">{displayTitle}</span>
         <span className="aui-fleet-card__count">{headStatus}</span>
@@ -68,8 +68,10 @@ export function SubagentFleetCard({
       </p>
       {children ? <div className="aui-fleet-card__rows">{children}</div> : null}
       <footer className="aui-fleet-card__foot">
-        <span>
-          Subagents run in parallel — keep chatting and they'll report back.
+        <span className="aui-fleet-card__foot-text">
+          <FleetStackIcon />
+          Subagents run in parallel — keep chatting and they&apos;ll report
+          back.
         </span>
         {onOpenWorkspace ? (
           <button
@@ -85,5 +87,51 @@ export function SubagentFleetCard({
         ) : null}
       </footer>
     </section>
+  );
+}
+
+/** Small bot/agent glyph for the fleet card's primary icon. Inline SVG
+ *  rather than an emoji so it inherits ``currentColor`` and tracks the
+ *  ``--color-accent-strong`` set by ``.aui-fleet-card__icon``. */
+function FleetBotIcon(): ReactElement {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="5" width="10" height="8" rx="2" />
+      <path d="M8 3v2" />
+      <circle cx="6" cy="9" r="0.7" fill="currentColor" />
+      <circle cx="10" cy="9" r="0.7" fill="currentColor" />
+      <path d="M6.5 11.5h3" />
+    </svg>
+  );
+}
+
+/** Stack-of-cards glyph next to the footer copy. Hints at the fanout
+ *  semantics ("multiple subagents") without leaning on emoji. */
+function FleetStackIcon(): ReactElement {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 1.5 11 4 6 6.5 1 4l5-2.5Z" />
+      <path d="M1 6.5 6 9l5-2.5" />
+      <path d="M1 9 6 11.5 11 9" />
+    </svg>
   );
 }

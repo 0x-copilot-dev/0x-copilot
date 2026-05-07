@@ -21,31 +21,44 @@ interface ConnectorCardProps {
   connectors: ConnectorState;
 }
 
+type Pending = null | "toggle" | "auth" | "remove";
+
 export function ConnectorCard({
   server,
   connectors,
 }: ConnectorCardProps): ReactElement {
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<Pending>(null);
   const [error, setError] = useState<string | null>(null);
   const display = authStateDisplay(server.auth_state);
+  const busy = pending !== null;
 
   // Sub-text priority: ``scopes_summary`` (server-supplied catalog
   // metadata) → state hint when scopes are absent (e.g. failed auth) →
   // server URL as last-resort identifier.
   const subtext = subtextFor(server, display.label);
 
-  async function handleToggle(checked: boolean): Promise<void> {
-    if (pending) {
+  // Show inline recovery affordances for the "Needs attention" cases —
+  // the parent group's hint reads "Re-authenticate to bring these
+  // online", so the row should actually expose those actions instead
+  // of forcing the user into the Manage MCP servers modal.
+  const needsAttention =
+    server.auth_state === "auth_pending" || server.auth_state === "auth_failed";
+
+  async function run(
+    kind: Exclude<Pending, null>,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    if (busy) {
       return;
     }
     try {
-      setPending(true);
+      setPending(kind);
       setError(null);
-      await connectors.setEnabled(server.server_id, checked);
+      await fn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update.");
+      setError(err instanceof Error ? err.message : "Action failed.");
     } finally {
-      setPending(false);
+      setPending(null);
     }
   }
 
@@ -64,14 +77,47 @@ export function ConnectorCard({
           <h4 className="connector-card__name">{server.display_name}</h4>
           <p className="connector-card__sub">{subtext}</p>
         </div>
-        <Switch
-          label={server.enabled ? "Enabled" : "Disabled"}
-          checked={server.enabled}
-          disabled={pending}
-          onChange={(event) => void handleToggle(event.target.checked)}
-          aria-label={`Toggle ${server.display_name}`}
-          className="connector-card__switch"
-        />
+        {needsAttention ? (
+          <div className="connector-card__actions">
+            <button
+              type="button"
+              className="connector-card__action"
+              disabled={busy}
+              onClick={() =>
+                void run("auth", () =>
+                  connectors.authenticate(server.server_id),
+                )
+              }
+            >
+              {pending === "auth" ? "Starting…" : "Re-authenticate"}
+            </button>
+            <button
+              type="button"
+              className="connector-card__action connector-card__action--danger"
+              disabled={busy}
+              onClick={() =>
+                void run("remove", () =>
+                  connectors.removeServer(server.server_id),
+                )
+              }
+            >
+              {pending === "remove" ? "Removing…" : "Remove"}
+            </button>
+          </div>
+        ) : (
+          <Switch
+            label={server.enabled ? "Enabled" : "Disabled"}
+            checked={server.enabled}
+            disabled={busy}
+            onChange={(event) =>
+              void run("toggle", () =>
+                connectors.setEnabled(server.server_id, event.target.checked),
+              )
+            }
+            aria-label={`Toggle ${server.display_name}`}
+            className="connector-card__switch"
+          />
+        )}
       </div>
       {error ? (
         <p className="app-error connector-card__error">{error}</p>

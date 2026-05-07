@@ -574,8 +574,15 @@ class InMemoryRuntimeApiStore:
 
         self.approval_decisions[record.approval_id] = record
         request = self.approval_requests[record.approval_id]
+        # PR 4.4.6.4 — round-trip ``decided_at`` on the request metadata
+        # so the undo endpoint can compute the window without needing a
+        # separate get_approval_decision read. The metadata JsonObject
+        # already round-trips through both adapters; this is the
+        # smallest seam for cross-call decision lookup.
+        merged_metadata = dict(request.metadata)
+        merged_metadata["decided_at"] = record.decided_at.isoformat()
         self.approval_requests[record.approval_id] = request.model_copy(
-            update={"status": record.status}
+            update={"status": record.status, "metadata": merged_metadata}
         )
         return record
 

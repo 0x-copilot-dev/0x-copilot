@@ -32,7 +32,10 @@ describe("subagentCardFromEntry", () => {
     const vm = subagentCardFromEntry(entry());
     expect(vm).toMatchObject({
       taskId: "task_1",
-      name: "Doc Reader",
+      // PR 4.4.7 — name now prefers ``display_title`` when present so
+      // the row carries the orchestrator's short task label
+      // ("Doc reader") instead of the title-cased role.
+      name: "Doc reader",
       status: "completed",
       terminal: true,
       task: "Read positioning + GTM plan, extract claims",
@@ -108,14 +111,18 @@ describe("subagentCardFromEntry", () => {
     );
   });
 
-  it("falls back to display_title for the task when objective_summary is missing", () => {
+  it("uses display_title as the row name when present", () => {
+    // PR 4.4.7 — display_title drives the row name (orchestrator's
+    // short task label). Task line falls back to objective_summary
+    // alone, leaving null when missing rather than echoing the name.
     const vm = subagentCardFromEntry(
       entry({
         objective_summary: null,
         display_title: "Read approved positioning",
       }),
     );
-    expect(vm.task).toBe("Read approved positioning");
+    expect(vm.name).toBe("Read approved positioning");
+    expect(vm.task).toBeNull();
   });
 });
 

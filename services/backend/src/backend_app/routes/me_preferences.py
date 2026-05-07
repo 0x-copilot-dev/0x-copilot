@@ -225,12 +225,58 @@ class NotificationsPreferencesUpdate(BaseModel):
         return NotificationsPreferences._v_matrix(value)  # type: ignore[arg-type]
 
 
+# PR 4.4.7 Phase 2 (Slice A) — per-user override for the catalog's
+# ``discoverable`` defaults. Replaces the localStorage-backed Phase 1
+# storage so the toggle survives across browsers. Slice B will read
+# this in the runtime context to drive agent suggestions; Slice A is
+# data plumbing only.
+#
+# Shape: ``overrides`` maps catalog slug → bool. ``true`` forces the
+# catalog entry to be suggestible for this user; ``false`` mutes it;
+# absent slug = inherit the catalog entry's ``discoverable`` default.
+# Validation here is shape-only (slug must be a non-empty string),
+# matching ``ConnectorScopeValidator`` — registries are loaded per-run
+# on the worker and a slug that is valid at PUT time may have been
+# removed by the next run; runtime gates enforce semantics.
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+class DiscoverableConnectorsPreferences(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    overrides: dict[str, bool] = Field(default_factory=dict)
+
+    @field_validator("overrides")
+    @classmethod
+    def _v_overrides(cls, value: dict[str, bool]) -> dict[str, bool]:
+        for key, enabled in value.items():
+            if not isinstance(key, str) or not _SLUG_RE.fullmatch(key):
+                raise ValueError("invalid_slug")
+            if not isinstance(enabled, bool):
+                raise ValueError("invalid_request")
+        return value
+
+
+class DiscoverableConnectorsPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    overrides: dict[str, bool] | None = None
+
+    @field_validator("overrides")
+    @classmethod
+    def _v_overrides(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
+        if value is None:
+            return None
+        return DiscoverableConnectorsPreferences._v_overrides(value)  # type: ignore[arg-type]
+
+
 class UserPreferencesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     appearance: AppearancePreferences
     shortcuts: ShortcutsPreferences
     notifications: NotificationsPreferences
+    discoverable_connectors: DiscoverableConnectorsPreferences
     updated_at: str
 
 
@@ -240,6 +286,7 @@ class UpdateUserPreferencesRequest(BaseModel):
     appearance: AppearancePreferencesUpdate | None = None
     shortcuts: ShortcutsPreferencesUpdate | None = None
     notifications: NotificationsPreferencesUpdate | None = None
+    discoverable_connectors: DiscoverableConnectorsPreferencesUpdate | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +318,11 @@ def deployment_default_preferences() -> dict[str, Any]:
                 "weekly_digest": {"email": True, "slack": False, "desktop": False},
             }
         },
+        # PR 4.4.7 Phase 2 (Slice A) — empty by default; absent slug
+        # inherits the catalog entry's ``discoverable`` flag so a
+        # fresh user gets the curated default and can opt out per
+        # vendor without ever opening the toggle.
+        "discoverable_connectors": {"overrides": {}},
     }
 
 
@@ -341,6 +393,12 @@ def register_me_preferences_routes(
             NotificationsPreferences.model_validate(
                 merged.get(
                     "notifications", deployment_default_preferences()["notifications"]
+                )
+            )
+            DiscoverableConnectorsPreferences.model_validate(
+                merged.get(
+                    "discoverable_connectors",
+                    deployment_default_preferences()["discoverable_connectors"],
                 )
             )
         except Exception as exc:  # pragma: no cover - validators emit specific codes
@@ -420,6 +478,12 @@ def _to_response(
         appearance=AppearancePreferences.model_validate(merged["appearance"]),
         shortcuts=ShortcutsPreferences.model_validate(merged["shortcuts"]),
         notifications=NotificationsPreferences.model_validate(merged["notifications"]),
+        discoverable_connectors=DiscoverableConnectorsPreferences.model_validate(
+            merged.get(
+                "discoverable_connectors",
+                deployment_default_preferences()["discoverable_connectors"],
+            )
+        ),
         updated_at=(record.updated_at.isoformat() if record else "") or "",
     )
 
@@ -449,6 +513,7 @@ def _paths(value: Any, prefix: str = "") -> list[str]:
 
 __all__ = [
     "AppearancePreferences",
+    "DiscoverableConnectorsPreferences",
     "NotificationsPreferences",
     "ShortcutsPreferences",
     "UpdateUserPreferencesRequest",

@@ -28,6 +28,7 @@ import {
   createConversation,
   createRun,
   decideApproval,
+  requestApprovalUndo,
   getConversation,
   listConversations,
   listMessages,
@@ -1336,6 +1337,7 @@ export function ChatScreen({
         placement={placement}
         error={conversationScopes.error}
         readOnly={currentConversation === null}
+        runInProgress={activeRunId !== null}
       />
     ),
     [
@@ -1345,6 +1347,7 @@ export function ChatScreen({
       connectors,
       onOpenSettings,
       currentConversation,
+      activeRunId,
     ],
   );
   const selectedModel = useMemo(
@@ -1426,6 +1429,21 @@ export function ChatScreen({
     // every render and re-creating the runtime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
+  );
+
+  // PR 4.4.6.4 — side-channel POST to ``/v1/agent/approvals/{id}/undo``.
+  // Side-channel because it's *not* a LangGraph resume: the run already
+  // completed; this records the user's intent + audits + emits a stream
+  // event. UndoableReceipt threads the result back into local state.
+  const handleRequestUndo = useCallback(
+    async (approvalId: string): Promise<{ undo_requested_at: string }> => {
+      if (identity === null) {
+        throw new Error("Not signed in.");
+      }
+      const response = await requestApprovalUndo(approvalId, identity);
+      return { undo_requested_at: response.undo_requested_at };
+    },
+    [identity],
   );
 
   /**
@@ -1641,6 +1659,7 @@ export function ChatScreen({
                     subagentsByTask: subagentsState.subagents,
                     activitiesByTask: subagentActivitiesByTask,
                     onJumpToApproval: scrollChatToEvent,
+                    onOpenWorkspace: () => paneState.openOn("agents"),
                   }}
                 >
                   <ThreadBody
@@ -1715,6 +1734,7 @@ export function ChatScreen({
                     }
                     onResumeToolCall={handleResumeToolCall}
                     onReload={handleReloadFromAssistant}
+                    onRequestUndo={handleRequestUndo}
                   />
                 </SubagentFleetProvider>
               </CitationsProvider>

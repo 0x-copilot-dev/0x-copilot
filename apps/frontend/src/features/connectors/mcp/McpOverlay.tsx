@@ -41,6 +41,7 @@ import { ConnectorRow } from "../ConnectorRow";
 import { isAuthenticated } from "../authStateDisplay";
 import type { ConnectorState } from "../useConnectors";
 import { useMcpCatalog } from "../useMcpCatalog";
+import { useDiscoverablePref } from "../useDiscoverablePref";
 
 export interface McpOverlayProps {
   open: boolean;
@@ -280,6 +281,13 @@ function CatalogCard({
   // require a pre-registered OAuth client, or after an auth-start
   // attempt fails with ``OAuthSetupRequiredError``.
   const [setupOpen, setSetupOpen] = useState(false);
+  // PR 4.4.7 — Phase 1 toggle for progressive discovery. Reads the
+  // catalog default and overlays a per-user override from local
+  // storage. No runtime effect yet (Phase 2 wires it).
+  const discoverable = useDiscoverablePref(
+    entry.slug,
+    entry.discoverable ?? true,
+  );
 
   async function handlePrimary(): Promise<void> {
     if (pending) {
@@ -368,6 +376,12 @@ function CatalogCard({
             {entry.scopes_summary ?? entry.description}
           </p>
           {error ? <p className="app-error mcp-card__error">{error}</p> : null}
+          <DiscoverableToggle
+            slug={entry.slug}
+            displayName={entry.display_name}
+            enabled={discoverable.enabled}
+            onChange={discoverable.setEnabled}
+          />
         </div>
         <CatalogCardCta
           status={status}
@@ -385,6 +399,48 @@ function CatalogCard({
         onClose={() => setSetupOpen(false)}
       />
     </>
+  );
+}
+
+// PR 4.4.7 — small in-card toggle that lets the user mute or unmute a
+// catalog entry's progressive-discovery suggestions. Phase 1: state
+// persists in localStorage and has no runtime effect yet. Phase 2 will
+// move the persistence to the backend and have the agent's "what could
+// I help with?" path consult it. Rendering as a tiny inline pair
+// (label + native checkbox styled as a switch) keeps the card height
+// uniform across rows.
+function DiscoverableToggle({
+  slug,
+  displayName,
+  enabled,
+  onChange,
+}: {
+  slug: string;
+  displayName: string;
+  enabled: boolean;
+  onChange: (next: boolean) => void;
+}): ReactElement {
+  const id = `mcp-discoverable-${slug}`;
+  return (
+    <label className="mcp-card__discoverable" htmlFor={id}>
+      <input
+        id={id}
+        type="checkbox"
+        checked={enabled}
+        onChange={(event) => onChange(event.target.checked)}
+        aria-label={`Discoverable: ${displayName}`}
+      />
+      <span className="mcp-card__discoverable-label">
+        Discoverable
+        <span
+          className="mcp-card__discoverable-hint"
+          title="When on, the agent may suggest this connector even before you sign in. Coming soon — toggle now to set your preference."
+        >
+          {" "}
+          · suggest in chat
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -573,24 +629,34 @@ function CustomUrlCard({
   }
 
   return (
-    <article className="mcp-card mcp-card--custom">
-      <header className="mcp-card__head">
-        <AppIcon name="custom" />
-        <div className="mcp-card__body">
-          <h4>Add custom URL</h4>
+    <>
+      <article className="mcp-card mcp-card--custom">
+        <AppIcon name="custom" size="lg" className="mcp-card__icon" />
+        <div className="mcp-card__main">
+          <div className="mcp-card__title-row">
+            <h4 className="mcp-card__title">Add custom URL</h4>
+          </div>
           <p className="mcp-card__desc">Self-hosted or unlisted MCP server.</p>
         </div>
-        {!open ? (
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setOpen(true)}
-          >
-            Add
-          </Button>
-        ) : null}
-      </header>
-      {open ? (
+        <button
+          type="button"
+          className="mcp-card__cta"
+          onClick={() => setOpen(true)}
+        >
+          Add
+        </button>
+      </article>
+
+      <Modal
+        open={open}
+        onClose={() => {
+          setOpen(false);
+          setError(null);
+          setUrl("");
+        }}
+        title="Add custom MCP server"
+        description="Paste the URL of a self-hosted or unlisted MCP server."
+      >
         <form className="mcp-setup" onSubmit={(e) => void handleSubmit(e)}>
           <Field label="Server URL">
             <TextInput
@@ -602,10 +668,8 @@ function CustomUrlCard({
               required
             />
           </Field>
+          {error ? <p className="app-error">{error}</p> : null}
           <div className="mcp-setup__actions">
-            <Button type="submit" variant="primary" disabled={pending}>
-              {pending ? "Adding…" : "Add"}
-            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -618,11 +682,13 @@ function CustomUrlCard({
             >
               Cancel
             </Button>
+            <Button type="submit" variant="primary" disabled={pending}>
+              {pending ? "Adding…" : "Add"}
+            </Button>
           </div>
-          {error ? <p className="app-error">{error}</p> : null}
         </form>
-      ) : null}
-    </article>
+      </Modal>
+    </>
   );
 }
 

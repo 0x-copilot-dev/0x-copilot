@@ -95,6 +95,23 @@ export interface McpCatalogEntry {
    */
   requires_pre_registered_client: boolean;
   verified: boolean;
+  /**
+   * PR 4.4.7 (Phase 1) — workspace's progressive-discovery default
+   * for this catalog entry. When true, the agent may surface this
+   * connector as a *suggestion* even before the current user installs
+   * or authenticates it, so users learn about capabilities instead of
+   * perceiving them as platform limitations.
+   *
+   * Phase 1 ships only the data plumbing + a per-user override
+   * persisted client-side. Phase 2 wires this into a runtime
+   * "suggested connectors" surface; until then the field has no
+   * runtime effect — agents only see installed + authenticated
+   * servers via ``McpPermissionPolicy``.
+   *
+   * Optional with a default fallback so older server payloads stay
+   * compatible.
+   */
+  discoverable?: boolean;
 }
 
 export interface McpCatalogResponse {
@@ -214,6 +231,7 @@ export type RuntimeApiEventType =
   | "approval_requested"
   | "approval_resolved"
   | "approval_forwarded"
+  | "approval_undo_requested"
   | "observation"
   | "error"
   | "model_call_started"
@@ -266,6 +284,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "approval_requested",
   "approval_resolved",
   "approval_forwarded",
+  "approval_undo_requested",
   "observation",
   "error",
   "model_call_started",
@@ -310,6 +329,25 @@ export type ApprovalStatus = "pending" | "approved" | "rejected" | "forwarded";
 export interface ApprovalForwardTarget {
   kind: "workspace_user";
   user_id: string;
+}
+
+// PR 4.4.6.2 — structured consent-card payload for `approval_kind == "mcp_tool"`.
+// Mirrors `runtime_api/schemas/approvals.py::McpApprovalMetadata`. Optional on
+// the wire so old emitters (no structured fields) and new readers stay
+// compatible — clients fall back to inferring from `read_only` + `risk_level`.
+export type McpApprovalCategory = "read" | "write" | "action";
+export type McpApprovalReasonCode =
+  | "read_only_first_use"
+  | "writes_out_of_workspace"
+  | "risk_high"
+  | "irreversible"
+  | "default";
+export type McpApprovalReversible = "yes" | "no" | "n/a";
+
+export interface McpApprovalParam {
+  label: string;
+  value: string;
+  hint?: string | null;
 }
 
 export interface SessionIdentity {
@@ -1247,6 +1285,18 @@ export interface ApprovalDecisionResponse {
   // render "Waiting on @marcus" without an extra fetch.
   forwarded_to_user_id?: string | null;
   child_approval_id?: string | null;
+  // PR 4.4.6.4 — non-null only when status === "approved" AND the
+  // original request was tagged reversible="yes". ISO 8601. The FE
+  // uses this to drive the 60s undo countdown on the receipt.
+  undo_expires_at?: string | null;
+}
+
+// PR 4.4.6.4 — result of a successful (or repeat) undo request.
+export interface ApprovalUndoResponse {
+  approval_id: string;
+  run_id: string;
+  undo_requested_at: string;
+  undo_expires_at: string;
 }
 
 // PR 1.4.1 Gap #6 — recipient inbox row.
@@ -1483,6 +1533,18 @@ export interface ApprovalForwardedPayload {
   [key: string]: unknown;
 }
 
+// PR 4.4.6.4 — emitted when a user POSTs /v1/agent/approvals/{id}/undo
+// within the 60s reversibility window. Same audit metadata round-trips
+// here so run-stream subscribers don't need a follow-up fetch.
+export interface ApprovalUndoRequestedPayload {
+  approval_id: string;
+  approval_kind?: "mcp_tool" | string;
+  decided_by_user_id: string;
+  undo_requested_at: string;
+  undo_expires_at: string;
+  [key: string]: unknown;
+}
+
 export interface RuntimeEventPayloadByType {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
@@ -1506,6 +1568,9 @@ export interface RuntimeEventPayloadByType {
   approval_requested: ApprovalRequestedPayload;
   approval_resolved: ApprovalResolvedPayload;
   approval_forwarded: ApprovalForwardedPayload;
+  /** PR 4.4.6.4 — user requested undo within the 60s reversibility
+   * window. Run-stream subscribers learn alongside the audit row. */
+  approval_undo_requested: ApprovalUndoRequestedPayload;
   observation: RuntimeTextPayload;
   error: RuntimeTextPayload;
   model_call_started: RuntimeLifecyclePayload;
@@ -2438,10 +2503,26 @@ export interface NotificationsPreferences {
   matrix: Record<NotificationEvent, Record<NotificationChannel, boolean>>;
 }
 
+/**
+ * PR 4.4.7 Phase 2 (Slice A) — per-user override for the catalog's
+ * ``discoverable`` defaults. ``overrides[slug] === true`` forces the
+ * catalog entry to be suggestible for this user, ``false`` mutes it,
+ * absent slug = inherit the catalog entry's ``discoverable`` flag.
+ *
+ * Phase 1 stored this in ``localStorage`` per-device. Slice A migrates
+ * the hook to read/write here so the toggle survives across browsers.
+ * Slice B reads it server-side at run-create to drive agent
+ * suggestions; until then the field has no runtime effect.
+ */
+export interface DiscoverableConnectorsPreferences {
+  overrides: Record<string, boolean>;
+}
+
 export interface UserPreferences {
   appearance: AppearancePreferences;
   shortcuts: ShortcutsPreferences;
   notifications: NotificationsPreferences;
+  discoverable_connectors: DiscoverableConnectorsPreferences;
   /** ISO timestamp of the last write; '' when no row exists yet (fresh user). */
   updated_at: string;
 }
@@ -2530,6 +2611,13 @@ export interface UpdateUserPreferencesRequest {
       Record<NotificationEvent, Partial<Record<NotificationChannel, boolean>>>
     >;
   };
+  /** PR 4.4.7 Phase 2 (Slice A) — per-user catalog discoverable
+   *  overrides. Sending an empty ``overrides`` object leaves prior
+   *  state untouched (deep-merge). To clear a single slug, send
+   *  ``{ overrides: { <slug>: <catalog default> } }`` — the merge
+   *  semantics here treat ``true``/``false`` as wholesale replace
+   *  per slug (no ``null`` clearing in this slice). */
+  discoverable_connectors?: { overrides?: Record<string, boolean> };
 }
 
 // ---------------------------------------------------------------------------

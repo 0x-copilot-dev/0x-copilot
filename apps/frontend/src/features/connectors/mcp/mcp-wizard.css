@@ -322,26 +322,27 @@
   grid-template-columns: 1fr;
 }
 
-@media (min-width: 600px) {
+/* Catalog cards stack 1-up on narrow screens. Two columns is enough at
+   the modal's 56rem max-width — three columns made each card too narrow
+   for "Cloudflare Observability" + a visible CTA. */
+@media (min-width: 720px) {
   .mcp-catalog__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (min-width: 960px) {
-  .mcp-catalog__grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
+/* Card layout: single horizontal row with icon | main | CTA. Same height
+   for every card — credentials form lives in its own dialog (SetupModal),
+   not inline, so a pre-registered vendor never makes one card 3× taller
+   than the rest and break the grid. */
 .mcp-card {
+  align-items: center;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  height: 100%;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   padding: var(--space-md);
   transition: border-color 0.15s ease;
 }
@@ -351,20 +352,30 @@
 }
 
 .mcp-card[data-status="installed"] {
-  opacity: 0.65;
+  opacity: 0.7;
 }
 
-.mcp-card__head {
-  align-items: flex-start;
+/* Squared avatar (catalog-local). The design-system AppIcon is round by
+   default for chat-row chips; flatter rectangles read better on a
+   product card and match the "app icon" affordance from the Mac/iOS
+   home-screen vocabulary. */
+.mcp-card__icon.ui-app-icon {
+  border-radius: var(--radius-sm);
+  height: 2rem;
+  width: 2rem;
+}
+
+.mcp-card__main {
   display: grid;
-  gap: var(--space-sm);
-  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px;
+  min-width: 0;
 }
 
-.mcp-card__title-block {
+.mcp-card__title-row {
+  align-items: baseline;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
   min-width: 0;
 }
 
@@ -378,30 +389,173 @@
   white-space: nowrap;
 }
 
-.mcp-card__meta {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .mcp-card__pill {
   font-size: var(--font-size-2xs);
 }
 
+.mcp-card__setup-note {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+}
+
 .mcp-card__desc {
   color: var(--color-text-muted);
-  flex: 1;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-snug);
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mcp-card__foot {
+.mcp-card__error {
+  font-size: var(--font-size-xs);
+  margin: 4px 0 0;
+  white-space: normal;
+}
+
+/* PR 4.4.7 (Phase 1) — progressive-discovery toggle. Visual treatment
+   is a small inline checkbox styled as a switch using the design
+   system's accent palette. Sits under the description so it doesn't
+   compete with the title row but remains scannable per row. */
+.mcp-card__discoverable {
+  align-items: center;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--font-size-xs);
+  gap: 6px;
+  margin-top: 6px;
+  user-select: none;
+}
+
+.mcp-card__discoverable input {
+  appearance: none;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong, var(--color-border));
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  flex: none;
+  height: 14px;
+  margin: 0;
+  position: relative;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+  width: 24px;
+}
+
+.mcp-card__discoverable input::after {
+  background: var(--color-text-muted);
+  border-radius: var(--radius-full);
+  content: "";
+  height: 8px;
+  left: 2px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  transition:
+    left 0.15s ease,
+    background 0.15s ease;
+  width: 8px;
+}
+
+.mcp-card__discoverable input:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.mcp-card__discoverable input:checked::after {
+  background: var(--color-accent-contrast, #fff);
+  left: 14px;
+}
+
+.mcp-card__discoverable input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.mcp-card__discoverable-label {
+  font-weight: var(--font-weight-medium);
+}
+
+.mcp-card__discoverable-hint {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-regular);
+}
+
+/* Compact secondary-style CTA — the brand mustard primary felt loud at
+   13× simultaneously on a single grid. Hover lifts to filled. */
+.mcp-card__cta {
+  background: transparent;
+  border: 1px solid var(--color-border-strong, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.4rem 0.75rem;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.mcp-card__cta:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  border-color: var(--color-text-muted);
+}
+
+.mcp-card__cta:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mcp-card__cta-badge {
+  font-size: var(--font-size-2xs);
+}
+
+/* Connected-tab row actions: vertical-centered cluster on the right
+   with the toggle + small text links for Re-auth / Remove. Matches
+   the catalog card grid (auto | 1fr | auto) so both tabs share the
+   same shell. */
+.mcp-card__actions {
   align-items: center;
   display: flex;
-  justify-content: flex-end;
-  margin-top: auto;
+  flex: none;
+  gap: var(--space-sm);
+}
+
+.mcp-card__link {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 4px 6px;
+  transition: color 0.15s ease;
+}
+
+.mcp-card__link:hover:not(:disabled),
+.mcp-card__link:focus-visible:not(:disabled) {
+  color: var(--color-text);
+  outline: none;
+  text-decoration: underline;
+}
+
+.mcp-card__link:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.mcp-card__link--danger {
+  color: var(--color-danger, var(--color-text-muted));
+}
+
+.mcp-card__link--danger:hover:not(:disabled),
+.mcp-card__link--danger:focus-visible:not(:disabled) {
+  color: var(--color-danger, var(--color-text));
 }
 
 .mcp-card--custom {
@@ -409,21 +563,14 @@
 }
 
 .mcp-setup {
-  border-top: 1px solid var(--color-border);
   display: grid;
   gap: var(--space-sm);
-  padding-top: var(--space-md);
-}
-
-.mcp-setup__intro {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  margin: 0;
 }
 
 .mcp-setup__actions {
   display: flex;
   gap: var(--space-sm);
+  justify-content: flex-end;
 }
 
 .mcp-connected-list {

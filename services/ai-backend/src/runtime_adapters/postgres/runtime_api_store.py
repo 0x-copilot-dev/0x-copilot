@@ -1339,12 +1339,23 @@ class PostgresRuntimeApiStore:
         """Persist an approval decision against the approval request row."""
 
         decision_reason = record.reason if record.reason is not None else record.answer
+        # PR 4.4.6.4 — round-trip ``decided_at`` into the metadata blob
+        # so the undo endpoint can compute the 60s window without a
+        # separate decision lookup. Mirrors the in-memory adapter; the
+        # blob is the existing zero-migration seam.
+        decided_at_iso = record.decided_at.isoformat()
         async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.transaction():
                 await conn.execute(
                     """
                     UPDATE runtime_approval_requests
-                    SET status = %s, decided_by_user_id = %s, decision_reason = %s, decided_at = %s
+                    SET status = %s,
+                        decided_by_user_id = %s,
+                        decision_reason = %s,
+                        decided_at = %s,
+                        request_payload_json_redacted = COALESCE(
+                            request_payload_json_redacted, '{}'::jsonb
+                        ) || jsonb_build_object('decided_at', %s::text)
                     WHERE id = %s AND org_id = %s
                     """,
                     (
@@ -1352,6 +1363,7 @@ class PostgresRuntimeApiStore:
                         record.decided_by_user_id,
                         decision_reason,
                         record.decided_at,
+                        decided_at_iso,
                         record.approval_id,
                         record.org_id,
                     ),

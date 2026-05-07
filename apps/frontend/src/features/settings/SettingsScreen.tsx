@@ -715,7 +715,7 @@ function ConnectorsSettings({
             onToggle={(event) => setManualOpen(event.currentTarget.open)}
           >
             <summary className="connector-manual-add__summary">
-              {manualOpen ? "Hide manual add" : "Add manually with URL"}
+              Add manually with URL
             </summary>
             {manualOpen ? <ManualAddForm connectors={connectors} /> : null}
           </details>
@@ -878,7 +878,7 @@ function ManualAddForm({
   }
 
   return (
-    <Card>
+    <>
       <form
         className="connector-add-form"
         onSubmit={(event) => void onSubmit(event)}
@@ -972,7 +972,7 @@ function ManualAddForm({
         </Button>
       </form>
       {formError ? <p className="app-error">{formError}</p> : null}
-    </Card>
+    </>
   );
 }
 

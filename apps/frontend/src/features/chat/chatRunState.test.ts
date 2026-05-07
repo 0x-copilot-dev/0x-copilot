@@ -165,7 +165,7 @@ describe("deriveRunUiState", () => {
     });
   });
 
-  it("hides planning while visible assistant text is streaming", () => {
+  it("keeps planning visible while assistant text is streaming", () => {
     const state = deriveRunUiState({
       activeRunId: "run_123",
       items: [],
@@ -179,7 +179,7 @@ describe("deriveRunUiState", () => {
     expect(state).toMatchObject({
       phase: "writing",
       headerStatus: "Writing answer...",
-      showPlanningIndicator: false,
+      showPlanningIndicator: true,
     });
   });
 
@@ -253,11 +253,11 @@ describe("deriveRunUiState", () => {
 
     expect(state).toMatchObject({
       phase: "acting",
-      showPlanningIndicator: false,
+      showPlanningIndicator: true,
     });
   });
 
-  it("does not show planning while an action is still running", () => {
+  it("keeps planning visible while an action is still running", () => {
     const state = deriveRunUiState({
       activeRunId: "run_123",
       items: [],
@@ -272,7 +272,7 @@ describe("deriveRunUiState", () => {
     expect(state).toMatchObject({
       phase: "acting",
       headerStatus: "Running action...",
-      showPlanningIndicator: false,
+      showPlanningIndicator: true,
     });
   });
 

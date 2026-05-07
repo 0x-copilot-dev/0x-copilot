@@ -57,6 +57,18 @@ class CatalogEntry:
     # dynamic client registration). The frontend prompts for
     # ``client_id`` / ``client_secret`` before calling install.
     requires_pre_registered_client: bool = False
+    # PR 4.4.7 (Phase 1) — "progressive discovery": when True, the
+    # agent may surface this connector as a *suggestion* even if the
+    # current user hasn't installed/authenticated it yet, so users
+    # learn about capabilities instead of perceiving them as platform
+    # limitations. Phase 1 ships the data model + per-user toggle UI
+    # only; runtime exposure (a separate ``SuggestedConnectorRegistry``
+    # surface) lands in Phase 2 so the existing
+    # ``McpPermissionPolicy`` / ``paused_connectors`` invariants stay
+    # intact for the auth-gated path. Default True for verified
+    # vendors and False for unverified — admins can flip individual
+    # entries here without touching the runtime.
+    discoverable: bool = True
 
     @property
     def server_id(self) -> str:

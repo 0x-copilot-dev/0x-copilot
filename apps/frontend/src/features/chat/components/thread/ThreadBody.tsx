@@ -105,6 +105,14 @@ export const ThreadBody = forwardRef<
     onSelectSuggestion?: (prompt: string) => void;
     onResumeToolCall?: (payload: unknown) => void;
     onReload?: (assistantMessageId: string) => void;
+    /**
+     * PR 4.4.6.4 — invoked when the user clicks Undo on an approved +
+     * reversible approval receipt. Forwarded to ``ApprovalTool`` via
+     * ``AssistantMessage``.
+     */
+    onRequestUndo?: (
+      approvalId: string,
+    ) => Promise<{ undo_requested_at: string }>;
   }
 >(function ThreadBody(
   {
@@ -145,6 +153,7 @@ export const ThreadBody = forwardRef<
     onSelectSuggestion,
     onResumeToolCall,
     onReload,
+    onRequestUndo,
   },
   composerRef,
 ): ReactElement {
@@ -215,6 +224,7 @@ export const ThreadBody = forwardRef<
                     ? () => onReload(message.id as string)
                     : undefined
                 }
+                onRequestUndo={onRequestUndo}
               />
             );
           }}

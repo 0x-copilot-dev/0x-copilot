@@ -29,6 +29,7 @@ export function AssistantMessage({
   onResumeToolCall,
   onReload,
   onForkFromHere,
+  onRequestUndo,
 }: {
   message: ThreadMessageLike;
   onMcpAuthConnect: (payload: {
@@ -64,6 +65,15 @@ export function AssistantMessage({
    * the user lands in the freshly forked conversation.
    */
   onForkFromHere?: () => void;
+  /**
+   * PR 4.4.6.4 — invoked when the user clicks Undo on an approved +
+   * reversible approval receipt. The host (`ChatScreen`) wires this
+   * to ``requestApprovalUndo``. Optional — read-only / shared-chat
+   * mounts pass ``undefined`` to hide the button.
+   */
+  onRequestUndo?: (
+    approvalId: string,
+  ) => Promise<{ undo_requested_at: string }>;
 }): ReactElement {
   const metrics = performanceMetricsFromMetadata(message.metadata);
   const showFooter = isTerminalAssistantStatus(message.status);
@@ -98,7 +108,9 @@ export function AssistantMessage({
                 run_subagent: SubagentTool,
                 run_subagent_fleet: SubagentFleetTool,
                 run_progress: ProgressTool,
-                approval_request: ApprovalTool,
+                approval_request: (props) => (
+                  <ApprovalTool {...props} onRequestUndo={onRequestUndo} />
+                ),
                 mcp_auth_required: (props) => (
                   <ConnectorAuthTool
                     {...props}

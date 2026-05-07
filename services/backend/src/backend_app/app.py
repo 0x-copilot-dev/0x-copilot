@@ -736,6 +736,61 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
+    # PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may surface
+    # as progressive-discovery suggestions. The ai-backend calls this at
+    # run-create and stuffs the response into
+    # ``AgentRuntimeContext.suggested_connectors``. Filter rules live in
+    # ``McpRegistryService.list_suggestible_connectors``; this route is
+    # a thin wire layer that resolves the user's discoverable override
+    # map from MeStore and forwards it.
+    @app.get(
+        "/internal/v1/me/suggestible-connectors",
+        response_model=McpCatalogResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_suggestible_connectors(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+        exclude_paused: str = Query(
+            "",
+            description=(
+                "Comma-separated server_ids to exclude (typically the "
+                "conversation's paused_connectors). Accepts both the "
+                "bare slug ('linear') and the seed prefix ('seed:linear')."
+            ),
+        ),
+    ) -> McpCatalogResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        excluded = tuple(
+            piece.strip() for piece in exclude_paused.split(",") if piece.strip()
+        )
+        prefs_record = app.state.me_store.get_preferences(
+            org_id=identity.org_id, user_id=identity.user_id
+        )
+        overrides: dict[str, bool] = {}
+        if prefs_record is not None:
+            stored = (
+                prefs_record.preferences.get("discoverable_connectors", {})
+                if isinstance(prefs_record.preferences, dict)
+                else {}
+            )
+            raw_overrides = (
+                stored.get("overrides", {}) if isinstance(stored, dict) else {}
+            )
+            if isinstance(raw_overrides, dict):
+                for key, value in raw_overrides.items():
+                    if isinstance(key, str) and isinstance(value, bool):
+                        overrides[key] = value
+        return _AppServices.mcp(app).list_suggestible_connectors(
+            org_id=identity.org_id,
+            user_id=identity.user_id,
+            exclude_paused=excluded,
+            user_overrides=overrides,
+        )
+
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/auth/start",
         response_model=McpAuthStartResponse,

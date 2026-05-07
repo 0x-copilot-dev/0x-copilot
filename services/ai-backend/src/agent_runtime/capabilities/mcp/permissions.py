@@ -34,8 +34,18 @@ class McpPermissionPolicy:
         context: AgentRuntimeContext,
         card: McpServerCard,
     ) -> bool:
-        """Return whether the runtime context may load this MCP server."""
+        """Return whether the runtime context may load this MCP server.
 
+        PR 4.4.6.2 — paused server_ids are denied here so a connector the
+        user toggled off in the per-chat popover is invisible to
+        ``list_server_cards`` AND blocked from ``load_server`` for the
+        duration of the run. The check is by ``server_id`` (the same key
+        the conversation column writes); cards without a ``server_id``
+        (deployment-level cards, not user-installed) skip the gate.
+        """
+
+        if card.server_id is not None and card.server_id in context.paused_connectors:
+            return False
         if card.allowed_org_ids and context.org_id not in card.allowed_org_ids:
             return False
         if card.allowed_user_ids and context.user_id not in card.allowed_user_ids:

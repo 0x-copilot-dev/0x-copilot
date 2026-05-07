@@ -1,4 +1,9 @@
+import type {
+  McpApprovalCategory,
+  McpApprovalReasonCode,
+} from "@enterprise-search/api-types";
 import { stringValue } from "./jsonUtils";
+import { approvalReasonForCode } from "./approvalCopy";
 
 export function safeVisibleText(value: string): string {
   return value
@@ -289,6 +294,141 @@ export function mcpApprovalDescription(
     stringValue(fallback) ??
     `Enterprise Search wants to run a ${connector} action.`
   );
+}
+
+// PR 4.4.6.1 — approval card copy helpers. The bundle replaces the
+// generic "Allow {tool} on {connector}? Approve or deny." with copy
+// that answers *what / who / why* in three slots. Tested in
+// ApprovalTool.test.tsx; consumers should not synthesize approval
+// strings inline.
+
+/** Verb-first action title for an MCP tool. Used as the card heading.
+ * "List your Linear issues" reads as a request the user can act on,
+ * unlike "Allow List Issues?" which buries the verb. */
+export function mcpApprovalActionTitle(
+  toolName: string | null,
+  displayName: string | null,
+  readOnly: boolean | null,
+): string {
+  const connector = displayName ?? "this connector";
+  const verb = mcpApprovalVerb(toolName, readOnly);
+  const subject = mcpApprovalSubject(toolName);
+  if (subject) {
+    return `${verb} your ${connector} ${subject}?`;
+  }
+  return `${verb} ${connector}?`;
+}
+
+function mcpApprovalVerb(
+  toolName: string | null,
+  readOnly: boolean | null,
+): string {
+  const action = toolActionName(toolName);
+  if (action === "search") {
+    return "Search";
+  }
+  if (action === "read") {
+    return "Read";
+  }
+  if (action === "modify") {
+    return readOnly === true ? "Read from" : "Update";
+  }
+  return readOnly === true ? "Read from" : "Run an action on";
+}
+
+function mcpApprovalSubject(toolName: string | null): string | null {
+  const normalized = toolName?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.includes("issue")) return "issues";
+  if (normalized.includes("ticket")) return "tickets";
+  if (normalized.includes("page")) return "pages";
+  if (normalized.includes("doc")) return "docs";
+  if (normalized.includes("message")) return "messages";
+  if (normalized.includes("channel")) return "channels";
+  if (normalized.includes("repo")) return "repos";
+  if (normalized.includes("pull")) return "pull requests";
+  if (normalized.includes("file")) return "files";
+  return null;
+}
+
+/** Vendor + access category for the right-hand pill. The pill anchors
+ * the card to the MCP server contract — the user knows at a glance
+ * which connector and how invasive the call is.
+ *
+ * PR 4.4.6.2 — server-supplied ``vendor`` / ``category`` win when
+ * present; otherwise we fall back to inferring from ``displayName`` +
+ * ``readOnly`` so old events (no structured payload) still render. */
+export function mcpApprovalCategory(
+  displayName: string | null,
+  readOnly: boolean | null,
+  serverSupplied?: {
+    vendor?: string | null;
+    category?: McpApprovalCategory | null;
+  },
+): { vendor: string; access: "READ" | "WRITE" | "ACTION" } {
+  const serverVendor = serverSupplied?.vendor?.trim();
+  const serverCategory = serverSupplied?.category;
+  if (serverVendor && serverCategory) {
+    return {
+      vendor: serverVendor,
+      access: serverCategory.toUpperCase() as "READ" | "WRITE" | "ACTION",
+    };
+  }
+  const vendor = (displayName ?? "Connector").toUpperCase();
+  if (readOnly === true) {
+    return { vendor, access: "READ" };
+  }
+  if (readOnly === false) {
+    return { vendor, access: "WRITE" };
+  }
+  return { vendor, access: "ACTION" };
+}
+
+/** One-sentence explanation of *why* the user is being asked. Read-only
+ * vs. write changes the framing — read calls are routine, writes carry
+ * the consent weight.
+ *
+ * PR 4.4.6.2 — when the server tags the approval with a ``reason_code``
+ * we render the matching sentence verbatim. Otherwise we synthesise as
+ * before from ``readOnly`` + ``riskLevel``. ``approvalReasonForCode``
+ * returns ``null`` for unknown codes, which also falls through. */
+export function mcpApprovalReason(
+  readOnly: boolean | null,
+  riskLevel: string | null,
+  fallbackMessage: unknown,
+  reasonCode?: McpApprovalReasonCode | null,
+): string {
+  const supplied = approvalReasonForCode(reasonCode);
+  if (supplied) {
+    return supplied;
+  }
+  if (readOnly === true) {
+    return "Atlas is asking before reading from this connector for the first time this turn.";
+  }
+  if (readOnly === false) {
+    if (riskLevel === "high") {
+      return "Atlas is asking because this writes to a high-risk connector — review the scope below.";
+    }
+    return "Atlas is asking because this writes outside your workspace.";
+  }
+  return (
+    stringValue(fallbackMessage) ??
+    "Atlas is asking before running this connector."
+  );
+}
+
+/** Persistent rule footer — teaches the user the policy so by the
+ * third approval they predict it. */
+export function mcpApprovalReassurance(readOnly: boolean | null): string {
+  if (readOnly === true) {
+    return "Atlas only reads here — no changes will be made.";
+  }
+  if (readOnly === false) {
+    return "You're always asked before Atlas writes outside this chat.";
+  }
+  return "You're always asked before Atlas runs an unrecognised connector action.";
 }
 
 export function emptyResultLabel(toolName?: string): string {

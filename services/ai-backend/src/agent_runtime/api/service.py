@@ -43,8 +43,10 @@ from runtime_api.schemas import (
     ApprovalForwardTarget,
     ApprovalRequestRecord,
     ApprovalStatus,
+    ApprovalUndoResponse,
     AssignedApproval,
     AssignedApprovalsResponse,
+    UNDO_WINDOW_SECONDS,
     CancelRunRequest,
     CancelRunResponse,
     ConversationConnectorScopesResponse,
@@ -1049,7 +1051,153 @@ class RuntimeApiService:
             run_id=record.run_id,
             status=record.status,
             decided_at=record.decided_at,
+            undo_expires_at=self._undo_expires_at_for(approval=approval, record=record),
         )
+
+    @staticmethod
+    def _undo_expires_at_for(
+        *,
+        approval: ApprovalRequestRecord,
+        record: ApprovalDecisionRecord,
+    ) -> datetime | None:
+        """Compute the undo deadline for an approved + reversible decision.
+
+        PR 4.4.6.4 — non-null only when status is APPROVED and the
+        original request was tagged ``reversible="yes"`` (set by the
+        worker via ``McpApprovalMetadata`` in PR 4.4.6.2). Computed
+        from ``decided_at + UNDO_WINDOW_SECONDS``; not persisted.
+        """
+
+        if record.status is not ApprovalStatus.APPROVED:
+            return None
+        if approval.metadata.get("reversible") != "yes":
+            return None
+        return record.decided_at + timedelta(seconds=UNDO_WINDOW_SECONDS)
+
+    async def request_approval_undo(
+        self,
+        *,
+        org_id: str,
+        approval_id: str,
+        decided_by_user_id: str,
+    ) -> ApprovalUndoResponse:
+        """Record the user's intent to undo an approved + reversible action.
+
+        PR 4.4.6.4 — protocol layer only. The audit row + stream event
+        capture the user's request inside the 60s window; actual MCP-
+        level revert (e.g., calling Slack's ``chat.delete``) is
+        per-vendor follow-up territory.
+        """
+
+        approval = await self.persistence.get_approval_request(
+            org_id=org_id, approval_id=approval_id
+        )
+        if approval is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.APPROVAL_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        if approval.user_id != decided_by_user_id:
+            raise RuntimeApiError(
+                RuntimeErrorCode.PERMISSION_DENIED,
+                "Approval decision user does not match approval scope.",
+                http_status=status.HTTP_403_FORBIDDEN,
+                retryable=False,
+            )
+        if approval.status is not ApprovalStatus.APPROVED:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Only approved decisions are reversible.",
+                http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                retryable=False,
+            )
+        if approval.metadata.get("reversible") != "yes":
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "This approval was not flagged reversible.",
+                http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                retryable=False,
+            )
+        decided_at = self._decision_decided_at(approval=approval)
+        if decided_at is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Approval has no decision yet.",
+                http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                retryable=False,
+            )
+        undo_expires_at = decided_at + timedelta(seconds=UNDO_WINDOW_SECONDS)
+        now = datetime.now(timezone.utc)
+        if now >= undo_expires_at:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Undo window expired.",
+                http_status=status.HTTP_410_GONE,
+                retryable=False,
+            )
+        run = await self._run_for_scope(
+            org_id=approval.org_id,
+            user_id=approval.user_id,
+            run_id=approval.run_id,
+        )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_UNDO_REQUESTED,
+            payload={
+                Keys.Field.APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                "decided_by_user_id": decided_by_user_id,
+                "undo_requested_at": now.isoformat(),
+                "undo_expires_at": undo_expires_at.isoformat(),
+            },
+        )
+        await self.persistence.write_audit_log(
+            event_type="approval_undo_requested",
+            record={
+                "org_id": approval.org_id,
+                "user_id": approval.user_id,
+                "resource_type": "approval",
+                "resource_id": approval.approval_id,
+                "run_id": approval.run_id,
+                "outcome": "success",
+                "metadata": {
+                    "approval_kind": approval_kind,
+                    "vendor": approval.metadata.get("vendor"),
+                    "tool_name": approval.metadata.get("tool_name"),
+                    "undo_expires_at": undo_expires_at.isoformat(),
+                    "undo_requested_at": now.isoformat(),
+                },
+            },
+        )
+        return ApprovalUndoResponse(
+            approval_id=approval.approval_id,
+            run_id=approval.run_id,
+            undo_requested_at=now,
+            undo_expires_at=undo_expires_at,
+        )
+
+    @staticmethod
+    def _decision_decided_at(*, approval: ApprovalRequestRecord) -> datetime | None:
+        """Read ``decided_at`` round-tripped into the request metadata.
+
+        PR 4.4.6.4 — both adapters merge ``decided_at`` into the metadata
+        blob when ``record_approval_decision`` runs. This avoids a
+        separate ``get_approval_decision`` persistence call. Returns
+        ``None`` when the decision hasn't landed yet (race) or the
+        adapter pre-dates this PR.
+        """
+
+        raw = approval.metadata.get("decided_at")
+        if not isinstance(raw, str):
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
 
     async def _decide_forwarded(
         self,
@@ -1644,16 +1792,34 @@ class RuntimeApiService:
         the route) wins when non-empty so service-to-service callers stay
         in control. When empty, the chat's stored override (filtered to
         active connectors only) materialises into the runtime context.
+
+        PR 4.4.6.2 — also lifts the conversation's *paused* connector ids
+        onto ``request_context.paused_connectors`` whenever the runtime
+        context is being driven by the conversation column, so MCP gates
+        downstream see an explicit "deny" for connectors the user
+        toggled off in the popover. ``connector_scopes`` alone can't
+        carry that signal (its empty-set is ambiguous between "no
+        override" and "all paused"). Header-driven flows skip this so
+        service-to-service callers retain full control.
         """
 
+        paused = conversation.paused_connectors()
         if request.request_context.connector_scopes:
-            return request
+            if not paused:
+                return request
+            new_context = request.request_context.model_copy(
+                update={"paused_connectors": paused}
+            )
+            return request.model_copy(update={"request_context": new_context})
         fallback = conversation.runtime_connector_scopes()
-        if not fallback:
+        if not fallback and not paused:
             return request
-        new_context = request.request_context.model_copy(
-            update={"connector_scopes": fallback}
-        )
+        update: dict[str, object] = {}
+        if fallback:
+            update["connector_scopes"] = fallback
+        if paused:
+            update["paused_connectors"] = paused
+        new_context = request.request_context.model_copy(update=update)
         return request.model_copy(update={"request_context": new_context})
 
     async def _run_for_scope(

@@ -27,6 +27,7 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Messages, Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
+from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 
 
@@ -58,6 +59,25 @@ class CallMcpTool:
                 resolution.safe_message,
                 retryable=resolution.retryable,
                 server_name=resolution.server_name or parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+
+        # PR 4.4.6.2 — defense-in-depth re-check after registry resolve.
+        # ``McpPermissionPolicy`` would have already hidden a paused
+        # server from ``list_server_cards`` and refused
+        # ``load_server``, so the model normally never reaches this
+        # point with a paused name. The re-check exists so a stale
+        # tool reference from an earlier turn (or a model that
+        # remembers the server name without re-discovery) can't bypass
+        # the per-chat pause.
+        if not McpPermissionPolicy.is_server_card_authorized(
+            self.runtime_context, resolution.card
+        ):
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.PERMISSION_DENIED,
+                Messages.Loader.UNAUTHORIZED_SERVER,
+                server_name=parsed_input.server_name,
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)

@@ -25,6 +25,7 @@ from runtime_api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalStatus,
+    ApprovalUndoResponse,
     AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
@@ -387,6 +388,23 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def approval_undo(
+        cls,
+        request: Request,
+        approval_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ApprovalUndoResponse:
+        """PR 4.4.6.4 — record an undo request within the 60s window."""
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.service(request).request_approval_undo(
+            org_id=org_id,
+            approval_id=approval_id,
+            decided_by_user_id=user_id,
+        )
+
+    @classmethod
     async def delete_user_history(
         cls,
         request: Request,
@@ -526,6 +544,13 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=ApprovalDecisionResponse,
             name=Keys.RouteName.APPROVAL_DECISION,
+        )
+        router.add_api_route(
+            "/approvals/{approval_id}/undo",
+            RuntimeApiRoutes.approval_undo,
+            methods=["POST"],
+            response_model=ApprovalUndoResponse,
+            name=Keys.RouteName.APPROVAL_UNDO,
         )
         # PR 1.4.1 — recipient inbox endpoint + per-user SSE channel.
         router.add_api_route(

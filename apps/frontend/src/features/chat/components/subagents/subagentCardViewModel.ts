@@ -178,19 +178,25 @@ export function subagentCardFromArgs(
   const terminal = isTerminalStatus(status);
   return {
     taskId,
-    name: subagentName ? formatAgentName(subagentName) : "Subagent",
+    // Prefer the orchestrator-supplied ``display_title`` (e.g.
+    // "Doc reader") so the in-thread row carries a meaningful task
+    // label instead of every parallel subagent rendering as the
+    // generic role ("General Purpose"). Fall back to a title-cased
+    // role name, then to the placeholder.
+    name:
+      displayTitle ??
+      (subagentName ? formatAgentName(subagentName) : "Subagent"),
     status,
     terminal,
-    // Prefer the most descriptive task text first, fall back to the
-    // shorter labels. `display_title` is the short label (e.g. "Doc
-    // reader") and is already used as the card name; using it as the
-    // task line would just repeat the name.
-    task: deriveTaskText(
-      shortSummary,
-      taskSummary,
-      objectiveSummary,
-      displayTitle,
-    ),
+    // Prefer the dispatch-time task description (``objective_summary``
+    // / ``task_summary``) over the model's running CoT
+    // (``short_summary``) — the latter starts as planning text
+    // ("Preparing a short, self-contained Python script...") which
+    // bleeds across rows when the orchestrator only updates
+    // ``short_summary``. Drop ``displayTitle`` from this chain because
+    // it now drives ``name``; using it as the task line would
+    // duplicate the row title.
+    task: deriveTaskText(objectiveSummary, taskSummary, shortSummary),
     finding: terminal ? deriveFindingText(summary) : null,
     fullResult: terminal ? deriveFullResult(summary) : null,
     startedAt,
@@ -219,13 +225,18 @@ export function subagentCardFromEntry(
   const terminal = isTerminalStatus(status);
   return {
     taskId: entry.task_id,
-    name: formatAgentName(entry.subagent_name),
+    // Prefer the orchestrator-supplied short label (``display_title``)
+    // for the row name; fall back to a title-cased ``subagent_name``
+    // when it's missing. Mirrors ``subagentCardFromArgs`` so the
+    // in-thread fleet row and the workspace pane render the same name.
+    name: entry.display_title ?? formatAgentName(entry.subagent_name),
     status,
     terminal,
-    // Prefer the longer `objective_summary` over the short
-    // `display_title` for the task line — `display_title` is the role
-    // label and would just repeat the card name.
-    task: deriveTaskText(entry.objective_summary, entry.display_title),
+    // Use ``objective_summary`` only — ``display_title`` now drives
+    // the name, so listing it here would duplicate. When
+    // ``objective_summary`` is missing the row falls back to the name
+    // alone, same as the workspace pane card.
+    task: deriveTaskText(entry.objective_summary),
     finding: terminal ? deriveFindingText(entry.result_summary) : null,
     fullResult: terminal ? deriveFullResult(entry.result_summary) : null,
     startedAt: entry.started_at,

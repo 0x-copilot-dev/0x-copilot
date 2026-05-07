@@ -197,9 +197,6 @@ PYTHONPATH=src:../../packages/service-contracts/src \
 ```bash
 cd services/backend-facade
 FACADE_ENVIRONMENT=development \
-DEV_AUTH_BYPASS=true \
-FACADE_DEV_ORG_ID=org_123 \
-FACADE_DEV_USER_ID=user_123 \
 BACKEND_URL=http://127.0.0.1:8100 \
 AI_BACKEND_URL=http://127.0.0.1:8000 \
 PYTHONPATH=src:../../packages/service-contracts/src \
@@ -213,59 +210,75 @@ npm run dev --workspace @enterprise-search/frontend -- --host 127.0.0.1
 
 ## Auth In Development
 
-Local browser auth bypass is explicit. It only works when both conditions are
-true:
+Local auth uses the **W0.1 dev IdP** — every request, dev or prod, carries a
+real bearer signed with `ENTERPRISE_AUTH_SECRET`. The verification path on the
+facade and the backend is the same one production uses; only the minting source
+is dev-specific. There is no `DEV_AUTH_BYPASS` shortcut.
 
-- `FACADE_ENVIRONMENT=development`
-- `DEV_AUTH_BYPASS=true`
+How it works:
 
-In that mode, the facade uses `FACADE_DEV_ORG_ID` and `FACADE_DEV_USER_ID` as the
-local identity. Do not hardcode JWTs or service tokens in source, Dockerfiles,
-README examples, or committed `.env` files.
+- `BACKEND_ENVIRONMENT=development` registers two extra routes on
+  `services/backend` (and re-exposes them through the facade):
+  - `GET  /v1/dev/personas` — list available fixtures.
+  - `POST /v1/dev/identity/mint` — exchange a persona slug for a bearer.
+- The frontend's `AuthContext` auto-mints on 401 using the persona stored at
+  `localStorage["enterprise.dev.persona_slug"]` (default `sarah_acme`).
+- Service-to-service calls (facade ↔ backend, ai-backend ↔ backend) use
+  `ENTERPRISE_SERVICE_TOKEN` plus `x-enterprise-org-id` /
+  `x-enterprise-user-id` headers derived from the verified user bearer. The
+  backend treats those headers as untrusted unless the service token is valid.
+- Production fails closed without `ENTERPRISE_AUTH_SECRET` and
+  `ENTERPRISE_SERVICE_TOKEN`. The `/v1/dev/*` surface is unregistered when
+  `BACKEND_ENVIRONMENT != development`.
 
-Leave `ENTERPRISE_SERVICE_TOKEN` unset for the default local stack. That keeps
-service-to-service calls in local query/body-scope mode. To test service-auth
-behavior, set `ENTERPRISE_SERVICE_TOKEN` in all relevant service environments;
-internal callers must also send `x-enterprise-org-id` and
-`x-enterprise-user-id`.
+Do not hardcode bearers, JWTs, or service tokens in source, Dockerfiles,
+README examples, or committed `.env` files. Mint a fresh bearer per session
+when you need one.
 
-Production and staging must not use `DEV_AUTH_BYPASS`. In production, missing
-`ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` fails closed.
+## API Testing (curl, Postman)
+
+For non-browser callers (curl, Postman, scripts), mint a dev bearer once and
+reuse it. All apps — browser, curl, Postman, native — must call the **facade**
+at `:8200`; never `:8100` (backend) or `:8000` (ai-backend) directly, even in
+dev. The internal surfaces require a service token plus identity headers.
+
+```bash
+# 1. Mint a bearer (defaults to the sarah_acme employee fixture).
+export TOKEN=$(make dev-bearer)
+# Or pick a different persona:
+export TOKEN=$(make dev-bearer PERSONA=marcus_admin)
+
+# 2. Hit the facade with it.
+curl -sS http://127.0.0.1:8200/v1/me/profile \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+Full curl recipes (conversations, runs, SSE, MCP install, per-chat connector
+scope toggles), the Postman collection setup, and the persona reference live in
+[`docs/dev-testing.md`](docs/dev-testing.md). Treat that doc as the single
+source of truth for non-browser API calls.
 
 ## Smoke Test
 
-After the four local processes are running, this should produce an assistant
-answer:
+After `make dev` has all four processes up, this script should produce a
+streaming run:
 
 ```bash
-python3 - <<'PY'
-import json
-import urllib.request
+TOKEN=$(make dev-bearer)
+BASE=http://127.0.0.1:8200
 
-base = "http://127.0.0.1:8200"
+CONV=$(curl -sS -X POST $BASE/v1/agent/conversations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"title":"Local smoke"}' | jq -r .conversation_id)
 
-def request(method, path, body=None):
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        base + path,
-        data=data,
-        method=method,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-conversation = request("POST", "/v1/agent/conversations", {"title": "Local smoke"})
-run = request(
-    "POST",
-    "/v1/agent/runs",
-    {"conversation_id": conversation["conversation_id"], "user_input": "Hi"},
-)
-print(run["stream_url"])
-PY
+curl -sS -X POST $BASE/v1/agent/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"conversation_id\":\"$CONV\",\"user_input\":\"Hi\"}" | jq .stream_url
 ```
 
-You can also send `Hi` from the UI composer.
+You can also send `Hi` from the UI composer at <http://127.0.0.1:5173>.
 
 ## Streaming Runtime Events
 
@@ -319,7 +332,7 @@ OPENAI_API_KEY=... \
 make prod
 ```
 
-`make prod` does not enable `DEV_AUTH_BYPASS` and does not hardcode a JWT or
+`make prod` does not register the dev IdP routes and does not hardcode a JWT or
 service token. Deploy the built images with your production orchestrator and
 managed secret store. The backend production runtime still requires a persistent
 MCP registry store and managed token-vault adapter before it can serve production
@@ -333,6 +346,7 @@ Start there for architecture details:
 - `services/ai-backend/docs/README.md`
 - `docs/architecture/workspace-topology.md`
 - `docs/architecture/service-boundaries.md`
+- `docs/dev-testing.md` — curl, Postman, and the dev IdP for non-browser callers.
 
 ## Repo Rules
 

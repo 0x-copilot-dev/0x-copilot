@@ -24,6 +24,19 @@ Events arrive with a monotonic `sequence_no` per run. Reconnect with the highest
 
 Render assistant messages as Markdown via Streamdown. Other roles (user, system, tool) stay plain text unless a feature explicitly opts in.
 
+## Chat surface invariants
+
+Two regressions kept biting the chat surface; the rules below exist so they don't return. Both are pinned by tests — if you change the underlying code, update the tests in the same change rather than weakening the invariant.
+
+### Planning-pulse visibility
+
+- `<PlanningIndicator>` lives inside the `.aui-thread-viewport` flex column. That viewport must keep `min-height: 0` so `overflow-y: auto` can scroll past tall message lists, but `min-height: 0` also lets flex children shrink below their intrinsic size. The indicator must therefore opt out of flex compression with `flex: 0 0 auto`. Do not remove that rule from `.aui-planning-indicator` — the element will silently collapse to `height: 0` once the message list crosses a screen-height threshold, even though `data-visible="true"` and computed `max-height` are correct. The CSS comment in `apps/frontend/src/styles.css` explains the trap; keep it.
+- The state derivation is in `apps/frontend/src/features/chat/chatRunState.ts`. The pulse is intentionally on for **every active phase** (`starting`, `working`, `acting`, `writing`, `reasoning`) — only `terminal`, `idle`, and `waiting_for_permission` suppress it. Don't re-introduce phase-specific suppression (e.g. "no pulse during writing" or "no pulse while a tool is running"); on fast models the affected phases pass in <1s and the user perceives the run as dead. The corresponding tests in `chatRunState.test.ts` pin every active phase to `showPlanningIndicator: true`.
+
+### Composer hint row
+
+The `↵ send · ⇧+↵ new line · / skills · model · Sources cited inline` strip in `<AssistantComposer>` is **stateless info** — it must render whether or not a run is active. Do not gate the `hint` prop on `running` (or any other run-state flag). Hiding it during a run was a real shipped regression; the user is mid-flight, can't see their shortcuts, and the composer looks broken. If you add a new hint or change the strip, render it unconditionally and let the affordance itself reflect availability (e.g. disable a button, don't unmount the row).
+
 ## Validation
 
 ```bash

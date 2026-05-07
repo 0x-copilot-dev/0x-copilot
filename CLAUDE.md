@@ -68,6 +68,16 @@ npm run typecheck --workspace @enterprise-search/api-types
 
 Lint/format runs through pre-commit (ruff + ruff-format for Python, prettier for JS/TS/CSS/MD/YAML).
 
+Hitting the API from curl or Postman in dev:
+
+```bash
+export TOKEN=$(make dev-bearer)                       # default: sarah_acme
+export TOKEN=$(make dev-bearer PERSONA=marcus_admin)  # admin variant
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8200/v1/me/profile
+```
+
+`docs/dev-testing.md` has full recipes (conversations, runs, SSE streaming, MCP catalog/install, per-chat connector scope PATCH) and Postman setup. Always call the **facade** at `:8200` — never `:8100`/`:8000` directly, even in dev.
+
 ## Architecture
 
 **Service boundaries are hard.** No deployable component imports another's `src/`. Cross-component integration is HTTP, generated contracts (`packages/api-types`), or constants-only (`packages/service-contracts`). Never add a sibling service to `PYTHONPATH`, never reuse another service's `.venv`, never use relative imports across deployable boundaries.

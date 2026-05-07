@@ -1,13 +1,18 @@
 """Runtime API request, response, event, and command schemas."""
 
 from runtime_api.schemas.approvals import (
+    APPROVAL_MAX_PARAMS,
     ApprovalDecisionRecord,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalForwardTarget,
+    ApprovalParam,
     ApprovalRequestRecord,
+    ApprovalUndoResponse,
     AssignedApproval,
     AssignedApprovalsResponse,
+    McpApprovalMetadata,
+    UNDO_WINDOW_SECONDS,
 )
 from runtime_api.schemas.commands import (
     RuntimeApprovalResolvedCommand,
@@ -202,8 +207,13 @@ __all__ = [
     "ApprovalForwardTarget",
     "ApprovalRequestRecord",
     "ApprovalDecisionResponse",
+    "ApprovalParam",
+    "ApprovalUndoResponse",
+    "APPROVAL_MAX_PARAMS",
     "AssignedApproval",
     "AssignedApprovalsResponse",
+    "McpApprovalMetadata",
+    "UNDO_WINDOW_SECONDS",
     "ApiErrorResponse",
     "RuntimeRunCommand",
     "RuntimeCancelCommand",

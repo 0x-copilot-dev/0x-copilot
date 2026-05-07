@@ -44,6 +44,11 @@ p {
   --secondary: var(--color-surface-muted);
   --secondary-foreground: var(--color-text);
   --radius: var(--radius-md);
+  /* Single source of truth for chat surface content width (thread
+   * viewport, message bodies, footer, planning indicator, welcome
+   * card). Bump cautiously: too wide hurts readability of long
+   * paragraphs. */
+  --chat-content-width: 56rem;
 }
 
 .assistant-markdown {
@@ -1339,22 +1344,30 @@ p {
   gap: var(--space-xl);
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-xl) max(var(--space-xl), calc((100% - 48rem) / 2));
+  padding: var(--space-xl)
+    max(var(--space-xl), calc((100% - var(--chat-content-width)) / 2));
 }
 
 .aui-thread-footer {
   flex-shrink: 0;
   background: var(--color-bg);
-  padding: var(--space-sm) max(var(--space-xl), calc((100% - 48rem) / 2))
+  padding: var(--space-sm)
+    max(var(--space-xl), calc((100% - var(--chat-content-width)) / 2))
     var(--space-md);
 }
 
 .aui-planning-indicator {
   align-self: stretch;
   color: var(--color-text-muted);
+  /* The viewport is `display: flex; flex-direction: column;
+   * min-height: 0`, which lets flex children shrink below content
+   * size. Without `flex-shrink: 0` the indicator collapses to 0px
+   * once the message list is tall enough to push it out, even with
+   * data-visible="true". */
+  flex: 0 0 auto;
   margin: calc(-1 * var(--space-md)) 0 0;
   max-height: 1.75rem;
-  max-width: 48rem;
+  max-width: var(--chat-content-width);
   opacity: 1;
   overflow: hidden;
   transform: translateY(0);
@@ -1400,7 +1413,7 @@ p {
   flex-direction: column;
   gap: var(--space-lg);
   margin: 12vh auto 0;
-  max-width: 48rem;
+  max-width: var(--chat-content-width);
   padding: 0 var(--space-md);
   width: 100%;
 }
@@ -1495,14 +1508,15 @@ p {
 .aui-message {
   display: block;
   gap: var(--space-sm);
-  max-width: 48rem;
+  max-width: var(--chat-content-width);
   width: 100%;
 }
 
 .aui-message--user {
   justify-self: end;
   margin-left: auto;
-  max-width: min(38rem, 88%);
+  max-width: var(--chat-content-width);
+  width: 100%;
 }
 
 .aui-message--user .aui-message__body {
@@ -1516,7 +1530,8 @@ p {
   display: grid;
   gap: var(--space-sm);
   grid-template-columns: auto minmax(0, 1fr);
-  max-width: min(70ch, 48rem);
+  max-width: var(--chat-content-width);
+  width: 100%;
 }
 
 .aui-message--assistant .aui-message__body {
@@ -1803,7 +1818,7 @@ p {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   color: var(--color-text-muted);
-  max-width: 48rem;
+  max-width: var(--chat-content-width);
   padding: var(--space-md);
   white-space: pre-wrap;
 }
@@ -1890,7 +1905,7 @@ p {
   flex-direction: column;
   gap: 0.5rem;
   margin: var(--space-lg) auto 0;
-  max-width: 48rem;
+  max-width: var(--chat-content-width);
   box-sizing: border-box;
   height: var(--composer-shell-height);
   overflow: hidden;
@@ -3203,6 +3218,235 @@ p {
   padding: 0.45rem 0.7rem;
 }
 
+/* PR 4.4.6.1 — purpose-built consent card. Replaces ActivityCard for
+   the unresolved MCP approval surface. Four zones: head (icon, title,
+   reason, vendor pill), params frame, actions, reassurance footer. */
+.atlas-approval-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md);
+}
+
+.atlas-approval-card__head {
+  align-items: flex-start;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.atlas-approval-card__icon {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  display: inline-flex;
+  flex: none;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.atlas-approval-card__heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.atlas-approval-card__title {
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+}
+
+.atlas-approval-card__reason {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  margin: 0;
+}
+
+.atlas-approval-card__pill {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-soft, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  display: inline-flex;
+  flex: none;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  gap: 0.4rem;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.atlas-approval-card__pill-sep {
+  color: var(--color-text-muted);
+}
+
+/* Inset framed params table — overrides the pill rendering that
+   ActivityParams uses for tool-card variants. Renders one row per
+   param with the key on the left, value on the right. */
+.atlas-approval-card__params {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-soft, var(--color-border));
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.atlas-approval-card__params .aui-activity-card__params {
+  display: grid;
+  gap: 6px;
+}
+
+.atlas-approval-card__params .aui-activity-card__param {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: 8rem minmax(0, 1fr);
+  padding: 0;
+}
+
+.atlas-approval-card__params .aui-activity-card__param dt {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.atlas-approval-card__params .aui-activity-card__param dd {
+  color: var(--color-text);
+  white-space: normal;
+}
+
+.atlas-approval-card__result {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-soft, var(--color-border));
+  border-radius: var(--radius-sm);
+  max-height: 14rem;
+  overflow: auto;
+  padding: var(--space-sm) var(--space-md);
+}
+
+.atlas-approval-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.atlas-approval-card__foot {
+  align-items: center;
+  border-top: 1px solid var(--color-border-soft, var(--color-border));
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: var(--font-size-xs);
+  gap: var(--space-sm);
+  padding-top: var(--space-sm);
+}
+
+.atlas-approval-card__foot-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  flex: none;
+}
+
+/* PR 4.4.6.1 — collapsed scrollback record once the approval settles.
+   One line, harness-row vocabulary, click to audit details. */
+.atlas-approval-receipt {
+  align-items: center;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-soft, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-sm);
+  gap: 0.4rem;
+  padding: 0.45rem var(--space-sm);
+}
+
+.atlas-approval-receipt__glyph {
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+}
+
+.atlas-approval-receipt[data-kind="approved"] .atlas-approval-receipt__glyph,
+.atlas-approval-receipt[data-kind="chain-approved"]
+  .atlas-approval-receipt__glyph {
+  color: var(--color-success, var(--color-accent));
+}
+
+.atlas-approval-receipt[data-kind="rejected"] .atlas-approval-receipt__glyph,
+.atlas-approval-receipt[data-kind="chain-rejected"]
+  .atlas-approval-receipt__glyph {
+  color: var(--color-danger);
+}
+
+.atlas-approval-receipt[data-kind="forwarded"] .atlas-approval-receipt__glyph,
+.atlas-approval-receipt[data-kind="cancelled"] .atlas-approval-receipt__glyph {
+  color: var(--color-text-muted);
+}
+
+.atlas-approval-receipt__label {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+.atlas-approval-receipt__sep {
+  color: var(--color-text-muted);
+}
+
+.atlas-approval-receipt__title {
+  color: var(--color-text);
+}
+
+.atlas-approval-receipt__meta {
+  color: var(--color-text-muted);
+}
+
+/* PR 4.4.6.4 — active undo button on the receipt. Compact, ghost-style
+ * by default; hover lifts to filled. The countdown text inside the
+ * button stays inside the button so the click target is one cell. */
+.atlas-approval-receipt__undo {
+  background: transparent;
+  border: 1px solid var(--color-border-strong, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.2rem 0.55rem;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.atlas-approval-receipt__undo:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  border-color: var(--color-text-muted);
+}
+
+.atlas-approval-receipt__undo:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* PR 4.4.6.4 — passive "Undo requested" chip after successful POST.
+ * Carries a tooltip on the wrapper so the audit-only nature of the
+ * MVP doesn't surprise the user (Phase 4.1+ wires real compensators). */
+.atlas-approval-receipt__undo-requested {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 .aui-tool-card__input {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -3872,6 +4116,48 @@ p {
   flex-shrink: 0;
 }
 
+/* PR 4.4.6.1 — Re-authenticate / Remove buttons for the
+   "Needs attention" cards. Compact, secondary-style — the row is a
+   recovery affordance, not a primary CTA. */
+.connector-card__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-xs);
+}
+
+.connector-card__action {
+  background: transparent;
+  border: 1px solid var(--color-border-strong, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.4rem 0.75rem;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.connector-card__action:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  border-color: var(--color-text-muted);
+}
+
+.connector-card__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.connector-card__action--danger {
+  color: var(--color-danger);
+}
+
+.connector-card__action--danger:hover:not(:disabled) {
+  background: var(--color-bg-danger-subtle, var(--color-surface-muted));
+  border-color: var(--color-danger);
+}
+
 .mcp-cta {
   align-items: center;
   display: flex;
@@ -3905,8 +4191,8 @@ p {
   padding: var(--space-md);
 }
 
-.connector-manual-add[open] {
-  background: var(--color-surface-muted);
+.connector-manual-add[open] .connector-manual-add__summary {
+  margin-bottom: var(--space-md);
 }
 
 .connector-manual-add__summary {
@@ -5348,7 +5634,10 @@ p {
 
 .aui-fleet-card__rows {
   display: grid;
-  gap: var(--space-sm);
+  /* PR 4.4.7 — rows are now bordered containers; bump the gap so
+   * borders don't visually merge into one long block. */
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .aui-fleet-card__foot {
@@ -5363,6 +5652,19 @@ p {
 .aui-fleet-card__foot > span:first-child {
   flex: 1 1 auto;
   min-width: min(16rem, 100%);
+}
+
+/* PR 4.4.7 — footer text gets a small stack glyph prefix to hint at
+ * the fanout semantics. */
+.aui-fleet-card__foot-text {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.aui-fleet-card__foot-text > svg {
+  color: var(--color-text-muted);
+  flex: none;
 }
 
 .aui-fleet-card__link {
@@ -5659,34 +5961,33 @@ p {
   word-break: break-word;
 }
 
-/* PR 3.2.4 — compact subagent row inside the parallel-fleet card. */
+/* PR 3.2.4 — compact subagent row inside the parallel-fleet card.
+ * PR 4.4.7 — each row is now its own bordered container (matches the
+ * refined design) instead of relying on a thin top divider. The fleet
+ * card's ``__rows`` wrapper provides the gap between rows. */
 .subagent-fleet-row {
   align-items: center;
+  background: var(--color-surface-raised, var(--color-surface));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
   display: grid;
   /* PR 3.2.7 — extra `auto` slot between progress and elapsed reserves
    *  space for the optional paused chip; collapses to 0 width when the
    *  chip isn't rendered, so non-paused rows look identical to PR 3.2.4. */
   grid-template-columns: 16px minmax(0, 1fr) 96px auto 64px;
   gap: 12px;
-  padding: 8px 0;
-}
-
-.subagent-fleet-row + .subagent-fleet-row,
-.subagent-fleet-row__inline-timeline + .subagent-fleet-row {
-  border-top: 1px solid var(--color-border-subtle);
+  padding: 12px 14px;
 }
 
 .subagent-fleet-row--clickable {
   cursor: pointer;
-  border-radius: 6px;
-  margin: 0 -8px;
-  padding-left: 8px;
-  padding-right: 8px;
-  transition: background-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
 .subagent-fleet-row--clickable:hover,
 .subagent-fleet-row--clickable:focus-visible {
-  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong, var(--color-text-muted));
 }
 .subagent-fleet-row--clickable:focus-visible {
   outline: 2px solid var(--color-focus-ring, var(--color-accent-strong));
@@ -6329,20 +6630,25 @@ p {
 }
 
 .atlas-composer-connectors__count {
+  /* Tucked inside the 28x28 button rather than overhanging the
+   * top-right corner. The composer shell uses `overflow: hidden`
+   * (see `.aui-composer`) for its rounded card + scrollable input,
+   * so a negative-offset badge gets clipped at the top. Inside
+   * placement avoids the clip without weakening the shell's
+   * overflow rule. */
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  top: 1px;
+  right: 1px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 3px;
   border-radius: 999px;
   background: var(--color-accent);
   color: var(--color-bg);
-  font-size: var(--font-size-2xs);
+  font-size: 9px;
   font-weight: var(--font-weight-bold);
-  line-height: 16px;
+  line-height: 11px;
   text-align: center;
-  box-shadow: 0 0 0 2px var(--color-bg);
 }
 
 /* PR 3.4 — connector popover body. The host shell is design-system
@@ -6427,6 +6733,19 @@ p {
   background: var(--color-bg-elevated-strong, var(--color-bg-elevated));
   border: 1px solid var(--color-danger, #d97777);
   color: var(--color-danger, #d97777);
+  font-size: var(--font-size-2xs);
+}
+
+/* PR 4.4.6.1 — informational banner when a run is in progress.
+ * Toggles in the list are disabled (readOnly piggybacks); this notice
+ * tells the user *why* and when the lock lifts. */
+.atlas-connector-popover__notice {
+  margin: 0 var(--space-sm) var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-soft, var(--color-border));
+  color: var(--color-text-muted);
   font-size: var(--font-size-2xs);
 }
 

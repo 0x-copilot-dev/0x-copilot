@@ -151,6 +151,21 @@ class ConversationRecord(RuntimeContract):
             if scopes is not None
         }
 
+    def paused_connectors(self) -> frozenset[str]:
+        """Server_ids the user explicitly paused for this conversation.
+
+        Distinct from "absent" entries: a connector with ``null`` in
+        ``enabled_connectors`` was set to that value via the per-chat
+        popover and must be invisible to MCP loaders for the next run.
+        Connectors not present at all defer to workspace defaults.
+        """
+
+        return frozenset(
+            connector
+            for connector, scopes in self.enabled_connectors.items()
+            if scopes is None
+        )
+
     def to_response(self) -> "ConversationResponse":
         """Return the stable public conversation shape."""
 

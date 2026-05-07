@@ -52,8 +52,13 @@ export function deriveRunUiState({
   return {
     phase: eventPhase,
     headerStatus: headerStatusForPhase(eventPhase, event),
-    showPlanningIndicator:
-      eventPhase === "starting" || eventPhase === "working",
+    // Pulse runs for every active phase (starting/working/acting/
+    // writing/reasoning) — only terminal/idle/waiting_for_permission
+    // suppress it (those branches return above). Don't reintroduce
+    // phase-specific suppression: on fast models the affected phases
+    // pass in <1s and the run looks dead. Pinned in chatRunState.test.ts
+    // and apps/frontend/CLAUDE.md → "Planning-pulse visibility".
+    showPlanningIndicator: eventPhase !== "terminal",
     planningLabel,
   };
 }

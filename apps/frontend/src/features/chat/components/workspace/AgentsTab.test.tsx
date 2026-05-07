@@ -97,7 +97,8 @@ describe("AgentsTab disclosure", () => {
       />,
     );
     expect(screen.getByText("1 subagent dispatched")).toBeInTheDocument();
-    expect(screen.getByText("Doc Reader")).toBeInTheDocument();
+    // PR 4.4.7 — display_title drives the row name verbatim.
+    expect(screen.getByText("Doc reader")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByText("1 subagent dispatched"));
     expect(onJumpToSubagent).toHaveBeenCalledWith(
       expect.objectContaining({ task_id: "task_doc_reader" }),
@@ -208,9 +209,10 @@ describe("AgentsTab disclosure", () => {
     );
     const user = userEvent.setup();
     await user.click(
-      // PR 3.2.2 — `subagentCardFromEntry` runs the subagent_name through
-      // `formatAgentName`, so "doc_reader" → "Doc reader" in the aria-label.
-      screen.getByRole("button", { name: /Open Doc Reader in thread/ }),
+      // PR 4.4.7 — display_title now drives the name; the entry fixture
+      // sets it to "Doc reader" (sentence case), which flows verbatim
+      // into the aria-label.
+      screen.getByRole("button", { name: /Open Doc reader in thread/ }),
     );
     expect(onJumpToSubagent).toHaveBeenCalledOnce();
   });

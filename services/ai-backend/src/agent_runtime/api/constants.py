@@ -92,6 +92,8 @@ class Keys:
 
     class RouteName:
         APPROVAL_DECISION = "approval_decision"
+        # PR 4.4.6.4 — undo within the 60s reversibility window.
+        APPROVAL_UNDO = "approval_undo"
         CANCEL_RUN = "cancel_run"
         CREATE_CONVERSATION = "create_conversation"
         CREATE_RUN = "create_run"

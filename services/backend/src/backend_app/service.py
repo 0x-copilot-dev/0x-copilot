@@ -88,6 +88,7 @@ def _catalog_entry_response(entry: CatalogEntry) -> McpCatalogEntryResponse:
         default_scopes=entry.default_scopes,
         requires_pre_registered_client=entry.requires_pre_registered_client,
         verified=entry.verified,
+        discoverable=entry.discoverable,
     )
 
 
@@ -203,6 +204,19 @@ class McpRegistryService:
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
         display_name = request.display_name or self._display_name_from_url(request.url)
+        # Idempotent on (org_id, user_id, normalized URL). Without this
+        # the registry accumulates duplicate rows on every retry — and
+        # the agent runtime refuses to boot when two MCP servers share
+        # a stable name (see ai-backend mcp/registry.py:74,
+        # `DUPLICATE_SERVER_NAME`), locking the user out of chat. Match
+        # the catalog flow's idempotency contract.
+        existing = self._server_by_url(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            url=request.url,
+        )
+        if existing is not None:
+            return McpServerResponse.from_record(existing)
         record = McpServerRecord(
             org_id=request.org_id,
             user_id=request.user_id,
@@ -223,6 +237,19 @@ class McpRegistryService:
             self.store.create_server(record, conn=conn)
             self._audit(record, "mcp_server_created", conn=conn)
         return McpServerResponse.from_record(record)
+
+    def _server_by_url(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        url: str,
+    ) -> McpServerRecord | None:
+        normalized = url.strip().rstrip("/").lower()
+        for record in self.store.list_servers(org_id=org_id, user_id=user_id):
+            if record.url.strip().rstrip("/").lower() == normalized:
+                return record
+        return None
 
     def list_servers(self, *, org_id: str, user_id: str) -> McpServerListResponse:
         # PR 4.4.6 — no seeding. ``connectors.servers`` reflects exactly
@@ -247,6 +274,62 @@ class McpRegistryService:
         return McpCatalogResponse(
             entries=tuple(_catalog_entry_response(entry) for entry in DEFAULT_CATALOG)
         )
+
+    def list_suggestible_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        exclude_paused: tuple[str, ...] = (),
+        user_overrides: dict[str, bool] | None = None,
+    ) -> McpCatalogResponse:
+        """PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may
+        suggest at run-time.
+
+        Filtering rules (server-side, in order):
+
+        1. Drop slugs whose ``seed:<slug>`` already exists in the user's
+           installed servers (the user knows about that connector
+           already; suggesting it again would be noise).
+        2. Drop slugs that the conversation paused. ``exclude_paused``
+           accepts the conversation column's keys verbatim — both the
+           bare slug and the ``seed:<slug>`` form so callers don't need
+           to translate.
+        3. Drop entries with ``discoverable=False`` *unless* the user
+           override forces ``True``.
+        4. Drop entries the user explicitly muted (override ``False``).
+
+        Returns the same wire shape as ``list_catalog`` so the caller
+        (``ai-backend``) treats the response uniformly.
+        """
+
+        installed = {
+            record.server_id
+            for record in self.store.list_servers(org_id=org_id, user_id=user_id)
+        }
+        paused_set = set(exclude_paused)
+        # Normalize the exclude set so callers can pass either form.
+        for raw in tuple(paused_set):
+            if raw.startswith("seed:"):
+                paused_set.add(raw[len("seed:") :])
+            else:
+                paused_set.add(f"seed:{raw}")
+        overrides = user_overrides or {}
+
+        suggestions: list[McpCatalogEntryResponse] = []
+        for entry in DEFAULT_CATALOG:
+            if entry.server_id in installed:
+                continue
+            if entry.slug in paused_set or entry.server_id in paused_set:
+                continue
+            override = overrides.get(entry.slug)
+            if override is False:
+                continue
+            if override is None and not entry.discoverable:
+                continue
+            # override is True OR (override is None AND entry.discoverable)
+            suggestions.append(_catalog_entry_response(entry))
+        return McpCatalogResponse(entries=tuple(suggestions))
 
     def install_from_catalog(
         self, request: InstallMcpServerRequest

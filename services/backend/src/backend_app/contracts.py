@@ -597,6 +597,14 @@ class McpCatalogEntryResponse(BackendContract):
     # Frontend prompts for ``client_id`` / ``client_secret`` first.
     requires_pre_registered_client: bool = False
     verified: bool = True
+    # PR 4.4.7 (Phase 1) — workspace's progressive-discovery default
+    # for this entry. Phase 1 surfaces this in the catalog UI as a
+    # toggle and persists per-user state in the browser only; Phase 2
+    # adds a runtime "suggested connectors" surface. The field rides
+    # along now so app-side storage migrations land before the runtime
+    # consumes them. Default True — admins can flip a vendor here
+    # without touching runtime code.
+    discoverable: bool = True
 
 
 class McpCatalogResponse(BackendContract):

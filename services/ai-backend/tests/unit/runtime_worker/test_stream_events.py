@@ -296,8 +296,166 @@ def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
             "status": "pending",
             "allowed_decisions": ["approve", "reject"],
             "grant_options": ["allow_once"],
+            # PR 4.4.6.2 — structured consent-card payload spread alongside
+            # the flat fields. Read-only `list_tasks` → READ + first-use.
+            "vendor": "CLICKUP",
+            "category": "read",
+            "reason_code": "read_only_first_use",
+            "reversible": "n/a",
+            "params": [{"label": "Assignee", "value": "me", "hint": None}],
         },
     )
+
+
+def test_native_mcp_interrupt_payloads_write_emits_writes_out_of_workspace() -> None:
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
+        interrupt_id="interrupt_w",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "mcp_slack_com",
+                        "tool_name": "post_message",
+                        "arguments": {
+                            "channel": "#launch-aurora",
+                            "text": "Atlas wrote this — should not appear in params",
+                            "api_key": "sk-secret-123",
+                        },
+                    },
+                }
+            ],
+            "review_configs": [],
+        },
+    )
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload["vendor"] == "SLACK"
+    assert payload["category"] == "write"
+    assert payload["reason_code"] == "writes_out_of_workspace"
+    # PR 4.4.6.4 — Slack post_message opts into the 60s undo window.
+    assert payload["reversible"] == "yes"
+    # PR 4.4.6.3 — Slack recogniser owns this vendor; only `channel`
+    # projects (no thread_ts in args). `text` and `api_key` never appear.
+    assert payload["params"] == [
+        {"label": "Channel", "value": "#launch-aurora", "hint": None}
+    ]
+
+
+def test_native_mcp_interrupt_payloads_github_recogniser_composes_repo_and_pr() -> None:
+    # PR 4.4.6.3 — owner + repo + pull_number compose into a single
+    # ``Repo: acme/api · #42`` row instead of three split rows.
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
+        interrupt_id="interrupt_gh",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "mcp_github_com",
+                        "tool_name": "create_pull_review_comment",
+                        "arguments": {
+                            "owner": "acme",
+                            "repo": "api",
+                            "pull_number": 42,
+                        },
+                    },
+                }
+            ],
+            "review_configs": [],
+        },
+    )
+
+    payload = payloads[0]
+    assert payload["params"] == [
+        {"label": "Repo", "value": "acme/api · #42", "hint": None}
+    ]
+
+
+def test_native_mcp_interrupt_payloads_unknown_vendor_falls_back_to_generic() -> None:
+    # PR 4.4.6.3 — a custom-URL server has no recogniser; the worker
+    # falls through to the Phase-2 allow-list projector.
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
+        interrupt_id="interrupt_acme",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "mcp_acme_internal_com",
+                        "tool_name": "list_widgets",
+                        "arguments": {"team": "Core"},
+                    },
+                }
+            ],
+            "review_configs": [],
+        },
+    )
+
+    payload = payloads[0]
+    # Generic projector capitalises the key as-is.
+    assert payload["params"] == [{"label": "Team", "value": "Core", "hint": None}]
+
+
+def test_native_mcp_interrupt_payloads_param_count_capped_at_six() -> None:
+    # PR 4.4.6.3 — Linear has a recogniser now; use a no-recogniser
+    # vendor (clickup) to exercise the generic allow-list cap.
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
+        interrupt_id="interrupt_cap",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "mcp_clickup_com",
+                        "tool_name": "list_tasks",
+                        "arguments": {
+                            "team": "Core",
+                            "project": "Atlas",
+                            "assignee": "me",
+                            "label": "bug",
+                            "filter": "open",
+                            "query": "p0",
+                            "title": "ignored - over the cap",
+                        },
+                    },
+                }
+            ],
+            "review_configs": [],
+        },
+    )
+
+    payload = payloads[0]
+    assert len(payload["params"]) == 6
+    labels = [row["label"] for row in payload["params"]]
+    # Allow-list iteration is in key-tuple order; ``label`` is last so
+    # it falls past the 6-row cap and is dropped.
+    assert "Label" not in labels
+
+
+def test_native_mcp_interrupt_payloads_arguments_missing_keeps_empty_params() -> None:
+    payloads = StreamOrchestrator.native_tool_approval_payloads(
+        interrupt_id="interrupt_empty",
+        interrupt_value={
+            "action_requests": [
+                {
+                    "name": "call_mcp_tool",
+                    "args": {
+                        "server_name": "linear",
+                        "tool_name": "list_issues",
+                        "arguments": {"body": "ignored — not on allow-list"},
+                    },
+                }
+            ],
+            "review_configs": [],
+        },
+    )
+
+    payload = payloads[0]
+    assert payload["params"] == []
+    assert payload["category"] == "read"
+    assert payload["reason_code"] == "read_only_first_use"
 
 
 def test_native_ask_a_question_interrupt_projects_to_approval_requested() -> None:

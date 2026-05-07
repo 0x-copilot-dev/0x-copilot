@@ -58,6 +58,11 @@ export interface ConnectorPopoverProps {
    *  rows that are flagged ``admin_managed``; the row's button is
    *  disabled and a tooltip explains. */
   isAdmin?: boolean;
+  /** A run is in progress for this conversation. When true, toggles
+   *  are locked because connector scope is frozen at run-start; mid-flight
+   *  scope changes would leave the agent's plan stale. The popover surfaces
+   *  this with a notice so the user understands why their toggle is inert. */
+  runInProgress?: boolean;
 }
 
 const ROW_SELECTOR = '[data-row="true"]';
@@ -84,6 +89,7 @@ export function ConnectorPopover({
   error,
   readOnly,
   isAdmin = true,
+  runInProgress = false,
 }: ConnectorPopoverProps): ReactElement | null {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -176,7 +182,7 @@ export function ConnectorPopover({
             <Row
               key={row.server_id}
               row={row}
-              readOnly={readOnly}
+              readOnly={readOnly || runInProgress}
               isAdmin={isAdmin}
               onToggle={onToggle}
               onConnect={onConnect}
@@ -185,13 +191,23 @@ export function ConnectorPopover({
           ))
         )}
       </div>
+      {runInProgress ? (
+        <div
+          className="atlas-connector-popover__notice"
+          role="status"
+          aria-live="polite"
+        >
+          Run in progress — toggles unlock when this turn finishes.
+        </div>
+      ) : null}
       {error ? (
         <div className="atlas-connector-popover__error" role="alert">
           {error}
         </div>
       ) : null}
       <div className="atlas-connector-popover__foot">
-        Per-chat changes don&apos;t affect other conversations.
+        Applies to your next message. Runs in progress keep their original
+        scope.
       </div>
     </Menu>
   );

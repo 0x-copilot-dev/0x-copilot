@@ -1,13 +1,23 @@
-// Single connector row. Owns its own pending + error state so failed
-// per-row actions (skip auth, remove, authenticate) surface inline
-// instead of in a shared error slot, and double-clicks on Authenticate
-// don't fire two OAuth redirects.
+// Connected-tab row for the Manage MCP servers modal.
+//
+// PR 4.4.7 — visual parity with the Catalog tab. Same `.mcp-card`
+// shell, same square `AppIcon`, single horizontal row with
+// `[icon] [name + Connected pill + scope summary] [toggle] [Re-auth |
+// Remove]`. The previous layout used a verbose vertical card with an
+// oversized danger button; that didn't match the Catalog cards
+// alongside it and made the Connected tab look like a different
+// product surface.
+//
+// Owns its own pending + error state so failed per-row actions
+// (re-auth, remove, toggle) surface inline rather than in a shared
+// slot, and double-clicks on Re-authenticate don't fire two OAuth
+// redirects.
 
-import { Badge, Button, Card, Switch } from "@enterprise-search/design-system";
+import { AppIcon, Badge, Switch } from "@enterprise-search/design-system";
 import type { McpServer } from "@enterprise-search/api-types";
 import { type ReactElement, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { authStateDisplay, isAuthenticated } from "./authStateDisplay";
+import { isAuthenticated } from "./authStateDisplay";
 import type { ConnectorState } from "./useConnectors";
 
 interface ConnectorRowProps {
@@ -15,7 +25,7 @@ interface ConnectorRowProps {
   connectors: ConnectorState;
 }
 
-type Pending = null | "toggle" | "auth" | "skip" | "remove";
+type Pending = null | "toggle" | "auth" | "remove";
 
 export function ConnectorRow({
   server,
@@ -23,11 +33,15 @@ export function ConnectorRow({
 }: ConnectorRowProps): ReactElement {
   const [pending, setPending] = useState<Pending>(null);
   const [rowError, setRowError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<null | "skip" | "remove">(null);
-
-  const display = authStateDisplay(server.auth_state);
+  const [confirm, setConfirm] = useState<null | "remove">(null);
   const authed = isAuthenticated(server.auth_state);
   const busy = pending !== null;
+
+  // The Connected tab only renders authenticated servers (parent
+  // `<ConnectedTab>` filters), so subtitle is the scope summary the
+  // catalog supplied. Fall back to the URL only if the catalog row
+  // didn't carry a summary (legacy installs).
+  const subtitle = server.scopes_summary ?? server.description ?? server.url;
 
   async function run(
     kind: Exclude<Pending, null>,
@@ -48,20 +62,37 @@ export function ConnectorRow({
   }
 
   return (
-    <Card className="connector-settings-row">
-      <div className="connector-settings-row__main">
-        <div className="connector-settings-row__title">
-          <h3>{server.display_name}</h3>
-          <p>{server.url}</p>
+    <article
+      className="mcp-card"
+      data-status={authed ? "connected" : "needs-auth"}
+      aria-label={`${server.display_name} connected card`}
+    >
+      <AppIcon
+        name={server.name}
+        logoUrl={server.logo_url ?? null}
+        size="lg"
+        className="mcp-card__icon"
+      />
+      <div className="mcp-card__main">
+        <div className="mcp-card__title-row">
+          <h4 className="mcp-card__title">{server.display_name}</h4>
+          <Badge tone="success" className="mcp-card__pill">
+            Connected
+          </Badge>
+          {!server.enabled ? (
+            <span className="mcp-card__setup-note" title="Disabled by you">
+              · Disabled
+            </span>
+          ) : null}
         </div>
-        <Badge tone={display.tone}>{display.label}</Badge>
+        <p className="mcp-card__desc">{subtitle}</p>
+        {rowError ? (
+          <p className="app-error mcp-card__error">{rowError}</p>
+        ) : null}
       </div>
-
-      <p className="connector-settings-row__hint">{display.hint}</p>
-
-      <div className="connector-settings-row__controls">
+      <div className="mcp-card__actions">
         <Switch
-          label={server.enabled ? "Enabled" : "Disabled"}
+          label=""
           checked={server.enabled}
           disabled={busy}
           onChange={(event) =>
@@ -69,86 +100,32 @@ export function ConnectorRow({
               connectors.setEnabled(server.server_id, event.target.checked),
             )
           }
+          aria-label={`${server.enabled ? "Disable" : "Enable"} ${
+            server.display_name
+          }`}
         />
-
-        {/* OAuth servers: show Authenticate / Re-authenticate. Hide for
-            servers that don't need OAuth (auth_unsupported). */}
         {server.auth_mode !== "none" &&
         server.auth_state !== "auth_unsupported" ? (
-          <Button
+          <button
             type="button"
-            variant={authed ? "ghost" : "secondary"}
+            className="mcp-card__link"
             disabled={busy}
-            aria-label={
-              authed
-                ? `Re-authenticate ${server.display_name}`
-                : `Authenticate ${server.display_name}`
-            }
             onClick={() =>
               void run("auth", () => connectors.authenticate(server.server_id))
             }
           >
-            {pending === "auth"
-              ? "Starting..."
-              : authed
-                ? "Re-authenticate"
-                : "Authenticate"}
-          </Button>
+            {pending === "auth" ? "Starting…" : "Re-auth"}
+          </button>
         ) : null}
-
-        {/* Skip auth: only meaningful when not yet signed in AND the
-            server doesn't actually require OAuth. PR 4.4.6 — for an
-            ``auth_mode === "oauth2"`` row the agent will fail every
-            tool call without a token, so skipping auth is a foot-gun.
-            Hide it. The user can either complete OAuth or remove the
-            row entirely. */}
-        {!authed && server.auth_mode !== "oauth2" ? (
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            aria-label={`Skip authentication for ${server.display_name}`}
-            onClick={() => setConfirm("skip")}
-          >
-            Skip auth
-          </Button>
-        ) : null}
-
-        <Button
+        <button
           type="button"
-          variant="danger"
+          className="mcp-card__link mcp-card__link--danger"
           disabled={busy}
-          aria-label={`Remove ${server.display_name}`}
           onClick={() => setConfirm("remove")}
         >
           Remove
-        </Button>
+        </button>
       </div>
-
-      {rowError ? (
-        <p className="app-error connector-settings-row__error">{rowError}</p>
-      ) : null}
-
-      <ConfirmDialog
-        open={confirm === "skip"}
-        onClose={() => setConfirm(null)}
-        onConfirm={() =>
-          run("skip", () => connectors.skipAuth(server.server_id))
-        }
-        title={`Skip auth for ${server.display_name}?`}
-        description={
-          <>
-            <p>
-              The agent will call this connector <strong>without OAuth</strong>.
-              Only do this if the server doesn&apos;t require auth, or you
-              already trust the network path.
-            </p>
-            <p>You can authenticate later from this page.</p>
-          </>
-        }
-        confirmLabel="Skip auth"
-        destructive
-      />
 
       <ConfirmDialog
         open={confirm === "remove"}
@@ -169,6 +146,6 @@ export function ConnectorRow({
         confirmLabel="Remove connector"
         destructive
       />
-    </Card>
+    </article>
   );
 }

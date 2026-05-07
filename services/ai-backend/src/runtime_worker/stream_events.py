@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
+
+from pydantic import ValidationError
 
 from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
@@ -13,10 +16,23 @@ from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
 )
+from runtime_api.schemas.approvals import (
+    APPROVAL_MAX_PARAMS,
+    ApprovalParam,
+    McpApprovalMetadata,
+)
+from runtime_api.schemas.common import (
+    ApprovalCategory,
+    ApprovalReasonCode,
+    ApprovalReversible,
+)
+from runtime_worker.approval_recognisers import ApprovalParamRecogniserRegistry
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
 from runtime_worker.stream_subagents import StreamUpdateProcessor
 from runtime_worker.stream_tools import StreamMessageProcessor
+
+_logger = logging.getLogger(__name__)
 
 
 class _Fields:
@@ -608,6 +624,15 @@ class StreamOrchestrator:
                 interrupt_id if len(action_requests) == 1 else f"{interrupt_id}:{index}"
             )
             allowed_decisions = review_configs.get(action_name, ())
+            risk_level = "low" if read_only else "medium"
+            structured = cls._mcp_approval_structured(
+                server_name=server_name,
+                display_name=display_name,
+                tool_name=tool_name,
+                read_only=read_only,
+                risk_level=risk_level,
+                arguments=arguments if isinstance(arguments, Mapping) else {},
+            )
             approvals.append(
                 {
                     "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
@@ -624,10 +649,16 @@ class StreamOrchestrator:
                     _Fields.ARGUMENTS: arguments if isinstance(arguments, dict) else {},
                     "message": f"Allow {display_name} {action_label}?",
                     _Fields.READ_ONLY: read_only,
-                    _Fields.RISK_LEVEL: "low" if read_only else "medium",
+                    _Fields.RISK_LEVEL: risk_level,
                     Keys.Field.STATUS: "pending",
                     _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
                     _Fields.GRANT_OPTIONS: ["allow_once"],
+                    # PR 4.4.6.2 — structured consent-card payload. Spreads
+                    # vendor / category / reason_code / reversible / params
+                    # into the same dict so the FE reads them off the
+                    # event's args bag without a nested unwrap. Validation
+                    # failures fall through with the flat fields only.
+                    **structured,
                 }
             )
         return tuple(approvals)
@@ -686,6 +717,162 @@ class StreamOrchestrator:
         ):
             return False
         return True
+
+    # PR 4.4.6.2 — consent-card structured payload. The FE reads the spread
+    # fields off the approval event's args bag; if validation fails we drop
+    # the structured payload, log a warning, and ship the approval with the
+    # flat fields only (the FE has a synthesiser fallback).
+
+    # Allow-list of argument keys whose values are safe to project into
+    # the consent card's params frame. Body / text / secrets / freeform
+    # description fields are excluded by omission — never block-listed.
+    _APPROVAL_PARAM_KEYS: tuple[str, ...] = (
+        "channel",
+        "to",
+        "recipient",
+        "team",
+        "project",
+        "repo",
+        "ref",
+        "branch",
+        "issue",
+        "page_id",
+        "database_id",
+        "subject",
+        "title",
+        "id",
+        "name",
+        "query",
+        "filter",
+        "assignee",
+        "label",
+    )
+    _APPROVAL_PARAM_VALUE_MAX = 128
+    _APPROVAL_VENDOR_MAX = 32
+    _APPROVAL_IRREVERSIBLE_TOKENS: tuple[str, ...] = (
+        "delete",
+        "remove",
+        "drop",
+    )
+
+    @classmethod
+    def _mcp_approval_structured(
+        cls,
+        *,
+        server_name: str,
+        display_name: str,
+        tool_name: str,
+        read_only: bool,
+        risk_level: str,
+        arguments: Mapping[str, object],
+    ) -> dict[str, object]:
+        # PR 4.4.6.3 — vendor-specific recogniser fronts the generic
+        # allow-list projector. None → no vendor matched, fall through
+        # to the Phase-2 path so unknown vendors stay byte-identical.
+        recognised = ApprovalParamRecogniserRegistry.recognise(
+            server_name=server_name, arguments=arguments
+        )
+        params = (
+            recognised if recognised is not None else cls._approval_params(arguments)
+        )
+        try:
+            metadata = McpApprovalMetadata(
+                vendor=cls._approval_vendor(display_name),
+                category=cls._approval_category(read_only),
+                reason_code=cls._approval_reason_code(read_only, risk_level),
+                reversible=cls._approval_reversible(
+                    read_only, tool_name, server_name=server_name
+                ),
+                params=params,
+            )
+        except ValidationError as exc:
+            _logger.warning(
+                "mcp approval metadata validation failed; falling back to flat fields",
+                extra={"tool_name": tool_name, "display_name": display_name},
+                exc_info=exc,
+            )
+            return {}
+        return metadata.model_dump(mode="json")
+
+    @classmethod
+    def _approval_vendor(cls, display_name: str) -> str:
+        token = display_name.upper()[: cls._APPROVAL_VENDOR_MAX]
+        return token or "CONNECTOR"
+
+    @classmethod
+    def _approval_category(cls, read_only: bool) -> ApprovalCategory:
+        return ApprovalCategory.READ if read_only else ApprovalCategory.WRITE
+
+    @classmethod
+    def _approval_reason_code(
+        cls, read_only: bool, risk_level: str
+    ) -> ApprovalReasonCode:
+        if risk_level in {"high", "critical"}:
+            return ApprovalReasonCode.RISK_HIGH
+        if read_only:
+            return ApprovalReasonCode.READ_ONLY_FIRST_USE
+        return ApprovalReasonCode.WRITES_OUT_OF_WORKSPACE
+
+    @classmethod
+    def _approval_reversible(
+        cls,
+        read_only: bool,
+        tool_name: str,
+        server_name: str = "",
+    ) -> ApprovalReversible:
+        if read_only:
+            return ApprovalReversible.NOT_APPLICABLE
+        # PR 4.4.6.4 — recognisers can opt their vendor's writes into the
+        # 60s undo window. Default stays NO to avoid promising undo for
+        # tools without a compensator.
+        opinion = ApprovalParamRecogniserRegistry.reversibility_for(
+            server_name=server_name, tool_name=tool_name, read_only=read_only
+        )
+        if opinion is not None:
+            return opinion
+        return ApprovalReversible.NO
+
+    @classmethod
+    def _approval_params(
+        cls, arguments: Mapping[str, object]
+    ) -> tuple[ApprovalParam, ...]:
+        params: list[ApprovalParam] = []
+        for key in cls._APPROVAL_PARAM_KEYS:
+            if key not in arguments:
+                continue
+            value = cls._approval_param_value(arguments[key])
+            if value is None:
+                continue
+            params.append(
+                ApprovalParam(label=cls._approval_param_label(key), value=value)
+            )
+            if len(params) >= APPROVAL_MAX_PARAMS:
+                break
+        return tuple(params)
+
+    @classmethod
+    def _approval_param_value(cls, raw: object) -> str | None:
+        if isinstance(raw, bool):
+            return "Yes" if raw else "No"
+        if isinstance(raw, (int, float)):
+            return str(raw)
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if not stripped:
+                return None
+            return stripped[: cls._APPROVAL_PARAM_VALUE_MAX]
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+            return f"<list of {len(raw)} items>"
+        if isinstance(raw, Mapping):
+            return f"<object with {len(raw)} keys>"
+        return None
+
+    @staticmethod
+    def _approval_param_label(key: str) -> str:
+        words = [word for word in key.replace("-", "_").split("_") if word]
+        if not words:
+            return key
+        return " ".join(word[:1].upper() + word[1:] for word in words)
 
     @classmethod
     def _review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:

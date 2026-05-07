@@ -1,0 +1,207 @@
+// PR 4.4.7 Phase 2 (Slice A) — backend-backed catalog discoverable
+// override.
+//
+// Phase 1 stored this in ``localStorage`` per device. Slice A migrates
+// the hook to read/write the same logical preference via the user's
+// ``UserPreferences.discoverable_connectors.overrides`` map so the
+// toggle survives across browsers and is available to the runtime in
+// Slice B.
+//
+// Migration path on first call within a session:
+//   1. Fetch the user's preferences once (shared across all hook
+//      instances via a module-level promise).
+//   2. If ``localStorage`` has overrides not present in the backend,
+//      PATCH them and clear the local entries.
+//   3. Subsequent reads come from the in-memory cache + the backend
+//      response; writes go through ``updateMyPreferences`` and update
+//      the cache optimistically.
+//
+// The hook keeps Phase 1's surface verbatim — ``(enabled, overridden,
+// setEnabled)`` — so the catalog cards do not need to change.
+//
+// We deliberately do NOT switch to localStorage when the backend call
+// fails: a fresh user may have no row yet, in which case the GET
+// returns ``overrides: {}`` and the hook reports the catalog default.
+// Network failures degrade to "no override" (catalog default) and the
+// next setEnabled retries the PATCH; that is the same end-state as
+// localStorage was, just without the cross-device persistence.
+
+import { useCallback, useEffect, useState } from "react";
+import { getMyPreferences, updateMyPreferences } from "../../api/meApi";
+
+const LEGACY_PREFIX = "enterprise.discoverable.";
+
+type Overrides = Record<string, boolean>;
+
+interface SharedState {
+  overrides: Overrides;
+  /** Listeners notified on every write so multiple cards stay in sync. */
+  listeners: Set<(next: Overrides) => void>;
+}
+
+const SHARED: SharedState = {
+  overrides: {},
+  listeners: new Set(),
+};
+
+let bootstrapPromise: Promise<void> | null = null;
+
+function readLegacyLocalOverrides(): Overrides {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  const out: Overrides = {};
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key === null || !key.startsWith(LEGACY_PREFIX)) continue;
+      const slug = key.slice(LEGACY_PREFIX.length);
+      const raw = window.localStorage.getItem(key);
+      if (raw === "on") out[slug] = true;
+      else if (raw === "off") out[slug] = false;
+    }
+  } catch {
+    // Privacy mode / quota errors — return what we have.
+  }
+  return out;
+}
+
+function clearLegacyLocalOverrides(slugs: readonly string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    for (const slug of slugs) {
+      window.localStorage.removeItem(LEGACY_PREFIX + slug);
+    }
+  } catch {
+    /* see read */
+  }
+}
+
+async function bootstrap(): Promise<void> {
+  try {
+    const prefs = await getMyPreferences();
+    SHARED.overrides = { ...prefs.discoverable_connectors.overrides };
+
+    // One-time migration: any legacy localStorage entries not present
+    // in the backend are PATCHed across, then deleted. The merge is
+    // intentionally backend-wins so a deliberate later flip on a
+    // different device is not overwritten by stale local state.
+    const legacy = readLegacyLocalOverrides();
+    const toMigrate: Overrides = {};
+    for (const [slug, value] of Object.entries(legacy)) {
+      if (!(slug in SHARED.overrides)) {
+        toMigrate[slug] = value;
+      }
+    }
+    if (Object.keys(toMigrate).length > 0) {
+      const updated = await updateMyPreferences({
+        discoverable_connectors: { overrides: toMigrate },
+      });
+      SHARED.overrides = { ...updated.discoverable_connectors.overrides };
+    }
+    clearLegacyLocalOverrides(Object.keys(legacy));
+  } catch {
+    // Bootstrap failure leaves SHARED.overrides empty — the hook will
+    // report catalog defaults until the next setEnabled retries. No
+    // fallback to localStorage by design (avoids two sources of
+    // truth diverging silently).
+    SHARED.overrides = {};
+  }
+}
+
+function ensureBootstrapped(): Promise<void> {
+  if (bootstrapPromise === null) {
+    bootstrapPromise = bootstrap();
+  }
+  return bootstrapPromise;
+}
+
+function publish(next: Overrides): void {
+  SHARED.overrides = next;
+  for (const listener of SHARED.listeners) {
+    listener(next);
+  }
+}
+
+async function persist(slug: string, enabled: boolean): Promise<void> {
+  // Optimistic local update; the backend PATCH echoes the merged
+  // shape and we replace the cache from the response so two
+  // concurrent flips on different slugs both land cleanly.
+  const optimistic = { ...SHARED.overrides, [slug]: enabled };
+  publish(optimistic);
+  try {
+    const updated = await updateMyPreferences({
+      discoverable_connectors: { overrides: { [slug]: enabled } },
+    });
+    publish({ ...updated.discoverable_connectors.overrides });
+  } catch {
+    // Network failure — revert by re-fetching via bootstrap. Cheap and
+    // keeps the UI honest about server state.
+    bootstrapPromise = null;
+    void ensureBootstrapped();
+  }
+}
+
+export interface DiscoverablePref {
+  /** Effective state — user override (if any), else the catalog default. */
+  enabled: boolean;
+  /** Has the user explicitly set this slug? Drives "Default · …" hint copy. */
+  overridden: boolean;
+  setEnabled: (next: boolean) => void;
+}
+
+/**
+ * Reads the user's override for one catalog entry's discoverable flag,
+ * falling back to the entry's catalog default when no override exists.
+ *
+ * Slice A wires the same surface to the user's backend preferences
+ * blob so toggles survive across browsers. The hook bootstraps once
+ * per session via ``getMyPreferences`` and migrates any leftover
+ * Phase 1 ``localStorage`` entries on the way.
+ */
+export function useDiscoverablePref(
+  slug: string,
+  catalogDefault: boolean,
+): DiscoverablePref {
+  const [override, setOverride] = useState<boolean | undefined>(() =>
+    slug in SHARED.overrides ? SHARED.overrides[slug] : undefined,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const onChange = (next: Overrides): void => {
+      if (cancelled) return;
+      setOverride(slug in next ? next[slug] : undefined);
+    };
+    SHARED.listeners.add(onChange);
+    void ensureBootstrapped().then(() => {
+      if (!cancelled) onChange(SHARED.overrides);
+    });
+    return () => {
+      cancelled = true;
+      SHARED.listeners.delete(onChange);
+    };
+  }, [slug]);
+
+  const setEnabled = useCallback(
+    (next: boolean) => {
+      void persist(slug, next);
+    },
+    [slug],
+  );
+
+  return {
+    enabled: override ?? catalogDefault,
+    overridden: override !== undefined,
+    setEnabled,
+  };
+}
+
+// PR 4.4.7 Phase 2 (Slice A) — testing seam. Lets unit tests reset
+// the module-level cache + bootstrap promise so they don't bleed
+// state across cases. Production code never calls this.
+export function _resetDiscoverablePrefForTests(): void {
+  SHARED.overrides = {};
+  SHARED.listeners.clear();
+  bootstrapPromise = null;
+}

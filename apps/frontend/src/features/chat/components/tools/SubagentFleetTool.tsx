@@ -70,6 +70,11 @@ export function SubagentFleetTool(
     props.onJumpToApproval ??
     fleetContext.onJumpToApproval ??
     scrollChatToEvent;
+  // PR 4.4.7 — fleet card now exposes a "View in workspace →" link in
+  // its footer. The handler comes from the chat-level provider so it
+  // can call ``paneState.openOn("agents")``; falls back to undefined
+  // when no provider is wired (the link simply isn't rendered).
+  const onOpenWorkspace = fleetContext.onOpenWorkspace;
   const data = asRecord(props.args);
   const fleetId = stringValue(data.fleet_id);
   if (fleetId === null) {
@@ -145,6 +150,7 @@ export function SubagentFleetTool(
       running={running}
       done={done}
       elapsed={elapsed}
+      onOpenWorkspace={onOpenWorkspace}
     >
       {rows}
     </SubagentFleetCard>
