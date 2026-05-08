@@ -1,17 +1,17 @@
 """Unit tests for ``CitationResolver`` and ``ConversationOrdinalAllocator``.
 
-PR 1.1-rev2 — model-declared citation pointers.
+PR 04 — citations binding map.
 
 These tests pin the resolver's tokenization, idempotency, dedupe, and
 sealed-ordinal contract, plus the allocator's monotonic / mapping
-guarantees. They are intentionally small and use only the public seams
-(``observe_delta`` / ``allocate_for_tool_call`` / ``sealed_ordinals``)
-so the internal buffering strategy can evolve without churning tests.
+guarantees and idempotency on retried tool_call_ids. They use only the
+public seams (``observe_delta`` / ``allocate_for_tool_call`` /
+``sealed_ordinals``) so the internal buffering strategy can evolve
+without churning tests.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,9 +20,12 @@ import pytest
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
-    ConversationOrdinalSeeder,
 )
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.persistence.ports import ConversationOrdinalConflict
+from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
+    InMemoryConversationToolOrdinalStore,
+)
 from runtime_api.schemas import RuntimeApiEventType
 
 
@@ -32,9 +35,10 @@ class _Values:
     CONVERSATION_ID = "conv_x"
     MESSAGE_A = "msg_a"
     MESSAGE_B = "msg_b"
-    TOOL_CALL_PRIOR = "call_one"
-    TOOL_CALL_PRIOR2 = "call_two"
-    TOOL_CALL_NEW = "call_three"
+    TOOL_CALL_ONE = "call_one"
+    TOOL_CALL_TWO = "call_two"
+    TOOL_CALL_THREE = "call_three"
+    TOOL_NAME = "web_search"
 
 
 @dataclass(frozen=True)
@@ -73,16 +77,28 @@ class _RecordingProducer:
         )
 
 
+def _build_allocator(
+    *,
+    starting_ordinal: int = 0,
+    mapping: dict[int, str] | None = None,
+    store: InMemoryConversationToolOrdinalStore | None = None,
+) -> ConversationOrdinalAllocator:
+    return ConversationOrdinalAllocator(
+        org_id=_Values.ORG_ID,
+        conversation_id=_Values.CONVERSATION_ID,
+        run_id=_Values.RUN_ID,
+        store=store,
+        starting_ordinal=starting_ordinal,
+        ordinal_to_tool_call_id=mapping or {},
+    )
+
+
 def _build_resolver(
     *,
     starting_ordinal: int = 0,
     mapping: dict[int, str] | None = None,
 ) -> tuple[CitationResolver, _RecordingProducer, ConversationOrdinalAllocator]:
-    allocator = ConversationOrdinalAllocator(
-        conversation_id=_Values.CONVERSATION_ID,
-        starting_ordinal=starting_ordinal,
-        ordinal_to_tool_call_id=mapping or {},
-    )
+    allocator = _build_allocator(starting_ordinal=starting_ordinal, mapping=mapping)
     producer = _RecordingProducer()
     resolver = CitationResolver(
         run=_StubRun(run_id=_Values.RUN_ID),
@@ -93,42 +109,55 @@ def _build_resolver(
     return resolver, producer, allocator
 
 
-class TestConversationOrdinalAllocator:
-    def test_allocate_is_monotonic_from_seed(self) -> None:
-        allocator = ConversationOrdinalAllocator(
-            conversation_id=_Values.CONVERSATION_ID,
-            starting_ordinal=4,
+class TestConversationOrdinalAllocatorMemoryOnly:
+    """Allocator behaviour when no store is bound (replay / unit-test path)."""
+
+    @pytest.mark.asyncio
+    async def test_allocate_for_tool_call_is_monotonic(self) -> None:
+        allocator = _build_allocator(starting_ordinal=4)
+        first = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
         )
-        assert allocator.allocate() == 5
-        assert allocator.allocate() == 6
+        second = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_TWO, tool_name=_Values.TOOL_NAME
+        )
+        assert first == 5
+        assert second == 6
         assert allocator.last_allocated == 6
 
-    def test_allocate_for_tool_call_records_mapping(self) -> None:
-        allocator = ConversationOrdinalAllocator(
-            conversation_id=_Values.CONVERSATION_ID,
-            starting_ordinal=0,
-            ordinal_to_tool_call_id={1: _Values.TOOL_CALL_PRIOR},
+    @pytest.mark.asyncio
+    async def test_idempotent_on_same_tool_call_id(self) -> None:
+        # Regression pin: a retried allocate for the same tool_call_id
+        # (LangGraph re-dispatch on resume) collapses to the existing
+        # ordinal — no second allocation, no counter bump.
+        allocator = _build_allocator()
+        first = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
         )
-        new_ordinal = allocator.allocate_for_tool_call(
-            tool_call_id=_Values.TOOL_CALL_NEW
+        second = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
         )
-        assert new_ordinal == 1  # collision with seed; last allocated overwrites
-        # Seed mapping was {1: prior}; allocate_for_tool_call(1) overwrites to new.
-        assert allocator.tool_call_id_for(1) == _Values.TOOL_CALL_NEW
+        assert first == second == 1
+        assert allocator.last_allocated == 1
 
-    def test_allocate_for_tool_call_rejects_empty_id(self) -> None:
-        allocator = ConversationOrdinalAllocator(
-            conversation_id=_Values.CONVERSATION_ID,
-            starting_ordinal=0,
-        )
+    @pytest.mark.asyncio
+    async def test_rejects_empty_tool_call_id(self) -> None:
+        allocator = _build_allocator()
         with pytest.raises(ValueError):
-            allocator.allocate_for_tool_call(tool_call_id="")
+            await allocator.allocate_for_tool_call(
+                tool_call_id="", tool_name=_Values.TOOL_NAME
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_tool_name(self) -> None:
+        allocator = _build_allocator()
+        with pytest.raises(ValueError):
+            await allocator.allocate_for_tool_call(
+                tool_call_id=_Values.TOOL_CALL_ONE, tool_name=""
+            )
 
     def test_bind_unbind_round_trip(self) -> None:
-        allocator = ConversationOrdinalAllocator(
-            conversation_id=_Values.CONVERSATION_ID,
-            starting_ordinal=0,
-        )
+        allocator = _build_allocator()
         assert ConversationOrdinalAllocator.active() is None
         token = ConversationOrdinalAllocator.bind_for_run(allocator)
         assert ConversationOrdinalAllocator.active() is allocator
@@ -137,21 +166,140 @@ class TestConversationOrdinalAllocator:
 
     def test_negative_seed_rejected(self) -> None:
         with pytest.raises(ValueError):
-            ConversationOrdinalAllocator(
-                conversation_id=_Values.CONVERSATION_ID,
-                starting_ordinal=-1,
-            )
+            _build_allocator(starting_ordinal=-1)
 
-    def test_has_ordinal(self) -> None:
-        allocator = ConversationOrdinalAllocator(
-            conversation_id=_Values.CONVERSATION_ID,
-            starting_ordinal=2,
-        )
+    def test_has_ordinal_reflects_seed(self) -> None:
+        allocator = _build_allocator(starting_ordinal=2)
         assert allocator.has_ordinal(1)
         assert allocator.has_ordinal(2)
         assert not allocator.has_ordinal(3)
-        allocator.allocate()
-        assert allocator.has_ordinal(3)
+
+    def test_tool_call_id_for_unknown_returns_none(self) -> None:
+        allocator = _build_allocator(
+            starting_ordinal=2,
+            mapping={1: _Values.TOOL_CALL_ONE, 2: _Values.TOOL_CALL_TWO},
+        )
+        assert allocator.tool_call_id_for(1) == _Values.TOOL_CALL_ONE
+        assert allocator.tool_call_id_for(99) is None
+
+
+class TestConversationOrdinalAllocatorWithStore:
+    """Allocator behaviour against the InMemory binding store (write-through path)."""
+
+    @pytest.mark.asyncio
+    async def test_writes_through_to_store(self) -> None:
+        store = InMemoryConversationToolOrdinalStore()
+        allocator = _build_allocator(store=store)
+        ordinal = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
+        )
+        rows = await store.load(
+            org_id=_Values.ORG_ID, conversation_id=_Values.CONVERSATION_ID
+        )
+        assert ordinal == 1
+        assert len(rows) == 1
+        assert rows[0].tool_call_id == _Values.TOOL_CALL_ONE
+        assert rows[0].run_id == _Values.RUN_ID
+
+    @pytest.mark.asyncio
+    async def test_idempotent_retry_does_not_duplicate_row(self) -> None:
+        store = InMemoryConversationToolOrdinalStore()
+        allocator = _build_allocator(store=store)
+        first = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
+        )
+        second = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_ONE, tool_name=_Values.TOOL_NAME
+        )
+        rows = await store.load(
+            org_id=_Values.ORG_ID, conversation_id=_Values.CONVERSATION_ID
+        )
+        assert first == second
+        assert len(rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_for_conversation_restores_from_store(self) -> None:
+        # Pre-populate the store with two bindings; for_conversation
+        # should restore counter=2 and the canonical mapping so a
+        # subsequent allocate returns 3.
+        store = InMemoryConversationToolOrdinalStore()
+        await store.record(
+            org_id=_Values.ORG_ID,
+            conversation_id=_Values.CONVERSATION_ID,
+            conversation_ordinal=1,
+            tool_call_id=_Values.TOOL_CALL_ONE,
+            tool_name=_Values.TOOL_NAME,
+            run_id="run_prior",
+        )
+        await store.record(
+            org_id=_Values.ORG_ID,
+            conversation_id=_Values.CONVERSATION_ID,
+            conversation_ordinal=2,
+            tool_call_id=_Values.TOOL_CALL_TWO,
+            tool_name=_Values.TOOL_NAME,
+            run_id="run_prior",
+        )
+        allocator = await ConversationOrdinalAllocator.for_conversation(
+            org_id=_Values.ORG_ID,
+            conversation_id=_Values.CONVERSATION_ID,
+            run_id=_Values.RUN_ID,
+            store=store,
+        )
+        assert allocator.last_allocated == 2
+        assert allocator.tool_call_id_for(1) == _Values.TOOL_CALL_ONE
+        assert allocator.tool_call_id_for(2) == _Values.TOOL_CALL_TWO
+        next_ordinal = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_THREE, tool_name=_Values.TOOL_NAME
+        )
+        assert next_ordinal == 3
+
+    @pytest.mark.asyncio
+    async def test_reload_after_conflict_returns_canonical_ordinal(self) -> None:
+        # Simulate a concurrent allocator: one allocator wrote (3,
+        # call_three) for the conversation while we held an in-memory
+        # counter of 0. Our next allocate for "call_three" must observe
+        # the conflict, reload, and return the canonical ordinal 3
+        # instead of inserting a duplicate.
+        store = InMemoryConversationToolOrdinalStore()
+        await store.record(
+            org_id=_Values.ORG_ID,
+            conversation_id=_Values.CONVERSATION_ID,
+            conversation_ordinal=3,
+            tool_call_id=_Values.TOOL_CALL_THREE,
+            tool_name=_Values.TOOL_NAME,
+            run_id="run_winner",
+        )
+        # Build allocator after the winning write; counter starts at 0
+        # locally because we haven't reloaded yet.
+        allocator = _build_allocator(store=store)
+        ordinal = await allocator.allocate_for_tool_call(
+            tool_call_id=_Values.TOOL_CALL_THREE, tool_name=_Values.TOOL_NAME
+        )
+        assert ordinal == 3
+        assert allocator.tool_call_id_for(3) == _Values.TOOL_CALL_THREE
+
+    @pytest.mark.asyncio
+    async def test_conflict_signature_is_typed(self) -> None:
+        # Sanity: the ConversationOrdinalConflict type the allocator
+        # catches is the same type our adapter raises.
+        store = InMemoryConversationToolOrdinalStore()
+        await store.record(
+            org_id=_Values.ORG_ID,
+            conversation_id=_Values.CONVERSATION_ID,
+            conversation_ordinal=1,
+            tool_call_id=_Values.TOOL_CALL_ONE,
+            tool_name=_Values.TOOL_NAME,
+            run_id=_Values.RUN_ID,
+        )
+        with pytest.raises(ConversationOrdinalConflict):
+            await store.record(
+                org_id=_Values.ORG_ID,
+                conversation_id=_Values.CONVERSATION_ID,
+                conversation_ordinal=2,
+                tool_call_id=_Values.TOOL_CALL_ONE,
+                tool_name=_Values.TOOL_NAME,
+                run_id=_Values.RUN_ID,
+            )
 
 
 class TestCitationResolverTokenization:
@@ -159,12 +307,12 @@ class TestCitationResolverTokenization:
     async def test_emits_one_event_per_complete_token(self) -> None:
         resolver, producer, _ = _build_resolver(
             starting_ordinal=2,
-            mapping={1: _Values.TOOL_CALL_PRIOR, 2: _Values.TOOL_CALL_PRIOR2},
+            mapping={1: _Values.TOOL_CALL_ONE, 2: _Values.TOOL_CALL_TWO},
         )
         await resolver.observe_delta(
-            message_id=_Values.MESSAGE_A,
-            delta_text="See [[1]] and also [[2]] later.",
+            message_id=_Values.MESSAGE_A, delta_text="See [[1]] and "
         )
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[2]].")
         ordinals = [
             event["payload"]["link"]["conversation_ordinal"]
             for event in producer.events
@@ -172,67 +320,58 @@ class TestCitationResolverTokenization:
         assert ordinals == [1, 2]
 
     @pytest.mark.asyncio
-    async def test_partial_token_split_across_deltas(self) -> None:
+    async def test_partial_tokens_do_not_emit_until_complete(self) -> None:
         resolver, producer, _ = _build_resolver(
-            starting_ordinal=3,
-            mapping={3: _Values.TOOL_CALL_NEW},
+            starting_ordinal=1, mapping={1: _Values.TOOL_CALL_ONE}
         )
-        # Deliver ``[[3]]`` in three pieces; the resolver should not
-        # emit until the closing ``]]`` arrives.
-        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="Per [[")
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[1")
         assert producer.events == []
-        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="3")
-        assert producer.events == []
-        await resolver.observe_delta(
-            message_id=_Values.MESSAGE_A, delta_text="]] launch."
-        )
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="]]")
         assert len(producer.events) == 1
-        link = producer.events[0]["payload"]["link"]
-        assert link["conversation_ordinal"] == 3
-        # ``Per `` is 4 chars; the marker starts at offset 4.
-        assert link["prose_offset"] == 4
-        assert link["prose_length"] == len("[[3]]")
 
     @pytest.mark.asyncio
-    async def test_re_delivered_delta_is_idempotent(self) -> None:
+    async def test_redelivered_delta_does_not_double_emit(self) -> None:
         resolver, producer, _ = _build_resolver(
-            starting_ordinal=1,
-            mapping={1: _Values.TOOL_CALL_PRIOR},
+            starting_ordinal=1, mapping={1: _Values.TOOL_CALL_ONE}
         )
         await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[1]]")
-        # The exact same delta text is observed again — a re-deliver
-        # on stream resume must not duplicate the event.
-        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="")
-        assert len(producer.events) == 1
-
-    @pytest.mark.asyncio
-    async def test_same_ordinal_at_two_offsets_emits_twice(self) -> None:
-        resolver, producer, _ = _build_resolver(
-            starting_ordinal=1,
-            mapping={1: _Values.TOOL_CALL_PRIOR},
-        )
-        await resolver.observe_delta(
-            message_id=_Values.MESSAGE_A,
-            delta_text="[[1]] vs [[1]] mid prose.",
-        )
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[1]]")
+        # Buffer accumulates the second delta; the regex re-finds the
+        # first match but the (offset, ordinal) idempotency key blocks it.
+        # The second [[1]] *at a new offset* should still emit.
+        assert len(producer.events) == 2
         offsets = [
             event["payload"]["link"]["prose_offset"] for event in producer.events
         ]
-        assert len(producer.events) == 2
-        assert offsets == [0, 9]
+        assert offsets == [0, 5]
 
     @pytest.mark.asyncio
-    async def test_unknown_ordinal_emits_with_empty_tool_call_id(self) -> None:
-        resolver, producer, _ = _build_resolver(starting_ordinal=0)
-        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[42]]")
+    async def test_stamps_source_tool_call_id_when_bound(self) -> None:
+        resolver, producer, _ = _build_resolver(
+            starting_ordinal=1, mapping={1: _Values.TOOL_CALL_ONE}
+        )
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[1]]")
+        assert producer.events[0]["payload"]["link"]["source_tool_call_id"] == (
+            _Values.TOOL_CALL_ONE
+        )
+
+    @pytest.mark.asyncio
+    async def test_unbound_ordinal_emits_event_with_empty_call_id(self) -> None:
+        # Hallucinated ordinal — model wrote [[99]] but no allocation
+        # was ever recorded. Resolver still emits (so the FE can render
+        # the muted ``?``); source_tool_call_id is the empty string.
+        resolver, producer, _ = _build_resolver(starting_ordinal=1)
+        await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[99]]")
         assert len(producer.events) == 1
-        assert producer.events[0]["payload"]["link"]["source_tool_call_id"] == ""
+        link = producer.events[0]["payload"]["link"]
+        assert link["conversation_ordinal"] == 99
+        assert link["source_tool_call_id"] == ""
 
     @pytest.mark.asyncio
     async def test_separate_messages_track_independently(self) -> None:
         resolver, producer, _ = _build_resolver(
             starting_ordinal=2,
-            mapping={1: _Values.TOOL_CALL_PRIOR, 2: _Values.TOOL_CALL_PRIOR2},
+            mapping={1: _Values.TOOL_CALL_ONE, 2: _Values.TOOL_CALL_TWO},
         )
         await resolver.observe_delta(message_id=_Values.MESSAGE_A, delta_text="[[1]]")
         await resolver.observe_delta(message_id=_Values.MESSAGE_B, delta_text="[[2]]")
@@ -253,63 +392,3 @@ class TestCitationResolverTokenization:
         )
         # Ordinal 2 first; 1 second; second [[2]] does not re-add.
         assert resolver.sealed_ordinals() == [2, 1]
-
-
-class TestConversationOrdinalSeeder:
-    @pytest.mark.asyncio
-    async def test_seed_counts_prior_tool_starts(self) -> None:
-        # Stub event store: returns events for two prior runs of the
-        # conversation, each with a TOOL_CALL_STARTED event carrying
-        # a call_id payload.
-        @dataclass(frozen=True)
-        class _StubEvent:
-            event_type: RuntimeApiEventType
-            conversation_id: str
-            payload: dict[str, Any]
-
-        prior_events_run_1: Sequence[Any] = (
-            _StubEvent(
-                event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-                conversation_id=_Values.CONVERSATION_ID,
-                payload={"call_id": _Values.TOOL_CALL_PRIOR},
-            ),
-        )
-        prior_events_run_2: Sequence[Any] = (
-            _StubEvent(
-                event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-                conversation_id=_Values.CONVERSATION_ID,
-                payload={"call_id": _Values.TOOL_CALL_PRIOR2},
-            ),
-            _StubEvent(
-                event_type=RuntimeApiEventType.TOOL_RESULT,
-                conversation_id=_Values.CONVERSATION_ID,
-                payload={"call_id": _Values.TOOL_CALL_PRIOR2},
-            ),
-            # Cross-conversation event must be filtered out.
-            _StubEvent(
-                event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-                conversation_id="other_conv",
-                payload={"call_id": "ignored"},
-            ),
-        )
-
-        class _StubEventStore:
-            async def list_events_after(
-                self, *, org_id: str, run_id: str, after_sequence: int
-            ) -> Sequence[Any]:
-                return {
-                    "run_a": prior_events_run_1,
-                    "run_b": prior_events_run_2,
-                }[run_id]
-
-        seed = await ConversationOrdinalSeeder.seed_from_event_log(
-            org_id=_Values.ORG_ID,
-            conversation_id=_Values.CONVERSATION_ID,
-            prior_run_ids=("run_a", "run_b"),
-            event_store=_StubEventStore(),
-        )
-        assert seed.starting_ordinal == 2
-        assert seed.ordinal_to_tool_call_id == {
-            1: _Values.TOOL_CALL_PRIOR,
-            2: _Values.TOOL_CALL_PRIOR2,
-        }

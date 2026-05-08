@@ -398,10 +398,16 @@ export function ChatScreen({
   }, [identity, loadHistoryItems]);
 
   useEffect(() => {
+    // Depend on both `connectors.servers` AND `items`: history loads
+    // asynchronously, often *after* `connectors.servers` settles, so a
+    // single connectors-only-deps pass misses pre-existing
+    // `mcp_auth_required` cards already in scrollback.
+    // `resolveAuthenticatedMcpServers` is reference-stable when
+    // nothing resolves, so this is loop-safe.
     setItems((current) =>
       resolveAuthenticatedMcpServers(current, connectors.servers),
     );
-  }, [connectors.servers]);
+  }, [connectors.servers, items]);
 
   // PR 3.2 — seed the Sources tab snapshot on conversation switch. The
   // live source_ingested event reducer overlays subsequent events. We

@@ -155,16 +155,36 @@ class CitationResolver:
                 self._seen_ordinals_set.add(ordinal)
                 self._seen_ordinals.append(ordinal)
             tool_call_id = self._allocator.tool_call_id_for(ordinal) or ""
-            _LOGGER.info(
-                "[citations] resolver.match run=%s msg=%s ordinal=%d offset=%d "
-                "tool_call_id='%s' (allocator_last=%d)",
-                self._run.run_id,
-                message_id,
-                ordinal,
-                prose_offset,
-                tool_call_id,
-                self._allocator.last_allocated,
-            )
+            if tool_call_id:
+                _LOGGER.info(
+                    "[citations] resolver.match run=%s msg=%s ordinal=%d "
+                    "offset=%d tool_call_id='%s' (allocator_last=%d)",
+                    self._run.run_id,
+                    message_id,
+                    ordinal,
+                    prose_offset,
+                    tool_call_id,
+                    self._allocator.last_allocated,
+                )
+            else:
+                # PR 04 — every cited ordinal *should* resolve to a
+                # bound tool_call_id from the persistent allocator.
+                # Empty here means either (a) the model hallucinated
+                # ``[[N]]`` for an ordinal that was never allocated, or
+                # (b) a tool path slipped through Phase 1's plumbing
+                # without binding its tool_call_id. Both surface as the
+                # FE's ``?`` placeholder; the metric is the alarm that
+                # tells us when (b) recurs.
+                _LOGGER.warning(
+                    "[citations] resolver.unbound_ordinal run=%s msg=%s "
+                    "ordinal=%d offset=%d (allocator_last=%d) — chip will "
+                    "render as `?`",
+                    self._run.run_id,
+                    message_id,
+                    ordinal,
+                    prose_offset,
+                    self._allocator.last_allocated,
+                )
             await self._producer.append_api_event(
                 run=self._run,
                 source=self._source,

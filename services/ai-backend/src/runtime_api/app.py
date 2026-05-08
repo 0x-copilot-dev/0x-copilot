@@ -529,6 +529,9 @@ class RuntimeApiAppFactory:
             lock_seconds=settings.execution.worker_lock_seconds,
             on_event_appended=event_bus.notify_sync if event_bus else None,
             draft_store=getattr(ports, "draft_store", None),
+            conversation_tool_ordinal_store=getattr(
+                ports, "conversation_tool_ordinal_store", None
+            ),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(

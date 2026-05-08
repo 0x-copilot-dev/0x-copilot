@@ -22,7 +22,6 @@ from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.citations import CitationLedger
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
-    ConversationOrdinalSeeder,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
@@ -37,7 +36,11 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.observability.usage_attribution import UsageAttributionResolver
-from agent_runtime.persistence.ports import CitationStorePort, DraftStorePort
+from agent_runtime.persistence.ports import (
+    CitationStorePort,
+    ConversationToolOrdinalStorePort,
+    DraftStorePort,
+)
 from runtime_adapters.async_wrappers import (
     adapt_event_store_to_async,
     adapt_persistence_to_async,
@@ -131,6 +134,9 @@ class RuntimeRunHandler:
         on_event_appended: Callable[[str], None] | None = None,
         citation_store: CitationStorePort | None = None,
         draft_store: DraftStorePort | None = None,
+        conversation_tool_ordinal_store: (
+            ConversationToolOrdinalStorePort | None
+        ) = None,
     ) -> None:
         self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
         self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
@@ -151,6 +157,14 @@ class RuntimeRunHandler:
         # ``StateBackend`` default and become non-persistent in-state files
         # for that run only. This is the legacy / unconfigured fallback.
         self.draft_store = draft_store
+        # PR 04 — persistent (conversation_ordinal ↔ tool_call_id)
+        # binding store. Phase 3 makes the allocator write through to
+        # this on every ``allocate_for_tool_call`` and read it back on
+        # bind so resumes / cross-turn citation resolve to the canonical
+        # binding rather than re-deriving ordinals positionally. Until
+        # Phase 3 lands the store is held but unused — wiring it now
+        # keeps the constructor surface stable across the migration.
+        self.conversation_tool_ordinal_store = conversation_tool_ordinal_store
         self.event_producer = RuntimeEventProducer(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -1318,33 +1332,40 @@ class RuntimeRunHandler:
         command: RuntimeRunCommand,
         run: RunRecord,
     ) -> ConversationOrdinalAllocator:
-        """Build the per-conversation ordinal allocator seeded from the event log.
+        """Build the per-conversation ordinal allocator from the binding store.
 
-        The seed equals the count of ``TOOL_CALL_STARTED`` events already
-        persisted on the active branch's prior runs, so the new run's
-        first allocation is strictly greater than any ordinal that has
-        already been embedded into a tool result message in this
-        conversation. This is the property that makes ``[[N]]`` markers
-        stable across turns.
+        PR 04 — replaces the prior positional-event-counting seeder.
+        :meth:`ConversationOrdinalAllocator.for_conversation` reads every
+        binding for ``conversation_id`` from
+        ``agent_conversation_tool_ordinals`` (migration 0026), seeds the
+        in-memory counter to ``max(conversation_ordinal)``, and the
+        allocator writes through to the same table on every fresh
+        ``allocate_for_tool_call``. Ordinals stay strictly monotonic
+        across runs and across approval resumes, with no event-counting.
+
+        When the worker was constructed without a binding store
+        (replay / eval / specific unit tests), fall back to a memory-only
+        allocator. Citations degrade to absent for that run rather than
+        crashing the dispatch path.
         """
 
-        records = await self.persistence.list_messages(
+        if self.conversation_tool_ordinal_store is None:
+            logging.getLogger(__name__).info(
+                "[citations] run.allocator_no_store conv=%s run=%s — "
+                "memory-only allocator (replay/eval fallback)",
+                command.conversation_id,
+                run.run_id,
+            )
+            return ConversationOrdinalAllocator(
+                org_id=command.org_id,
+                conversation_id=command.conversation_id,
+                run_id=run.run_id,
+            )
+        return await ConversationOrdinalAllocator.for_conversation(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
-            limit=200,
-        )
-        selected = self._selected_message_chain(records, run.user_message_id)
-        prior_run_ids = ToolObservationIndexBuilder._prior_run_ids(selected, run.run_id)
-        seed = await ConversationOrdinalSeeder.seed_from_event_log(
-            org_id=command.org_id,
-            conversation_id=command.conversation_id,
-            prior_run_ids=prior_run_ids,
-            event_store=self.event_store,
-        )
-        return ConversationOrdinalAllocator(
-            conversation_id=command.conversation_id,
-            starting_ordinal=seed.starting_ordinal,
-            ordinal_to_tool_call_id=seed.ordinal_to_tool_call_id,
+            run_id=run.run_id,
+            store=self.conversation_tool_ordinal_store,
         )
 
     def _bind_citation_resolver(

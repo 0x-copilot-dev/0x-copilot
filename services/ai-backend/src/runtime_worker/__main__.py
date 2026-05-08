@@ -57,6 +57,9 @@ class RuntimeWorkerEntrypoint:
                     settings=settings,
                     lock_seconds=settings.execution.worker_lock_seconds,
                     draft_store=async_ports.draft_store,
+                    conversation_tool_ordinal_store=(
+                        async_ports.conversation_tool_ordinal_store
+                    ),
                 )
                 logger.info(
                     "worker_started",
@@ -138,6 +141,7 @@ class RuntimeWorkerEntrypoint:
             settings=settings,
             lock_seconds=settings.execution.worker_lock_seconds,
             draft_store=ports.draft_store,
+            conversation_tool_ordinal_store=ports.conversation_tool_ordinal_store,
         )
         logger.info(
             "worker_started",

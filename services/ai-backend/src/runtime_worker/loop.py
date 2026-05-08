@@ -31,8 +31,15 @@ from runtime_api.schemas import (
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
-from agent_runtime.persistence.ports import CitationStorePort, DraftStorePort
+from agent_runtime.persistence.ports import (
+    CitationStorePort,
+    ConversationToolOrdinalStorePort,
+    DraftStorePort,
+)
 from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
+from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
+    InMemoryConversationToolOrdinalStore,
+)
 from runtime_worker.handlers.run import RuntimeRunHandler
 
 
@@ -54,6 +61,9 @@ class RuntimeWorker:
         approval_handler: RuntimeApprovalHandler | None = None,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: "DraftStorePort | None" = None,
+        conversation_tool_ordinal_store: (
+            "ConversationToolOrdinalStorePort | None"
+        ) = None,
     ) -> None:
         # Worker is fully async on the inside. Sync ports get wrapped
         # via to_thread; async ports pass through unchanged.
@@ -73,6 +83,16 @@ class RuntimeWorker:
             if isinstance(self.persistence, CitationStorePort)
             else InMemoryCitationStore()
         )
+        # PR 04 — persistent (conversation_ordinal ↔ tool_call_id)
+        # binding store for the model-declared citation system.
+        # Defaults to a fresh InMemory adapter when the worker is
+        # constructed without one — sufficient for in-process dev and
+        # unit tests; production wiring (e.g. ``RuntimeApiAppFactory``)
+        # injects a Postgres adapter sharing the runtime_api_store
+        # connection pool.
+        self.conversation_tool_ordinal_store: ConversationToolOrdinalStorePort = (
+            conversation_tool_ordinal_store or InMemoryConversationToolOrdinalStore()
+        )
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -80,6 +100,7 @@ class RuntimeWorker:
             on_event_appended=on_event_appended,
             citation_store=citation_store,
             draft_store=draft_store,
+            conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -91,6 +112,7 @@ class RuntimeWorker:
             settings=self.settings,
             on_event_appended=on_event_appended,
             draft_store=draft_store,
+            conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

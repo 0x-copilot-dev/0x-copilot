@@ -199,11 +199,23 @@ class CitationCapturingTool(BaseTool):
                     "(citations disabled or replay path)",
                     self.name,
                 )
+            elif not tool_call_id:
+                # PR 04 — every tool that can be cited must have a real
+                # ``tool_call_id``. The schema-augmentation path in
+                # :meth:`CitationCapturingRegistry._wrap` guarantees one
+                # for tools that go through LangChain dispatch; the only
+                # surviving path here is unit tests of the inner tool in
+                # isolation (no LangChain), where citations are
+                # irrelevant. Surface the gap rather than allocate
+                # without a binding.
+                _LOGGER.warning(
+                    "[citations] tool.hint_skipped tool=%s "
+                    "reason=no_tool_call_id_injected (test/replay path)",
+                    self.name,
+                )
             else:
-                ordinal = (
-                    allocator.allocate_for_tool_call(tool_call_id=tool_call_id)
-                    if tool_call_id
-                    else allocator.allocate()
+                ordinal = await allocator.allocate_for_tool_call(
+                    tool_call_id=tool_call_id, tool_name=self.name
                 )
                 result = _CitationHint.append_to(
                     result, ordinal=ordinal, tool_name=self.name
@@ -213,7 +225,7 @@ class CitationCapturingTool(BaseTool):
                     "call_id='%s' result_type=%s",
                     self.name,
                     ordinal,
-                    tool_call_id or "",
+                    tool_call_id,
                     type(result).__name__,
                 )
         except Exception:  # noqa: BLE001 - best-effort, never break the tool path

@@ -173,8 +173,9 @@ class CallMcpTool:
                 qualified_tool_name = (
                     f"{parsed_input.server_name}.{parsed_input.tool_name}"
                 )
-                ordinal = allocator.allocate_for_tool_call(
-                    tool_call_id=parsed_input.tool_call_id
+                ordinal = await allocator.allocate_for_tool_call(
+                    tool_call_id=parsed_input.tool_call_id,
+                    tool_name=qualified_tool_name,
                 )
                 hinted = _CitationHint.append_to(
                     output,

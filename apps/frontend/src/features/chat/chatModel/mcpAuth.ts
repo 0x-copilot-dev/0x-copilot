@@ -26,7 +26,13 @@ export function resolveAuthenticatedMcpServers(
   if (authenticated.length === 0) {
     return items;
   }
-  return items.map((item) => {
+  // Reference-stable: when nothing resolves, return the original
+  // `items` ref so callers (the ChatScreen effect) can safely include
+  // `items` in their deps without an infinite render loop. Without
+  // this, `items.map(...)` always allocates a new array even when
+  // every entry is the same ref, which fails React's `Object.is` bail.
+  let anyChanged = false;
+  const next = items.map((item) => {
     if (item.kind !== "message") {
       return item;
     }
@@ -48,12 +54,14 @@ export function resolveAuthenticatedMcpServers(
     if (!changed) {
       return item;
     }
+    anyChanged = true;
     const status =
       item.status?.type === "requires-action" && !hasPendingAction(content)
         ? ({ type: "running" } satisfies AssistantMessageStatus)
         : item.status;
     return { ...item, content, status };
   });
+  return anyChanged ? next : items;
 }
 
 export function removeRedundantMcpAuthWrappers(

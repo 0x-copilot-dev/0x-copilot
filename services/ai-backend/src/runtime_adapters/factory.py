@@ -12,15 +12,25 @@ from agent_runtime.api.async_ports import (
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.persistence.ports import DraftStorePort, ShareStorePort
+from agent_runtime.persistence.ports import (
+    ConversationToolOrdinalStorePort,
+    DraftStorePort,
+    ShareStorePort,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import (
     AsyncInMemoryRuntimeApiStore,
     InMemoryRuntimeApiStore,
 )
+from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
+    InMemoryConversationToolOrdinalStore,
+)
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.in_memory.share_store import InMemoryShareStore
 from runtime_adapters.postgres import PostgresRuntimeApiStore
+from runtime_adapters.postgres.conversation_tool_ordinal_store import (
+    PostgresConversationToolOrdinalStore,
+)
 from runtime_adapters.postgres.draft_store import PostgresDraftStore
 from runtime_adapters.postgres.share_store import PostgresShareStore
 
@@ -40,6 +50,11 @@ class RuntimePorts:
     # backs both the recipient view (ShareService) and PR 6.2's fork
     # service (via ``ShareSnapshotPort.resolve_by_token`` on ShareService).
     share_store: ShareStorePort | None = None
+    # PR 04 — persistent (conversation_ordinal ↔ tool_call_id) binding
+    # store. Backs the model-declared citation system; reads at run /
+    # approval-resume bind, writes on every allocate. Optional so call
+    # sites that build ports manually keep compiling.
+    conversation_tool_ordinal_store: ConversationToolOrdinalStorePort | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +74,8 @@ class AsyncRuntimePorts:
     draft_store: DraftStorePort | None = None
     # PR 6.1 — conversation share store (see RuntimePorts.share_store).
     share_store: ShareStorePort | None = None
+    # PR 04 — see RuntimePorts.conversation_tool_ordinal_store.
+    conversation_tool_ordinal_store: ConversationToolOrdinalStorePort | None = None
 
 
 class RuntimeAdapterFactory:
@@ -85,6 +102,7 @@ class RuntimeAdapterFactory:
                 backend=backend,
                 draft_store=InMemoryDraftStore(),
                 share_store=InMemoryShareStore(),
+                conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
             )
         if backend == "postgres":
             raise AgentRuntimeError(
@@ -133,6 +151,7 @@ class RuntimeAdapterFactory:
                 store=store,
                 draft_store=InMemoryDraftStore(),
                 share_store=InMemoryShareStore(),
+                conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -150,6 +169,9 @@ class RuntimeAdapterFactory:
                 store=store,
                 draft_store=PostgresDraftStore(store),
                 share_store=PostgresShareStore(store),
+                conversation_tool_ordinal_store=PostgresConversationToolOrdinalStore(
+                    store
+                ),
             )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,

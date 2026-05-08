@@ -1,27 +1,44 @@
 """Conversation-scoped tool invocation ordinal allocator.
 
-PR 1.1-rev2 — citations as model-declared, conversation-scoped pointers.
+PR 04 — citations binding map.
 
 Each tool invocation in a conversation is assigned a monotonic
-``conversation_ordinal`` at dispatch time. The ordinal is used by:
+``conversation_ordinal`` at dispatch time. The ordinal is a stable,
+durable pointer used by:
 
 - the per-tool result-hinting wrappers that prepend
   ``[Tool call #N — cite as [[N]] when referencing this result.]``
   to the result text the model reads, so the model can declare which
   tool grounded any factual claim with a stable pointer;
-- the ``CitationResolver`` that watches streamed assistant text for
-  ``[[N]]`` markers and resolves them against the tool invocation log;
-- the ``ToolObservationIndexBuilder`` that surfaces prior turns' tool
+- the :class:`agent_runtime.capabilities.citation_resolver.CitationResolver`
+  that watches streamed assistant text for ``[[N]]`` markers and stamps
+  ``source_tool_call_id`` on each emitted ``citation_made`` event;
+- the cross-turn observation builder that surfaces prior turns' tool
   calls into the model's context, so cross-turn citation continues to
-  resolve.
+  resolve to the same ``tool_call_id`` it referred to in the originating
+  turn.
 
-The allocator is bound per run via ``ContextVar`` (mirroring
-:class:`agent_runtime.capabilities.citations.CitationLedger`). At run
-start, the ``ConversationOrdinalSeeder`` computes the starting ordinal
-by counting ``TOOL_CALL_STARTED`` events persisted by prior runs in the
-conversation's active branch — so a brand-new tool call in turn T gets
-an ordinal strictly greater than any previously emitted in this thread.
+The allocator is a write-through cache over a persistent
+``(conversation_ordinal ↔ tool_call_id)`` binding table
+(:class:`agent_runtime.persistence.ports.ConversationToolOrdinalStorePort`,
+backed by ``agent_conversation_tool_ordinals`` from migration 0026).
+This replaces the prior positional-event-counting seeder, whose count
+could disagree with the live counter when the MCP middleware allocated
+inside a tool body or when approval interrupts caused repeated rebinds.
+With persistence:
 
+* Every allocation writes one row to the store. The PRIMARY KEY +
+  UNIQUE constraint guarantee one ordinal per ``tool_call_id`` per
+  conversation. Retries (LangGraph re-dispatch on resume) collapse
+  to the existing row.
+* Approval resumes reload the allocator from the store; in-memory
+  state survives the pause without recomputation.
+* Cross-turn citations look up the same canonical mapping the cross-turn
+  observation builder reads from.
+
+The allocator is bound per run via ``ContextVar`` so tools and middleware
+reach it without threading the runtime context through every signature
+(mirrors :class:`agent_runtime.capabilities.citations.CitationLedger`).
 When no allocator is bound (replay, eval harnesses, unit tests of inner
 tools), :meth:`ConversationOrdinalAllocator.active` returns ``None`` and
 the wrappers degrade to a no-op append. Citations are best-effort
@@ -31,14 +48,13 @@ decoration, never required for tool correctness.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only imports
-    from agent_runtime.api.ports import EventStorePort
-    from runtime_api.schemas import RuntimeEventEnvelope
+    from agent_runtime.persistence.ports import (
+        ConversationToolOrdinalStorePort,
+    )
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,38 +63,51 @@ _LOGGER = logging.getLogger(__name__)
 class ConversationOrdinalAllocator:
     """Per-conversation monotonic ordinal allocator for tool invocations.
 
-    The allocator owns the in-memory counter for the active run. Its
-    starting value is supplied by :class:`ConversationOrdinalSeeder` at
-    bind time so the ordinal sequence continues from the prior runs of
-    the same conversation/branch — making the chip a stable pointer
-    across turns.
+    Owns the in-memory counter for the active run, plus the
+    ``(ordinal → tool_call_id)`` mapping the resolver consults when
+    stamping ``citation_made`` events. State is loaded from
+    :class:`ConversationToolOrdinalStorePort` at construction
+    (:meth:`for_conversation`) and written back on every successful
+    :meth:`allocate_for_tool_call`. Without a store the allocator
+    operates purely in memory — used by replay paths and unit tests of
+    inner tools.
     """
 
     def __init__(
         self,
         *,
+        org_id: str,
         conversation_id: str,
-        starting_ordinal: int,
+        run_id: str,
+        store: "ConversationToolOrdinalStorePort | None" = None,
+        starting_ordinal: int = 0,
         ordinal_to_tool_call_id: dict[int, str] | None = None,
     ) -> None:
         if starting_ordinal < 0:
             raise ValueError("starting_ordinal must be non-negative")
+        self._org_id = org_id
         self._conversation_id = conversation_id
+        self._run_id = run_id
+        self._store = store
         self._counter = starting_ordinal
-        # Bidirectional index: lets the resolver populate
-        # ``CitationLink.source_tool_call_id`` from a parsed ``[[N]]``
-        # token without an extra persistence lookup. Seeded with prior
-        # turns' (ordinal, tool_call_id) pairs by
-        # :class:`ConversationOrdinalSeeder`, then extended live as the
-        # current run dispatches new tool calls via
-        # :meth:`allocate_for_tool_call`.
+        # Bidirectional index: ordinal → tool_call_id, plus the reverse
+        # for fast idempotent lookup on retries (same ``tool_call_id``
+        # bound twice must collapse to the same ordinal).
         self._ordinal_to_tool_call_id: dict[int, str] = dict(
             ordinal_to_tool_call_id or {}
         )
+        self._tool_call_id_to_ordinal: dict[str, int] = {
+            call_id: ordinal
+            for ordinal, call_id in self._ordinal_to_tool_call_id.items()
+        }
 
     @property
     def conversation_id(self) -> str:
         return self._conversation_id
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
 
     @property
     def last_allocated(self) -> int:
@@ -86,43 +115,92 @@ class ConversationOrdinalAllocator:
 
         return self._counter
 
-    def allocate(self) -> int:
-        """Allocate the next conversation_ordinal without binding a tool call.
-
-        Used by callers that don't have a stable ``tool_call_id`` to
-        register (e.g. provider-native passthrough adapters that fire
-        before the tool message is materialized). Most call sites
-        should prefer :meth:`allocate_for_tool_call`.
-        """
-
-        self._counter += 1
-        _LOGGER.info(
-            "[citations] allocator.allocate conv=%s ordinal=%d (no tool_call_id binding)",
-            self._conversation_id,
-            self._counter,
-        )
-        return self._counter
-
-    def allocate_for_tool_call(self, *, tool_call_id: str) -> int:
+    async def allocate_for_tool_call(
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+    ) -> int:
         """Allocate the next ordinal and bind it to ``tool_call_id``.
 
-        Recording the binding lets the :class:`CitationResolver`
-        populate ``CitationLink.source_tool_call_id`` on emit without a
-        round-trip through persistence.
+        Idempotent on ``tool_call_id`` — a retry for the same call_id
+        returns the existing ordinal without bumping the counter or
+        writing a second row. When the allocator is bound to a store,
+        every fresh binding is persisted before returning. On a
+        :class:`ConversationOrdinalConflict` (a concurrent allocator
+        beat us with a different counter value), reload state from the
+        store and retry once with the canonical ordinal.
         """
 
         if not tool_call_id:
             raise ValueError("tool_call_id must be a non-empty string")
-        self._counter += 1
-        ordinal = self._counter
-        self._ordinal_to_tool_call_id[ordinal] = tool_call_id
-        _LOGGER.info(
-            "[citations] allocator.allocate_for_tool_call conv=%s ordinal=%d call_id=%s",
-            self._conversation_id,
-            ordinal,
-            tool_call_id,
+        if not tool_name:
+            raise ValueError("tool_name must be a non-empty string")
+        existing = self._tool_call_id_to_ordinal.get(tool_call_id)
+        if existing is not None:
+            return existing
+        if self._store is None:
+            # No persistence layer (replay / eval / unit tests of
+            # inner tools). Allocate in memory and return.
+            self._counter += 1
+            self._ordinal_to_tool_call_id[self._counter] = tool_call_id
+            self._tool_call_id_to_ordinal[tool_call_id] = self._counter
+            _LOGGER.info(
+                "[citations] allocator.allocate_for_tool_call conv=%s "
+                "ordinal=%d call_id=%s tool=%s (no_store)",
+                self._conversation_id,
+                self._counter,
+                tool_call_id,
+                tool_name,
+            )
+            return self._counter
+        # Late import to avoid a cross-package import cycle:
+        # capabilities.conversation_ordinals → persistence.ports →
+        # capabilities (via record dataclasses) — keeping the conflict
+        # exception import lazy preserves the prior import topology.
+        from agent_runtime.persistence.ports import (  # noqa: PLC0415
+            ConversationOrdinalConflict,
         )
-        return ordinal
+
+        attempted = self._counter + 1
+        try:
+            binding = await self._store.record(
+                org_id=self._org_id,
+                conversation_id=self._conversation_id,
+                conversation_ordinal=attempted,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                run_id=self._run_id,
+            )
+        except ConversationOrdinalConflict as exc:
+            _LOGGER.info(
+                "[citations] allocator.conflict conv=%s attempted=%d "
+                "call_id=%s reason=%s — reloading and retrying",
+                self._conversation_id,
+                attempted,
+                tool_call_id,
+                exc.existing_ordinal,
+            )
+            await self._reload_from_store()
+            return await self.allocate_for_tool_call(
+                tool_call_id=tool_call_id, tool_name=tool_name
+            )
+        self._counter = max(self._counter, binding.conversation_ordinal)
+        self._ordinal_to_tool_call_id[binding.conversation_ordinal] = (
+            binding.tool_call_id
+        )
+        self._tool_call_id_to_ordinal[binding.tool_call_id] = (
+            binding.conversation_ordinal
+        )
+        _LOGGER.info(
+            "[citations] allocator.allocate_for_tool_call conv=%s "
+            "ordinal=%d call_id=%s tool=%s",
+            self._conversation_id,
+            binding.conversation_ordinal,
+            binding.tool_call_id,
+            binding.tool_name,
+        )
+        return binding.conversation_ordinal
 
     def tool_call_id_for(self, ordinal: int) -> str | None:
         """Return the ``tool_call_id`` bound to ``ordinal`` (or ``None``)."""
@@ -134,35 +212,71 @@ class ConversationOrdinalAllocator:
 
         return 0 < ordinal <= self._counter
 
+    async def _reload_from_store(self) -> None:
+        """Refresh in-memory state after a conflict from the store."""
+
+        if self._store is None:
+            return
+        bindings = await self._store.load(
+            org_id=self._org_id,
+            conversation_id=self._conversation_id,
+        )
+        self._ordinal_to_tool_call_id = {
+            b.conversation_ordinal: b.tool_call_id for b in bindings
+        }
+        self._tool_call_id_to_ordinal = {
+            b.tool_call_id: b.conversation_ordinal for b in bindings
+        }
+        self._counter = max(
+            (b.conversation_ordinal for b in bindings),
+            default=0,
+        )
+
     @classmethod
     async def for_conversation(
         cls,
         *,
         org_id: str,
         conversation_id: str,
-        prior_run_ids: Sequence[str],
-        event_store: "EventStorePort",
+        run_id: str,
+        store: "ConversationToolOrdinalStorePort",
     ) -> "ConversationOrdinalAllocator":
-        """Build a freshly-seeded allocator for a run on this conversation.
+        """Build an allocator restored from the persistent binding map.
 
-        Convenience wrapper for callers that don't need to inspect the
-        seed separately (the run handler keeps the seed inline because
-        it logs ``allocator_seed=…``; the approval handler just wants
-        an allocator). Both handlers must use the same seeding
-        primitive so resumes after an approval continue the
-        conversation's ordinal sequence rather than restarting at 0.
+        Reads every binding for ``conversation_id`` from the store, sets
+        the counter to ``max(conversation_ordinal)``, and seeds the
+        in-memory map. The next allocate returns ``counter + 1`` —
+        strictly greater than any ordinal already persisted for this
+        conversation, regardless of which run created it (so a brand-new
+        tool call in turn T+k does not collide with an ordinal allocated
+        in turn T).
+
+        Approval resumes call this with the same ``run_id`` the run
+        started under, so new bindings made post-resume stay attributed
+        to the original run.
         """
 
-        seed = await ConversationOrdinalSeeder.seed_from_event_log(
-            org_id=org_id,
-            conversation_id=conversation_id,
-            prior_run_ids=prior_run_ids,
-            event_store=event_store,
+        bindings = await store.load(org_id=org_id, conversation_id=conversation_id)
+        starting = max(
+            (b.conversation_ordinal for b in bindings),
+            default=0,
+        )
+        mapping = {b.conversation_ordinal: b.tool_call_id for b in bindings}
+        _LOGGER.info(
+            "[citations] allocator.for_conversation conv=%s run=%s "
+            "starting_ordinal=%d mapped_ordinals=%d",
+            conversation_id,
+            run_id,
+            starting,
+            len(mapping),
         )
         return cls(
+            org_id=org_id,
             conversation_id=conversation_id,
-            starting_ordinal=seed.starting_ordinal,
-            ordinal_to_tool_call_id=seed.ordinal_to_tool_call_id,
+            run_id=run_id,
+            store=store,
+            starting_ordinal=starting,
+            ordinal_to_tool_call_id=mapping,
         )
 
     @classmethod
@@ -189,82 +303,9 @@ class ConversationOrdinalAllocator:
         return _CONVERSATION_ORDINAL_CTX.get(None)
 
 
-class ConversationOrdinalSeeder:
-    """Compute the starting ordinal + ordinal/tool-call mapping for a new run.
-
-    The seed equals the count of ``TOOL_CALL_STARTED`` events already
-    persisted across the conversation's prior runs (filtered by branch
-    chain via the supplied ``prior_run_ids``). The next ``allocate``
-    therefore returns ``seed + 1`` — strictly greater than any ordinal
-    already embedded in a persisted tool result message.
-
-    The seeder also returns a ``{ordinal: tool_call_id}`` mapping so the
-    :class:`CitationResolver` can resolve cross-turn ``[[N]]`` markers
-    (citations from the current run that point at a prior turn's tool)
-    without an extra persistence round-trip.
-
-    Implementation re-uses :meth:`EventStorePort.list_events_after` so we
-    do not introduce a new port method or query primitive.
-    """
-
-    class Keys:
-        CALL_ID = "call_id"
-
-    @dataclass(frozen=True)
-    class Seed:
-        """Outcome of seeding: the starting ordinal + the prior mapping."""
-
-        starting_ordinal: int
-        ordinal_to_tool_call_id: dict[int, str]
-
-    @classmethod
-    async def seed_from_event_log(
-        cls,
-        *,
-        org_id: str,
-        conversation_id: str,
-        prior_run_ids: Sequence[str],
-        event_store: "EventStorePort",
-    ) -> "ConversationOrdinalSeeder.Seed":
-        # Late import to avoid the citations.py / runtime_api.schemas
-        # circular import path used elsewhere in the runtime.
-        from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
-
-        ordinal = 0
-        mapping: dict[int, str] = {}
-        for run_id in prior_run_ids:
-            events: Sequence[
-                RuntimeEventEnvelope
-            ] = await event_store.list_events_after(
-                org_id=org_id,
-                run_id=run_id,
-                after_sequence=0,
-            )
-            for event in events:
-                if event.conversation_id != conversation_id:
-                    continue
-                if event.event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
-                    ordinal += 1
-                    call_id = event.payload.get(cls.Keys.CALL_ID)
-                    if isinstance(call_id, str) and call_id:
-                        mapping[ordinal] = call_id
-        _LOGGER.info(
-            "[citations] seeder.seed_from_event_log conv=%s prior_runs=%d "
-            "starting_ordinal=%d mapped_ordinals=%d",
-            conversation_id,
-            len(prior_run_ids),
-            ordinal,
-            len(mapping),
-        )
-        return cls.Seed(
-            starting_ordinal=ordinal,
-            ordinal_to_tool_call_id=mapping,
-        )
-
-
 _CONVERSATION_ORDINAL_CTX: ContextVar[ConversationOrdinalAllocator | None] = ContextVar(
     "conversation_ordinal_allocator", default=None
 )
 
 
-__all__ = ("ConversationOrdinalAllocator", "ConversationOrdinalSeeder")
+__all__ = ("ConversationOrdinalAllocator",)

@@ -18,6 +18,7 @@ from agent_runtime.persistence.records import (
     ShareRecord,
     SourceAggregate,
     SubagentSnapshot,
+    ToolOrdinalBindingRecord,
 )
 
 
@@ -33,6 +34,36 @@ class OptimisticConflict(RuntimeError):
         self.draft_id = draft_id
         self.expected_version = expected_version
         self.actual_version = actual_version
+
+
+class ConversationOrdinalConflict(RuntimeError):
+    """Raised when an ordinal allocator races another writer for the same conversation.
+
+    Two allocators trying to bind ordinals concurrently against the same
+    ``(conversation_id, tool_call_id)`` row will see the unique constraint
+    catch the loser. The losing caller catches this exception, reloads its
+    in-memory state from the store, and returns the canonical ordinal that
+    the winner persisted. The exception is not user-facing — it lives
+    inside the allocator's retry loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        conversation_id: str,
+        tool_call_id: str,
+        attempted_ordinal: int,
+        existing_ordinal: int | None = None,
+    ) -> None:
+        super().__init__(
+            f"conversation {conversation_id} tool_call_id {tool_call_id} "
+            f"attempted ordinal {attempted_ordinal}; existing ordinal "
+            f"{existing_ordinal!r}"
+        )
+        self.conversation_id = conversation_id
+        self.tool_call_id = tool_call_id
+        self.attempted_ordinal = attempted_ordinal
+        self.existing_ordinal = existing_ordinal
 
 
 @runtime_checkable
@@ -241,6 +272,59 @@ class CitationStorePort(Protocol):
         """Return citations for a whole conversation in ``created_at`` order.
 
         Powers the Workspace pane Sources tab when reading archived runs.
+        """
+
+
+@runtime_checkable
+class ConversationToolOrdinalStorePort(Protocol):
+    """Persistent ``(conversation_ordinal ↔ tool_call_id)`` binding store (PR 04).
+
+    Owned by the
+    :class:`agent_runtime.capabilities.conversation_ordinals.ConversationOrdinalAllocator`.
+    Every ordinal allocation writes a row; the allocator is restored on
+    bind / approval-resume by reading the bindings back. The store
+    replaces the prior positional-event-counting seeder, which produced
+    different answers in the runtime allocator, the cross-turn observation
+    builder, and the FE.
+
+    The port intentionally exposes only two methods — the allocator owns
+    every other concern (in-memory cache of the binding map, write-through,
+    retry on conflict). Backends are responsible for translating the
+    ``UNIQUE(conversation_id, tool_call_id)`` constraint into a
+    :class:`ConversationOrdinalConflict` exception.
+    """
+
+    async def record(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        conversation_ordinal: int,
+        tool_call_id: str,
+        tool_name: str,
+        run_id: str,
+    ) -> ToolOrdinalBindingRecord:
+        """Insert one binding and return the canonical row.
+
+        Idempotent on ``(conversation_id, tool_call_id)``: a retry for
+        the same ``tool_call_id`` returns the previously-persisted row
+        without bumping ``conversation_ordinal``. If the same
+        ``tool_call_id`` is already bound to a *different* ordinal (a
+        concurrent allocator beat us with a different counter value),
+        raise :class:`ConversationOrdinalConflict` so the caller can
+        reload state and retry.
+        """
+
+    async def load(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> Sequence[ToolOrdinalBindingRecord]:
+        """Return all bindings for a conversation, sorted by ordinal asc.
+
+        The allocator constructs its in-memory counter + binding map
+        from this read at run start and after every approval resume.
         """
 
 

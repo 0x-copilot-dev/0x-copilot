@@ -73,6 +73,7 @@ from agent_runtime.persistence.records.tool_budgets import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
 )
+from agent_runtime.persistence.records.tool_ordinals import ToolOrdinalBindingRecord
 from agent_runtime.persistence.records.tools import ToolInvocationRecord
 from agent_runtime.persistence.records.workspace_feeds import (
     SourceAggregate,
@@ -97,6 +98,7 @@ PERSISTENCE_TABLE_RECORDS = (
     CheckpointRecord,
     CitationRecord,
     DraftRecord,
+    ToolOrdinalBindingRecord,
 )
 
 __all__ = [
@@ -150,6 +152,7 @@ __all__ = [
     "ChargeOutcome",
     "ToolBudgetEnforcement",
     "ToolBudgetRecord",
+    "ToolOrdinalBindingRecord",
     "RetentionKind",
     "RetentionPolicyRecord",
     "RetentionScope",

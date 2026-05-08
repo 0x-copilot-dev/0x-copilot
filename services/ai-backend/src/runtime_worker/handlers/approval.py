@@ -94,6 +94,7 @@ class RuntimeApprovalHandler:
         runtime_resumer: RuntimeResumer = astream_runtime_resume,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: object | None = None,
+        conversation_tool_ordinal_store: object | None = None,
     ) -> None:
         self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
         self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
@@ -117,6 +118,12 @@ class RuntimeApprovalHandler:
         # default early-return (status transitions skipped) — surfaced as
         # an audit gap rather than a crash.
         self._draft_store = draft_store
+        # PR 04 — held now so Phase 3's allocator refactor can read it
+        # to build the resumed allocator from the persistent binding map
+        # rather than re-counting events. ``object`` typing keeps the
+        # constructor signature decoupled from the persistence ports
+        # module while threading the store from the worker boundary.
+        self._conversation_tool_ordinal_store = conversation_tool_ordinal_store
         # PR 3.2.5 Phase 3 — explicit dedup so a transient retry of
         # ``handle()`` for the same approval cannot re-emit
         # ``SUBAGENT_RESUMED``. Upstream approval-status idempotency
@@ -328,40 +335,41 @@ class RuntimeApprovalHandler:
         self,
         run: RunRecord,
     ) -> ConversationOrdinalAllocator:
-        """Build a fresh allocator seeded for a resumed run.
+        """Build the allocator for a resumed run.
 
-        The original run paused with the allocator unbound. Tools that
-        fired before the pause already emitted ``TOOL_CALL_STARTED``
-        events and burned their ordinals. The seeder walks every
-        message in the conversation, picks the run_ids referenced
-        there, and counts those events — matching the run handler's
-        seeding rule but including the run being resumed (its prior
-        tool calls are part of the persisted history).
+        PR 04 — replaces the prior message-walking + event-counting
+        seeder. The resumed allocator is reconstructed from the
+        persistent ``(conversation_ordinal ↔ tool_call_id)`` binding
+        store; the in-memory counter resumes at ``max(persisted)`` so
+        every fresh allocation post-pause is strictly greater than any
+        ordinal already burned pre-pause. Tool calls that re-dispatch on
+        resume (LangGraph reuses the same ``call_id``) collapse to the
+        existing binding instead of allocating again.
+
+        When the worker was constructed without a binding store
+        (replay / eval), fall back to a memory-only allocator. This
+        path doesn't carry ordinals across the pause but it never
+        crashes the resume.
         """
 
-        records = await self.persistence.list_messages(
-            org_id=run.org_id,
-            conversation_id=run.conversation_id,
-            limit=200,
+        if self._conversation_tool_ordinal_store is None:
+            return ConversationOrdinalAllocator(
+                org_id=run.org_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+            )
+        from agent_runtime.persistence.ports import (  # noqa: PLC0415
+            ConversationToolOrdinalStorePort,
         )
-        # Collect every run_id referenced by the conversation's messages,
-        # including the run we're resuming. Order doesn't matter for
-        # counting; the seeder iterates per-run events independently.
-        run_ids: list[str] = []
-        seen: set[str] = set()
-        for record in records:
-            run_id = record.run_id
-            if run_id is None or run_id in seen:
-                continue
-            seen.add(run_id)
-            run_ids.append(run_id)
-        if run.run_id not in seen:
-            run_ids.append(run.run_id)
+
+        store: ConversationToolOrdinalStorePort = (
+            self._conversation_tool_ordinal_store  # type: ignore[assignment]
+        )
         return await ConversationOrdinalAllocator.for_conversation(
             org_id=run.org_id,
             conversation_id=run.conversation_id,
-            prior_run_ids=tuple(run_ids),
-            event_store=self.event_store,
+            run_id=run.run_id,
+            store=store,
         )
 
     async def _stream_resume(
