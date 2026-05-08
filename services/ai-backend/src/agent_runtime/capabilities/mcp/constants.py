@@ -51,6 +51,7 @@ class Keys:
         SERVER_CARD = "server_card"
         SERVER_NAME = "server_name"
         SHORT_DESCRIPTION = "short_description"
+        TOOL_CALL_ID = "tool_call_id"
         TOOL_NAME = "tool_name"
         TOOLS = "tools"
         TRANSPORT = "transport"

@@ -144,12 +144,15 @@ class CallMcpTool:
             result=output,
         )
 
-        # PR 1.1-rev2 — allocate a conversation-scoped ordinal and add a
-        # citation hint to the MCP output the model reads. The hint
-        # piggybacks on the standard MCP ``content`` array as a text
-        # block; servers without that shape get a top-level
-        # ``_citation_hint`` field. Best-effort: when no allocator is
-        # bound (replay/eval) the output is returned unchanged.
+        # PR 04 — allocate a conversation-scoped ordinal *bound* to the
+        # LangGraph-assigned ``tool_call_id`` (now plumbed through via
+        # ``InjectedToolCallId`` on :class:`McpToolCallRequest`). The
+        # binding lets the resolver stamp ``source_tool_call_id`` on
+        # every ``citation_made`` event without the FE needing an
+        # ordinal-position fallback. Best-effort: when no allocator is
+        # bound (replay/eval) or no tool_call_id was injected (legacy
+        # call sites that build the request by hand), the output is
+        # returned unchanged.
         try:
             allocator = ConversationOrdinalAllocator.active()
             if allocator is None:
@@ -159,32 +162,34 @@ class CallMcpTool:
                     parsed_input.server_name,
                     parsed_input.tool_name,
                 )
-            else:
-                tool_call_id = (
-                    self.runtime_context.trace_id
-                    if isinstance(self.runtime_context.trace_id, str)
-                    and self.runtime_context.trace_id
-                    else None
+            elif not parsed_input.tool_call_id:
+                _LOGGER.warning(
+                    "[citations] mcp.hint_skipped server=%s tool=%s "
+                    "reason=no_tool_call_id_injected (replay/eval path)",
+                    parsed_input.server_name,
+                    parsed_input.tool_name,
                 )
-                ordinal = (
-                    allocator.allocate_for_tool_call(tool_call_id=tool_call_id)
-                    if tool_call_id
-                    else allocator.allocate()
+            else:
+                qualified_tool_name = (
+                    f"{parsed_input.server_name}.{parsed_input.tool_name}"
+                )
+                ordinal = allocator.allocate_for_tool_call(
+                    tool_call_id=parsed_input.tool_call_id
                 )
                 hinted = _CitationHint.append_to(
                     output,
                     ordinal=ordinal,
-                    tool_name=f"{parsed_input.server_name}.{parsed_input.tool_name}",
+                    tool_name=qualified_tool_name,
                 )
                 if isinstance(hinted, dict):
                     output = hinted
                 _LOGGER.info(
                     "[citations] mcp.hint_appended server=%s tool=%s "
-                    "ordinal=%d call_id='%s'",
+                    "ordinal=%d call_id=%s",
                     parsed_input.server_name,
                     parsed_input.tool_name,
                     ordinal,
-                    tool_call_id or "",
+                    parsed_input.tool_call_id,
                 )
         except Exception:  # noqa: BLE001 - best-effort; never break MCP results
             _LOGGER.warning(

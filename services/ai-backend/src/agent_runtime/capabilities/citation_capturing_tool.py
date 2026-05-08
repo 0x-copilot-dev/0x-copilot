@@ -26,10 +26,10 @@ events; the user gets a clean source list without inline chip noise.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from langchain_core.tools import BaseTool
-from pydantic import ConfigDict
+from langchain_core.tools import BaseTool, InjectedToolCallId
+from pydantic import BaseModel, ConfigDict, create_model
 
 from agent_runtime.capabilities.citation_projection import CitationProjector
 from agent_runtime.capabilities.conversation_ordinals import (
@@ -164,8 +164,15 @@ class CitationCapturingTool(BaseTool):
         return self.inner._run(*args, **kwargs)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        result = await self.inner._arun(*args, **kwargs)
+        # PR 04 — ``tool_call_id`` is injected by LangGraph via
+        # :class:`InjectedToolCallId` when the args_schema declares it
+        # (see ``_augment_schema_with_tool_call_id`` for the wrapper
+        # that adds the marker to inner schemas that don't have it).
+        # The inner tool's ``_arun`` typically does NOT accept this
+        # kwarg, so pop before forwarding.
         tool_call_id = self._extract_tool_call_id(kwargs)
+        kwargs.pop("tool_call_id", None)
+        result = await self.inner._arun(*args, **kwargs)
         # Legacy PR 1.1 path — pattern-matches the result against a
         # fixed set of shapes and registers any sources via the
         # ``CitationLedger``. Best-effort, never raises into the tool
@@ -247,17 +254,53 @@ class CitationCapturingRegistry:
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
         return tuple(self._wrap(tool) for tool in rendered)
 
-    @staticmethod
-    def _wrap(tool: object) -> object:
+    @classmethod
+    def _wrap(cls, tool: object) -> object:
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, CitationCapturingTool):
             return tool
+        # PR 04 — augment the inner tool's args_schema so LangGraph
+        # injects ``tool_call_id`` into ``_arun`` kwargs. Without this,
+        # tools like DuckDuckGo's ``DuckDuckGoSearchResults`` (whose
+        # upstream schema doesn't declare ``InjectedToolCallId``) emit
+        # citations with an empty ``source_tool_call_id`` and the FE
+        # has to fall back to a fragile ordinal-position lookup.
         return CitationCapturingTool(
             name=tool.name,
             description=tool.description,
-            args_schema=tool.args_schema,
+            args_schema=cls._augment_schema_with_tool_call_id(tool.args_schema),
             inner=tool,
+        )
+
+    @staticmethod
+    def _augment_schema_with_tool_call_id(
+        inner_schema: object,
+    ) -> type[BaseModel]:
+        """Return a Pydantic args_schema that declares ``tool_call_id``
+        as ``Annotated[str, InjectedToolCallId]``.
+
+        LangChain's ``BaseTool.args_schema`` is typed as
+        ``ArgsSchema | None`` — a Pydantic model class, a JSON-schema-ish
+        dict, or ``None``. We only know how to extend a real Pydantic
+        class; for the dict / None cases we fall back to a minimal
+        synthetic schema carrying just the injected field. Idempotent:
+        a Pydantic class that already declares ``tool_call_id`` is
+        returned unchanged.
+        """
+
+        if isinstance(inner_schema, type) and issubclass(inner_schema, BaseModel):
+            existing = getattr(inner_schema, "model_fields", {})
+            if "tool_call_id" in existing:
+                return inner_schema
+            return create_model(
+                f"{inner_schema.__name__}WithToolCallId",
+                __base__=inner_schema,
+                tool_call_id=(Annotated[str, InjectedToolCallId], ""),
+            )
+        return create_model(
+            "CitationCapturingToolInput",
+            tool_call_id=(Annotated[str, InjectedToolCallId], ""),
         )
 
 

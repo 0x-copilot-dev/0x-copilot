@@ -14,7 +14,10 @@
 
 import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
-import { useOrdinalCitation } from "./citationsContext";
+import {
+  useOrdinalCitation,
+  useResolvedOrdinalCitation,
+} from "./citationsContext";
 import { citationDebug } from "../../chatModel/citationDebug";
 
 export const CITATION_ORDINAL_HREF_PREFIX = "#cite-ord:";
@@ -53,12 +56,23 @@ export function OrdinalCitationChip({
   onSelect,
 }: OrdinalCitationChipProps): ReactElement {
   const link = useOrdinalCitation(conversationOrdinal);
+  // PR 1.1-rev2 — resolve via the link first, ordinal-position fallback
+  // second. Decoupled from ``link === undefined`` so the chip can still
+  // open Sources when a citation_made event was empty (LangChain /
+  // MCP-middleware paths) and the ordinal-position fallback knows the
+  // call_id.
+  const resolved = useResolvedOrdinalCitation(conversationOrdinal);
   // Trace each chip's resolution outcome once per ordinal+state — first
   // mount and any subsequent state change. Helps the user diagnose
   // "chip rendered but unresolved" vs "chip never rendered".
   const lastLoggedRef = useRef<string | null>(null);
   useEffect(() => {
-    const state = link === undefined ? "unresolved" : "resolved";
+    const state =
+      link === undefined && resolved === null
+        ? "unresolved"
+        : link === undefined
+          ? "fallback"
+          : "resolved";
     const key = `${conversationOrdinal}:${state}`;
     if (lastLoggedRef.current !== key) {
       lastLoggedRef.current = key;
@@ -66,11 +80,13 @@ export function OrdinalCitationChip({
         `chip.${state} ordinal=${conversationOrdinal}` +
           (link
             ? ` call_id='${link.source_tool_call_id}' msg=${link.message_id}`
-            : ""),
+            : resolved
+              ? ` fallback_call_id='${resolved.callId}'`
+              : ""),
       );
     }
-  }, [conversationOrdinal, link]);
-  if (link === undefined) {
+  }, [conversationOrdinal, link, resolved]);
+  if (link === undefined && resolved === null) {
     return (
       <span
         className="citation-chip citation-chip--unresolved"
@@ -81,17 +97,33 @@ export function OrdinalCitationChip({
       </span>
     );
   }
+  const callId = resolved?.callId ?? link?.source_tool_call_id ?? "";
+  // ``data-citation-id`` matches the synthetic id used by ``SourceRow``
+  // (``tool:<call_id>``) so the reverse handshake helper
+  // ``scrollChatToCitation`` can find this chip from the Sources tab's
+  // ↗ jump button.
+  const dataCitationId = callId
+    ? `tool:${callId}`
+    : `tool-ord:${conversationOrdinal}`;
   return (
     <a
       className="citation-chip"
+      data-citation-id={dataCitationId}
       data-conversation-ordinal={String(conversationOrdinal)}
-      data-source-tool-call-id={link.source_tool_call_id || undefined}
-      href={`#tool-call-${link.source_tool_call_id || conversationOrdinal}`}
+      data-source-tool-call-id={callId || undefined}
+      href={`#tool-call-${callId || conversationOrdinal}`}
       title={`Tool call #${conversationOrdinal}`}
       onClick={(event) => {
+        // Prefer the per-chip prop (kept for tests/legacy mounts), then
+        // the context callback wired by ChatScreen → workspace pane.
         if (onSelect) {
           event.preventDefault();
-          onSelect(conversationOrdinal, link.source_tool_call_id);
+          onSelect(conversationOrdinal, callId);
+          return;
+        }
+        if (resolved?.onSelect) {
+          event.preventDefault();
+          resolved.onSelect();
         }
       }}
     >

@@ -52,16 +52,31 @@ interface CitationsContextValue {
   /** The run whose chips are currently being rendered — used by ordinal
    *  lookups so the correct run's link map is consulted. */
   activeRunId: string | null;
+  /** PR 1.1-rev2 — document-order list of *real* tool-call ids in the
+   *  active conversation. Used as the ordinal-position fallback when a
+   *  citation_made event left ``source_tool_call_id`` empty (LangChain
+   *  tools without ``InjectedToolCallId``, MCP middleware that
+   *  intentionally doesn't bind because it has no per-call id at hint
+   *  time). Empty when no tools have been called. */
+  toolCallIdsInOrder: readonly string[];
+  /** PR 1.1-rev2 — invoked when an ordinal chip is clicked. Receives the
+   *  resolved synthetic ``citation_id`` (``tool:<call_id>``) so the host
+   *  can open the Sources tab and scroll to the matching row. ``null``
+   *  when click should fall back to anchor navigation. */
+  onOrdinalSelect: ((citationId: string) => void) | null;
 }
 
 const EMPTY_LOOKUP: CitationLookup = new Map();
 const EMPTY_TERMINAL: ReadonlySet<string> = new Set();
+const EMPTY_ORDER: readonly string[] = [];
 const DEFAULT_VALUE: CitationsContextValue = {
   active: EMPTY_LOOKUP,
   byRun: emptyCitationRegistry(),
   terminalRuns: EMPTY_TERMINAL,
   linksByRun: emptyCitationLinkRegistry(),
   activeRunId: null,
+  toolCallIdsInOrder: EMPTY_ORDER,
+  onOrdinalSelect: null,
 };
 const EMPTY_CITATIONS: readonly CitationSourceRef[] = [];
 
@@ -94,6 +109,19 @@ export interface CitationsProviderProps {
    * returns ``undefined``.
    */
   activeRunId?: string | null;
+  /**
+   * PR 1.1-rev2 — document-order list of real tool-call ids for the
+   * ordinal-position fallback path (LangChain tools without
+   * ``InjectedToolCallId``, MCP middleware that doesn't bind a
+   * tool_call_id). Optional; defaults to ``[]``.
+   */
+  toolCallIdsInOrder?: readonly string[];
+  /**
+   * PR 1.1-rev2 — invoked when an ordinal chip is clicked, with the
+   * resolved synthetic citation_id (``tool:<call_id>``). Optional; when
+   * absent the chip falls back to plain anchor navigation.
+   */
+  onOrdinalSelect?: (citationId: string) => void;
   children: ReactNode;
 }
 
@@ -103,6 +131,8 @@ export function CitationsProvider({
   terminalRuns,
   linksByRun,
   activeRunId,
+  toolCallIdsInOrder,
+  onOrdinalSelect,
   children,
 }: CitationsProviderProps): ReactElement {
   const value = useMemo<CitationsContextValue>(
@@ -112,8 +142,18 @@ export function CitationsProvider({
       terminalRuns: terminalRuns ?? EMPTY_TERMINAL,
       linksByRun: linksByRun ?? emptyCitationLinkRegistry(),
       activeRunId: activeRunId ?? null,
+      toolCallIdsInOrder: toolCallIdsInOrder ?? EMPTY_ORDER,
+      onOrdinalSelect: onOrdinalSelect ?? null,
     }),
-    [citations, byRun, terminalRuns, linksByRun, activeRunId],
+    [
+      citations,
+      byRun,
+      terminalRuns,
+      linksByRun,
+      activeRunId,
+      toolCallIdsInOrder,
+      onOrdinalSelect,
+    ],
   );
   return (
     <CitationsContext.Provider value={value}>
@@ -175,6 +215,48 @@ export function useRunCitations(
  *    ``activeCitations``'s ``mostRecentAssistantRunId`` fallback used
  *    for legacy ``[c<id>]`` chips.
  */
+/**
+ * PR 1.1-rev2 — resolve an ordinal to a stable synthetic ``citation_id``
+ * (``tool:<call_id>``) plus the on-click callback the chip should fire.
+ *
+ * Resolution order:
+ *   1. The ``citation_made`` link's ``source_tool_call_id`` (when bound).
+ *   2. ``toolCallIdsInOrder[ordinal - 1]`` — the FE's document-order
+ *      ordinal-position fallback for runtime paths that didn't bind a
+ *      tool_call_id (MCP middleware, LangChain tools without
+ *      ``InjectedToolCallId``).
+ *
+ * Returns ``null`` for hallucinated / out-of-range ordinals so the chip
+ * stays inert (the muted ``?`` placeholder already covers that visual).
+ */
+export interface ResolvedOrdinalCitation {
+  citationId: string;
+  callId: string;
+  onSelect: (() => void) | null;
+}
+
+export function useResolvedOrdinalCitation(
+  conversationOrdinal: number,
+): ResolvedOrdinalCitation | null {
+  const link = useOrdinalCitation(conversationOrdinal);
+  const { toolCallIdsInOrder, onOrdinalSelect } = useContext(CitationsContext);
+  return useMemo(() => {
+    let callId = link?.source_tool_call_id ?? "";
+    if (!callId) {
+      const fallback = toolCallIdsInOrder[conversationOrdinal - 1];
+      if (typeof fallback === "string" && fallback.length > 0) {
+        callId = fallback;
+      }
+    }
+    if (!callId) {
+      return null;
+    }
+    const citationId = `tool:${callId}`;
+    const onSelect = onOrdinalSelect ? () => onOrdinalSelect(citationId) : null;
+    return { citationId, callId, onSelect };
+  }, [link, toolCallIdsInOrder, conversationOrdinal, onOrdinalSelect]);
+}
+
 export function useOrdinalCitation(
   conversationOrdinal: number,
 ): CitationLink | undefined {

@@ -185,7 +185,14 @@ class McpDiscoveryService:
         if not normalized_id:
             return {"status": _Results.UNKNOWN_SERVER, "server_id": server_id}
 
-        cached_approval = self._suggested.get(normalized_id)
+        # Idempotency cache key — case-insensitive and seed-prefix-stripped
+        # so `linear`, `Linear`, `seed:linear` all collapse to one entry.
+        # Without this, a model that switches casing between calls bypasses
+        # the cache and emits a duplicate Connect card.
+        cache_key = normalized_id.lower()
+        if cache_key.startswith("seed:"):
+            cache_key = cache_key[len("seed:") :]
+        cached_approval = self._suggested.get(cache_key)
         if cached_approval is not None:
             return {
                 "status": _Results.ALREADY_SUGGESTED,
@@ -225,7 +232,11 @@ class McpDiscoveryService:
             )
             return {"status": _Results.SERVER_DISABLED, "server_id": normalized_id}
 
-        if card.auth_state is McpAuthState.AUTHENTICATED:
+        # `==` not `is`: Pydantic re-validation in some code paths can
+        # return enum instances that aren't identity-equal to the
+        # imported singleton even though they compare equal. Using `==`
+        # keeps the short-circuit reliable across both paths.
+        if card.auth_state == McpAuthState.AUTHENTICATED:
             # Already useful — no card needed; the agent should just
             # use the server. Skip audit + event to keep the suggestion
             # surface tight.
@@ -254,7 +265,7 @@ class McpDiscoveryService:
             event_type=RuntimeApiEventType.MCP_AUTH_REQUIRED,
             payload=payload,
         )
-        self._suggested[normalized_id] = approval_id
+        self._suggested[cache_key] = approval_id
         return {
             "status": _Results.EMITTED,
             "server_id": normalized_id,
@@ -319,10 +330,29 @@ class McpDiscoveryService:
         ``catalog_slug`` sentinel is only stamped on catalog hits so a
         registry-hit doesn't mis-route the Connect button to the
         install overlay.
+
+        Lookup matches case-insensitively and accepts both the bare
+        slug ("linear") and the seed-prefixed id ("seed:linear"). The
+        catalog fallback already normalizes via :meth:`_lookup_suggestion`;
+        without matching normalization here, a model that calls with a
+        capitalized or seed-prefixed slug misses the registry, falls
+        through to a synthesized UNAUTHENTICATED catalog card, and
+        emits a Connect prompt for an already-authenticated server.
         """
 
+        normalized = server_id.strip().lower()
+        bare = (
+            normalized[len("seed:") :] if normalized.startswith("seed:") else normalized
+        )
         for card in self._registry.list_available_servers(self._runtime_context):
-            if (card.server_id or card.name) == server_id:
+            card_sid = (card.server_id or "").lower()
+            card_name = (card.name or "").lower()
+            if (
+                card_sid == normalized
+                or card_name == normalized
+                or card_name == bare
+                or card_sid == f"seed:{bare}"
+            ):
                 return (card, "registry")
         # PR 4.4.7 Phase 2 (Slice C) — fall back to the catalog
         # suggestions snapshot. These are uninstalled connectors the

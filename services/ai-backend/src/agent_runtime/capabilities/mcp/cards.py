@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
 import json
-from typing import Any, TypeAlias
+from typing import Annotated, Any, TypeAlias
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from langchain_core.tools import InjectedToolCallId
 from pydantic import (
     Field,
     PositiveInt,
@@ -203,11 +204,23 @@ class McpLoadRequest(RuntimeContract):
 
 
 class McpToolCallRequest(RuntimeContract):
-    """Request to invoke a validated tool on a selected MCP server."""
+    """Request to invoke a validated tool on a selected MCP server.
+
+    PR 04 (citations binding map) — ``tool_call_id`` is injected by
+    LangGraph at dispatch via :class:`InjectedToolCallId`. The ai-backend
+    needs it to bind the conversation_ordinal allocated for this MCP
+    call to the call's stable LangGraph id, so citations resolved to
+    ``[[N]]`` in the model's prose can be looked up against a single
+    persisted binding map (see ``agent_conversation_tool_ordinals``).
+    Default is the empty string for replay/eval harnesses that build a
+    request manually; the runtime worker always supplies a non-empty
+    value.
+    """
 
     server_name: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    tool_call_id: Annotated[str, InjectedToolCallId] = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -218,6 +231,7 @@ class McpToolCallRequest(RuntimeContract):
             Keys.Field.SERVER_NAME,
             Keys.Field.TOOL_NAME,
             Keys.Field.ARGUMENTS,
+            Keys.Field.TOOL_CALL_ID,
         }
         extra_arguments = {
             str(key): item for key, item in value.items() if str(key) not in known_keys
@@ -233,6 +247,7 @@ class McpToolCallRequest(RuntimeContract):
                 **extra_arguments,
                 **dict(arguments),
             },
+            Keys.Field.TOOL_CALL_ID: value.get(Keys.Field.TOOL_CALL_ID, ""),
         }
 
     @field_validator(Keys.Field.SERVER_NAME)

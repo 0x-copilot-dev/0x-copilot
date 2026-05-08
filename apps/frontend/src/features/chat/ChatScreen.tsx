@@ -1213,6 +1213,18 @@ export function ChatScreen({
     if (pendingApprovalDecisionsRef.current.has(approvalId)) {
       return;
     }
+    // Discovery cards (`mcp_discovery:<run_id>:<server_id>`) are UI
+    // hints emitted by McpDiscoveryService — they're never persisted
+    // as ApprovalRequest rows, so POSTing a decision returns 404.
+    // Resolve them locally and let `connectors.authenticate` /
+    // `connectors.skipAuth` (called from onMcpAuthConnect /
+    // onMcpAuthSkip) drive the actual side effect.
+    if (approvalId.startsWith("mcp_discovery:")) {
+      if (decision === "rejected") {
+        setItems((current) => resolveMcpAuthSkip(current, approvalId));
+      }
+      return;
+    }
     pendingApprovalDecisionsRef.current.add(approvalId);
     try {
       await decideApproval(approvalId, decision, identity, "mcp_auth_resolved");
@@ -1324,10 +1336,13 @@ export function ChatScreen({
     [items],
   );
   const sourcesWithToolCitations = useMemo<SourceEntryMap>(() => {
-    const fallbackRunId =
-      activeRunId ?? mostRecentAssistantRunId(items) ?? null;
+    // Conversation-scoped: scan every run in the registry, not only the
+    // most-recent assistant message's run. After an approval interrupt,
+    // ``citation_made`` events fire on the resumed run while the
+    // assistant message metadata may carry a sibling run id, and a
+    // single-run filter would silently drop those citations.
     const cited = citedToolSources({
-      runId: fallbackRunId,
+      runId: null,
       citationLinks,
       toolIndex,
       toolCallIdsInOrder,
@@ -1346,14 +1361,7 @@ export function ChatScreen({
       }
     }
     return merged;
-  }, [
-    activeRunId,
-    citationLinks,
-    items,
-    sourcesMap,
-    toolIndex,
-    toolCallIdsInOrder,
-  ]);
+  }, [citationLinks, sourcesMap, toolIndex, toolCallIdsInOrder]);
 
   // PR 3.5 / G9 — set of runIds whose assistant message has reached a
   // terminal status (complete/incomplete). Used by `useRunCitations` so
@@ -1813,6 +1821,12 @@ export function ChatScreen({
                 terminalRuns={terminalRuns}
                 linksByRun={citationLinks}
                 activeRunId={activeRunId}
+                toolCallIdsInOrder={toolCallIdsInOrder}
+                onOrdinalSelect={(citationId) =>
+                  paneState.openOn("sources", {
+                    focusCitationId: citationId,
+                  })
+                }
               >
                 <SubagentFleetProvider
                   value={{
@@ -1908,6 +1922,9 @@ export function ChatScreen({
               sourcesError={sourcesError}
               sourcesSearching={runUiState.phase === "acting"}
               onSelectSource={(source) =>
+                scrollChatToCitation(source.citation_id)
+              }
+              onJumpToChatSource={(source) =>
                 scrollChatToCitation(source.citation_id)
               }
               subagents={subagentsState.subagents}

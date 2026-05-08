@@ -314,16 +314,25 @@ function EnterpriseSearchApp({
         if (!cancelled) {
           const pendingAction = readPendingMcpAuthAction(server.server_id);
           if (pendingAction !== null) {
-            try {
-              await decideApproval(
-                pendingAction.approvalId,
-                "approved",
-                currentIdentity,
-                "mcp_auth_completed",
-              );
-            } catch {
-              // The connector can still be authenticated if the approval record
-              // was lost during a backend restart.
+            // Discovery cards (`mcp_discovery:<run_id>:<server_id>`)
+            // aren't persisted as ApprovalRequest rows by the runtime
+            // — the backend never has anything to decide against, and
+            // the POST 404s. Skip the decideApproval call for those
+            // ids; the OAuth completion itself is the resolution.
+            const isDiscoveryApproval =
+              pendingAction.approvalId.startsWith("mcp_discovery:");
+            if (!isDiscoveryApproval) {
+              try {
+                await decideApproval(
+                  pendingAction.approvalId,
+                  "approved",
+                  currentIdentity,
+                  "mcp_auth_completed",
+                );
+              } catch {
+                // The connector can still be authenticated if the approval record
+                // was lost during a backend restart.
+              }
             }
             if (cancelled) {
               return;

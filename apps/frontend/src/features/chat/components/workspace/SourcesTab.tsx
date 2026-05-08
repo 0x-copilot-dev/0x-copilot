@@ -41,6 +41,10 @@ export interface SourcesTabProps {
   /** Override label for the shimmer; defaults to "Looking for sources…". */
   searchingLabel?: string;
   onSelect?: (source: SourceEntry) => void;
+  /** PR 1.1-rev2 — invoked when the per-row ↗ jump button is clicked.
+   *  The host scrolls the chat viewport to the first chip that cited
+   *  this source. Optional — when omitted the button is hidden. */
+  onJumpToChat?: (source: SourceEntry) => void;
 }
 
 export function SourcesTab({
@@ -51,6 +55,7 @@ export function SourcesTab({
   searching,
   searchingLabel,
   onSelect,
+  onJumpToChat,
 }: SourcesTabProps): ReactElement {
   const ordered = sourcesByCitationCount(sources);
   const focusRef = useRef<HTMLLIElement | null>(null);
@@ -119,6 +124,7 @@ export function SourcesTab({
                 ordinal={ordinalById.get(source.citation_id) ?? 0}
                 focused={isFocused}
                 onSelect={onSelect}
+                onJumpToChat={onJumpToChat}
               />
             );
           })}

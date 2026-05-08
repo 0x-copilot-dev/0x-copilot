@@ -47,6 +47,10 @@ export interface WorkspacePaneProps {
   /** PR 3.7.1 — derived from runUiState; drives the "Looking for sources…" shimmer. */
   sourcesSearching?: boolean;
   onSelectSource?: (source: SourceEntry) => void;
+  /** PR 1.1-rev2 — invoked when a Sources row's ↗ jump button is clicked.
+   *  ChatScreen wires this to the chip-pulse helper so the chat scrolls
+   *  back to where the source was cited. */
+  onJumpToChatSource?: (source: SourceEntry) => void;
   /** Agents tab inputs (PR 1.5 reducer + PR 3.2 archive). */
   subagents: SubagentSnapshotMap;
   subagentsLoading?: boolean;
@@ -87,6 +91,7 @@ export function WorkspacePane({
   sourcesError,
   sourcesSearching,
   onSelectSource,
+  onJumpToChatSource,
   subagents,
   subagentsLoading,
   subagentsError,
@@ -196,6 +201,7 @@ export function WorkspacePane({
             focusCitationId={state.focus.citationId ?? null}
             searching={sourcesSearching}
             onSelect={onSelectSource}
+            onJumpToChat={onJumpToChatSource}
           />
         ) : null}
         {state.activeTab === "agents" ? (

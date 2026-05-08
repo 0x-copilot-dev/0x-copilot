@@ -138,13 +138,45 @@ describe("connectorFromToolName", () => {
 });
 
 describe("citedToolSources", () => {
-  it("returns empty when runId is null", () => {
+  it("returns empty when runId is null and the registry is empty", () => {
+    // PR 1.1-rev2 — ``runId === null`` is now the conversation-scoped
+    // entry point (Sources tab); it scans all runs in the registry. An
+    // empty registry naturally projects to no rows.
     const out = citedToolSources({
       runId: null,
       citationLinks: emptyCitationLinkRegistry(),
       toolIndex: toolInvocationIndex([]),
     });
     expect(out).toEqual([]);
+  });
+
+  it("scans every run in the registry when runId is null", () => {
+    // Regression pin: after an approval interrupt the citation_made
+    // events fire on the resumed run while the assistant message
+    // metadata may carry the original run id. A single-run filter
+    // silently dropped those citations from the Sources tab. The
+    // conversation-scoped projection (runId=null) walks every run in
+    // the registry so the resumed-run citations still surface.
+    const items = [
+      toolPart({
+        toolCallId: "call_one",
+        toolName: "linear.list_issues",
+        result: "5 issues",
+      }),
+    ];
+    const otherRun = "run_resumed";
+    const links = upsertCitationLink(
+      emptyCitationLinkRegistry(),
+      otherRun,
+      link({ conversation_ordinal: 4, source_tool_call_id: "call_one" }),
+    );
+    const out = citedToolSources({
+      runId: null,
+      citationLinks: links,
+      toolIndex: toolInvocationIndex(items),
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source_doc_id).toBe(`${TOOL_DOC_ID_PREFIX}call_one`);
   });
 
   it("returns empty when no citation links exist for the run", () => {
@@ -315,6 +347,41 @@ describe("citedToolSources", () => {
     });
     expect(out[0].snippet?.length).toBeLessThanOrEqual(51); // 50 + ellipsis char
     expect(out[0].snippet?.endsWith("…")).toBe(true);
+  });
+
+  it("renders MCP call_tool with the real server.tool path in title and connector", () => {
+    // The MCP wrapper exposes itself to the model as ``call_tool``
+    // with ``server_name`` + ``tool_name`` in args. The Sources tab
+    // should surface ``linear.list_issues`` rather than the generic
+    // ``call_tool`` wrapper name.
+    const items = [
+      toolPart({
+        toolCallId: "call_lin_1",
+        toolName: "call_tool",
+        args: {
+          server_name: "linear",
+          tool_name: "list_issues",
+          arguments: { assignee: "me" },
+        },
+        result: "13 issues returned",
+      }),
+    ];
+    const links = upsertCitationLink(
+      emptyCitationLinkRegistry(),
+      RUN,
+      link({ conversation_ordinal: 1, source_tool_call_id: "" }),
+    );
+    const out = citedToolSources({
+      runId: RUN,
+      citationLinks: links,
+      toolIndex: toolInvocationIndex(items),
+      toolCallIdsInOrder: ["call_lin_1"],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source_connector).toBe("linear");
+    expect(out[0].title).toContain("linear.list_issues");
+    expect(out[0].title).not.toBe("call_tool");
+    expect(out[0].snippet).toBe("13 issues returned");
   });
 
   it("creates multiple rows when distinct tool_call_ids are cited", () => {

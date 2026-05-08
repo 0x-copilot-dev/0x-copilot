@@ -97,11 +97,29 @@ export function toolInvocationIndex(
   return index.size === 0 ? EMPTY_INDEX : index;
 }
 
+/** Tool names the FE *synthesizes* from non-tool wire events (approval
+ *  gates, MCP auth interrupts, progress beats). They are not real tool
+ *  calls — the runtime never allocates a ``conversation_ordinal`` for
+ *  them and they don't fire ``tool_call_started``. They must NOT
+ *  participate in ordinal-position fallback or ordinal-1 would land on
+ *  the approval gate instead of the actual tool that ran after the
+ *  gate cleared. */
+const SYNTHETIC_FE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "approval_request",
+  "mcp_auth_required",
+  "run_progress",
+]);
+
 /** Walk ``items`` in document order and yield each tool-call part's
  *  call_id, deduped. Used by ``citedToolSources`` to map ordinals (1-based
  *  per conversation) back to the corresponding tool invocation when the
  *  runtime didn't bind a ``source_tool_call_id`` — common for LangChain
- *  tools that don't opt into ``InjectedToolCallId`` (DuckDuckGo et al.). */
+ *  tools that don't opt into ``InjectedToolCallId`` (DuckDuckGo et al.).
+ *
+ *  Skips FE-synthesized parts (``approval_request`` etc.) so the Nth
+ *  ordinal aligns with the Nth *real* tool invocation — the conversation
+ *  ordinal is allocated server-side and never counts the FE-synthesized
+ *  approval/auth/progress parts. */
 export function toolInvocationCallIdsInOrder(
   items: readonly ChatItem[],
 ): readonly string[] {
@@ -113,6 +131,10 @@ export function toolInvocationCallIdsInOrder(
     }
     for (const part of item.content) {
       if (!isToolCallPart(part)) {
+        continue;
+      }
+      const toolName = stringValue(part.toolName);
+      if (toolName !== null && SYNTHETIC_FE_TOOL_NAMES.has(toolName)) {
         continue;
       }
       const callId = stringValue(part.toolCallId);
@@ -140,13 +162,23 @@ export interface CitedToolSourcesArgs {
   snippetMaxChars?: number;
 }
 
-/** Project the run's cited tool invocations into ``SourceEntry`` rows.
+/** Project the conversation's cited tool invocations into ``SourceEntry``
+ *  rows.
  *
- *  Each row aggregates how many distinct prose offsets in the run cited
- *  this tool's ordinal — that becomes ``citation_count``, matching the
- *  legacy ``sourcesByCitationCount`` ordering used by ``SourcesTab``.
+ *  Each row aggregates how many distinct prose offsets cited this tool's
+ *  ordinal across all runs in the registry — that becomes
+ *  ``citation_count``, matching the legacy ``sourcesByCitationCount``
+ *  ordering used by ``SourcesTab``.
  *
- *  Returns ``[]`` when no cited tool invocations exist for the run. */
+ *  ``runId`` semantics:
+ *    - ``string`` → only links emitted in that run (single-turn projection).
+ *    - ``null``   → links across every run in the registry. The Sources
+ *      tab is conversation-scoped, and after an approval interrupt the
+ *      ``citation_made`` events fire on the resumed run while the
+ *      assistant message metadata may carry a different run id, so a
+ *      single-run filter would silently drop those citations.
+ *
+ *  Returns ``[]`` when no cited tool invocations exist. */
 export function citedToolSources({
   runId,
   citationLinks,
@@ -154,14 +186,15 @@ export function citedToolSources({
   toolCallIdsInOrder = [],
   snippetMaxChars = SNIPPET_MAX_CHARS,
 }: CitedToolSourcesArgs): readonly SourceEntry[] {
-  if (runId === null) {
-    return EMPTY_SOURCES;
-  }
-  const links = linksForRun(citationLinks, runId);
+  const links =
+    runId === null
+      ? allLinks(citationLinks)
+      : linksForRun(citationLinks, runId);
   if (links.length === 0) {
     citationDebug(
-      `cited_tool_sources.empty run=${runId} reason=no_links_in_run ` +
-        `runs_indexed=${citationLinks.size} tools_indexed=${toolIndex.size}`,
+      `cited_tool_sources.empty run=${runId ?? "ALL"} ` +
+        `reason=no_links runs_indexed=${citationLinks.size} ` +
+        `tools_indexed=${toolIndex.size}`,
     );
     return EMPTY_SOURCES;
   }
@@ -215,12 +248,28 @@ export function citedToolSources({
     rows.push(toSourceEntry(bucket, snapshot, snippetMaxChars));
   }
   citationDebug(
-    `cited_tool_sources.projected run=${runId} links=${links.length} ` +
-      `unique_calls=${byCallId.size} rows=${rows.length} ` +
-      `missing_snapshots=${missingSnapshots} ` +
+    `cited_tool_sources.projected run=${runId ?? "ALL"} ` +
+      `links=${links.length} unique_calls=${byCallId.size} ` +
+      `rows=${rows.length} missing_snapshots=${missingSnapshots} ` +
       `ordinal_fallbacks=${ordinalFallbacks}`,
   );
   return rows;
+}
+
+/** Flatten every link in the registry, regardless of run. Used by the
+ *  conversation-scoped projection so a citation that fired on a
+ *  resumed-after-approval run still surfaces in the Sources tab even
+ *  when ``mostRecentAssistantRunId`` points at a sibling run. */
+function allLinks(
+  registry: CitationLinkRegistryByRun,
+): readonly CitationLink[] {
+  const out: CitationLink[] = [];
+  for (const runId of registry.keys()) {
+    for (const link of linksForRun(registry, runId)) {
+      out.push(link);
+    }
+  }
+  return out;
 }
 
 function toSourceEntry(
@@ -233,7 +282,23 @@ function toSourceEntry(
   snippetMaxChars: number,
 ): SourceEntry {
   const toolName = snapshot?.tool_name ?? "tool call";
-  const connector = connectorFromToolName(toolName);
+  // For MCP wrapper calls, derive the connector from the inner
+  // ``server_name`` arg so the row groups under ``linear`` rather than
+  // ``mcp``. Falls back to the wrapper-name heuristic for everything
+  // else. ``approval_request`` is FE-synthesized and shouldn't normally
+  // be reachable via ordinal-position fallback (filtered out in
+  // ``toolInvocationCallIdsInOrder``), but keep the same args-shape
+  // detection here as a defensive default.
+  let connector = connectorFromToolName(toolName);
+  if (
+    (toolName === "call_tool" || toolName === "approval_request") &&
+    snapshot?.args
+  ) {
+    const serverName = stringValue(snapshot.args["server_name"]);
+    if (serverName !== null) {
+      connector = serverName.toLowerCase();
+    }
+  }
   return {
     citation_id: `${TOOL_CITATION_ID_PREFIX}${bucket.tool_call_id}`,
     source_connector: connector,
@@ -285,6 +350,27 @@ function titleFor(
   toolName: string,
   snapshot: ToolCallSnapshot | undefined,
 ): string {
+  // The MCP wrapper exposes itself to the model as ``call_tool`` with
+  // ``server_name`` + ``tool_name`` in args. The FE-synthesized
+  // ``approval_request`` part also carries ``server_name`` +
+  // ``tool_name`` in its args. Surface the actual MCP tool path
+  // (``linear.list_issues``) instead of the generic wrapper name so
+  // the Sources tab row reads naturally.
+  if (
+    (toolName === "call_tool" || toolName === "approval_request") &&
+    snapshot?.args
+  ) {
+    const serverName = stringValue(snapshot.args["server_name"]);
+    const innerToolName = stringValue(snapshot.args["tool_name"]);
+    if (serverName && innerToolName) {
+      const labelArgs = snapshot.args["arguments"];
+      const argsSummary = isToolCallArgs(labelArgs)
+        ? summarizeArgs(labelArgs)
+        : null;
+      const head = `${serverName}.${innerToolName}`;
+      return argsSummary === null ? head : `${head} — ${argsSummary}`;
+    }
+  }
   if (snapshot?.args) {
     const argsSummary = summarizeArgs(snapshot.args);
     if (argsSummary !== null) {
