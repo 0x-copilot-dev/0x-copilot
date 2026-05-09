@@ -30,6 +30,7 @@ from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
+from agent_runtime.persistence.ports import ConversationToolOrdinalStorePort
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -94,7 +95,9 @@ class RuntimeApprovalHandler:
         runtime_resumer: RuntimeResumer = astream_runtime_resume,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: object | None = None,
-        conversation_tool_ordinal_store: object | None = None,
+        conversation_tool_ordinal_store: (
+            ConversationToolOrdinalStorePort | None
+        ) = None,
     ) -> None:
         self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
         self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
@@ -118,12 +121,14 @@ class RuntimeApprovalHandler:
         # default early-return (status transitions skipped) — surfaced as
         # an audit gap rather than a crash.
         self._draft_store = draft_store
-        # PR 04 — held now so Phase 3's allocator refactor can read it
-        # to build the resumed allocator from the persistent binding map
-        # rather than re-counting events. ``object`` typing keeps the
-        # constructor signature decoupled from the persistence ports
-        # module while threading the store from the worker boundary.
-        self._conversation_tool_ordinal_store = conversation_tool_ordinal_store
+        # PR 04 — bound at construction so the resumed allocator is
+        # rebuilt from the persistent binding map rather than re-counting
+        # events. Optional so handler unit tests can construct without
+        # the store; production wiring (RuntimeWorker) always supplies
+        # one (in-memory or postgres adapter).
+        self._conversation_tool_ordinal_store: (
+            ConversationToolOrdinalStorePort | None
+        ) = conversation_tool_ordinal_store
         # PR 3.2.5 Phase 3 — explicit dedup so a transient retry of
         # ``handle()`` for the same approval cannot re-emit
         # ``SUBAGENT_RESUMED``. Upstream approval-status idempotency
@@ -358,18 +363,11 @@ class RuntimeApprovalHandler:
                 conversation_id=run.conversation_id,
                 run_id=run.run_id,
             )
-        from agent_runtime.persistence.ports import (  # noqa: PLC0415
-            ConversationToolOrdinalStorePort,
-        )
-
-        store: ConversationToolOrdinalStorePort = (
-            self._conversation_tool_ordinal_store  # type: ignore[assignment]
-        )
         return await ConversationOrdinalAllocator.for_conversation(
             org_id=run.org_id,
             conversation_id=run.conversation_id,
             run_id=run.run_id,
-            store=store,
+            store=self._conversation_tool_ordinal_store,
         )
 
     async def _stream_resume(

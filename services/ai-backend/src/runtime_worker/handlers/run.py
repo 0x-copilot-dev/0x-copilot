@@ -925,7 +925,15 @@ class RuntimeRunHandler:
         run: RunRecord,
         selected: Sequence[MessageRecord],
     ) -> ToolObservationIndex:
-        return await ToolObservationIndexBuilder(self.event_store).build(
+        # PR 04 — pass the persistent binding store so the builder can
+        # source ordinals from the canonical map instead of re-counting
+        # TOOL_CALL_STARTED events. Passing ``None`` (worker constructed
+        # without the store) is fine: observations come back without
+        # ordinals and the prompt context omits ``cite as [[N]]`` hints.
+        return await ToolObservationIndexBuilder(
+            self.event_store,
+            conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
+        ).build(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
             current_run_id=run.run_id,

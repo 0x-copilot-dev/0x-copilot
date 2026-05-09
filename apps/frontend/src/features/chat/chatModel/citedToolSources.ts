@@ -1,4 +1,4 @@
-// PR 1.1-rev2 / Phase 4e/4f — derive Sources-tab rows from cited tool calls.
+// PR 04 — derive Sources-tab rows from cited tool calls.
 //
 // The legacy ``sourcesReducer`` builds a ``SourceEntryMap`` from
 // ``source_ingested`` events (PR 1.1's wire). The model-declared
@@ -9,7 +9,16 @@
 // cited tool invocation into a synthetic ``SourceEntry`` and merge it
 // into the legacy map.
 //
-// Two helpers, both pure:
+// PR 04 invariant: every ``citation_made`` event arrives with a
+// non-empty ``source_tool_call_id``. The runtime allocator now binds
+// every ordinal to the LangGraph ``tool_call_id`` and persists the
+// binding map (``agent_conversation_tool_ordinals``); the resolver
+// stamps the call_id on every event. Empty means a hallucinated
+// ordinal — the chip surfaces as ``?`` (handled in
+// ``OrdinalCitationChip``) and the projection skips the link rather
+// than guessing.
+//
+// Two helpers:
 //
 //   - ``toolInvocationIndex(items)`` walks the chat content and returns
 //     a ``Map<tool_call_id, ToolCallSnapshot>`` so a citation event can
@@ -17,11 +26,10 @@
 //     the whole tree.
 //
 //   - ``citedToolSources({ runId, citationLinks, toolIndex })`` projects
-//     each unique ``source_tool_call_id`` cited in ``runId`` into one
-//     synthetic ``SourceEntry``. ``citation_count`` aggregates the
-//     number of distinct ``[[N]]`` chips pointing at the tool invocation
-//     across the run's messages, matching what ``sourcesByCitationCount``
-//     expects.
+//     each unique ``source_tool_call_id`` cited into one synthetic
+//     ``SourceEntry``. ``citation_count`` aggregates the number of
+//     distinct ``[[N]]`` chips pointing at the tool invocation,
+//     matching what ``sourcesByCitationCount`` expects.
 
 import type { CitationLink, SourceEntry } from "@enterprise-search/api-types";
 
@@ -97,67 +105,10 @@ export function toolInvocationIndex(
   return index.size === 0 ? EMPTY_INDEX : index;
 }
 
-/** Tool names the FE *synthesizes* from non-tool wire events (approval
- *  gates, MCP auth interrupts, progress beats). They are not real tool
- *  calls — the runtime never allocates a ``conversation_ordinal`` for
- *  them and they don't fire ``tool_call_started``. They must NOT
- *  participate in ordinal-position fallback or ordinal-1 would land on
- *  the approval gate instead of the actual tool that ran after the
- *  gate cleared. */
-const SYNTHETIC_FE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "approval_request",
-  "mcp_auth_required",
-  "run_progress",
-]);
-
-/** Walk ``items`` in document order and yield each tool-call part's
- *  call_id, deduped. Used by ``citedToolSources`` to map ordinals (1-based
- *  per conversation) back to the corresponding tool invocation when the
- *  runtime didn't bind a ``source_tool_call_id`` — common for LangChain
- *  tools that don't opt into ``InjectedToolCallId`` (DuckDuckGo et al.).
- *
- *  Skips FE-synthesized parts (``approval_request`` etc.) so the Nth
- *  ordinal aligns with the Nth *real* tool invocation — the conversation
- *  ordinal is allocated server-side and never counts the FE-synthesized
- *  approval/auth/progress parts. */
-export function toolInvocationCallIdsInOrder(
-  items: readonly ChatItem[],
-): readonly string[] {
-  const seen = new Set<string>();
-  const order: string[] = [];
-  for (const item of items) {
-    if (item.kind !== "message") {
-      continue;
-    }
-    for (const part of item.content) {
-      if (!isToolCallPart(part)) {
-        continue;
-      }
-      const toolName = stringValue(part.toolName);
-      if (toolName !== null && SYNTHETIC_FE_TOOL_NAMES.has(toolName)) {
-        continue;
-      }
-      const callId = stringValue(part.toolCallId);
-      if (callId === null || seen.has(callId)) {
-        continue;
-      }
-      seen.add(callId);
-      order.push(callId);
-    }
-  }
-  return order;
-}
-
 export interface CitedToolSourcesArgs {
   runId: string | null;
   citationLinks: CitationLinkRegistryByRun;
   toolIndex: ToolInvocationIndex;
-  /** PR 1.1-rev2 — ordinal-position fallback. When the runtime
-   *  couldn't bind a ``source_tool_call_id`` to an ordinal (LangChain
-   *  tool that didn't opt into ``InjectedToolCallId``), we resolve the
-   *  ``Nth`` cited ordinal against the ``Nth`` tool-call part in
-   *  ``items`` order. ``[]`` disables the fallback. */
-  toolCallIdsInOrder?: readonly string[];
   /** Optional cap on the snippet length, mostly for tests. */
   snippetMaxChars?: number;
 }
@@ -183,7 +134,6 @@ export function citedToolSources({
   runId,
   citationLinks,
   toolIndex,
-  toolCallIdsInOrder = [],
   snippetMaxChars = SNIPPET_MAX_CHARS,
 }: CitedToolSourcesArgs): readonly SourceEntry[] {
   const links =
@@ -207,24 +157,16 @@ export function citedToolSources({
       links: CitationLink[];
     }
   >();
-  let ordinalFallbacks = 0;
+  let unboundLinks = 0;
   for (const link of links) {
-    let callId = link.source_tool_call_id;
+    const callId = link.source_tool_call_id;
     if (!callId) {
-      // PR 1.1-rev2 — ordinal-position fallback. The Nth cited ordinal
-      // resolves to the Nth tool invocation in document order. Common
-      // for LangChain tools that don't pass ``InjectedToolCallId`` (the
-      // runtime allocates an ordinal but can't bind a call_id at
-      // dispatch time).
-      const fallback = toolCallIdsInOrder[link.conversation_ordinal - 1];
-      if (typeof fallback === "string" && fallback.length > 0) {
-        callId = fallback;
-        ordinalFallbacks += 1;
-      } else {
-        // Truly unresolvable (hallucinated ordinal beyond any real
-        // tool call). Skip — there's nothing to surface.
-        continue;
-      }
+      // PR 04 — empty ``source_tool_call_id`` on a citation_made event
+      // is now reserved for hallucinated ordinals. The chip already
+      // renders as ``?`` for these via OrdinalCitationChip; the
+      // projection skips them so the Sources tab doesn't invent a row.
+      unboundLinks += 1;
+      continue;
     }
     const existing = byCallId.get(callId);
     if (existing) {
@@ -251,7 +193,7 @@ export function citedToolSources({
     `cited_tool_sources.projected run=${runId ?? "ALL"} ` +
       `links=${links.length} unique_calls=${byCallId.size} ` +
       `rows=${rows.length} missing_snapshots=${missingSnapshots} ` +
-      `ordinal_fallbacks=${ordinalFallbacks}`,
+      `unbound_links=${unboundLinks}`,
   );
   return rows;
 }
@@ -285,15 +227,9 @@ function toSourceEntry(
   // For MCP wrapper calls, derive the connector from the inner
   // ``server_name`` arg so the row groups under ``linear`` rather than
   // ``mcp``. Falls back to the wrapper-name heuristic for everything
-  // else. ``approval_request`` is FE-synthesized and shouldn't normally
-  // be reachable via ordinal-position fallback (filtered out in
-  // ``toolInvocationCallIdsInOrder``), but keep the same args-shape
-  // detection here as a defensive default.
+  // else.
   let connector = connectorFromToolName(toolName);
-  if (
-    (toolName === "call_tool" || toolName === "approval_request") &&
-    snapshot?.args
-  ) {
+  if (toolName === "call_tool" && snapshot?.args) {
     const serverName = stringValue(snapshot.args["server_name"]);
     if (serverName !== null) {
       connector = serverName.toLowerCase();
@@ -351,15 +287,10 @@ function titleFor(
   snapshot: ToolCallSnapshot | undefined,
 ): string {
   // The MCP wrapper exposes itself to the model as ``call_tool`` with
-  // ``server_name`` + ``tool_name`` in args. The FE-synthesized
-  // ``approval_request`` part also carries ``server_name`` +
-  // ``tool_name`` in its args. Surface the actual MCP tool path
-  // (``linear.list_issues``) instead of the generic wrapper name so
-  // the Sources tab row reads naturally.
-  if (
-    (toolName === "call_tool" || toolName === "approval_request") &&
-    snapshot?.args
-  ) {
+  // ``server_name`` + ``tool_name`` in args. Surface the actual MCP
+  // tool path (``linear.list_issues``) instead of the generic wrapper
+  // name so the Sources tab row reads naturally.
+  if (toolName === "call_tool" && snapshot?.args) {
     const serverName = stringValue(snapshot.args["server_name"]);
     const innerToolName = stringValue(snapshot.args["tool_name"]);
     if (serverName && innerToolName) {

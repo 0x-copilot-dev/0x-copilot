@@ -115,7 +115,6 @@ import {
 } from "./chatModel/sourcesReducer";
 import {
   citedToolSources,
-  toolInvocationCallIdsInOrder,
   toolInvocationIndex,
 } from "./chatModel/citedToolSources";
 import { WorkspacePane } from "./components/workspace/WorkspacePane";
@@ -1332,26 +1331,21 @@ export function ChatScreen({
   // ``source_doc_id`` prefixes (``tool:`` / ``tool-call:``) keep the
   // two paths from key-colliding.
   const toolIndex = useMemo(() => toolInvocationIndex(items), [items]);
-  // PR 1.1-rev2 — ordinal-position fallback list. ``citedToolSources``
-  // walks this when a citation_made event lacks ``source_tool_call_id``
-  // (LangChain tools that don't pass ``InjectedToolCallId``, e.g.
-  // DuckDuckGo). The Nth ordinal maps to the Nth tool invocation by
-  // document order.
-  const toolCallIdsInOrder = useMemo(
-    () => toolInvocationCallIdsInOrder(items),
-    [items],
-  );
   const sourcesWithToolCitations = useMemo<SourceEntryMap>(() => {
     // Conversation-scoped: scan every run in the registry, not only the
     // most-recent assistant message's run. After an approval interrupt,
     // ``citation_made`` events fire on the resumed run while the
     // assistant message metadata may carry a sibling run id, and a
     // single-run filter would silently drop those citations.
+    //
+    // PR 04 — every ``citation_made`` link arrives with a non-empty
+    // ``source_tool_call_id`` (the runtime allocator binds every
+    // ordinal to the LangGraph tool_call_id). The projection no longer
+    // needs an FE-side ordinal-position fallback.
     const cited = citedToolSources({
       runId: null,
       citationLinks,
       toolIndex,
-      toolCallIdsInOrder,
     });
     if (cited.length === 0) {
       return sourcesMap;
@@ -1367,7 +1361,7 @@ export function ChatScreen({
       }
     }
     return merged;
-  }, [citationLinks, sourcesMap, toolIndex, toolCallIdsInOrder]);
+  }, [citationLinks, sourcesMap, toolIndex]);
 
   // PR 3.5 / G9 — set of runIds whose assistant message has reached a
   // terminal status (complete/incomplete). Used by `useRunCitations` so
@@ -1827,7 +1821,6 @@ export function ChatScreen({
                 terminalRuns={terminalRuns}
                 linksByRun={citationLinks}
                 activeRunId={activeRunId}
-                toolCallIdsInOrder={toolCallIdsInOrder}
                 onOrdinalSelect={(citationId) =>
                   paneState.openOn("sources", {
                     focusCitationId: citationId,

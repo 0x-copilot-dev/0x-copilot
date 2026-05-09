@@ -1,6 +1,8 @@
 # PR 1.1-rev2 — Citations: model-declared, conversation-scoped pointers
 
-> **Status:** Proposed · supersedes [`01-citations-live-registry.md`](./01-citations-live-registry.md) and [`02-citations-followups.md`](./02-citations-followups.md) · Owner: TBD · Target wave: W1
+> **Status:** Shipped — wire shape (`citation_made`, `[[N]]`, `CitationLink`) is unchanged. **The storage and resolution model described in this doc has been replaced** by [`04-citations-binding-map.md`](./04-citations-binding-map.md): the positional event-counting seeder + four out-of-band ordinal counters this doc relied on were structurally fragile (ordinal collisions across runs, FE fallback collisions). PR 04 collapses them to one persistent `(conversation_ordinal ↔ tool_call_id)` binding table and removes the FE ordinal-position fallback. Read PR 04 for current implementation; this doc remains as the wire-format spec.
+> **Supersedes:** [`01-citations-live-registry.md`](./01-citations-live-registry.md), [`02-citations-followups.md`](./02-citations-followups.md)
+> **Superseded-by (storage layer only):** [`04-citations-binding-map.md`](./04-citations-binding-map.md)
 > **Scope:** `services/ai-backend` (event + persistence + stream filter) · `apps/frontend` (reducer + chip + provider) · `packages/api-types` (wire contract)
 > **Reads alongside:** [`docs/new-design/0-OVERALL_PLAN.md`](./0-OVERALL_PLAN.md), `services/ai-backend/CLAUDE.md`, `apps/frontend/CLAUDE.md`.
 

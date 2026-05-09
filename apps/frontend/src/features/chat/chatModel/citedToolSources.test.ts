@@ -245,55 +245,14 @@ describe("citedToolSources", () => {
     expect(out[0].citation_count).toBe(2);
   });
 
-  it("falls back to ordinal-position when source_tool_call_id is empty", () => {
-    // Regression pin: LangChain tools that don't pass
-    // ``InjectedToolCallId`` (DuckDuckGo et al.) leave the resolver
-    // with an empty ``source_tool_call_id``. The FE recovers by
-    // matching the Nth ordinal to the Nth tool invocation in document
-    // order.
-    const items = [
-      toolPart({
-        toolCallId: "call_a",
-        toolName: "web_search",
-        result: "result a",
-      }),
-      toolPart({
-        toolCallId: "call_b",
-        toolName: "web_search",
-        result: "result b",
-      }),
-    ];
-    let registry = emptyCitationLinkRegistry();
-    registry = upsertCitationLink(
-      registry,
-      RUN,
-      link({ conversation_ordinal: 1, source_tool_call_id: "" }),
-    );
-    registry = upsertCitationLink(
-      registry,
-      RUN,
-      link({
-        conversation_ordinal: 2,
-        prose_offset: 9,
-        source_tool_call_id: "",
-      }),
-    );
-    const out = citedToolSources({
-      runId: RUN,
-      citationLinks: registry,
-      toolIndex: toolInvocationIndex(items),
-      toolCallIdsInOrder: ["call_a", "call_b"],
-    });
-    expect(out).toHaveLength(2);
-    // Each ordinal resolved to its positional tool call.
-    const docIds = out.map((row) => row.source_doc_id).sort();
-    expect(docIds).toEqual([
-      `${TOOL_DOC_ID_PREFIX}call_a`,
-      `${TOOL_DOC_ID_PREFIX}call_b`,
-    ]);
-  });
-
-  it("skips citation links with empty source_tool_call_id when no fallback list provided", () => {
+  it("skips citation links with empty source_tool_call_id (hallucinated ordinal)", () => {
+    // PR 04 invariant: every ``citation_made`` event the runtime emits
+    // arrives with a non-empty ``source_tool_call_id`` (the allocator
+    // binds every ordinal to the LangGraph tool_call_id and the
+    // resolver stamps it). Empty here means a hallucinated ordinal —
+    // model wrote ``[[N]]`` for a number that was never allocated.
+    // The chip surfaces as ``?`` (handled by ``OrdinalCitationChip``)
+    // and the projection skips the link rather than inventing a row.
     const links = upsertCitationLink(
       emptyCitationLinkRegistry(),
       RUN,
@@ -353,7 +312,8 @@ describe("citedToolSources", () => {
     // The MCP wrapper exposes itself to the model as ``call_tool``
     // with ``server_name`` + ``tool_name`` in args. The Sources tab
     // should surface ``linear.list_issues`` rather than the generic
-    // ``call_tool`` wrapper name.
+    // ``call_tool`` wrapper name. PR 04 — the link's
+    // ``source_tool_call_id`` is bound by the runtime allocator.
     const items = [
       toolPart({
         toolCallId: "call_lin_1",
@@ -369,13 +329,12 @@ describe("citedToolSources", () => {
     const links = upsertCitationLink(
       emptyCitationLinkRegistry(),
       RUN,
-      link({ conversation_ordinal: 1, source_tool_call_id: "" }),
+      link({ conversation_ordinal: 1, source_tool_call_id: "call_lin_1" }),
     );
     const out = citedToolSources({
       runId: RUN,
       citationLinks: links,
       toolIndex: toolInvocationIndex(items),
-      toolCallIdsInOrder: ["call_lin_1"],
     });
     expect(out).toHaveLength(1);
     expect(out[0].source_connector).toBe("linear");

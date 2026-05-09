@@ -92,11 +92,12 @@ describe("OrdinalCitationChip", () => {
     expect(chip.textContent).toBe("5");
   });
 
-  it("renders even when source_tool_call_id is empty", () => {
-    // Hallucinated ordinal case: the resolver fired the event but
-    // the allocator hadn't bound a tool_call_id. Chip still resolves
-    // — it just doesn't carry the data attribute that drives the
-    // tool-card click handshake.
+  it("renders ?-placeholder when source_tool_call_id is empty (hallucinated)", () => {
+    // PR 04 invariant: every ``citation_made`` event the runtime
+    // emits arrives with a non-empty ``source_tool_call_id``. Empty
+    // means the model wrote ``[[N]]`` for an ordinal that was never
+    // allocated — surface that as the muted ``?`` so the regression
+    // is visible rather than papered over.
     render(
       withProvider(<OrdinalCitationChip conversationOrdinal={9} />, {
         activeRunId: RUN,
@@ -111,8 +112,31 @@ describe("OrdinalCitationChip", () => {
         ],
       }),
     );
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("?")).toBeInTheDocument();
+  });
+
+  it("data-citation-id is `tool:<source_tool_call_id>` and matches the SourceRow key", () => {
+    // PR 04 click-handshake invariant: chip and source row both key
+    // off ``tool:<source_tool_call_id>``. Pinning this guarantees
+    // that ``scrollChatToCitation(citation_id)`` always finds *the*
+    // chip for that source.
+    render(
+      withProvider(<OrdinalCitationChip conversationOrdinal={3} />, {
+        activeRunId: RUN,
+        seed: [
+          {
+            runId: RUN,
+            link: link({
+              conversation_ordinal: 3,
+              source_tool_call_id: "call_abc",
+            }),
+          },
+        ],
+      }),
+    );
     const chip = screen.getByRole("link");
-    expect(chip.textContent).toBe("9");
-    expect(chip.getAttribute("data-source-tool-call-id")).toBeNull();
+    expect(chip.getAttribute("data-citation-id")).toBe("tool:call_abc");
+    expect(chip.getAttribute("data-source-tool-call-id")).toBe("call_abc");
   });
 });

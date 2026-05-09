@@ -9,6 +9,7 @@ import json
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.execution.contracts import AgentRuntimeContext, JsonObject
+from agent_runtime.persistence.ports import ConversationToolOrdinalStorePort
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_api.schemas import (
     MessageRecord,
@@ -31,11 +32,14 @@ class ToolObservation:
     result_preview: str
     payload: JsonObject
     created_at: str
-    # PR 1.1-rev2 — positional conversation_ordinal for the tool call.
-    # Computed at build-time from the cumulative count of TOOL_CALL_STARTED
-    # events on the active branch, so cross-turn ``[[N]]`` citations
-    # resolve to the right prior tool. ``None`` for observation kinds
-    # (e.g. subagent summaries) that don't get a tool-call ordinal.
+    # PR 04 — conversation_ordinal sourced from the persistent
+    # ``agent_conversation_tool_ordinals`` binding map, joined by
+    # ``call_id``. The same number the in-turn resolver stamps on
+    # ``citation_made`` events, so a cross-turn ``[[N]]`` cited by the
+    # model in T+k resolves to the *same* tool the originating turn
+    # used. ``None`` for observation kinds without a tool-call ordinal
+    # (subagent summaries, or call_ids missing from the binding map
+    # because they pre-date the persistence layer).
     conversation_ordinal: int | None = None
 
 
@@ -52,15 +56,39 @@ class ToolObservationIndex:
 
 
 class ToolObservationIndexBuilder:
-    """Project prior tool result events into compact model context."""
+    """Project prior tool result events into compact model context.
+
+    PR 04 — ordinals come from the persistent binding map
+    (:class:`ConversationToolOrdinalStorePort`), not from re-counting
+    ``TOOL_CALL_STARTED`` events at build time. The runtime allocator
+    is the only writer; this builder is one of the readers. Joining on
+    ``tool_call_id`` guarantees the prompt context's ``cite as [[N]]``
+    hint matches the resolver's binding for that same tool call —
+    cross-turn citation and within-turn citation share one source of
+    truth.
+
+    When the store is not bound (replay / eval paths that build the
+    builder without the worker's full DI), observations are returned
+    without ordinals — the model still sees the prior result preview
+    and the ``load_prior_tool_result`` affordance, just no ``[[N]]``
+    cite hint. Citations remain best-effort decoration.
+    """
 
     max_observations = 8
     max_prompt_chars = 4_000
     max_preview_chars = 600
     max_args_chars = 240
 
-    def __init__(self, event_store: EventStorePort) -> None:
+    def __init__(
+        self,
+        event_store: EventStorePort,
+        *,
+        conversation_tool_ordinal_store: (
+            ConversationToolOrdinalStorePort | None
+        ) = None,
+    ) -> None:
         self.event_store = event_store
+        self._ordinal_store = conversation_tool_ordinal_store
 
     async def build(
         self,
@@ -72,24 +100,11 @@ class ToolObservationIndexBuilder:
     ) -> ToolObservationIndex:
         run_ids = self._prior_run_ids(selected_messages, current_run_id)
         observations: list[ToolObservation] = []
-        # PR 1.1-rev2 — track the conversation-scoped tool call ordinal
-        # positionally (count of TOOL_CALL_STARTED events seen so far on
-        # the active branch). The seeder uses the same primitive at run
-        # start so the prompt context's ``[[N]]`` markers match the
-        # ordinals the resolver will accept.
-        ordinal_by_call_id: dict[str, int] = {}
-        cumulative_ordinal = 0
         for run_id in run_ids:
             events = await self.event_store.list_events_after(
                 org_id=org_id,
                 run_id=run_id,
                 after_sequence=0,
-            )
-            cumulative_ordinal = self._index_ordinals_from_events(
-                events=events,
-                expected_conversation_id=conversation_id,
-                ordinal_by_call_id=ordinal_by_call_id,
-                starting_ordinal=cumulative_ordinal,
             )
             observations.extend(
                 self._observations_for_run(
@@ -97,7 +112,20 @@ class ToolObservationIndexBuilder:
                     expected_conversation_id=conversation_id,
                 )
             )
-        # Stamp each observation with its positional ordinal (when known).
+        # PR 04 — join observations to the canonical binding map by
+        # ``call_id``. The map is whatever the runtime allocator has
+        # persisted so far for the conversation; observations whose
+        # call_id isn't bound (subagent summaries, pre-PR04
+        # backfill-pending rows) just lack ``conversation_ordinal``.
+        ordinal_by_call_id: dict[str, int] = {}
+        if self._ordinal_store is not None:
+            bindings = await self._ordinal_store.load(
+                org_id=org_id, conversation_id=conversation_id
+            )
+            ordinal_by_call_id = {
+                binding.tool_call_id: binding.conversation_ordinal
+                for binding in bindings
+            }
         observations = [
             self._with_ordinal(obs, ordinal_by_call_id.get(obs.call_id))
             for obs in observations
@@ -125,30 +153,6 @@ class ToolObservationIndexBuilder:
             created_at=observation.created_at,
             conversation_ordinal=ordinal,
         )
-
-    @classmethod
-    def _index_ordinals_from_events(
-        cls,
-        *,
-        events: Sequence[RuntimeEventEnvelope],
-        expected_conversation_id: str,
-        ordinal_by_call_id: dict[str, int],
-        starting_ordinal: int,
-    ) -> int:
-        """Walk events in order and assign positional ordinals to call_ids."""
-
-        ordinal = starting_ordinal
-        for event in events:
-            if event.conversation_id != expected_conversation_id:
-                continue
-            if event.event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
-                ordinal += 1
-                call_id = StreamTextHelper.extract(
-                    event.payload.get(Keys.Field.CALL_ID)
-                )
-                if call_id is not None and call_id not in ordinal_by_call_id:
-                    ordinal_by_call_id[call_id] = ordinal
-        return ordinal
 
     @classmethod
     def _prior_run_ids(
