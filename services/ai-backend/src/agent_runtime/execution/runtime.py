@@ -206,30 +206,6 @@ class _TracedRuntimeCall:
 
 
 @RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
-def invoke_runtime(
-    harness: RuntimeHarness,
-    messages: Sequence[object],
-    *,
-    logger: RuntimeLogger | None = None,
-) -> Any:
-    """Invoke a sync-compatible runtime agent with typed config metadata."""
-
-    call = _TracedRuntimeCall(
-        harness,
-        event_prefix="runtime.invoke",
-        safe_message="Runtime invocation failed safely.",
-        logger=logger or RuntimeLogger(),
-        start_metadata={"message_count": len(messages)},
-    )
-    call.require_method("invoke")
-    with call.guard():
-        return harness.agent.invoke(
-            {"messages": list(messages)},
-            config=runtime_config(harness),
-        )
-
-
-@RuntimeTracer.traced(name=TraceNames.RUNTIME_INVOKE, run_type=TraceRunTypes.CHAIN)
 async def ainvoke_runtime(
     harness: RuntimeHarness,
     messages: Sequence[object],

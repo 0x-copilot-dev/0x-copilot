@@ -79,7 +79,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         with pytest.raises(ValidationError):
             self.make_resource(uri=self.TestValues.Uris.FILE)
 
-    def test_registry_returns_only_authorized_healthy_cards(
+    async def test_registry_returns_only_authorized_healthy_cards(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -107,11 +107,11 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
         registry = DynamicMcpRegistry(providers=(provider,))
 
-        cards = registry.list_server_cards(runtime_context_admin)
+        cards = await registry.list_server_cards(runtime_context_admin)
 
         assert tuple(card.name for card in cards) == (self.TestValues.Names.DRIVE_MCP,)
 
-    def test_registry_duplicate_names_raise_deterministic_error(
+    async def test_registry_duplicate_names_raise_deterministic_error(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -125,7 +125,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         registry = DynamicMcpRegistry(providers=(provider,))
 
         with pytest.raises(AgentRuntimeError) as exc_info:
-            registry.list_server_cards(runtime_context_admin)
+            await registry.list_server_cards(runtime_context_admin)
 
         assert exc_info.value.code == RuntimeErrorCode.CONFIGURATION_ERROR
         assert exc_info.value.safe_message == Messages.Registry.DUPLICATE_SERVER_NAME
@@ -170,7 +170,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
         assert provider.created_clients == [self.TestValues.Names.DRIVE_MCP]
 
-    def test_loader_denies_when_permission_changes_before_load(
+    async def test_loader_denies_when_permission_changes_before_load(
         self,
         model_config: ModelConfig,
         runtime_context_admin: AgentRuntimeContext,
@@ -189,14 +189,13 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         lost_permission_context = self.lost_permission_context(model_config)
 
         assert tuple(
-            card.name for card in registry.list_server_cards(runtime_context_admin)
+            card.name
+            for card in await registry.list_server_cards(runtime_context_admin)
         ) == (self.TestValues.Names.DRIVE_MCP,)
-        result = asyncio.run(
-            loader.load_server(
-                McpLoadRequest(
-                    server_name=self.TestValues.Names.DRIVE_MCP,
-                    runtime_context=lost_permission_context,
-                )
+        result = await loader.load_server(
+            McpLoadRequest(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=lost_permission_context,
             )
         )
 

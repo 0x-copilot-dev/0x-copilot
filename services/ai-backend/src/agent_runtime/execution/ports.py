@@ -18,7 +18,7 @@ class ToolRegistry(Protocol):
 class McpRegistry(Protocol):
     """Lists MCP servers or capabilities after runtime permissions are applied."""
 
-    def list_available_servers(self, context: object) -> Sequence[object]:
+    async def list_available_servers(self, context: object) -> Sequence[object]:
         """Return MCP server descriptors visible to this context."""
 
 

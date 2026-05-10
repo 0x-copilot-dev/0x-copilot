@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
-from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.factory import RuntimeHarness, acreate_agent_runtime
 from agent_runtime.capabilities.skills.virtual import VirtualSkillCard
 from tests.unit.agent_runtime.agent.helpers import SkillsRuntimeFactoryTestMixin
 
 
 @dataclass
 class FakeVirtualSkillRegistry:
-    def list_available_skills(
+    async def list_available_skills(
         self, _context: AgentRuntimeContext
     ) -> tuple[VirtualSkillCard, ...]:
         return (
@@ -26,19 +26,19 @@ class FakeVirtualSkillRegistry:
             ),
         )
 
-    def load_skill_by_name(self, _name: str) -> object:
+    async def load_skill_by_name(self, _name: str) -> object:
         return object()
 
 
 class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):
-    def test_factory_passes_skill_directories_to_agent_builder(
+    async def test_factory_passes_skill_directories_to_agent_builder(
         self,
         runtime_context_admin: AgentRuntimeContext,
         fake_dependencies: RuntimeDependencies,
     ) -> None:
         builder = self.create_builder()
 
-        harness = create_agent_runtime(
+        harness = await acreate_agent_runtime(
             context=runtime_context_admin,
             dependencies=fake_dependencies,
             agent_builder=builder,
@@ -48,7 +48,7 @@ class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):
         assert harness.skill_directories == self.expected_skill_directories()
         assert builder.calls[0].skill_directories == self.expected_skill_directories()
 
-    def test_factory_injects_virtual_skill_cards_and_loader_tool(
+    async def test_factory_injects_virtual_skill_cards_and_loader_tool(
         self,
         runtime_context_admin: AgentRuntimeContext,
         fake_dependencies: RuntimeDependencies,
@@ -58,7 +58,7 @@ class TestSkillsRuntimeFactory(SkillsRuntimeFactoryTestMixin):
             update={"skill_registry": FakeVirtualSkillRegistry()}
         )
 
-        harness = create_agent_runtime(
+        harness = await acreate_agent_runtime(
             context=runtime_context_admin,
             dependencies=dependencies,
             agent_builder=builder,

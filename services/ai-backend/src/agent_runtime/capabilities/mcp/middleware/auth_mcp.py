@@ -18,7 +18,7 @@ from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 class McpAuthSessionCreator(Protocol):
     """Creates MCP auth sessions without returning any tokens."""
 
-    def create_auth_session(
+    async def create_auth_session(
         self,
         *,
         server_id: str,
@@ -58,7 +58,7 @@ class AuthMcpTool:
         )
         if isinstance(parsed_input, McpLoadResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
-        session = self.auth_session_creator.create_auth_session(
+        session = await self.auth_session_creator.create_auth_session(
             server_id=parsed_input.server_id or parsed_input.server_name,
             runtime_context=self.runtime_context,
         )

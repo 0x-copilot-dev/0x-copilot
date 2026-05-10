@@ -36,7 +36,7 @@ class _StubAuthGate:
         self.outcome = outcome
         self.calls: list[str] = []
 
-    def check(
+    async def check(
         self, *, target_connector: str, runtime_context: object
     ) -> CapabilityAuthCheck:
         self.calls.append(target_connector)

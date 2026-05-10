@@ -59,7 +59,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only imports
 class McpServerLookup(Protocol):
     """Subset of the MCP registry the discovery service depends on."""
 
-    def list_available_servers(
+    async def list_available_servers(
         self, context: AgentRuntimeContext
     ) -> tuple[McpServerCard, ...]:
         """Return the per-context catalog already authorized for the run."""
@@ -215,7 +215,7 @@ class McpDiscoveryService:
                 "server_id": normalized_id,
             }
 
-        lookup = self._lookup_card_with_source(normalized_id)
+        lookup = await self._lookup_card_with_source(normalized_id)
         if lookup is None:
             # Not in the per-run catalog — never emit a card for a server
             # the model only thinks exists. Audit nothing (no resource
@@ -246,7 +246,7 @@ class McpDiscoveryService:
             }
 
         approval_id = self._approval_id(normalized_id)
-        payload = self._build_payload(
+        payload = await self._build_payload(
             card=card,
             approval_id=approval_id,
             reason=reason,
@@ -315,11 +315,11 @@ class McpDiscoveryService:
 
         return _MCP_DISCOVERY_CTX.get(None)
 
-    def _lookup_card(self, server_id: str) -> McpServerCard | None:
-        result = self._lookup_card_with_source(server_id)
+    async def _lookup_card(self, server_id: str) -> McpServerCard | None:
+        result = await self._lookup_card_with_source(server_id)
         return result[0] if result is not None else None
 
-    def _lookup_card_with_source(
+    async def _lookup_card_with_source(
         self, server_id: str
     ) -> tuple[McpServerCard, str] | None:
         """Resolve a server_id to a card, tagging the lookup source.
@@ -344,7 +344,7 @@ class McpDiscoveryService:
         bare = (
             normalized[len("seed:") :] if normalized.startswith("seed:") else normalized
         )
-        for card in self._registry.list_available_servers(self._runtime_context):
+        for card in await self._registry.list_available_servers(self._runtime_context):
             card_sid = (card.server_id or "").lower()
             card_name = (card.name or "").lower()
             if (
@@ -378,7 +378,7 @@ class McpDiscoveryService:
                 return card
         return None
 
-    def _build_payload(
+    async def _build_payload(
         self,
         *,
         card: McpServerCard,
@@ -412,7 +412,7 @@ class McpDiscoveryService:
         # the row + starts OAuth in a single flow — the discovery card
         # itself doesn't need a pre-baked auth_url.
         if lookup_source == "registry" and self._auth_session_creator is not None:
-            session = self._auth_session_creator.create_auth_session(
+            session = await self._auth_session_creator.create_auth_session(
                 server_id=server_id,
                 runtime_context=self._runtime_context,
             )

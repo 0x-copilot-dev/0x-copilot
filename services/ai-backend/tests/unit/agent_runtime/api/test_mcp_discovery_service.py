@@ -109,7 +109,7 @@ class _RecordingEventStore:
 class _FakeAuthSessionCreator:
     """Returns a deterministic auth session — no network."""
 
-    def create_auth_session(
+    async def create_auth_session(
         self, *, server_id: str, runtime_context: AgentRuntimeContext
     ) -> McpAuthSession:
         return McpAuthSession(
@@ -127,7 +127,7 @@ class _StubRegistry:
     def __init__(self, cards: list[McpServerCard]) -> None:
         self._cards = cards
 
-    def list_available_servers(
+    async def list_available_servers(
         self, context: AgentRuntimeContext
     ) -> tuple[McpServerCard, ...]:
         return tuple(self._cards)
@@ -481,7 +481,7 @@ class TestSuggestCatalogFallback(DiscoveryFixtureMixin):
         from agent_runtime.execution.contracts import CatalogSuggestionCard
 
         class _AssertingCreator:
-            def create_auth_session(self, *, server_id, runtime_context):
+            async def create_auth_session(self, *, server_id, runtime_context):
                 # Args ignored on purpose — the assertion is "this
                 # method must not be invoked at all" for a catalog hit.
                 del server_id, runtime_context

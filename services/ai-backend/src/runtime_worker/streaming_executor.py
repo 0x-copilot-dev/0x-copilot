@@ -17,6 +17,7 @@ from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
 )
+from runtime_worker.delta_coalescer import DeltaCoalescer
 from runtime_worker.run_metrics import AssistantRunMetrics, TokenUsageExtractor
 from runtime_worker.stream_events import StreamOrchestrator
 
@@ -116,6 +117,8 @@ class StreamingExecutor:
         track_subagents: bool = False,
         citation_pipeline: CitationStreamPipeline | None = None,
         citation_resolver: CitationResolver | None = None,
+        delta_coalesce_window_ms: int = 0,
+        delta_coalesce_max_chunks: int = 64,
     ) -> StreamingResult:
         # PR 1.1-rev2 — fall back to the active ContextVar-bound resolver
         # when the caller didn't pass one. This lets the approval-resume
@@ -130,148 +133,172 @@ class StreamingExecutor:
         active_subagent_tasks: set[str] = set()
         completed_subagent_tasks: set[str] = set()
 
-        async for chunk in stream:
-            result.last_chunk = chunk
-            current_task_id = (
-                next(iter(active_subagent_tasks)) if active_subagent_tasks else None
-            )
-            chunk_message_id = _MessageIdExtractor.extract(chunk)
-            metrics.record_usage_from(
-                chunk, message_id=chunk_message_id, task_id=current_task_id
-            )
-            await cls._maybe_emit_model_call_completed(
-                run=run,
-                metrics=metrics,
-                event_producer=event_producer,
-                message_id=chunk_message_id,
-                source=chunk,
-                attribution=attribution,
-            )
-            latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
-            candidate = stream_event_mapper.stream_result_candidate(chunk)
-            if candidate is not None and not active_subagent_tasks:
-                result.final_result = candidate
-                candidate_id = _MessageIdExtractor.extract(candidate)
-                metrics.record_usage_from(
-                    candidate, message_id=candidate_id, task_id=current_task_id
+        # P4 Stage 2 — coalesce ``MODEL_DELTA`` chunk writes within a
+        # configurable window. Default ``window_ms=0`` means passthrough
+        # (one append per chunk, matching pre-Stage-2). The ``async with``
+        # block guarantees a final flush on normal exit, exception, or
+        # cancellation so buffered chunks are never silently dropped.
+        delta_coalescer = DeltaCoalescer(
+            producer=event_producer,
+            run=run,
+            window_ms=delta_coalesce_window_ms,
+            max_chunks=delta_coalesce_max_chunks,
+        )
+
+        async with delta_coalescer:
+            async for chunk in stream:
+                result.last_chunk = chunk
+                current_task_id = (
+                    next(iter(active_subagent_tasks)) if active_subagent_tasks else None
                 )
+                chunk_message_id = _MessageIdExtractor.extract(chunk)
+                metrics.record_usage_from(
+                    chunk, message_id=chunk_message_id, task_id=current_task_id
+                )
+                # P4 Stage 2 — flush any buffered deltas before emitting a
+                # non-DELTA event so envelope ordering is preserved on the
+                # wire (a MODEL_CALL_COMPLETED never lands ahead of the
+                # deltas that preceded it).
+                await delta_coalescer.flush()
                 await cls._maybe_emit_model_call_completed(
                     run=run,
                     metrics=metrics,
                     event_producer=event_producer,
-                    message_id=candidate_id,
-                    source=candidate,
+                    message_id=chunk_message_id,
+                    source=chunk,
                     attribution=attribution,
                 )
-            delta = stream_event_mapper.stream_delta(chunk)
-            if citation_pipeline is not None:
-                # Hook the provider citation pipeline (PRD 01) between the
-                # parsed delta and the wire emission. The pipeline returns
-                # the (possibly rewritten) delta with ``[c<id>]`` chips
-                # appended for any native citation primitives the chunk
-                # carries; the ledger registers the source as a side
-                # effect, firing one ``source_ingested`` event per unique
-                # source. Pass-through providers (no native citations) and
-                # unbound ledgers return ``raw_delta`` unchanged.
-                delta = await citation_pipeline.adapt_chunk(
-                    chunk=chunk, raw_delta=delta
-                )
-            await stream_event_mapper.append_activity_events(
-                run=run,
-                chunk=chunk,
-                delta=delta,
-            )
-            new_events = await event_store.list_events_after(
-                org_id=run.org_id,
-                run_id=run.run_id,
-                after_sequence=latest_before,
-            )
-            for event in new_events:
-                if event.event_type in cls.action_interrupt_events:
-                    # Phase 2 (`subagent-interrupt-isolation`) — flag the
-                    # run as interrupted but DO NOT return early. The
-                    # previous early-return abandoned the supervisor's
-                    # `astream` mid-iteration, which cancelled parallel
-                    # subagent branches that were healthy and mid-work.
-                    # By continuing to drain the stream, LangGraph keeps
-                    # yielding events from siblings until each finishes
-                    # (`SUBAGENT_COMPLETED`) or itself interrupts. The
-                    # paused branch stays paused via LangGraph's
-                    # checkpoint; the supervisor's blocked `task` tool
-                    # call(s) are resumed by the existing approval
-                    # handler. `action_interrupted=True` still carries
-                    # back the WAITING_FOR_APPROVAL transition.
-                    result.action_interrupted = True
-                if track_subagents:
-                    if (
-                        event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
-                        and event.task_id is not None
-                    ):
-                        active_subagent_tasks.add(event.task_id)
-                        result.saw_task_subagent = True
-                    if (
-                        event.event_type == RuntimeApiEventType.SUBAGENT_COMPLETED
-                        and event.task_id is not None
-                    ):
-                        active_subagent_tasks.discard(event.task_id)
-                        if event.task_id not in completed_subagent_tasks:
-                            completed_subagent_tasks.add(event.task_id)
-                            if event.summary:
-                                result.subagent_summaries.append(event.summary)
-            if delta is None:
-                continue
-            if not active_subagent_tasks:
-                result.response_deltas.append(delta)
-            metrics.record_model_delta(delta)
-            await event_producer.append_api_event(
-                run=run,
-                source=StreamEventSource.MODEL,
-                event_type=RuntimeApiEventType.MODEL_DELTA,
-                payload={_Fields.DELTA: delta, _Fields.MESSAGE: delta},
-                summary=delta,
-            )
-            # PR 1.1-rev2 — feed the streamed delta to the citation
-            # resolver so any `[[N]]` markers the model emits resolve to
-            # ``citation_made`` events on the same wire (with monotonic
-            # ``sequence_no``). The resolver is best-effort and never
-            # raises into the streaming path; an unbound resolver
-            # (citations disabled, replay path) is a no-op.
-            #
-            # ``chunk_message_id`` may be ``None`` for some providers
-            # (notably OpenAI Responses streaming chunks, where
-            # LangChain's adapter doesn't always surface an id on every
-            # delta). The FE's chip resolution scans by ordinal across
-            # the run via ``anyLinkForOrdinalInRun`` — message_id is
-            # only used for positional offset anchoring, not lookup —
-            # so we synthesize a per-run id here rather than dropping
-            # the delta. This guarantees the resolver always observes
-            # text the model emitted, regardless of provider quirks.
-            if citation_resolver is None:
-                if "[[" in delta:
-                    _LOGGER.warning(
-                        "[citations] streaming.skip run=%s reason=no_resolver "
-                        "delta_preview=%r",
-                        run.run_id,
-                        delta[:80],
+                latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
+                candidate = stream_event_mapper.stream_result_candidate(chunk)
+                if candidate is not None and not active_subagent_tasks:
+                    result.final_result = candidate
+                    candidate_id = _MessageIdExtractor.extract(candidate)
+                    metrics.record_usage_from(
+                        candidate, message_id=candidate_id, task_id=current_task_id
                     )
-            elif active_subagent_tasks:
-                if "[[" in delta:
-                    _LOGGER.debug(
-                        "[citations] streaming.skip run=%s "
-                        "reason=active_subagent active_count=%d",
-                        run.run_id,
-                        len(active_subagent_tasks),
+                    await cls._maybe_emit_model_call_completed(
+                        run=run,
+                        metrics=metrics,
+                        event_producer=event_producer,
+                        message_id=candidate_id,
+                        source=candidate,
+                        attribution=attribution,
                     )
-            else:
-                effective_message_id = (
-                    chunk_message_id
-                    if chunk_message_id is not None
-                    else f"msg-of-run:{run.run_id}"
+                delta = stream_event_mapper.stream_delta(chunk)
+                if citation_pipeline is not None:
+                    # Hook the provider citation pipeline (PRD 01) between the
+                    # parsed delta and the wire emission. The pipeline returns
+                    # the (possibly rewritten) delta with ``[c<id>]`` chips
+                    # appended for any native citation primitives the chunk
+                    # carries; the ledger registers the source as a side
+                    # effect, firing one ``source_ingested`` event per unique
+                    # source. Pass-through providers (no native citations) and
+                    # unbound ledgers return ``raw_delta`` unchanged.
+                    delta = await citation_pipeline.adapt_chunk(
+                        chunk=chunk, raw_delta=delta
+                    )
+                # Activity events (TOOL_CALL, etc.) must land after any
+                # buffered deltas — flush before emitting them.
+                await delta_coalescer.flush()
+                await stream_event_mapper.append_activity_events(
+                    run=run,
+                    chunk=chunk,
+                    delta=delta,
                 )
-                await citation_resolver.observe_delta(
-                    message_id=effective_message_id,
-                    delta_text=delta,
+                new_events = await event_store.list_events_after(
+                    org_id=run.org_id,
+                    run_id=run.run_id,
+                    after_sequence=latest_before,
                 )
+                for event in new_events:
+                    if event.event_type in cls.action_interrupt_events:
+                        # Phase 2 (`subagent-interrupt-isolation`) — flag
+                        # the run as interrupted but DO NOT return early.
+                        # The previous early-return abandoned the
+                        # supervisor's `astream` mid-iteration, which
+                        # cancelled parallel subagent branches that were
+                        # healthy and mid-work. By continuing to drain the
+                        # stream, LangGraph keeps yielding events from
+                        # siblings until each finishes
+                        # (`SUBAGENT_COMPLETED`) or itself interrupts. The
+                        # paused branch stays paused via LangGraph's
+                        # checkpoint; the supervisor's blocked `task` tool
+                        # call(s) are resumed by the existing approval
+                        # handler. `action_interrupted=True` still carries
+                        # back the WAITING_FOR_APPROVAL transition.
+                        result.action_interrupted = True
+                    if track_subagents:
+                        if (
+                            event.event_type == RuntimeApiEventType.SUBAGENT_STARTED
+                            and event.task_id is not None
+                        ):
+                            active_subagent_tasks.add(event.task_id)
+                            result.saw_task_subagent = True
+                        if (
+                            event.event_type == RuntimeApiEventType.SUBAGENT_COMPLETED
+                            and event.task_id is not None
+                        ):
+                            active_subagent_tasks.discard(event.task_id)
+                            if event.task_id not in completed_subagent_tasks:
+                                completed_subagent_tasks.add(event.task_id)
+                                if event.summary:
+                                    result.subagent_summaries.append(event.summary)
+                if delta is None:
+                    continue
+                if not active_subagent_tasks:
+                    result.response_deltas.append(delta)
+                metrics.record_model_delta(delta)
+                # P4 Stage 2 — buffered through the coalescer instead of
+                # appending one round-trip per chunk. With ``window_ms=0``
+                # (default) this is a passthrough to ``append_api_event``;
+                # with ``window_ms>0`` chunks accumulate until the window
+                # or ``max_chunks`` triggers a batched flush.
+                await delta_coalescer.add_delta(
+                    payload={_Fields.DELTA: delta, _Fields.MESSAGE: delta},
+                    summary=delta,
+                )
+                # PR 1.1-rev2 — feed the streamed delta to the citation
+                # resolver so any `[[N]]` markers the model emits resolve to
+                # ``citation_made`` events on the same wire (with monotonic
+                # ``sequence_no``). The resolver is best-effort and never
+                # raises into the streaming path; an unbound resolver
+                # (citations disabled, replay path) is a no-op.
+                #
+                # ``chunk_message_id`` may be ``None`` for some providers
+                # (notably OpenAI Responses streaming chunks, where
+                # LangChain's adapter doesn't always surface an id on every
+                # delta). The FE's chip resolution scans by ordinal across
+                # the run via ``anyLinkForOrdinalInRun`` — message_id is
+                # only used for positional offset anchoring, not lookup —
+                # so we synthesize a per-run id here rather than dropping
+                # the delta. This guarantees the resolver always observes
+                # text the model emitted, regardless of provider quirks.
+                if citation_resolver is None:
+                    if "[[" in delta:
+                        _LOGGER.warning(
+                            "[citations] streaming.skip run=%s reason=no_resolver "
+                            "delta_preview=%r",
+                            run.run_id,
+                            delta[:80],
+                        )
+                elif active_subagent_tasks:
+                    if "[[" in delta:
+                        _LOGGER.debug(
+                            "[citations] streaming.skip run=%s "
+                            "reason=active_subagent active_count=%d",
+                            run.run_id,
+                            len(active_subagent_tasks),
+                        )
+                else:
+                    effective_message_id = (
+                        chunk_message_id
+                        if chunk_message_id is not None
+                        else f"msg-of-run:{run.run_id}"
+                    )
+                    await citation_resolver.observe_delta(
+                        message_id=effective_message_id,
+                        delta_text=delta,
+                    )
         return result
 
     @classmethod

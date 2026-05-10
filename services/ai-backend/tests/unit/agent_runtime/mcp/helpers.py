@@ -128,7 +128,9 @@ class DynamicMcpLoadingMixin:
         clients: Mapping[str, "DynamicMcpLoadingMixin.FakeMcpClient"]
         created_clients: list[str] = field(default_factory=list)
 
-        def list_server_cards(self) -> Sequence[McpServerCard | Mapping[str, object]]:
+        async def list_server_cards(
+            self,
+        ) -> Sequence[McpServerCard | Mapping[str, object]]:
             return self.cards
 
         def create_client(

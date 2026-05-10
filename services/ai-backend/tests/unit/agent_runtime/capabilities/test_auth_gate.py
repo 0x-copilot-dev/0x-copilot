@@ -40,7 +40,7 @@ class _StubMcpRegistry:
     def __init__(self, servers: list[_StubServer]) -> None:
         self._servers = servers
 
-    def list_available_servers(self, _context: object) -> tuple[_StubServer, ...]:
+    async def list_available_servers(self, _context: object) -> tuple[_StubServer, ...]:
         return tuple(self._servers)
 
 
@@ -56,22 +56,22 @@ def _gate(
 
 
 class TestCapabilityAuthGate:
-    def test_built_in_tool_authenticated(self) -> None:
-        result = _gate(tools=[_StubTool(name="slack_post")]).check(
+    async def test_built_in_tool_authenticated(self) -> None:
+        result = await _gate(tools=[_StubTool(name="slack_post")]).check(
             target_connector="slack_post", runtime_context=object()
         )
         assert result.outcome is CapabilityAuthOutcome.AUTHENTICATED
         assert result.mcp_server_id is None
 
-    def test_mcp_authenticated(self) -> None:
-        result = _gate(servers=[_StubServer(name="linear", server_id="srv_1")]).check(
-            target_connector="linear", runtime_context=object()
-        )
+    async def test_mcp_authenticated(self) -> None:
+        result = await _gate(
+            servers=[_StubServer(name="linear", server_id="srv_1")]
+        ).check(target_connector="linear", runtime_context=object())
         assert result.outcome is CapabilityAuthOutcome.AUTHENTICATED
         assert result.mcp_server_id == "srv_1"
 
-    def test_mcp_not_authenticated_surfaces_server_id(self) -> None:
-        result = _gate(
+    async def test_mcp_not_authenticated_surfaces_server_id(self) -> None:
+        result = await _gate(
             servers=[
                 _StubServer(
                     name="linear",
@@ -84,8 +84,8 @@ class TestCapabilityAuthGate:
         assert result.mcp_server_id == "srv_1"
         assert result.safe_message is not None
 
-    def test_mcp_disabled(self) -> None:
-        result = _gate(
+    async def test_mcp_disabled(self) -> None:
+        result = await _gate(
             servers=[
                 _StubServer(
                     name="linear",
@@ -98,11 +98,13 @@ class TestCapabilityAuthGate:
         assert result.outcome is CapabilityAuthOutcome.WORKSPACE_DISABLED
         assert result.mcp_server_id == "srv_1"
 
-    def test_unknown_capability(self) -> None:
-        result = _gate().check(target_connector="ghost_tool", runtime_context=object())
+    async def test_unknown_capability(self) -> None:
+        result = await _gate().check(
+            target_connector="ghost_tool", runtime_context=object()
+        )
         assert result.outcome is CapabilityAuthOutcome.UNKNOWN_CAPABILITY
         assert result.mcp_server_id is None
 
-    def test_empty_target(self) -> None:
-        result = _gate().check(target_connector="", runtime_context=object())
+    async def test_empty_target(self) -> None:
+        result = await _gate().check(target_connector="", runtime_context=object())
         assert result.outcome is CapabilityAuthOutcome.UNKNOWN_CAPABILITY

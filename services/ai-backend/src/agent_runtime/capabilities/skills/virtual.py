@@ -53,10 +53,10 @@ RawSkillCard = VirtualSkillCard | Mapping[str, object]
 
 
 class SkillProvider(Protocol):
-    def list_skill_cards(self) -> Sequence[RawSkillCard]:
+    async def list_skill_cards(self) -> Sequence[RawSkillCard]:
         """Return compact, model-visible Skill cards."""
 
-    def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+    async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         """Return the full Skill markdown by stable name."""
 
 
@@ -68,32 +68,32 @@ class BackendSkillProvider:
     runtime_context: AgentRuntimeContext
     timeout_seconds: float = 10
 
-    def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
-        response = httpx.get(
-            f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
-            params={
-                "org_id": self.runtime_context.org_id,
-                "user_id": self.runtime_context.user_id,
-            },
-            headers=BackendSkillServiceAuth.headers(self.runtime_context),
-            timeout=self.timeout_seconds,
-        )
+    async def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.get(
+                f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
+                params={
+                    "org_id": self.runtime_context.org_id,
+                    "user_id": self.runtime_context.user_id,
+                },
+                headers=BackendSkillServiceAuth.headers(self.runtime_context),
+            )
         response.raise_for_status()
         payload = response.json()
         return tuple(
             VirtualSkillCard.model_validate(card) for card in payload.get("skills", ())
         )
 
-    def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
-        response = httpx.get(
-            f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
-            params={
-                "org_id": self.runtime_context.org_id,
-                "user_id": self.runtime_context.user_id,
-            },
-            headers=BackendSkillServiceAuth.headers(self.runtime_context),
-            timeout=self.timeout_seconds,
-        )
+    async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.get(
+                f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
+                params={
+                    "org_id": self.runtime_context.org_id,
+                    "user_id": self.runtime_context.user_id,
+                },
+                headers=BackendSkillServiceAuth.headers(self.runtime_context),
+            )
         response.raise_for_status()
         return VirtualSkillBundle.model_validate(response.json())
 
@@ -108,11 +108,13 @@ class VirtualSkillRegistry:
         default_factory=dict, init=False
     )
 
-    def list_available_skills(self, context: object) -> tuple[VirtualSkillCard, ...]:
+    async def list_available_skills(
+        self, context: object
+    ) -> tuple[VirtualSkillCard, ...]:
         runtime_context = ValueNormalizer.coerce_runtime_context(context)
         cards = self._card_cache
         if cards is None:
-            cards = self._collect_cards(runtime_context)
+            cards = await self._collect_cards(runtime_context)
             self._card_cache = cards
         duplicate = ValueNormalizer.first_duplicate_name(card.name for card in cards)
         if duplicate is not None:
@@ -126,12 +128,12 @@ class VirtualSkillRegistry:
             sorted((card for card in cards if card.enabled), key=lambda card: card.name)
         )
 
-    def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+    async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         if name in self._bundle_cache:
             return self._bundle_cache[name]
         matches: list[SkillProvider] = []
         for provider in self.providers:
-            for card in provider.list_skill_cards():
+            for card in await provider.list_skill_cards():
                 parsed = (
                     card
                     if isinstance(card, VirtualSkillCard)
@@ -151,17 +153,17 @@ class VirtualSkillRegistry:
                 "Duplicate Skill names are configured.",
                 retryable=False,
             )
-        bundle = matches[0].load_skill_by_name(name)
+        bundle = await matches[0].load_skill_by_name(name)
         self._bundle_cache[name] = bundle
         return bundle
 
-    def _collect_cards(
+    async def _collect_cards(
         self, context: AgentRuntimeContext
     ) -> tuple[VirtualSkillCard, ...]:
         cards: list[VirtualSkillCard] = []
         for provider in self.providers:
             try:
-                raw_cards = provider.list_skill_cards()
+                raw_cards = await provider.list_skill_cards()
             except AgentRuntimeError:
                 raise
             except Exception as exc:

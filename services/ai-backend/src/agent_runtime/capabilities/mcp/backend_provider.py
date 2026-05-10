@@ -47,16 +47,16 @@ class BackendMcpProvider:
     auth_redirect_uri: str
     timeout_seconds: float = 10
 
-    def list_server_cards(self) -> tuple[McpServerCard, ...]:
-        response = httpx.get(
-            f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
-            params={
-                Keys.Field.ORG_ID: self.runtime_context.org_id,
-                Keys.Field.USER_ID: self.runtime_context.user_id,
-            },
-            headers=BackendMcpServiceAuth.headers(self.runtime_context),
-            timeout=self.timeout_seconds,
-        )
+    async def list_server_cards(self) -> tuple[McpServerCard, ...]:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.get(
+                f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
+                params={
+                    Keys.Field.ORG_ID: self.runtime_context.org_id,
+                    Keys.Field.USER_ID: self.runtime_context.user_id,
+                },
+                headers=BackendMcpServiceAuth.headers(self.runtime_context),
+            )
         response.raise_for_status()
         payload = response.json()
         return tuple(
@@ -71,24 +71,24 @@ class BackendMcpProvider:
             timeout_seconds=self.timeout_seconds,
         )
 
-    def create_auth_session(
+    async def create_auth_session(
         self,
         *,
         server_id: str,
         runtime_context: AgentRuntimeContext,
     ) -> McpAuthSession:
-        card = self._card_by_server_id_or_name(server_id)
+        card = await self._card_by_server_id_or_name(server_id)
         resolved_server_id = card.server_id or card.name
-        response = httpx.post(
-            f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{resolved_server_id}/auth/start",
-            json={
-                Keys.Field.ORG_ID: runtime_context.org_id,
-                Keys.Field.USER_ID: runtime_context.user_id,
-                Keys.Field.REDIRECT_URI: self.auth_redirect_uri,
-            },
-            headers=BackendMcpServiceAuth.headers(runtime_context),
-            timeout=self.timeout_seconds,
-        )
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{resolved_server_id}/auth/start",
+                json={
+                    Keys.Field.ORG_ID: runtime_context.org_id,
+                    Keys.Field.USER_ID: runtime_context.user_id,
+                    Keys.Field.REDIRECT_URI: self.auth_redirect_uri,
+                },
+                headers=BackendMcpServiceAuth.headers(runtime_context),
+            )
         response.raise_for_status()
         payload = response.json()
         return McpAuthSession(
@@ -104,8 +104,8 @@ class BackendMcpProvider:
         parsed = McpServerCard.model_validate(card)
         return parsed.model_copy(update={Keys.Field.REQUIRED_SCOPES: frozenset()})
 
-    def _card_by_server_id_or_name(self, value: str) -> McpServerCard:
-        for card in self.list_server_cards():
+    async def _card_by_server_id_or_name(self, value: str) -> McpServerCard:
+        for card in await self.list_server_cards():
             if card.server_id == value or card.name == value:
                 return card
         raise AgentRuntimeError(

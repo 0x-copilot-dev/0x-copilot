@@ -27,7 +27,7 @@ RawMcpServerCard = McpServerCard | Mapping[str, object]
 class McpServerProvider(McpClientFactory, Protocol):
     """Adapter boundary for MCP server metadata and client creation."""
 
-    def list_server_cards(self) -> Sequence[RawMcpServerCard]:
+    async def list_server_cards(self) -> Sequence[RawMcpServerCard]:
         """Return compact server cards registered by this provider."""
 
 
@@ -60,13 +60,13 @@ class DynamicMcpRegistry:
                     retryable=False,
                 )
 
-    def list_server_cards(
+    async def list_server_cards(
         self, context: AgentRuntimeContext
     ) -> tuple[McpServerCard, ...]:
         """Return compact MCP cards visible to the request context."""
 
         runtime_context = ValueNormalizer.coerce_runtime_context(context)
-        entries = self._collect_entries()
+        entries = await self._collect_entries()
         duplicate_name = ValueNormalizer.first_duplicate_name(
             entry.card.name for entry in entries
         )
@@ -85,15 +85,19 @@ class DynamicMcpRegistry:
         )
         return tuple(sorted(cards, key=lambda card: card.name))
 
-    def list_available_servers(self, context: object) -> tuple[McpServerCard, ...]:
+    async def list_available_servers(
+        self, context: object
+    ) -> tuple[McpServerCard, ...]:
         """Runtime port adapter returning model-visible compact server cards."""
 
-        return self.list_server_cards(ValueNormalizer.coerce_runtime_context(context))
+        return await self.list_server_cards(
+            ValueNormalizer.coerce_runtime_context(context)
+        )
 
-    def resolve_server(self, name: str) -> RegisteredMcpServer | McpLoadError:
+    async def resolve_server(self, name: str) -> RegisteredMcpServer | McpLoadError:
         """Resolve a selected stable server name to exactly one provider entry."""
 
-        entries = self._collect_entries()
+        entries = await self._collect_entries()
         matching_entries = [entry for entry in entries if entry.card.name == name]
         if not matching_entries:
             return McpLoadError(
@@ -124,11 +128,11 @@ class DynamicMcpRegistry:
             )
         return entry
 
-    def _collect_entries(self) -> tuple[RegisteredMcpServer, ...]:
+    async def _collect_entries(self) -> tuple[RegisteredMcpServer, ...]:
         entries: list[RegisteredMcpServer] = []
         for provider in self.providers:
             try:
-                raw_cards = provider.list_server_cards()
+                raw_cards = await provider.list_server_cards()
             except AgentRuntimeError:
                 raise
             except Exception as exc:

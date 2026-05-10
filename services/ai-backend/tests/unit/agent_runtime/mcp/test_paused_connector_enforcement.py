@@ -120,7 +120,7 @@ class _StubRegistry:
     def __init__(self, card: McpServerCard) -> None:
         self._card = card
 
-    def resolve_server(self, _name: str) -> _StubResolution:
+    async def resolve_server(self, _name: str) -> _StubResolution:
         return _StubResolution(self._card)
 
 

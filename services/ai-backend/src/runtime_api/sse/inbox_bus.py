@@ -1,8 +1,8 @@
 """Per-user inbox event bus for SSE push (PR 1.4.1).
 
-This is the in-process counterpart to :class:`RuntimeEventBus` (which
-fans run-scoped events). The inbox bus fans approval-assignment +
-approval-resolution events to the recipient user's session, whose
+This is the per-user counterpart to the run-scoped SSE bus
+(``runtime_api/sse/event_bus.py``). The inbox bus fans approval-assignment
+and approval-resolution events to the recipient user's session, whose
 identity is *not* a participant in the source run's conversation.
 
 Why a separate bus, instead of a slot inside the existing run stream?
@@ -10,10 +10,22 @@ The recipient is not authorized to subscribe to the source run's events
 — the conversation belongs to a different user. Routing inbox events
 through a per-user channel keeps the visibility contract clean.
 
+Backends (P2 — see ``docs/refactor/02-sse-listen-notify.md`` §8):
+
+* :class:`InMemoryInboxBus` — process-local deque + ``asyncio.Condition``
+  pub/sub. The historical default. Works only when API and worker share a
+  process. In production with separate processes, a publish from the
+  worker never reaches API-side subscribers.
+* Postgres-backed inbox bus — TODO follow-up. Requires an
+  ``inbox_events`` table (per-user retention, multi-replica safe) plus
+  ``LISTEN/NOTIFY runtime_inbox_v1`` for the wakeup. Tracked separately
+  because the storage migration is independent of the in-memory→postgres
+  switch on the run bus.
+
 Schema:
 
-  - ``inbox_events`` (in-memory only for v1 — multi-replica adds Redis
-    pub/sub behind the same port without changing the contract).
+  - ``inbox_events`` (in-memory only for v1 — postgres storage is the
+    follow-up that pairs with the LISTEN/NOTIFY backend).
   - ``inbox_event_cursors(user_id pk, latest_sequence_no)`` for replay.
 
 The bus exposes:
@@ -32,7 +44,7 @@ from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +71,39 @@ class InboxEventEnvelope:
     emitted_at: datetime
 
 
-class InboxEventBus:
+@runtime_checkable
+class InboxBusBackend(Protocol):
+    """Per-user inbox surface used by the inbox SSE adapter."""
+
+    async def publish(
+        self,
+        *,
+        user_id: str,
+        event_type: InboxEventType,
+        approval_id: str,
+        status: str,
+        org_id: str,
+        conversation_id: str,
+        actor_user_id: str,
+    ) -> InboxEventEnvelope:
+        """Append + wake any subscriber on ``user_id``."""
+
+    async def wait(self, *, user_id: str, timeout: float = 5.0) -> None:
+        """Block until next publish for this user or timeout."""
+
+    def list_after(
+        self, *, user_id: str, after_sequence: int
+    ) -> Iterable[InboxEventEnvelope]:
+        """Return persisted events with ``sequence_no > after_sequence``."""
+
+    def latest_sequence_no(self, *, user_id: str) -> int:
+        """Highest sequence_no published for ``user_id``."""
+
+    def unsubscribe(self, *, user_id: str) -> None:
+        """Drop any local subscription state for ``user_id`` (idempotent)."""
+
+
+class InMemoryInboxBus:
     """In-process per-user inbox bus.
 
     Bounded by ``max_buffer_per_user`` events per user — older events
@@ -72,11 +116,11 @@ class InboxEventBus:
     Tests instantiate per-test and avoid cross-test bleed.
     """
 
-    _instance: "InboxEventBus | None" = None
+    _instance: "InMemoryInboxBus | None" = None
     DEFAULT_MAX_BUFFER_PER_USER = 256
 
     @classmethod
-    def get_default(cls) -> "InboxEventBus":
+    def get_default(cls) -> "InMemoryInboxBus":
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -149,3 +193,9 @@ class InboxEventBus:
         # within the buffer window — but drop the condition variable
         # so we don't accumulate unused conditions.
         self._conditions.pop(user_id, None)
+
+
+# Backward-compat alias so existing call sites that import
+# ``InboxEventBus`` continue to work without edits. New code should
+# depend on the ``InboxBusBackend`` Protocol or the explicit class name.
+InboxEventBus = InMemoryInboxBus

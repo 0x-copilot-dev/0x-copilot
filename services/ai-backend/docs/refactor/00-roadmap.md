@@ -172,11 +172,11 @@ Not yet PRDs. Do not implement until the underlying code question is answered.
 Tick as PRDs are written and PRs ship. Update in the same PR that adds the PRD.
 
 - [x] P1 — PRD drafted: [`01-presentation-polish-removal.md`](01-presentation-polish-removal.md)
-- [ ] P2 — PRD pending
-- [ ] P3 — PRD pending
-- [ ] P4 — PRD pending
+- [x] P2 — PRD drafted + shipped: [`02-sse-listen-notify.md`](02-sse-listen-notify.md). EventBusBackend Protocol + InMemoryEventBus (renamed) + PostgresEventBus + LISTEN/NOTIFY adapter hook + lifespan wiring; default `RUNTIME_EVENT_BUS_BACKEND=in_memory` so the change ships dark. Inbox-bus refactor: Protocol + InMemoryInboxBus rename + backward-compat alias landed; persistent Postgres inbox backend + `LISTEN/NOTIFY runtime_inbox_v1` is the documented schema-bearing follow-up.
+- [x] P3 — PRD drafted + shipped: [`03-parallel-bootstrap.md`](03-parallel-bootstrap.md). 3-resolver gather in `create_run` (11.a) + 4-registry gather in `acreate_agent_runtime` (11.b) were shipped pre-PRD; 5-way gather adding `_skill_cards` (11.c) shipped this round.
+- [x] P4 — PRD drafted + shipped (both stages): [`04-event-write-consolidation.md`](04-event-write-consolidation.md). Stage 1 folds `INSERT runtime_events` + `UPDATE agent_runs.latest_sequence_no` into one transaction (default-on); Stage 2 adds `EventStorePort.append_events_batch` + `RuntimeEventProducer.append_api_events_batch` + `DeltaCoalescer` in the streaming executor (default `RUNTIME_DELTA_COALESCE_WINDOW_MS=0` — ships dark).
 - [x] P5 — PRD drafted: [`01-async-only-ports.md`](01-async-only-ports.md)
-- [ ] P6 — PRD pending
+- [x] P6 — PRD drafted: [`05-cleanup-wave.md`](05-cleanup-wave.md). All 6 legacy directories already deleted in prior work; the 3 other sub-items (`dev_auth_bypass_allowed`, `migrate.py`, `EncryptExistingColumns`) were withdrawn after pre-flight verification — see PRD §1.5.
 - [ ] P7 — PRD pending
 - [ ] P8 — PRD pending
 - [ ] P9 — PRD pending

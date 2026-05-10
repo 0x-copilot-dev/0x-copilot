@@ -59,7 +59,7 @@ class CallMcpTool:
         if isinstance(parsed_input, McpToolCallResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
 
-        resolution = self.registry.resolve_server(parsed_input.server_name)
+        resolution = await self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
             return McpToolCallResult.fail(
                 resolution.code,

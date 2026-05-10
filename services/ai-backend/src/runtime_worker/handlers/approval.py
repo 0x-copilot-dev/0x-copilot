@@ -418,6 +418,10 @@ class RuntimeApprovalHandler:
             citation_pipeline=CitationStreamPipeline.for_provider(
                 run.runtime_context.model_profile.provider
             ),
+            # P4 Stage 2 — opt-in coalesce window for MODEL_DELTA batching.
+            # Default 0 (disabled) so this ships dark.
+            delta_coalesce_window_ms=self.settings.execution.delta_coalesce_window_ms,
+            delta_coalesce_max_chunks=self.settings.execution.delta_coalesce_max_chunks,
         )
         return StreamingExecutor.compose_final(result)
 

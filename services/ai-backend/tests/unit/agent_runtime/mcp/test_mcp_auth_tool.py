@@ -24,7 +24,7 @@ from agent_runtime.capabilities.mcp.middleware.auth_mcp import (
 
 @dataclass(frozen=True)
 class FakeAuthSessionCreator:
-    def create_auth_session(
+    async def create_auth_session(
         self,
         *,
         server_id: str,
@@ -102,18 +102,15 @@ def test_backend_mcp_service_auth_includes_trusted_scope_headers(
     assert headers[USER_HEADER] == runtime_context_admin.user_id
 
 
-def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
+async def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
     monkeypatch,
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
     from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 
-    class FakeSyncResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {
+    responses = [
+        FakeHttpResponse(
+            {
                 "servers": [
                     {
                         "server_id": "server_123",
@@ -129,10 +126,12 @@ def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
                     }
                 ]
             }
-
+        ),
+    ]
+    calls: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.get",
-        lambda *args, **kwargs: FakeSyncResponse(),
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
+        lambda timeout: FakeAsyncClient(responses, calls),
     )
     provider = BackendMcpProvider(
         backend_url="http://backend.local",
@@ -140,32 +139,20 @@ def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
         auth_redirect_uri="http://localhost/callback",
     )
 
-    cards = provider.list_server_cards()
+    cards = await provider.list_server_cards()
 
     assert cards[0].name == "mcp_clickup_com"
     assert cards[0].required_scopes == frozenset()
 
 
-def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
+async def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
     monkeypatch,
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
     from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 
-    captured: dict[str, object] = {}
-
-    class FakeSyncResponse:
-        def __init__(self, payload: dict[str, object]) -> None:
-            self.payload = payload
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return self.payload
-
-    def fake_get(*args: object, **kwargs: object) -> FakeSyncResponse:
-        return FakeSyncResponse(
+    responses = [
+        FakeHttpResponse(
             {
                 "servers": [
                     {
@@ -182,26 +169,19 @@ def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
                     }
                 ]
             }
-        )
-
-    def fake_post(url: str, **kwargs: object) -> FakeSyncResponse:
-        captured["url"] = url
-        captured["json"] = kwargs["json"]
-        return FakeSyncResponse(
+        ),
+        FakeHttpResponse(
             {
                 "server_id": "server_123",
                 "auth_url": "https://auth.example.com/authorize",
                 "expires_at": "2026-05-01T06:00:00+00:00",
             }
-        )
-
+        ),
+    ]
+    calls: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.get",
-        fake_get,
-    )
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.post",
-        fake_post,
+        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
+        lambda timeout: FakeAsyncClient(responses, calls),
     )
     provider = BackendMcpProvider(
         backend_url="http://backend.local",
@@ -209,12 +189,13 @@ def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
         auth_redirect_uri="http://localhost/callback",
     )
 
-    session = provider.create_auth_session(
+    session = await provider.create_auth_session(
         server_id="mcp_clickup_com",
         runtime_context=runtime_context_admin,
     )
 
-    assert captured["url"].endswith("/internal/v1/mcp/servers/server_123/auth/start")
+    auth_call = next(c for c in calls if c.get("method") == "POST")
+    assert auth_call["url"].endswith("/internal/v1/mcp/servers/server_123/auth/start")
     assert session.server_id == "server_123"
     assert session.server_name == "mcp_clickup_com"
 
@@ -434,5 +415,9 @@ class FakeAsyncClient:
         return None
 
     async def post(self, url: str, **kwargs: object) -> FakeHttpResponse:
-        self.calls.append({"url": url, **kwargs})
+        self.calls.append({"url": url, "method": "POST", **kwargs})
+        return self.responses.pop(0)
+
+    async def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
+        self.calls.append({"url": url, "method": "GET", **kwargs})
         return self.responses.pop(0)

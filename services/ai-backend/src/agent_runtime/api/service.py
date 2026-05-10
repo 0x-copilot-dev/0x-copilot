@@ -130,10 +130,9 @@ class RuntimeApiService:
         # until the trusted-backend lane is configured.
         suggestible_connectors_resolver: "SuggestibleConnectorsResolver | None" = None,
     ) -> None:
-        # The service is uniformly async on the inside. Sync ports get
-        # wrapped via to_thread; async ports pass through. This way every
-        # call site below uses `await self.persistence.*` and we never have
-        # to ask which kind of backend is configured.
+        # The service is uniformly async; ports are async-native, so every
+        # call site below uses `await self.persistence.*` regardless of
+        # which backend is configured.
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.queue: RuntimeQueuePort = queue

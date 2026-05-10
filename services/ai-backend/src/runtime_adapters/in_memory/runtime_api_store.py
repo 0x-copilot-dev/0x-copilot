@@ -66,7 +66,17 @@ from runtime_api.schemas import (
 class InMemoryRuntimeApiStore:
     """In-memory implementation of persistence, event store, and queue ports."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, consolidated_writes: bool = False) -> None:
+        # P4 — when True, ``append_event`` advances the run's
+        # ``latest_sequence_no`` cursor inside the same call. Mirrors the
+        # Postgres adapter so the pair stays behavior-identical regardless
+        # of which backend is wired in.
+        #
+        # ``consolidates_cursor_writes`` is the public read-only mirror that
+        # ``RuntimeEventProducer`` checks at construction to decide whether
+        # to skip its separate ``set_run_latest_sequence`` call.
+        self._consolidated_writes = consolidated_writes
+        self.consolidates_cursor_writes: bool = consolidated_writes
         self.conversations: dict[str, ConversationRecord] = {}
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -563,11 +573,19 @@ class InMemoryRuntimeApiStore:
     async def set_run_latest_sequence(
         self, *, run_id: str, latest_sequence_no: int
     ) -> RunRecord:
-        """Persist latest event sequence for run inspection."""
+        """Persist latest event sequence for run inspection.
 
-        updated = self.runs[run_id].model_copy(
-            update={"latest_sequence_no": latest_sequence_no}
-        )
+        Mirrors the Postgres adapter's H3 monotonic guard: a smaller-
+        numbered append arriving out of order is a no-op. Without this guard
+        the in-memory adapter could rewind the cursor under async
+        concurrency, diverging from production.
+        """
+
+        current = self.runs[run_id]
+        existing = current.latest_sequence_no
+        if existing is not None and existing >= latest_sequence_no:
+            return current
+        updated = current.model_copy(update={"latest_sequence_no": latest_sequence_no})
         self.runs[run_id] = updated
         return updated
 
@@ -1681,8 +1699,39 @@ class InMemoryRuntimeApiStore:
             row for row in bucket if row.id != policy_id
         )
 
+    async def append_events_batch(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
+        """Append N events as one logical operation (P4 Stage 2 in-memory parity).
+
+        Returns envelopes in input order with contiguous sequence numbers.
+        Empty input returns ``()`` without side effects. All events must
+        share the same ``run_id``; this is asserted to surface coalescer
+        bugs early.
+        """
+
+        if not events:
+            return ()
+        run_ids = {event.run_id for event in events}
+        if len(run_ids) > 1:
+            raise ValueError(
+                "append_events_batch requires all events to share one run_id; "
+                f"saw {len(run_ids)}."
+            )
+        envelopes: list[RuntimeEventEnvelope] = []
+        for event in events:
+            envelopes.append(await self.append_event(event))
+        return tuple(envelopes)
+
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
-        """Append one event with a monotonically increasing run sequence number."""
+        """Append one event with a monotonically increasing run sequence number.
+
+        P4 (consolidated writes): when ``self._consolidated_writes`` is True
+        the run's ``latest_sequence_no`` cursor is advanced in-line, mirroring
+        the Postgres adapter. The H3 monotonic guard inside
+        :meth:`set_run_latest_sequence` keeps the redundant producer call
+        (under rollback) safe.
+        """
 
         events = self.events_by_run.setdefault(event.run_id, [])
         envelope = RuntimeEventEnvelope(
@@ -1713,6 +1762,11 @@ class InMemoryRuntimeApiStore:
             metadata=event.metadata,
         )
         events.append(envelope)
+        if self._consolidated_writes and event.run_id in self.runs:
+            await self.set_run_latest_sequence(
+                run_id=event.run_id,
+                latest_sequence_no=envelope.sequence_no,
+            )
         return envelope
 
     async def list_events_after(

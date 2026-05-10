@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -10,7 +9,7 @@ from agent_runtime.execution.contracts import (
     ModelConfig,
     RuntimeDependencies,
 )
-from agent_runtime.execution.factory import create_agent_runtime
+from agent_runtime.execution.factory import acreate_agent_runtime
 from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
     McpAuthMode,
@@ -106,7 +105,7 @@ class FakeMcpProvider:
     client: FakeMcpClient
     created_for: list[str] = field(default_factory=list)
 
-    def list_server_cards(self) -> Sequence[McpServerCard]:
+    async def list_server_cards(self) -> Sequence[McpServerCard]:
         return self.cards
 
     def create_client(self, card: McpServerCard) -> FakeMcpClient:
@@ -152,7 +151,7 @@ class FakeSubagentRunner:
         return None
 
 
-def test_runtime_capability_stack_wires_together_without_live_llm_calls(
+async def test_runtime_capability_stack_wires_together_without_live_llm_calls(
     tmp_path,
     model_config: ModelConfig,
 ) -> None:
@@ -288,7 +287,7 @@ Use this only when source-backed research is needed.
     )
 
     builder = CapturingAgentBuilder()
-    harness = create_agent_runtime(
+    harness = await acreate_agent_runtime(
         context=context,
         dependencies=RuntimeDependencies(
             tool_registry=tool_registry,
@@ -321,10 +320,8 @@ Use this only when source-backed research is needed.
     assert tool_result.loaded_spec == tool_spec
     assert tool_provider.loaded_names == ["doc_search"]
 
-    mcp_result = asyncio.run(
-        McpLoader(mcp_registry).load_server(
-            McpLoadRequest(server_name="drive_mcp", runtime_context=context)
-        )
+    mcp_result = await McpLoader(mcp_registry).load_server(
+        McpLoadRequest(server_name="drive_mcp", runtime_context=context)
     )
     assert mcp_result.succeeded
     assert mcp_result.loaded_server is not None
@@ -386,10 +383,10 @@ Use this only when source-backed research is needed.
     )
     runner = FakeSubagentRunner()
     lifecycle = AsyncSubagentLifecycle(catalog=subagent_catalog, runner=runner)
-    started = asyncio.run(
-        lifecycle.start(context=context, subagent_name="researcher", task=task)
+    started = await lifecycle.start(
+        context=context, subagent_name="researcher", task=task
     )
-    checked = asyncio.run(lifecycle.check(started.state.task_id))  # type: ignore[union-attr]
+    checked = await lifecycle.check(started.state.task_id)  # type: ignore[union-attr]
     assert task.allowed_tools == frozenset({"doc_search"})
     assert "full raw chat" not in str(task.model_dump())
     assert started.state is not None

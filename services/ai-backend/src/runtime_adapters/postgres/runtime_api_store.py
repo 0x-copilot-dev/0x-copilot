@@ -345,11 +345,36 @@ class PostgresRuntimeApiStore:
         field_encryption: FieldEncryption | None = None,
         replica_pool: AsyncConnectionPool | None = None,
         replica_database_url: str | None = None,
+        consolidated_writes: bool = False,
+        notify_after_append: bool = False,
+        notify_channel: str = "runtime_events_v1",
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
         self.database_url = database_url
         self._role = role
+        # P4 — when True, ``append_event`` folds the
+        # ``agent_runs.latest_sequence_no`` UPDATE into the same transaction
+        # as the ``runtime_events`` INSERT (saves one connection + one
+        # BEGIN/COMMIT). The H3 monotonic guard
+        # (``latest_sequence_no IS NULL OR latest_sequence_no < new``)
+        # mirrors the logic in :meth:`set_run_latest_sequence` so out-of-order
+        # writes never rewind the cursor.
+        #
+        # ``consolidates_cursor_writes`` is the public read-only mirror that
+        # ``RuntimeEventProducer`` checks at construction to decide whether
+        # to skip its separate ``set_run_latest_sequence`` call.
+        self._consolidated_writes = consolidated_writes
+        self.consolidates_cursor_writes: bool = consolidated_writes
+        # P2 — when True, every successful ``append_event`` /
+        # ``append_events_batch`` fires ``NOTIFY <channel>, '<run_id>:<seq>'``
+        # so cross-process listeners (the SSE adapter in the API process)
+        # wake within milliseconds. The NOTIFY runs inside the same
+        # transaction as the INSERT — if the INSERT rolls back the NOTIFY
+        # is silently discarded by Postgres. Default False so the existing
+        # in-memory event-bus path is unaffected.
+        self._notify_after_append = notify_after_append
+        self._notify_channel = notify_channel
         # C7 phase 1: ``field_encryption`` defaults to ``NullFieldEncryption``
         # so writes stay v0 (plaintext) until an operator flips
         # ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``. The injection point is
@@ -3666,6 +3691,13 @@ class PostgresRuntimeApiStore:
         the lock) sees the freshly committed row. The
         ``runtime_events(run_id, sequence_no)`` UNIQUE constraint is a backstop
         — if it ever fires, the lock pattern is broken.
+
+        P4 (consolidated writes): when ``self._consolidated_writes`` is True
+        the same transaction also advances ``agent_runs.latest_sequence_no``
+        with the H3 monotonic guard. ``RuntimeEventProducer`` therefore skips
+        its separate ``set_run_latest_sequence`` call — saving one connection
+        acquire + one BEGIN/COMMIT pair per event. Behavior is identical to
+        the two-step path even if the producer's redundant call still fires.
         """
 
         async with self._tenant_connection(org_id=event.org_id) as conn:
@@ -3778,7 +3810,217 @@ class PostgresRuntimeApiStore:
                         version,
                     ),
                 )
+                if self._consolidated_writes:
+                    # P4 — fold the cursor advance into the same transaction.
+                    # Monotonic guard mirrors set_run_latest_sequence (H3) so
+                    # the producer's redundant call (if it still fires under
+                    # rollback) is a no-op and never rewinds.
+                    await conn.execute(
+                        """
+                        UPDATE agent_runs
+                           SET latest_sequence_no = %s
+                         WHERE id = %s
+                           AND (
+                               latest_sequence_no IS NULL
+                               OR latest_sequence_no < %s
+                           )
+                        """,
+                        (
+                            envelope.sequence_no,
+                            envelope.run_id,
+                            envelope.sequence_no,
+                        ),
+                    )
+                if self._notify_after_append:
+                    # P2 — fire NOTIFY inside the same transaction; if the
+                    # INSERT rolls back the NOTIFY is silently discarded
+                    # by Postgres. Channel name is parameterised at
+                    # construction; payload is ``<run_id>:<sequence_no>``.
+                    await conn.execute(
+                        f"NOTIFY {self._notify_channel}, %s",
+                        (f"{envelope.run_id}:{envelope.sequence_no}",),
+                    )
         return envelope
+
+    async def append_events_batch(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
+        """Append N events under one transaction (P4 Stage 2).
+
+        Used by the worker's ``DeltaCoalescer`` to flush a batch of
+        ``MODEL_DELTA`` chunks. All events must share the same ``run_id``
+        (asserted) — coalescing across runs would break per-run sequence
+        allocation. Returns envelopes in input order with contiguous
+        sequence numbers.
+
+        One transaction holds:
+          * ``SELECT … FOR UPDATE`` on ``agent_runs`` (the H1 row lock —
+            same semantics as :meth:`append_event`).
+          * One ``SELECT MAX(sequence_no) + 1`` to allocate the starting
+            sequence number; subsequent envelopes claim ``start, start+1,
+            …, start+N-1`` without re-querying.
+          * One multi-row ``INSERT`` of N events (one round-trip to
+            Postgres regardless of batch size).
+          * When ``consolidates_cursor_writes`` is True, one final
+            ``UPDATE agent_runs.latest_sequence_no`` with the H3 monotonic
+            guard — same shape as :meth:`append_event`'s consolidated path.
+
+        Empty input returns ``()`` without opening a connection. Per-event
+        encryption + envelope building still runs in Python (the codec
+        cannot be moved into SQL).
+        """
+
+        if not events:
+            return ()
+        run_ids = {event.run_id for event in events}
+        if len(run_ids) > 1:
+            raise ValueError(
+                "append_events_batch requires all events to share one run_id; "
+                f"saw {len(run_ids)}."
+            )
+        first = events[0]
+        async with self._tenant_connection(org_id=first.org_id) as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE",
+                    (first.run_id,),
+                )
+                run = await cur.fetchone()
+                cur = await conn.execute(
+                    """
+                    SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence
+                    FROM runtime_events
+                    WHERE run_id = %s
+                    """,
+                    (first.run_id,),
+                )
+                start_row = await cur.fetchone()
+                start_sequence = int(start_row[_Columns.NEXT_SEQUENCE])
+                event_org_id = str(run[_Columns.ORG_ID])
+                version = self._codec.write_version
+
+                envelopes: list[RuntimeEventEnvelope] = []
+                rows: list[tuple[object, ...]] = []
+                for offset, event in enumerate(events):
+                    activity_kind = (
+                        event.activity_kind
+                        or RuntimeEventPresentationProjector.activity_kind_for(
+                            event_type=event.event_type,
+                            source=event.source,
+                        )
+                    )
+                    envelope = RuntimeEventEnvelope(
+                        run_id=event.run_id,
+                        conversation_id=event.conversation_id,
+                        sequence_no=start_sequence + offset,
+                        source=event.source,
+                        event_type=event.event_type,
+                        trace_id=event.trace_id,
+                        parent_event_id=event.parent_event_id,
+                        span_id=event.span_id,
+                        parent_span_id=event.parent_span_id,
+                        parent_task_id=event.parent_task_id,
+                        task_id=event.task_id,
+                        subagent_id=event.subagent_id,
+                        display_title=event.display_title,
+                        summary=event.summary,
+                        status=event.status,
+                        activity_kind=activity_kind,
+                        visibility=event.visibility,
+                        redaction_state=event.redaction_state,
+                        presentation=event.presentation,
+                        payload=event.payload,
+                        metadata=event.metadata,
+                    )
+                    payload_encrypted = self._codec.encrypt_jsonb(
+                        envelope.payload,
+                        table=_Tables.RUNTIME_EVENTS,
+                        column=_Columns.PAYLOAD_JSON_REDACTED,
+                        org_id=event_org_id,
+                    )
+                    metadata_encrypted = self._codec.encrypt_jsonb(
+                        envelope.metadata,
+                        table=_Tables.RUNTIME_EVENTS,
+                        column=_Columns.METADATA_JSON_REDACTED,
+                        org_id=event_org_id,
+                    )
+                    envelopes.append(envelope)
+                    rows.append(
+                        (
+                            envelope.event_id,
+                            envelope.run_id,
+                            envelope.conversation_id,
+                            event_org_id,
+                            envelope.sequence_no,
+                            envelope.event_protocol_version,
+                            envelope.source.value,
+                            envelope.event_type.value,
+                            envelope.parent_event_id,
+                            envelope.span_id,
+                            envelope.parent_span_id,
+                            envelope.parent_task_id,
+                            envelope.task_id,
+                            envelope.subagent_id,
+                            envelope.display_title,
+                            envelope.summary,
+                            envelope.status,
+                            envelope.trace_id,
+                            Jsonb(payload_encrypted),
+                            Jsonb(metadata_encrypted),
+                            envelope.visibility.value,
+                            envelope.redaction_state.value,
+                            envelope.activity_kind,
+                            Jsonb(envelope.presentation),
+                            envelope.created_at,
+                            version,
+                        )
+                    )
+
+                # One round-trip multi-row INSERT.
+                placeholder_row = "(" + ", ".join(["%s"] * len(rows[0])) + ")"
+                values_clause = ", ".join([placeholder_row] * len(rows))
+                flat_params = tuple(value for row in rows for value in row)
+                await conn.execute(
+                    f"""
+                    INSERT INTO runtime_events (
+                        id, run_id, conversation_id, org_id, sequence_no,
+                        event_protocol_version, source, event_type,
+                        parent_event_id, span_id, parent_span_id,
+                        parent_task_id, task_id, subagent_id,
+                        display_title, summary, status, trace_id,
+                        payload_json_redacted, metadata_json_redacted,
+                        visibility, redaction_state, activity_kind,
+                        presentation_json, created_at, encryption_version
+                    )
+                    VALUES {values_clause}
+                    """,
+                    flat_params,
+                )
+                if self._consolidated_writes:
+                    last_sequence = envelopes[-1].sequence_no
+                    await conn.execute(
+                        """
+                        UPDATE agent_runs
+                           SET latest_sequence_no = %s
+                         WHERE id = %s
+                           AND (
+                               latest_sequence_no IS NULL
+                               OR latest_sequence_no < %s
+                           )
+                        """,
+                        (last_sequence, first.run_id, last_sequence),
+                    )
+                if self._notify_after_append:
+                    # P2 — one NOTIFY per batch. The payload carries the
+                    # *highest* sequence number; SSE adapters always
+                    # ``replay_events(after_sequence=N)`` so they pick up
+                    # everything in the batch in one round-trip.
+                    last_sequence = envelopes[-1].sequence_no
+                    await conn.execute(
+                        f"NOTIFY {self._notify_channel}, %s",
+                        (f"{first.run_id}:{last_sequence}",),
+                    )
+        return tuple(envelopes)
 
     async def list_events_after(
         self,

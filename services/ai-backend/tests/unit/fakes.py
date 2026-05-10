@@ -21,7 +21,7 @@ class FakeMcpRegistry:
     servers: Sequence[object] = ("drive_mcp",)
     seen_contexts: list[AgentRuntimeContext] = field(default_factory=list)
 
-    def list_available_servers(self, context: object) -> Sequence[object]:
+    async def list_available_servers(self, context: object) -> Sequence[object]:
         self.seen_contexts.append(context)  # type: ignore[arg-type]
         return self.servers
 

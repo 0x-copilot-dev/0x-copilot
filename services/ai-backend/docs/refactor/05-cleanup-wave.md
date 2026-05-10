@@ -1,15 +1,16 @@
 # Refactor PRD — Cleanup Wave (Phase 2)
 
-**Status:** Draft
+**Status:** Draft (scope reduced after pre-flight verification — see [§1.5](#15-pre-flight-findings-three-sub-items-withdrawn))
 **Author:** architecture audit, May 2026
-**Tracks:** [refactor-audit §1.7](../architecture/refactor-audit.md#17-custom-migration-runner), [§1.8](../architecture/refactor-audit.md#18-encryptexistingcolumns-running-as-a-perpetual-job), [§5.6](../architecture/refactor-audit.md#56-6-empty-legacy-directories-under-agent_runtime), [§5.7](../architecture/refactor-audit.md#57-dev_auth_bypass_allowed-toggle-on-deploymentprofile)
+**Tracks:** [refactor-audit §5.6](../architecture/refactor-audit.md#56-6-empty-legacy-directories-under-agent_runtime)
 **Roadmap:** [00-roadmap.md](00-roadmap.md) → P6
+**Originally tracked also:** [refactor-audit §1.7](../architecture/refactor-audit.md#17-custom-migration-runner), [§1.8](../architecture/refactor-audit.md#18-encryptexistingcolumns-running-as-a-perpetual-job), [§5.7](../architecture/refactor-audit.md#57-dev_auth_bypass_allowed-toggle-on-deploymentprofile) — withdrawn after code reads invalidated the audit hypotheses (see [§1.5](#15-pre-flight-findings-three-sub-items-withdrawn))
 
 ---
 
 ## 1. Problem
 
-Four hygiene items the audit flagged as low-risk single-PR work. Each is too small to ship in its own PR; bundled they clear a measurable amount of visible cruft and reduce long-term maintenance load.
+One hygiene item: six legacy empty directories under `agent_runtime/` that confuse new readers and shadow live modules in tooling.
 
 ### 1.1 Six legacy empty directories under `agent_runtime/`
 
@@ -19,7 +20,15 @@ The architecture index Appendix A documents six top-level directories that conta
 find services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools} -name "*.py"
 ```
 
-returning no hits. Live equivalents:
+returning no hits. Verified there are zero live imports:
+
+```bash
+grep -rEn "from agent_runtime\.(agent|mcp|memory|skills|subagents|tools)( |\.|$)" \
+  services/ai-backend/src services/ai-backend/tests
+# returns nothing
+```
+
+Live equivalents:
 
 | Empty directory            | Live equivalent                                                                             |
 | -------------------------- | ------------------------------------------------------------------------------------------- |
@@ -32,36 +41,56 @@ returning no hits. Live equivalents:
 
 **Why it's a problem:** search hits land in legacy paths first; new contributors get confused. Empty `__init__.py`-less directories are silently importable as namespace packages, which can mask broken imports in test runs.
 
-### 1.2 `EncryptExistingColumns` running as a perpetual worker job
+### 1.5 Pre-flight findings: three sub-items withdrawn
 
-[`runtime_worker/jobs/encrypt_existing_columns.py`](../../src/runtime_worker/jobs/encrypt_existing_columns.py) is registered as a worker background job. Naming and intent both indicate this is a one-shot data migration that calcified into a forever-running daemon: it scans for unencrypted rows on every wake, encrypts any it finds, then sleeps.
+The original PRD bundled four hygiene items. Pre-flight code reads (May 2026) invalidated the audit hypothesis on three of them. They are documented here so future readers don't re-walk the same ground.
 
-**Why it's a problem:**
+#### Withdrawn — `dev_auth_bypass_allowed` is an active safety gate, not a stale toggle
 
-- Daemons that idempotently scan empty work add database load and complicate worker shutdown.
-- The encryption logic is mixed with scheduler / loop logic. The encryption should be a stable transform; the scheduling should be one-shot.
-- A successful one-shot migration leaves a clean state (every row encrypted) that the daemon by definition cannot reach — it has no terminal condition.
+The audit at [refactor-audit §5.7](../architecture/refactor-audit.md#57-dev_auth_bypass_allowed-toggle-on-deploymentprofile) hypothesized this field was stale because the root [`CLAUDE.md`](../../../../CLAUDE.md) says "DEV_AUTH_BYPASS no longer exists." The field is in fact a **fail-closed guard** in [`profile.py:147-160`](../../src/agent_runtime/deployment/profile.py#L147-L160):
 
-### 1.3 Bespoke schema migration runner
+```python
+@classmethod
+def _enforce_consistency(cls, profile_name, env, toggles):
+    bypass_set = env.get("DEV_AUTH_BYPASS", "").strip().lower() == "true"
+    if bypass_set and not toggles.dev_auth_bypass_allowed:
+        raise DeploymentProfileError(
+            f"DEV_AUTH_BYPASS=true is not allowed under "
+            f"{ENV_DEPLOYMENT_PROFILE}={profile_name!r}; remove either the "
+            f"profile or the bypass env var."
+        )
+```
 
-[`agent_runtime/persistence/schema/migrate.py`](../../src/agent_runtime/persistence/schema/migrate.py) is a custom migration script. The migration story has unbounded growth from here:
+Removing the toggle removes the consistency check. Even though the bypass _route_ no longer exists, the env-var guard still prevents a misconfiguration from silently doing nothing instead of fail-closing. Keep as-is.
 
-- No autogenerate from SQLAlchemy models.
-- No standard downgrade path.
-- No standard data-migration story (custom migrations live in the script).
-- Other Python services in the monorepo will likely converge on Alembic; one-off here is friction.
+#### Withdrawn — `migrate.py` is a thin wrapper over yoyo-migrations, not bespoke code
 
-### 1.4 Stale `dev_auth_bypass_allowed` toggle on `DeploymentProfile`
+The audit at [refactor-audit §1.7](../architecture/refactor-audit.md#17-custom-migration-runner) hypothesized this was a custom migration runner. It is in fact a ~140-LOC wrapper around the **yoyo-migrations** library that adds operational guardrails:
 
-[`agent_runtime/deployment/profile.py`](../../src/agent_runtime/deployment/profile.py) lists `dev_auth_bypass_allowed` as a feature toggle. The root [`CLAUDE.md`](../../../../CLAUDE.md) explicitly says "DEV_AUTH_BYPASS no longer exists. Dev sessions go through a real signed bearer minted by `POST /v1/dev/identity/mint`."
+- SQL-first authoring under [`migrations/`](../../migrations/) with explicit `NNNN_<topic>.rollback.sql` siblings (26 migrations as of this PRD).
+- `MANIFEST.lock` checksums verified by `tools/check_migration_manifest.py` so silent edits to migration files are caught in CI.
+- Distributed locking via `yoyo.backend.lock()` so concurrent applies are safe.
+- `RUNTIME_MIGRATIONS_AUTO_APPLY` env gate (default true for dev/test, false for production deploys).
+- Operational logging on every apply / rollback.
 
-**Why it's a problem:** stale toggles confuse readers about what code paths still exist. If the toggle is checked anywhere, that's dead code that nominally implies a bypass exists.
+Switching to Alembic would lose SQL-first authoring, the explicit rollback files, and the manifest checksum guard — and gain nothing concrete because there's no SQLAlchemy ORM in use to benefit from autogenerate. **Keep as-is.**
+
+#### Withdrawn — `EncryptExistingColumns` is a rate-limited resumable backfill, not a calcified one-shot
+
+The audit at [refactor-audit §1.8](../architecture/refactor-audit.md#18-encryptexistingcolumns-running-as-a-perpetual-job) hypothesized this was a one-shot migration that calcified into a daemon. It is in fact a deliberately ongoing operational pattern (`FieldEncryptionBackfill`):
+
+- Targets multiple `(table, column)` pairs; the doc-comment explicitly notes more columns will be added in C7 phase 2 once their writers land. Running as a loop means new columns get backfilled automatically when their writers ship.
+- Idempotent on `encryption_version=0` — re-running advances the cursor without rewriting v1 rows.
+- Rate-limited per `RUNTIME_ENCRYPTION_BACKFILL_BATCH` + `RUNTIME_ENCRYPTION_BACKFILL_SLEEP_MS`.
+- Multi-worker safe via `FOR UPDATE SKIP LOCKED`.
+- Pauses on KMS unavailability (`EncryptionUnavailableError`) and resumes on next pass — important for envelope-encryption KMS rotation.
+
+Converting to a one-shot Alembic migration would lose all of those properties (resume, multi-worker, KMS-aware, ongoing column additions). **Keep as-is.**
 
 ### What this is NOT
 
-- Not a behavior change in production. Encryption stays. Migration history stays. Auth model stays. Empty directories obviously add nothing.
-- Not a switch of database, ORM, or test framework.
-- Not a change to the encryption algorithm or key management.
+- Not a behavior change anywhere. The 6 directories have no `.py` files and no imports.
+- Not a switch of database, ORM, migration tool, encryption strategy, or auth model.
 
 ---
 
@@ -69,20 +98,28 @@ returning no hits. Live equivalents:
 
 ### Goal
 
-Remove four pieces of cruft in one PR with no production behavior change. Each sub-item ships an additive change first (where applicable) and a removal step last so revert is a single git revert.
+Delete six empty legacy directories from `agent_runtime/` so search results, IDE autocomplete, and namespace-package resolution all stop suggesting them.
 
 ### Non-goals
 
-- Reduce the schema migration surface (table count, column types). Migration runner change only.
-- Move from `pgcrypto` / current encryption strategy to anything else. Encryption transform is preserved verbatim.
-- Reorganize `agent_runtime/` further. The 6 empty dirs go; the rest of the layout is left alone.
+- Touch `dev_auth_bypass_allowed`, `migrate.py`, or `EncryptExistingColumns` — see [§1.5](#15-pre-flight-findings-three-sub-items-withdrawn) for why.
+- Reorganize the live `agent_runtime/` subtree.
+- Add or remove any `__init__.py` from live packages.
 
-### Success criteria
+### Acceptance criteria
 
-- All 6 empty `agent_runtime/{agent,mcp,memory,skills,subagents,tools}/` directories removed in git history. `find services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools} -type d` returns no hits.
-- `runtime_worker/jobs/encrypt_existing_columns.py` removed from the worker's job registration. The encryption transform exists as an Alembic data migration that ran once on every environment.
-- Alembic adopted: `alembic.ini` + `alembic/env.py` + `alembic/versions/` exist, `alembic upgrade head` from a clean DB produces the same schema as `agent_runtime/persistence/schema/migrate.py` did. Old `migrate.py` is removed (or kept as a no-op shim for one release if anything in CI calls it directly).
-- `dev_auth_bypass_allowed` field removed from `DeploymentProfile` and from any settings shapes. No runtime check on the field anywhere in the codebase. (Verify before deletion: see [§3.4](#34-stale-toggle-removal-1-line-grep-then-delete).)
+- All 6 directories removed:
+  ```bash
+  find services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools} -type d
+  # returns nothing
+  ```
+- Pre-existing grep result still holds:
+  ```bash
+  grep -rEn "from agent_runtime\.(agent|mcp|memory|skills|subagents|tools)( |\.|$)" \
+    services/ai-backend/src services/ai-backend/tests
+  # returns nothing
+  ```
+- `__pycache__` artifacts cleaned (`.gitignore` already covers them; ensure no committed `.pyc` files remain after the deletion commit).
 - Full test suite green (`make test`, plus per-service `pytest`).
 - No new public API surface; no contract changes; no migration that requires downtime.
 
@@ -96,192 +133,92 @@ Remove four pieces of cruft in one PR with no production behavior change. Each s
 git rm -r services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools}
 ```
 
-Verification before commit:
+Pre-deletion verification (re-run before commit):
 
 ```bash
 # Should return nothing
 find services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools} -name "*.py" 2>/dev/null
 
 # Should return nothing — confirms no live import resolves to these paths
-grep -rn "from agent_runtime\.\(agent\|mcp\|memory\|skills\|subagents\|tools\)" services/ai-backend/src services/ai-backend/tests
-grep -rn "import agent_runtime\.\(agent\|mcp\|memory\|skills\|subagents\|tools\)" services/ai-backend/src services/ai-backend/tests
+grep -rEn "from agent_runtime\.(agent|mcp|memory|skills|subagents|tools)( |\.|$)" \
+  services/ai-backend/src services/ai-backend/tests
 ```
 
-If either grep returns a match, _do not delete_ — investigate first.
+If either returns a match, _do not delete_ — investigate first.
 
-### 3.2 `EncryptExistingColumns` → Alembic data migration
+### 3.2 Documentation update
 
-**Files removed:**
-
-| File                                                                                                           | Why                                 |
-| -------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| [`runtime_worker/jobs/encrypt_existing_columns.py`](../../src/runtime_worker/jobs/encrypt_existing_columns.py) | Loop replaced by one-shot migration |
-
-**Files modified:**
-
-- Worker entrypoint ([`runtime_worker/__main__.py`](../../src/runtime_worker/__main__.py) or wherever the job loop is registered): drop the `EncryptExistingColumns` registration.
-- Worker dependencies module: drop the import.
-
-**Files added:**
-
-- `services/ai-backend/alembic/versions/<rev>_encrypt_existing_columns.py` — Alembic data migration that performs the same row scan + encryption transform as the daemon, in one batch. Idempotent: SELECT WHERE column is unencrypted, batch UPDATE. Use server-side cursor for large tables.
-
-**Migration shape (sketch):**
-
-```python
-def upgrade() -> None:
-    bind = op.get_bind()
-    # Use the same FieldCodec the runtime uses; import from
-    # services/ai-backend/src/runtime_adapters/postgres/codec.py (or wherever it lives)
-    codec = FieldCodec.from_env()
-    batch_size = 1000
-    while True:
-        rows = bind.execute(text(
-            "SELECT id, sensitive_col FROM <table> "
-            "WHERE encryption_marker IS NULL "
-            "ORDER BY id LIMIT :n FOR UPDATE SKIP LOCKED"
-        ), {"n": batch_size}).fetchall()
-        if not rows:
-            break
-        for row in rows:
-            encrypted = codec.encrypt(row.sensitive_col)
-            bind.execute(text(
-                "UPDATE <table> SET sensitive_col = :v, encryption_marker = 'v1' "
-                "WHERE id = :id"
-            ), {"v": encrypted, "id": row.id})
-
-def downgrade() -> None:
-    raise NotImplementedError("Encryption is not reversible without the key")
-```
-
-**Operational note:** The migration must run before this PR ships to any environment that still has unencrypted rows. Confirm by counting `WHERE encryption_marker IS NULL` on staging + prod beforehand. If both are zero, the migration is a no-op and the daemon was already idle — safe to delete with no migration.
-
-### 3.3 Alembic adoption
-
-**Files removed:**
-
-| File                                                                                                   | Why                 |
-| ------------------------------------------------------------------------------------------------------ | ------------------- |
-| [`agent_runtime/persistence/schema/migrate.py`](../../src/agent_runtime/persistence/schema/migrate.py) | Replaced by Alembic |
-
-(Or kept as a shim that prints "deprecated, use `alembic upgrade head`" for one release.)
-
-**Files added:**
-
-- `services/ai-backend/alembic.ini` — Alembic config, `script_location = alembic`, `sqlalchemy.url = ${DATABASE_URL}`.
-- `services/ai-backend/alembic/env.py` — standard Alembic env, configured to use the same SQLAlchemy MetaData object the schema currently uses.
-- `services/ai-backend/alembic/versions/0001_baseline.py` — baseline migration capturing the current schema as a single CREATE TABLE per table. Use `alembic stamp head` on existing environments to mark them as already-baselined (no-op).
-
-**Files modified:**
-
-- [`services/ai-backend/Makefile`](../../Makefile): `make migrate` becomes `alembic upgrade head` (was: invoke `migrate.py`).
-- [`services/ai-backend/pyproject.toml`](../../pyproject.toml) / `requirements.txt`: add `alembic`.
-- Anything in CI / Docker entrypoint that called the old runner: switch to `alembic upgrade head`.
-
-**Baseline cutover plan:**
-
-1. Generate Alembic baseline `0001_baseline.py` from current schema (autogenerate against an empty DB).
-2. On every existing environment (dev, staging, prod): `alembic stamp head` to mark as baselined without running.
-3. New environments: `alembic upgrade head` from empty.
-4. Remove `migrate.py` after one release where both invocations existed (Make targets warn).
-
-### 3.4 Stale toggle removal (1-line grep, then delete)
-
-```bash
-grep -rn "dev_auth_bypass_allowed" services/ai-backend/src services/ai-backend/tests
-```
-
-Three possible outcomes:
-
-1. **Field defined but never read:** safe delete. Remove from `DeploymentProfile` field list, remove from `DeploymentFeatureToggles` if separate, remove from `toggles_hash()` input set.
-2. **Field read in dead code (e.g. a guard that's also unreachable):** delete the field and the guard.
-3. **Field still gating live behavior:** stop. Open a separate issue, do not include in this PR.
-
-Per the root [`CLAUDE.md`](../../../../CLAUDE.md) ("DEV_AUTH_BYPASS no longer exists"), outcome 1 or 2 is expected.
+- Update [`docs/architecture/index.md`](../architecture/index.md) Appendix A: change "Verified empty by `find …` returning no hits" to past tense / "deleted in PR #N (P6)."
+- Update [`docs/architecture/refactor-audit.md`](../architecture/refactor-audit.md) §5.6, §5.7, §1.7, §1.8 to reflect outcomes (one shipped, three withdrawn). Optional in this PR — can land separately.
 
 ---
 
 ## 4. Behaviors to preserve
 
-| Behavior                                                                                                 | How preserved                                                                       |
-| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Encryption transform on existing unencrypted rows                                                        | Alembic data migration runs once; key + algorithm unchanged                         |
-| Schema parity between `migrate.py` and Alembic baseline                                                  | Diff `pg_dump --schema-only` before/after; baseline migration matches               |
-| Deployment profile resolution at startup ([`profile.py`](../../src/agent_runtime/deployment/profile.py)) | Untouched apart from one removed field                                              |
-| `toggles_hash()` stability                                                                               | Field removal changes the hash; this is the intended behavior — bump a version note |
-| All current Alembic conventions in other services in the monorepo (if any)                               | Match their `alembic.ini` style, env.py shape, naming                               |
+| Behavior                                    | How preserved                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| Every live import in `services/ai-backend/` | Pre-flight grep proves none target the empty directories                  |
+| Encryption transform on existing rows       | Untouched — see [§1.5](#15-pre-flight-findings-three-sub-items-withdrawn) |
+| Schema migration history                    | Untouched                                                                 |
+| `DEV_AUTH_BYPASS` env-var fail-closed guard | Untouched                                                                 |
+| Deployment profile resolution at startup    | Untouched                                                                 |
 
 ---
 
 ## 5. Risks
 
-| Risk                                                                                   | Likelihood | Mitigation                                                                                  |
-| -------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------- |
-| An empty-dir delete reveals a hidden namespace-package import we missed in grep        | Low        | Pre-delete grep covers `from`, `import`, and re-export forms; CI catches anything missed    |
-| Alembic baseline diverges from current schema by one column                            | Medium     | `pg_dump --schema-only` diff in the PR description; baseline is generated, not hand-written |
-| `dev_auth_bypass_allowed` is referenced in a settings-loading code path we didn't grep | Low        | Use `ripgrep -uu` to include hidden / ignored files; check `.env.example` and Helm charts   |
-| Encryption migration is run before being smoke-tested on staging with realistic data   | Medium     | Mandatory staging dry-run with row counts logged before merge                               |
-| `alembic stamp head` is forgotten on one environment → next migration fails            | Medium     | PR description includes a per-environment runbook; ops checks off each environment          |
+| Risk                                                                               | Likelihood | Mitigation                                                                                                                                 |
+| ---------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| An empty-dir delete reveals a hidden namespace-package import we missed in grep    | Low        | Pre-delete grep covers `from`, `import`, and trailing-character forms; CI catches anything missed                                          |
+| A reviewer expects the original four-item PRD and is confused by the reduced scope | Low        | Reduced scope is documented in [§1.5](#15-pre-flight-findings-three-sub-items-withdrawn) at the top of this PRD                            |
+| A future search in IDE re-creates a legacy directory accidentally                  | Trivial    | The deletion sticks because there's nothing to import; if a developer creates a new `agent_runtime/agent/` it will conflict in code review |
 
 ---
 
 ## 6. Unit testing requirements
 
-### 6.1 Empty-directory removal
+This is a no-behavior-change deletion. Tests should not change.
 
-- No new tests; CI test discovery proves nothing imported them.
+### 6.1 No-regression assertion
 
-### 6.2 Encryption migration
+- `make test` and per-service `pytest` pass with zero test modifications.
 
-- New test: `tests/unit/migrations/test_encrypt_existing_columns.py` — uses `alembic-utils` or a temporary in-memory SQLite to:
-  1. Insert N rows with unencrypted values matching the prior daemon's input shape.
-  2. Run the migration.
-  3. Assert all rows are encrypted (round-trip via `FieldCodec.decrypt` returns the original values).
-  4. Assert the migration is idempotent — running it twice does not re-encrypt or corrupt.
-  5. Assert empty-table case is a no-op (no errors, no writes).
+### 6.2 (Optional) negative grep CI step
 
-### 6.3 Alembic adoption
+Add a CI step that asserts no first-party file imports from the deleted paths:
 
-- New test: `tests/unit/migrations/test_baseline.py` — programmatically run `alembic upgrade head` against a temporary Postgres (testcontainer or transactional fixture), then `pg_dump --schema-only` and assert it matches a checked-in golden snapshot.
-- Update CI to run `alembic upgrade head` against an empty DB on every PR (catches malformed migrations).
+```bash
+! grep -rEn "from agent_runtime\.(agent|mcp|memory|skills|subagents|tools)( |\.|$)" \
+    services/ai-backend/src services/ai-backend/tests
+```
 
-### 6.4 Stale toggle
-
-- Negative test: `grep -rn "dev_auth_bypass_allowed" services/ai-backend/src services/ai-backend/tests` returns zero hits, asserted via a CI step.
+Inverting the exit status (negation by `!`) so CI fails if any match appears.
 
 ---
 
 ## 7. Rollback plan
 
-| Sub-item             | Rollback                                                                                                                                                                                           |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Empty dir deletion   | `git revert` the deletion commit. Directories reappear empty.                                                                                                                                      |
-| Encryption migration | If migration fails mid-run: it's idempotent (`SELECT WHERE encryption_marker IS NULL`), retry. If logic is broken: revert the Alembic migration file _and_ re-add the daemon (separate revert PR). |
-| Alembic adoption     | Revert PR. Old `migrate.py` returns. `alembic stamp head` markers on environments are harmless leftovers (the `alembic_version` table can be dropped manually).                                    |
-| Stale toggle         | `git revert`. Toggle field returns to the profile.                                                                                                                                                 |
+`git revert` the deletion commit. The directories reappear empty (no `.py` files were ever in them).
 
 ---
 
 ## 8. Implementation order within the PR
 
-Land in this order so each sub-item independently passes CI before the next builds on it:
+Single commit:
 
-1. **Stale toggle removal** (smallest, unrelated to anything else; lowest risk).
-2. **Empty directory deletion** (mechanical; CI proves nothing imports them).
-3. **Alembic adoption** (additive: add Alembic config + baseline, dual-track with old `migrate.py` for one CI cycle, then remove old runner).
-4. **Encryption migration** (depends on Alembic being in place).
-
-Each step has its own commit so revert is granular.
+1. Re-run pre-flight greps as a sanity check.
+2. `git rm -r services/ai-backend/src/agent_runtime/{agent,mcp,memory,skills,subagents,tools}`
+3. Run full test suite locally.
+4. Open PR.
 
 ---
 
-## 9. Open questions
+## 9. Open follow-ups
 
-- Does any tooling outside `services/ai-backend/` invoke `migrate.py` directly (Helm pre-hook, init container, CI job)? If yes, change those callers in the same PR.
-- Are there other Python services in the monorepo with their own bespoke migration runners? If yes, this PR sets the convention; flag them for follow-up.
-- Confirm `EncryptExistingColumns` row count on staging and prod before scheduling. If both are zero, skip the migration entirely.
-- Verify `FieldCodec` is importable from a migration context (no circular import with the runtime's startup wiring).
+- Should the optional CI grep step be added in a separate PR? Yes — keep this PR to one outcome.
+- Should the audit doc be updated to reflect the three withdrawn findings? Yes — recommended in a follow-up edit, not in this PR's scope.
+- Are there other "obviously safe" hygiene cleanups that turned out to be load-bearing under inspection? Anyone reviewing this PRD should note: the audit was wrong on 3 of 4 items here. Apply the same skepticism to other hygiene PRDs in this folder.
 
 ---
 
-_This PRD is in draft until the four pre-flight verifications above complete. After verification, mark as Ready and assign for implementation._
+_Phase 2 PR. Independent of [P5](01-async-only-ports.md), [P7](06-citation-batching.md), [P8](07-cluster-boundary-moves.md), and [P9](08-service-consolidation.md). Land in any order within Phase 2._

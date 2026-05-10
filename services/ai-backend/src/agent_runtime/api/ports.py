@@ -1,11 +1,10 @@
-"""Async port protocols for runtime API persistence, event replay, and queueing.
+"""Port protocols for runtime API persistence, event replay, and queueing.
 
-These mirror the sync ports in `agent_runtime.api.ports` exactly, with every
-method declared `async def`. They exist alongside the sync ports during the
-incremental migration to a fully-async I/O chain (see plan
-`hazy-kindling-minsky`). Once all callers are async and the sync postgres
-adapter is retired, the sync ports go away and these are renamed to the
-unprefixed names.
+Async-native end-to-end. Every method is `async def`; both the in-memory
+adapter (`runtime_adapters.in_memory.InMemoryRuntimeApiStore`) and the
+Postgres adapter (`runtime_adapters.postgres.PostgresRuntimeApiStore`)
+implement the same surface. There is no sync mirror — the dev / test
+in-memory store is itself async.
 """
 
 from __future__ import annotations
@@ -227,7 +226,12 @@ class PersistencePort(Protocol):
         limit: int,
         cursor: tuple[datetime, str] | None,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Recipient inbox query (PR 1.4.1). See sync port for contract."""
+        """Recipient inbox query (PR 1.4.1).
+
+        Newest-first ordering on ``(created_at DESC, approval_id DESC)``;
+        cursor is exclusive. The ``org_id`` filter narrows within the
+        trusted tenant scope set by the caller.
+        """
 
     async def list_pending_expired_approvals(
         self,
@@ -715,6 +719,30 @@ class EventStorePort(Protocol):
 
         Implementations MUST serialize concurrent appends per ``run_id`` so the
         returned ``sequence_no`` is monotonically increasing without gaps.
+        """
+
+    async def append_events_batch(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
+        """Append a batch of events under one transaction (P4 Stage 2).
+
+        Used by the worker's ``DeltaCoalescer`` to flush ``MODEL_DELTA``
+        chunks accumulated within a coalesce window. All events must share
+        the same ``run_id``; the implementation assigns ``sequence_no`` to
+        each in input order and returns the populated envelopes in the same
+        order.
+
+        Implementations MUST:
+          * serialize concurrent batch (and single) appends per ``run_id``
+            so the returned ``sequence_no`` values are contiguous within the
+            batch and monotonically increasing across the run;
+          * roll back as one transaction on any failure mid-batch (no
+            partial writes);
+          * advance ``agent_runs.latest_sequence_no`` to ``max(sequence_no)``
+            in the same transaction when ``consolidates_cursor_writes`` is
+            enabled (mirrors the single-event ``append_event`` consolidation).
+
+        An empty input list returns ``()`` without touching the store.
         """
 
     async def list_events_after(

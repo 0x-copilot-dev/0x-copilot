@@ -22,7 +22,7 @@ class FakeSkillProvider:
     list_calls = 0
     load_calls = 0
 
-    def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
+    async def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
         self.list_calls += 1
         return (
             VirtualSkillCard(
@@ -37,7 +37,7 @@ class FakeSkillProvider:
             ),
         )
 
-    def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+    async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         self.load_calls += 1
         return VirtualSkillBundle(
             skill_id="skill_123",

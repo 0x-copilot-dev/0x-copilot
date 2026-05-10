@@ -31,13 +31,10 @@ from runtime_api.schemas import (
 
 
 class RuntimeEventProducer:
-    """Append redacted, ordered, UI-ready event envelopes through async ports.
+    """Append redacted, ordered, UI-ready event envelopes.
 
-    The producer's hot path is uniformly async. The constructor normalizes
-    incoming ports: an async store goes through directly, a sync store is
-    wrapped via ``adapt_*_to_async`` which bridges each call through
-    ``asyncio.to_thread``. Callers therefore don't have to know which kind
-    of port they're holding.
+    The producer's hot path is uniformly async; ports are async-native
+    so every persistence call awaits directly without bridging.
     """
 
     def __init__(
@@ -52,6 +49,19 @@ class RuntimeEventProducer:
         self.event_store: EventStorePort = event_store
         self.presentation_generator = presentation_generator or PresentationGenerator()
         self._on_event_appended = on_event_appended
+        # P4 — auto-detect whether the event store advances the run cursor
+        # inside its own transaction. Adapters opt in via a public
+        # ``consolidates_cursor_writes`` attribute set from
+        # ``RuntimeExecutionSettings.consolidated_event_writes``. When True,
+        # the producer skips the separate ``set_run_latest_sequence`` round-
+        # trip after each append. Reading from the event store (not a
+        # constructor flag) keeps producer/adapter agreement automatic — a
+        # mismatch where the producer skips but the adapter never updates
+        # would leave the cursor stuck, so the source of truth must be the
+        # adapter that actually runs the UPDATE.
+        self._consolidated_writes = bool(
+            getattr(event_store, "consolidates_cursor_writes", False)
+        )
 
     async def append_api_event(
         self,
@@ -110,10 +120,11 @@ class RuntimeEventProducer:
             **timeline_fields,
         )
         envelope = await self.event_store.append_event(draft)
-        await self.persistence.set_run_latest_sequence(
-            run_id=run.run_id,
-            latest_sequence_no=envelope.sequence_no,
-        )
+        if not self._consolidated_writes:
+            await self.persistence.set_run_latest_sequence(
+                run_id=run.run_id,
+                latest_sequence_no=envelope.sequence_no,
+            )
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)
         return envelope
@@ -158,10 +169,11 @@ class RuntimeEventProducer:
                 }
             )
         envelope = await self.event_store.append_event(draft)
-        await self.persistence.set_run_latest_sequence(
-            run_id=run.run_id,
-            latest_sequence_no=envelope.sequence_no,
-        )
+        if not self._consolidated_writes:
+            await self.persistence.set_run_latest_sequence(
+                run_id=run.run_id,
+                latest_sequence_no=envelope.sequence_no,
+            )
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)
         return envelope
@@ -225,3 +237,106 @@ class RuntimeEventProducer:
                 await self.append_stream_event(run=run, stream_event=event)
             )
         return tuple(envelopes)
+
+    async def append_api_events_batch(
+        self,
+        *,
+        run: RunRecord,
+        source: StreamEventSource,
+        event_type: RuntimeApiEventType,
+        entries: Sequence[Mapping[str, object]],
+    ) -> Sequence[RuntimeEventEnvelope]:
+        """Append N API events of one ``event_type`` under one transaction.
+
+        Used by the worker's ``DeltaCoalescer`` (P4 Stage 2) to flush a
+        batch of buffered ``MODEL_DELTA`` chunks. Each entry is a mapping
+        with optional ``payload``, ``metadata``, ``parent_task_id``,
+        ``subagent_id``, ``summary``, and ``status`` keys — the same
+        argument shape as :meth:`append_api_event`. The producer projects
+        each entry through the standard ``RuntimeEventPresentationProjector``
+        + ``PresentationGenerator`` pipeline before handing the drafts to
+        the event store's batched-append path.
+
+        Behavior:
+          * empty ``entries`` returns ``()`` without touching the store;
+          * one ``on_event_appended(run_id)`` notification fires per batch
+            (not per entry) — SSE clients still see N envelopes via the
+            store, but the notify-then-pull pattern replays them in one
+            tick;
+          * cursor advancement matches ``append_api_event``: the adapter
+            advances ``latest_sequence_no`` when consolidated, otherwise
+            this method calls ``set_run_latest_sequence`` once with the
+            highest assigned ``sequence_no``.
+        """
+
+        if not entries:
+            return ()
+        drafts: list[RuntimeEventDraft] = []
+        for entry in entries:
+            payload = entry.get("payload") or {}
+            metadata = entry.get("metadata") or {}
+            parent_task_id = entry.get("parent_task_id")
+            subagent_id = entry.get("subagent_id")
+            summary = entry.get("summary")
+            status = entry.get("status")
+            if not isinstance(payload, dict) or not isinstance(metadata, dict):
+                raise TypeError(
+                    "append_api_events_batch entry payload + metadata must be dicts"
+                )
+            safe_payload = RuntimeEventPresentationProjector.payload_for_event(
+                event_type=event_type,
+                payload=payload,
+            )
+            safe_metadata = metadata
+            timeline_fields = RuntimeEventPresentationProjector.presentation_fields(
+                event_type=event_type,
+                source=source,
+                parent_task_id=(
+                    str(parent_task_id) if parent_task_id is not None else None
+                ),
+                payload=safe_payload,
+                metadata=safe_metadata,
+                subagent_id=(str(subagent_id) if subagent_id is not None else None),
+            )
+            if isinstance(summary, str) and (safe_summary := summary.strip()):
+                timeline_fields["summary"] = safe_summary
+            if isinstance(status, str) and (safe_status := status.strip()):
+                timeline_fields["status"] = safe_status
+            preliminary = (
+                self.presentation_generator.preliminary_presentation_for_event(
+                    event_type=event_type,
+                    payload=safe_payload,
+                    metadata=safe_metadata,
+                    timeline_fields=timeline_fields,
+                )
+            )
+            draft_metadata = (
+                {**safe_metadata, "presentation": preliminary}
+                if preliminary is not None
+                else safe_metadata
+            )
+            drafts.append(
+                RuntimeEventDraft(
+                    run_id=run.run_id,
+                    conversation_id=run.conversation_id,
+                    source=source,
+                    event_type=event_type,
+                    trace_id=run.trace_id,
+                    parent_task_id=(
+                        str(parent_task_id) if parent_task_id is not None else None
+                    ),
+                    payload=safe_payload,
+                    metadata=draft_metadata,
+                    presentation=preliminary,
+                    **timeline_fields,
+                )
+            )
+        envelopes = await self.event_store.append_events_batch(drafts)
+        if not self._consolidated_writes and envelopes:
+            await self.persistence.set_run_latest_sequence(
+                run_id=run.run_id,
+                latest_sequence_no=envelopes[-1].sequence_no,
+            )
+        if self._on_event_appended is not None:
+            self._on_event_appended(run.run_id)
+        return envelopes

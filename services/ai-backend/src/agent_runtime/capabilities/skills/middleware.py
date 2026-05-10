@@ -38,7 +38,7 @@ class LoadSkillTool:
         if isinstance(parsed_input, dict):
             return parsed_input
         try:
-            bundle = self.registry.load_skill_by_name(parsed_input.skill_name)
+            bundle = await self.registry.load_skill_by_name(parsed_input.skill_name)
         except AgentRuntimeError as exc:
             return {
                 "ok": False,

@@ -42,11 +42,12 @@ from runtime_api.http.routes import (
 )
 from runtime_api.rbac import public_route
 from runtime_api.routes.health import register_health_routes
-from runtime_api.sse.event_bus import RuntimeEventBus
+from runtime_api.sse.event_bus import (
+    EventBusBackend,
+    InMemoryEventBus,
+)
+from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
-
-
-_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres", "in_memory"})
 
 
 class RuntimeApiAppFactory:
@@ -72,11 +73,21 @@ class RuntimeApiAppFactory:
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await cls.open_async_store(app)
+            # P2 — start the cross-process LISTEN/NOTIFY bus task if the
+            # Postgres backend is configured. Must run after the store is
+            # open (the bus borrows the same DATABASE_URL) and before the
+            # in-process worker so any startup events the worker emits are
+            # immediately routable.
+            await cls.start_event_bus(app)
             await cls.start_in_process_worker(app)
             try:
                 yield
             finally:
                 await cls.stop_in_process_worker(app)
+                # Stop the bus AFTER the worker so any final events the
+                # worker writes during shutdown are delivered to SSE
+                # clients before the listener disconnects.
+                await cls.stop_event_bus(app)
                 await cls.close_async_store(app)
 
         app = FastAPI(title="Agent Runtime API", version="1", lifespan=lifespan)
@@ -139,7 +150,7 @@ class RuntimeApiAppFactory:
     def default_service(cls, app: FastAPI) -> RuntimeApiService:
         settings = RuntimeSettings.load()
         RuntimeSettings.configure_sdk_environment(settings)
-        event_bus = RuntimeEventBus.get_default()
+        event_bus = cls.default_event_bus(settings)
         # PR 1.4.1 — production wiring for the inbox bus + the
         # composite notification dispatcher. Tests use the
         # ``RuntimeApiService(notification_dispatcher=...)`` constructor
@@ -198,12 +209,12 @@ class RuntimeApiAppFactory:
         )
 
         suggestible_resolver = SuggestibleConnectorsResolverFactory.default()
-        async_ports = RuntimeAdapterFactory.from_settings(settings)
-        app.state.runtime_ports = async_ports
+        ports = RuntimeAdapterFactory.from_settings(settings)
+        app.state.runtime_ports = ports
         return RuntimeApiService(
-            persistence=async_ports.persistence,
-            event_store=async_ports.event_store,
-            queue=async_ports.queue,
+            persistence=ports.persistence,
+            event_store=ports.event_store,
+            queue=ports.queue,
             settings=settings,
             on_event_appended=event_bus.notify_sync,
             notification_dispatcher=notification_dispatcher
@@ -286,20 +297,20 @@ class RuntimeApiAppFactory:
         from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
         from runtime_adapters.postgres.draft_store import PostgresDraftStore
 
-        async_ports = getattr(app.state, "runtime_ports", None)
         ports = getattr(app.state, "runtime_ports", None)
-        if async_ports is not None and async_ports.backend == "postgres":
-            store = PostgresDraftStore(async_ports.store)
-            persistence = async_ports.persistence
-            event_store = async_ports.event_store
-        elif async_ports is not None:
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is not None and ports.backend == "postgres":
+            store = PostgresDraftStore(ports.store)
+            persistence = ports.persistence
+            event_store = ports.event_store
+        elif ports is not None:
             store = (
-                async_ports.draft_store
-                if async_ports.draft_store is not None
+                ports.draft_store
+                if ports.draft_store is not None
                 else InMemoryDraftStore()
             )
-            persistence = async_ports.persistence
-            event_store = async_ports.event_store
+            persistence = ports.persistence
+            event_store = ports.event_store
         elif ports is not None:
             store = (
                 ports.draft_store
@@ -354,23 +365,23 @@ class RuntimeApiAppFactory:
         - PR 6.2's fork service via ``ShareSnapshotPort.resolve_by_token``.
 
         Returns ``None`` when no ports are wired (minimal test apps).
-        Production/dev always have either sync or async ports configured.
+        Production and dev always have async ports configured.
         """
 
         from agent_runtime.api.share_service import ShareService
         from runtime_adapters.in_memory.share_store import InMemoryShareStore
 
-        async_ports = getattr(app.state, "runtime_ports", None)
-        ports = async_ports
+        ports = getattr(app.state, "runtime_ports", None)
+        ports = ports
         if ports is None:  # pragma: no cover — only hit when boot has no ports
             return None
         share_store = getattr(ports, "share_store", None) or InMemoryShareStore()
         api_service = getattr(app.state, "runtime_api_service", None)
         if api_service is None:
             return None
-        # Construct using the runtime API service's already-adapted
-        # async ports — no double-wrapping (the service's __init__ ran
-        # ``adapt_persistence_to_async`` once).
+        # Reuse the runtime API service's async ports directly — both
+        # surfaces share the same async-native InMemoryRuntimeApiStore
+        # (or PostgresRuntimeApiStore in production).
         import os as _os
 
         return ShareService(
@@ -403,8 +414,8 @@ class RuntimeApiAppFactory:
         from runtime_api.identity import RuntimeIdentity  # noqa: F401 (typing only)
         from runtime_worker.audit import WorkerAuditEmitter
 
-        async_ports = getattr(app.state, "runtime_ports", None)
-        ports = async_ports
+        ports = getattr(app.state, "runtime_ports", None)
+        ports = ports
         if ports is None:  # pragma: no cover — only hit when app boots without ports
             return None
 
@@ -452,14 +463,14 @@ class RuntimeApiAppFactory:
         from runtime_adapters.postgres.source_store import PostgresSourceStore
         from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
 
-        async_ports = getattr(app.state, "runtime_ports", None)
-        if async_ports is not None and async_ports.backend == "postgres":
-            parent = async_ports.store
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is not None and ports.backend == "postgres":
+            parent = ports.store
             return WorkspaceFeedService(
                 subagent_store=PostgresSubagentStore(parent),
                 source_store=PostgresSourceStore(parent),
             )
-        ports = async_ports
+        ports = ports
         underlying = (
             ports.store.underlying  # type: ignore[union-attr]
             if hasattr(getattr(ports, "store", None), "underlying")
@@ -471,23 +482,87 @@ class RuntimeApiAppFactory:
         )
 
     @classmethod
+    def default_event_bus(cls, settings: RuntimeSettings) -> EventBusBackend:
+        """Pick the SSE event bus based on configuration.
+
+        ``in_memory`` (the default) returns the legacy single-process
+        ``InMemoryEventBus`` singleton — unchanged from pre-P2 behavior so
+        dev / test paths see no change.
+
+        ``postgres`` constructs a :class:`PostgresEventBus` whose
+        connection factory opens a dedicated psycopg ``AsyncConnection``
+        (autocommit-enabled, since ``LISTEN`` must take effect outside a
+        transaction). The bus is started + stopped by
+        :meth:`start_event_bus` / :meth:`stop_event_bus` in the lifespan.
+        """
+
+        backend = settings.execution.event_bus_backend.lower()
+        if backend == "postgres":
+            database_url = settings.store.database_url
+            if not database_url:
+                raise ValueError(
+                    "RUNTIME_EVENT_BUS_BACKEND=postgres requires DATABASE_URL "
+                    "to be configured."
+                )
+
+            async def _connection_factory() -> object:
+                import psycopg
+
+                # ``LISTEN`` is connection-bound and must run outside a
+                # transaction; autocommit is required so the LISTEN takes
+                # effect immediately and notifications are delivered as
+                # they arrive.
+                return await psycopg.AsyncConnection.connect(
+                    database_url, autocommit=True
+                )
+
+            return PostgresEventBus(connection_factory=_connection_factory)
+        return InMemoryEventBus.get_default()
+
+    @classmethod
+    async def start_event_bus(cls, app: FastAPI) -> None:
+        """Start the SSE event-bus background task if it has one.
+
+        ``InMemoryEventBus`` is purely in-process and has no background
+        task, so this is a no-op for it. ``PostgresEventBus`` spawns its
+        ``listen_loop`` task here and tears it down in
+        :meth:`stop_event_bus`.
+        """
+
+        bus = getattr(app.state, "runtime_event_bus", None)
+        start = getattr(bus, "start", None)
+        if start is None:
+            return
+        await start()
+
+    @classmethod
+    async def stop_event_bus(cls, app: FastAPI) -> None:
+        """Stop the SSE event-bus background task if it has one."""
+
+        bus = getattr(app.state, "runtime_event_bus", None)
+        stop = getattr(bus, "stop", None)
+        if stop is None:
+            return
+        await stop()
+
+    @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:
         """Open + migrate the async store on startup if one was configured."""
 
-        async_ports = getattr(app.state, "runtime_ports", None)
-        if async_ports is None:
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
             return
-        await async_ports.store.open()
-        await async_ports.store.migrate()
+        await ports.store.open()
+        await ports.store.migrate()
 
     @classmethod
     async def close_async_store(cls, app: FastAPI) -> None:
         """Close the async store on shutdown."""
 
-        async_ports = getattr(app.state, "runtime_ports", None)
-        if async_ports is None:
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
             return
-        await async_ports.store.close()
+        await ports.store.close()
 
     @classmethod
     async def start_in_process_worker(cls, app: FastAPI) -> None:

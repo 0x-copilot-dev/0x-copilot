@@ -41,6 +41,25 @@ class _EnvFields:
     WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
     START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
     ALLOW_EMPTY_CAPABILITIES = "RUNTIME_ALLOW_EMPTY_CAPABILITIES"
+    # P4 — collapses ``append_event`` + ``set_run_latest_sequence`` into one
+    # transaction (adapter folds the cursor UPDATE into the same tx; producer
+    # skips its separate call). Default ``true``; flip ``false`` for full
+    # rollback to the pre-P4 two-transaction path.
+    EVENT_WRITE_CONSOLIDATED = "RUNTIME_EVENT_WRITE_CONSOLIDATED"
+    # P4 Stage 2 — worker-side ``MODEL_DELTA`` coalesce window (ms). When
+    # > 0, the streaming executor accumulates chunks for the window and
+    # flushes them via ``append_events_batch`` (one DB round-trip per
+    # batch). Default ``0`` (disabled) so Stage 2 ships dark; flip on per
+    # environment after measurement on staging.
+    DELTA_COALESCE_WINDOW_MS = "RUNTIME_DELTA_COALESCE_WINDOW_MS"
+    # Hard cap on chunks per batch — forces a flush even if the window has
+    # not expired. Defends against pathological emit rates.
+    DELTA_COALESCE_MAX_CHUNKS = "RUNTIME_DELTA_COALESCE_MAX_CHUNKS"
+    # P2 — SSE event bus backend selection. ``in_memory`` (default) uses
+    # the legacy single-process ``asyncio.Condition`` path. ``postgres``
+    # switches to ``LISTEN/NOTIFY`` so the worker's append wakes SSE
+    # adapters in a separate API process.
+    EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
@@ -100,6 +119,25 @@ class RuntimeExecutionSettings(RuntimeContract):
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
     allow_empty_capabilities: bool = False
+    # P4 — when True the postgres + in-memory adapters fold the
+    # ``agent_runs.latest_sequence_no`` cursor UPDATE into the same
+    # transaction as the ``runtime_events`` INSERT, and
+    # ``RuntimeEventProducer`` skips its separate ``set_run_latest_sequence``
+    # call. The H3 monotonic guard (``latest_sequence_no < new``) still
+    # holds: even if the producer's redundant call did fire it would no-op.
+    consolidated_event_writes: bool = True
+    # P4 Stage 2 — coalesce window (ms) for worker-side ``MODEL_DELTA``
+    # batching. ``0`` disables coalescing (default — Stage 2 ships dark).
+    # Recommended ``50`` once measured on staging.
+    delta_coalesce_window_ms: int = Field(default=0, ge=0, le=1000)
+    # Hard cap on chunks per coalesce batch. Forces a flush even if the
+    # window has not expired so a runaway emit rate can't grow the buffer
+    # without bound.
+    delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1024)
+    # P2 — SSE event bus backend. ``in_memory`` is the legacy single-
+    # process default; ``postgres`` enables Postgres ``LISTEN/NOTIFY`` so
+    # cross-process worker → API SSE wakeups are delivered in milliseconds.
+    event_bus_backend: str = "in_memory"
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -277,6 +315,13 @@ class RuntimeSettings(BaseSettings):
                     v, E.ALLOW_EMPTY_CAPABILITIES, "false"
                 ).lower()
                 in _truthy,
+                consolidated_event_writes=_s(
+                    v, E.EVENT_WRITE_CONSOLIDATED, "true"
+                ).lower()
+                in _truthy,
+                delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
+                delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
+                event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "in_memory").lower(),
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

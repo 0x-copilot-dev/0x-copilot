@@ -15,7 +15,7 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.execution.graph import ConfiguredRuntimeGraph
 from agent_runtime.execution.runtime import (
-    invoke_runtime,
+    ainvoke_runtime,
     runtime_config,
 )
 from agent_runtime.observability.tracing import TraceNames
@@ -31,7 +31,7 @@ class CapturingInvokeAgent:
         }
     )
 
-    def invoke(
+    async def ainvoke(
         self, input_data: dict[str, object], *, config: dict[str, object]
     ) -> object:
         self.calls.append({"input": input_data, "config": config})
@@ -103,7 +103,7 @@ def test_runtime_config_uses_product_run_id_without_raw_identity(
     assert config["tags"] == ["agent_runtime", "run:run_123"]
 
 
-def test_invoke_runtime_logs_success_and_passes_langgraph_config(
+async def test_invoke_runtime_logs_success_and_passes_langgraph_config(
     caplog: pytest.LogCaptureFixture,
     runtime_context_admin: AgentRuntimeContext,
     fake_dependencies: RuntimeDependencies,
@@ -112,7 +112,9 @@ def test_invoke_runtime_logs_success_and_passes_langgraph_config(
     agent = CapturingInvokeAgent()
     harness = make_harness(runtime_context_admin, fake_dependencies, agent=agent)
 
-    result = invoke_runtime(harness, messages=({"role": "user", "content": "secret"},))
+    result = await ainvoke_runtime(
+        harness, messages=({"role": "user", "content": "secret"},)
+    )
 
     payloads = runtime_payloads(caplog.records)
     assert result == {
@@ -132,7 +134,7 @@ def test_invoke_runtime_logs_success_and_passes_langgraph_config(
     assert "secret" not in str(payloads)
 
 
-def test_invoke_runtime_logs_safe_error_without_raw_exception(
+async def test_invoke_runtime_logs_safe_error_without_raw_exception(
     caplog: pytest.LogCaptureFixture,
     runtime_context_admin: AgentRuntimeContext,
     fake_dependencies: RuntimeDependencies,
@@ -145,7 +147,9 @@ def test_invoke_runtime_logs_safe_error_without_raw_exception(
     )
 
     with pytest.raises(AgentRuntimeError):
-        invoke_runtime(harness, messages=({"role": "user", "content": "secret"},))
+        await ainvoke_runtime(
+            harness, messages=({"role": "user", "content": "secret"},)
+        )
 
     payloads = runtime_payloads(caplog.records)
     error_payload = payloads[-1]

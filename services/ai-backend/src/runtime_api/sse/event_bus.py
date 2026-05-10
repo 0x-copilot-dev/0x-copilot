@@ -1,26 +1,72 @@
-"""Async event notification bus for SSE push instead of poll."""
+"""SSE push notification bus.
+
+Two backends are supported (P2 — see ``docs/refactor/02-sse-listen-notify.md``):
+
+* :class:`InMemoryEventBus` — process-local ``asyncio.Condition`` pub/sub.
+  The historical default. Works only when API and worker share a process
+  (``RUNTIME_START_IN_PROCESS_WORKER=true`` in dev). In production, where
+  the worker is a separate process, the worker's ``notify_sync`` can never
+  wake an SSE adapter waiting on the API process — the SSE adapter falls
+  back to its 2-second poll.
+* :class:`PostgresEventBus` — Postgres ``LISTEN/NOTIFY`` pub/sub. Cross-
+  process by design. The worker's ``append_event`` fires
+  ``NOTIFY runtime_events_v1, '<run_id>:<seq>'``; the API process holds a
+  dedicated ``LISTEN`` connection and dispatches each notification to the
+  registered ``run_id`` waiter. Sub-50ms wakeup; the SSE poll fallback
+  becomes a backstop (10s) instead of the primary mechanism.
+
+Production wires the Postgres backend via
+``RUNTIME_EVENT_BUS_BACKEND=postgres``. Default is ``in_memory`` so the
+behavior change ships dark.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections import defaultdict
+from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeEventBus:
-    """Lightweight pub/sub that wakes SSE listeners when events are appended.
+@runtime_checkable
+class EventBusBackend(Protocol):
+    """Subscribe / wait / notify / unsubscribe surface used by the SSE adapter."""
 
-    In-process: uses asyncio.Condition so the SSE adapter wakes immediately
-    when the worker appends an event, instead of polling every 250ms.
+    fallback_poll_seconds: float
+
+    async def wait(self, run_id: str, *, timeout: float) -> None:
+        """Block up to ``timeout`` for the next notification on ``run_id``."""
+
+    async def notify(self, run_id: str) -> None:
+        """Wake any waiters on ``run_id`` (no-op when none are registered)."""
+
+    def notify_sync(self, run_id: str) -> None:
+        """Thread-safe synchronous notify wrapper for callbacks fired off-loop."""
+
+    def unsubscribe(self, run_id: str) -> None:
+        """Drop any local subscription state for ``run_id`` (idempotent)."""
+
+
+class InMemoryEventBus:
+    """In-process pub/sub via ``asyncio.Condition`` (single-process only).
+
+    The original ``RuntimeEventBus``. Suitable for tests, dev runs with
+    ``RUNTIME_START_IN_PROCESS_WORKER=true``, and any deployment where the
+    API and worker are guaranteed to share a process. Cross-process
+    notifications never arrive — see :class:`PostgresEventBus` for the
+    multi-process case.
     """
 
-    _instance: RuntimeEventBus | None = None
+    fallback_poll_seconds: float = 2.0
+
+    _instance: "InMemoryEventBus | None" = None
 
     @classmethod
-    def get_default(cls) -> RuntimeEventBus:
+    def get_default(cls) -> "InMemoryEventBus":
         """Return (or create) the process-global event bus singleton."""
+
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -69,3 +115,9 @@ class RuntimeEventBus:
     async def _async_notify(condition: asyncio.Condition) -> None:
         async with condition:
             condition.notify_all()
+
+
+# Backward-compat alias so existing call sites that import
+# ``RuntimeEventBus`` continue to work without edits. New code should
+# depend on the ``EventBusBackend`` Protocol or the explicit class name.
+RuntimeEventBus = InMemoryEventBus

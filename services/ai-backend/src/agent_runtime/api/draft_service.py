@@ -178,7 +178,7 @@ class DraftService:
             raise self._immutable_status_error(latest.status)
 
         # 1. Auth pre-check — fail fast BEFORE any DB write.
-        self._enforce_auth_gate(
+        await self._enforce_auth_gate(
             target_connector=request.target_connector,
             org_id=org_id,
             user_id=user_id,
@@ -272,7 +272,7 @@ class DraftService:
 
     # -- internal helpers ----------------------------------------------------
 
-    def _enforce_auth_gate(
+    async def _enforce_auth_gate(
         self,
         *,
         target_connector: str,
@@ -287,7 +287,7 @@ class DraftService:
         runtime_context = _RuntimeContextStub(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
-        check: CapabilityAuthCheck = self._auth_gate.check(
+        check: CapabilityAuthCheck = await self._auth_gate.check(
             target_connector=target_connector,
             runtime_context=runtime_context,
         )

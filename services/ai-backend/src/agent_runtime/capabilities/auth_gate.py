@@ -60,7 +60,9 @@ class _McpServerLike(Protocol):
 
 
 class _McpRegistryLike(Protocol):
-    def list_available_servers(self, context: object) -> Iterable[_McpServerLike]: ...
+    async def list_available_servers(
+        self, context: object
+    ) -> Iterable[_McpServerLike]: ...
 
 
 class CapabilityAuthGate:
@@ -77,7 +79,7 @@ class CapabilityAuthGate:
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
 
-    def check(
+    async def check(
         self,
         *,
         target_connector: str,
@@ -97,7 +99,7 @@ class CapabilityAuthGate:
                     outcome=CapabilityAuthOutcome.AUTHENTICATED,
                 )
         # 2. Is it a known MCP server?
-        for server in self._mcp_registry.list_available_servers(runtime_context):
+        for server in await self._mcp_registry.list_available_servers(runtime_context):
             if server.name != target_connector:
                 continue
             if not server.enabled:

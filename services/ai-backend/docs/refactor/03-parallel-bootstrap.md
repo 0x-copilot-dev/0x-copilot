@@ -1,6 +1,6 @@
 # Refactor PRD — Parallel run-start resolvers in `create_run` (Phase 1)
 
-**Status:** Draft (rewrite — original draft mis-located the target inside `factory.py`; verification revealed the real call site is `RuntimeApiService.create_run`)
+**Status:** Partially shipped — see [§11 — Status by phase](#11-status-by-phase)
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §4.4](../architecture/refactor-audit.md#44-sequential-bootstrap-in-create_agent_runtime)
 **Roadmap entry:** [`00-roadmap.md` P3](00-roadmap.md#phase-1--performance-wins-no-structural-change)
@@ -283,3 +283,51 @@ No feature flag is needed; the change is too small and the rollback boundary too
 ---
 
 _This PRD is implementable today. All §3.4 verifications are complete._
+
+---
+
+## 11. Status by phase
+
+| Phase                                        | Scope                                                                                                                                        | Status                                                                                                                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 11.a — `create_run` 3-resolver gather        | The original primary scope of this PRD: the three serial awaits in `RuntimeApiService.create_run`.                                           | **Shipped** — see [`agent_runtime/api/service.py:641-653`](../../src/agent_runtime/api/service.py#L641-L653). One `asyncio.gather` of three.            |
+| 11.b — Factory 4-registry gather             | Originally deferred to "after P5 makes the factory async-able". P5 shipped (the factory is now `async`), so this landed alongside.           | **Shipped** — see [`agent_runtime/execution/factory.py:138-151`](../../src/agent_runtime/execution/factory.py#L138-L151). One `asyncio.gather` of four. |
+| 11.c — Factory 5-way gather (`_skill_cards`) | The remaining sequential `await` in [`_assemble_harness`](../../src/agent_runtime/execution/factory.py#L198-L201) — independent of the four. | **This change.**                                                                                                                                        |
+
+### 11.c — Factory 5-way gather
+
+#### Problem
+
+After 11.b, `acreate_agent_runtime` does a 4-way gather, then `_assemble_harness` issues one more `await _skill_cards(...)` before composing the system prompt. `_skill_cards` only depends on `runtime_dependencies.skill_registry` and `runtime_context` — both available at the start of `acreate_agent_runtime`. It can join the 4-way gather as a 5th branch.
+
+Without this, the bootstrap pays `gather(4) + serial(_skill_cards)` per run — typically 30–80ms of waste depending on backend latency.
+
+#### Change
+
+Two edits in [`agent_runtime/execution/factory.py`](../../src/agent_runtime/execution/factory.py):
+
+1. Extend the gather in `acreate_agent_runtime` to include `_skill_cards(...)` as the 5th branch.
+2. `_assemble_harness` accepts a `skill_cards` parameter (drops its own `await _skill_cards(...)`).
+
+The sync `create_agent_runtime` continues to compute `skill_cards` inline (it's sync) and pass to `_assemble_harness`. Both paths converge on the same `_assemble_harness` signature.
+
+#### Behaviors preserved
+
+- `_skill_cards` short-circuit semantics: `skill_registry is None` or missing `list_available_skills` → `()`. `asyncio.gather` schedules the coroutine, which returns the empty tuple immediately. Identical to current behavior.
+- Order of fan-out tuple: tools, mcp_servers, subagents, skill_directories, **skill_cards**. The 5th slot is appended; the prior 4 keep their positions.
+- Failure semantics: if any branch raises, the gather propagates and the existing `try / except AgentRuntimeError / except Exception` block in `_assemble_harness` catches and wraps unknown exceptions as `RuntimeErrorCode.RUNTIME_FACTORY_ERROR` (unchanged).
+- The sync `create_agent_runtime` path is untouched in its execution semantics — it still computes skill cards inline before calling `_assemble_harness`.
+
+#### Tests
+
+A new file `tests/unit/agent_runtime/execution/test_parallel_bootstrap_skill_cards.py`:
+
+- `test_factory_gathers_five_listings_concurrently` — five fakes each sleeping 50ms; total wall-clock under 150ms (would be ≥250ms serial).
+- `test_skill_cards_default_to_empty_when_registry_absent` — `skill_registry=None` produces `()` for the 5th slot.
+- `test_skill_cards_registry_without_list_method_returns_empty` — registry without `list_available_skills` produces `()`.
+- `test_assemble_harness_signature_change_passes_skill_cards_through` — direct call to `_assemble_harness` with explicit `skill_cards` builds a harness whose `skill_cards` equals what was passed in.
+- `test_branch_failure_propagates_runtime_error` — one fake raises mid-gather; bootstrap surfaces `AgentRuntimeError(RuntimeErrorCode.RUNTIME_FACTORY_ERROR)`.
+
+#### Rollback
+
+`git revert`. Single commit, no flag, no schema change.

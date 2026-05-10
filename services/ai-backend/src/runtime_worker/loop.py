@@ -59,8 +59,7 @@ class RuntimeWorker:
             "ConversationToolOrdinalStorePort | None"
         ) = None,
     ) -> None:
-        # Worker is fully async on the inside. Sync ports get wrapped
-        # via to_thread; async ports pass through unchanged.
+        # Worker is fully async; ports are async-native end-to-end.
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.queue: RuntimeQueuePort = queue

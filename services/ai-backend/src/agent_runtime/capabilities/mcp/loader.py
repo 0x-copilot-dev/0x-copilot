@@ -61,7 +61,7 @@ class McpLoader:
         """Load a selected MCP server while rechecking permissions and validation."""
 
         runtime_context = request.runtime_context
-        resolution = self.registry.resolve_server(request.server_name)
+        resolution = await self.registry.resolve_server(request.server_name)
         if isinstance(resolution, McpLoadError):
             return McpLoaderHelpers.result_from_error(
                 resolution, runtime_context.trace_id
