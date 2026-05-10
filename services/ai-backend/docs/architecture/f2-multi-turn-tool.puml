@@ -1,0 +1,80 @@
+@startuml f2-multi-turn-tool
+title Flow 2 — Multi-turn with built-in tool call
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "RuntimeRunHandler" as h
+participant "StreamingExecutor" as exec
+participant "Deep Agents graph\n(LangGraph)" as graph
+participant "LLM provider" as llm
+participant "ToolBudgetMiddleware" as bud
+participant "DynamicToolRegistry +\nToolLoader" as t
+participant "Built-in tool\n(e.g. ask_a_question /\nLoadPriorToolResult)" as tool
+participant "RuntimeEventProducer" as ep
+participant "EventStore" as es
+participant "RuntimeEventBus + SSE" as sse
+participant "BudgetCharger" as charger
+
+note over h, sse
+  Pre-conditions: run already started via Flow 1.
+  sequence_no continues to increment monotonically
+  per run. Every event flows ep → es → bus → sse → user.
+end note
+
+== Turn 1 — model emits tool call ==
+
+exec -> graph : drive stream
+graph -> llm : invoke with messages + tools
+llm -->> graph : assistant message with tool_call
+
+graph -> bud : pre-check tool budget
+bud --> graph : ok / budget remaining
+
+graph -> t : resolve(tool_name, context)
+t -> t : ToolPermissionChecker.is_card_authorized
+t -> t : ToolLoader.load_tool(card)
+t --> graph : LoadedToolSpec
+exec -> ep : append_api_event(TOOL_CALL)\nsource=TOOL,\npayload={name, args}
+ep -> es : append → sequence_no++
+ep ->> sse : notify → user sees tool started
+
+graph -> tool : invoke(args)
+tool --> graph : ToolResult / payload
+exec -> ep : append_api_event(TOOL_RESULT)\nsource=TOOL,\npayload={result}
+ep -> es : append → sequence_no++
+ep ->> sse : notify → user sees tool completed
+ep ->> ep : spawn async polish task →\nlater PRESENTATION_UPDATED
+
+== Turn 2 — model consumes tool result and answers ==
+
+graph -> llm : new turn (tool result added)
+loop deltas
+  llm -->> graph : chunk
+  exec -> ep : MODEL_DELTA (sequence_no++)
+  ep ->> sse : notify
+end
+llm -->> graph : final message
+
+exec -> ep : FINAL_RESPONSE (sequence_no++)
+exec -> ep : RUN_COMPLETED (sequence_no++)
+ep ->> sse : notify
+
+== Post-run charging ==
+
+h -> charger : charge_run(run_id, usage)
+charger -> charger : CostCalculator.compute(\n   usage, ModelPricingCatalog\n)
+charger -> es : (no event — internal CAS update)
+
+note over bud, charger
+  ToolBudgetMiddleware would short-circuit
+  any tool invocation past the per-task cap
+  (default 5) by emitting a BUDGET_WARNING
+  / safe error message. BudgetCharger applies
+  observed usage idempotently with CAS retry.
+end note
+
+@enduml

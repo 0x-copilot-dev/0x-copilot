@@ -1,0 +1,113 @@
+@startuml f7-mcp-add
+title Flow 7 — Adding an MCP server (JSON / catalog / custom UI)
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User\n(admin or member)" as u
+participant "Frontend\n(Settings / Catalog /\nin-chat suggest card)" as fe
+participant "backend-facade" as facade
+participant "backend\n(MCP registry,\nOAuth, token vault)" as backend
+participant "Persistent registry\n(server rows + scopes)" as breg
+participant "RuntimeApiService" as svc
+participant "DynamicMcpRegistry\n(capabilities/mcp/registry.py)" as mreg
+participant "SuggestibleConnectorsResolver\n(api/suggestible_\nconnectors_resolver.py)" as sugg
+participant "McpDiscoveryService\n(api/mcp_discovery_service.py)" as disc
+
+note over u, disc
+  Three install paths converge on the same registry row.
+  ai-backend never owns the registry — it is read-only on
+  this side. The suggestible-connectors resolver and the
+  DynamicMcpRegistry both query backend; the user-visible
+  story is whether the connector is *installed* (registry)
+  or just *suggestible* (catalog).
+end note
+
+== Path A — JSON config (operator / GitOps) ==
+
+u -> backend : (out-of-band)\nedit config + restart\n— or — POST /internal/v1/mcp/servers\nwith JSON spec
+backend -> breg : upsert ServerRecord\n(server_id, scopes, auth_type,\n endpoint, …)
+backend --> u : 201 / 204
+
+== Path B — Install from catalog (most common) ==
+
+u -> fe : open Settings → Connectors → Catalog
+fe -> facade : GET /v1/connectors/catalog
+facade -> backend : same
+backend -> breg : list catalog (uninstalled)
+backend --> facade : CatalogSuggestionCard[]
+facade --> fe : render catalog grid
+u -> fe : click "Connect Linear"
+fe -> facade : POST /v1/connectors/install\n{server_id, scopes}
+facade -> backend : same
+backend -> backend : DCR (dynamic client\n  registration if supported)
+backend -> breg : insert ServerRecord\n(auth_state=NONE)
+backend --> fe : install_id +\nauth_start_url
+
+note right of backend
+  Install ≠ authenticated. The server row exists,
+  capabilities can be enumerated, but auth_state
+  starts as NONE. Real auth happens in flow 8.
+end note
+
+fe -> facade : (if auto-auth) follow auth_start_url
+facade -> backend : OAuth dance →\ntoken vault stores
+backend -> breg : update auth_state=VALID
+
+== Path C — Custom add via UI (advanced) ==
+
+u -> fe : Settings → Add custom MCP\n{name, url, auth_type, \npre-registered client_id/secret}
+fe -> facade : POST /v1/connectors/custom
+facade -> backend : same
+backend -> backend : validate descriptor\n(MCP discovery probe)
+backend -> breg : insert ServerRecord\n(auth_state=NONE if oauth,\n VALID if api_key)
+backend --> fe : 201 +\n(optional auth_start_url)
+
+== ai-backend reflects the change at next discovery ==
+
+== A) on the next chat turn ==
+
+u -> facade : POST /v1/agent/runs (next message)
+facade -> svc : create_run(...)
+svc -> mreg : list_available_servers(context)
+mreg -> backend : GET /internal/v1/mcp/servers\n(filter by org + scopes)
+backend -> breg : query
+backend --> mreg : ServerRecord[] +\nauth_state per server
+mreg -> mreg : McpPermissionPolicy.\nis_server_card_visible
+mreg --> svc : visible McpServerCard[]
+svc --> facade : run started; system prompt\nincludes the new server's card
+
+== B) catalog suggestion mid-chat ==
+
+note over disc
+  When the user types "can you connect to Linear?"
+  before installing, McpDiscoveryService is bound for
+  the run; the model can call the suggest_mcp_connector
+  builtin tool. The discovery service synthesizes a
+  CatalogSuggestionCard and emits an inline offer the
+  user can accept — which routes to Path B above.
+end note
+
+u -> facade : "can you connect to Linear?"
+facade -> svc : create_run(...)
+note over svc, disc : (run executes)
+disc -> sugg : list suggestible (uninstalled)
+sugg -> backend : GET /internal/v1/mcp/catalog
+backend --> sugg : CatalogSuggestionCard[]
+disc --> svc : offer(server_id="linear")\n(emits APPROVAL_REQUESTED-style\n inline card via\n RuntimeEventProducer)
+u -> fe : click "Connect" on inline card
+fe -> facade : POST /v1/connectors/install\n(same as Path B)
+facade -> backend : install + (optional) auth
+fe --> u : "Linear connected — try again"
+
+note over breg, mreg
+  ai-backend caches nothing across turns: every
+  create_agent_runtime re-queries the registry,
+  so a connector added at T=10s is visible at T=11s
+  without a worker restart. Registry mutation
+  belongs to backend; ai-backend is strictly a reader.
+end note
+
+@enduml

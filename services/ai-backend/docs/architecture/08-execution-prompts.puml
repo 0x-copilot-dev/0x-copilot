@@ -1,0 +1,87 @@
+@startuml 08-execution-prompts
+title C5 — Agent Runtime Core (agent_runtime/execution/ + prompts/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/execution/" as exec_pkg #FFF6D6 {
+
+  [factory.py\ncreate_agent_runtime() — orchestrator\n(602 LOC)] as factory
+  [deep_agent_builder.py\nDeep Agents graph builder] as builder
+  [graph.py\n(LangGraph wiring helpers)] as graph
+  [runtime.py\nruntime_config(thread_id, …),\nRuntimeStreamModes.RICH] as runtime
+  [contracts.py\nAgentRuntimeContext, ModelConfig,\nModelReasoningConfig,\nRuntimeRunContext, RuntimeDependencies,\nStreamEvent + StreamEventSource (8 vals),\nStreamEventType] as contracts
+  [ports.py\nProtocols: ToolRegistry, McpRegistry,\nSubagentCatalog, MemoryBackendFactory] as ports
+  [provider_kwargs.py\nworkspace_model_kwargs +\nuser_policy_model_kwargs\n(training opt-out, region routing)] as p_kwargs
+  [models.py\n(LangChain init_chat_model wrappers)] as models
+  [errors.py\nAgentRuntimeError + RuntimeErrorCode] as errors
+  [atlas_task_tool.py\n(supervisor task → subagent\ntrace linking)] as atlas
+  [tool_outcomes.py] as outcomes
+
+  package "providers/" as prov_pkg {
+    [anthropic_stream_adapter.py\n(thinking modes, streaming)] as anth
+    [openai_responses_stream_adapter.py\n(Responses API)] as oai
+    [gemini_grounding_stream_adapter.py\n(grounding / search)] as gem
+    [citation_pipeline.py\nCitationStreamPipeline] as cite_pipe
+    [citation_extraction.py] as cite_ext
+  }
+}
+
+package "agent_runtime/prompts/" as prom_pkg #FFF6D6 {
+  [runtime.py\nDEFAULT_INSTRUCTIONS,\nMCP_SERVER_CARDS_INSTRUCTIONS,\nSKILL_CARDS_INSTRUCTIONS,\nNO_MCP_SERVER_CARDS_INSTRUCTIONS] as prom_runtime
+  [tools.py\n(per-tool prompt fragments)] as prom_tools
+}
+
+' --- External wiring ---
+component "Capabilities (tool/mcp/skill\nregistries + middleware)" as caps <<external>>
+component "Delegation (subagent catalog)" as deleg <<external>>
+component "RuntimeEventProducer" as ep <<external>>
+component "Observability (tracing,\nredaction)" as obs <<external>>
+component "LLM providers\n(Anthropic / OpenAI / Google)" as providers <<external>>
+
+factory --> contracts : validate context\n+ build dependencies
+factory --> ports : resolve protocols\nfrom DI container
+factory --> caps : list_available_tools,\nlist_available_servers,\nload_skill_directories
+factory --> deleg : list_available_subagents\n+ FilesystemPermission map
+factory --> prom_runtime : assemble system prompt
+factory --> p_kwargs : workspace_model_kwargs +\nuser_policy_model_kwargs
+factory --> models
+factory --> builder
+factory --> errors
+
+prom_runtime --> prom_tools : compose tool prompts
+factory ..> prom_tools
+
+builder --> graph : Deep Agents → LangGraph compile
+builder --> atlas : link supervisor task call ↔\nsubagent trace_id
+builder --> caps : tool nodes,\nMCP loader nodes
+builder --> deleg : subagent graph nodes
+builder --> outcomes
+builder --> prov_pkg : provider stream adapters
+
+prov_pkg --> providers : streaming chat completion
+prov_pkg --> cite_pipe
+cite_pipe --> cite_ext
+cite_pipe ..> caps : feed citation ledger
+
+runtime --> graph : runtime_config(thread_id,\nmax_concurrency, traced metadata)
+runtime ..> obs : trace context + event_id
+
+ep ..> contracts : StreamEvent → RuntimeEventEnvelope
+
+note bottom of factory
+  System prompt assembly (factory.py):
+   1. DEFAULT_INSTRUCTIONS (persona,
+      grounding, citation discipline)
+   2. + MCP server cards (auth state,
+      capabilities)
+   3. + Skill cards (allowed_tools,
+      virtual_path)
+   4. + Suggested connectors (catalog
+      hints from SuggestibleConnectorsResolver)
+end note
+
+@enduml

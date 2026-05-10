@@ -1,0 +1,117 @@
+@startuml 06-persistence
+title C8a — Persistence (agent_runtime/persistence/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/persistence/" as pkg #F0F0F0 {
+
+  package "Ports (Protocols)" as ports_pkg {
+    interface "MemoryMetadataPort" as p_mem
+    interface "PayloadStoragePort" as p_pay
+    interface "CheckpointStorePort" as p_chk
+    interface "DraftStorePort\n(versioned, append-only)" as p_draft
+    interface "SubagentStorePort\n(read-only projection of\nSUBAGENT_* events)" as p_sub
+    interface "SourceStorePort\n(citation aggregates)" as p_src
+    interface "CitationStorePort\n(idempotent: run, connector, doc_id)" as p_cite
+    interface "ConversationToolOrdinalStorePort\n(conversation_ordinal ↔ tool_call_id)" as p_ord
+    interface "ShareStorePort\n(creator + recipient)" as p_share
+  }
+
+  package "Records (records/)" as rec_pkg {
+    [common.py\n(OutboxStatus, AsyncTaskStatus,\nToolInvocationStatus,\nPersistenceApprovalStatus,\nRuntimeMemoryScopeType,\nPayloadKind, PayloadRedactionState)\n+ PersistenceValueNormalizer] as r_common
+
+    package "Run lifecycle" as rec_run {
+      [outbox.py\n(OutboxEventRecord,\nRuntimeWorkerClaim,\nRuntimeWorkerResult)] as r_out
+      [approvals.py\n(PersistenceApprovalRequestRecord)] as r_appr
+      [tools.py (ToolInvocationRecord)] as r_tool
+      [subagents.py\n(AsyncTaskRecord, SubagentResultRecord)] as r_sub
+    }
+
+    package "Memory + payloads" as rec_mem {
+      [memory.py\n(MemoryScopeRecord, MemoryItemRecord)] as r_mem
+      [payloads.py\n(ContextPayloadRecord)] as r_pay
+      [checkpoints.py (CheckpointRecord)] as r_chk
+    }
+
+    package "Workspace surfaces" as rec_ws {
+      [drafts.py\n(DraftRecord, DraftStatus)] as r_draft
+      [citations.py (CitationRecord)] as r_cite
+      [workspace_feeds.py\n(SubagentSnapshot,\nSourceAggregate)] as r_wfeed
+    }
+
+    package "Audit + telemetry + governance" as rec_admin {
+      [audit.py (AuditLogRecord)] as r_audit
+      [telemetry.py\n(RuntimeRunUsageRecord,\nRuntimeModelCallUsageRecord,\nCompressionEventRecord)] as r_tel
+      [tool_budgets.py\n(ToolBudgetRecord,\nToolBudgetEnforcement)] as r_tbud
+      [retention.py\n(RetentionPolicyRecord,\nRetentionScope, RetentionKind,\nRetentionSweepOutcome)] as r_ret
+    }
+  }
+
+  package "Schema" as sch_pkg {
+    [schema/postgres.py\n(table DDL)] as sch_pg
+    [schema/migrate.py] as sch_mig
+  }
+
+  [constants.py (Values)] as const
+  [exceptions.py\n(OptimisticConflict,\nConversationOrdinalConflict)] as exc
+}
+
+' --- Implementations satisfy ports ---
+component "Adapters\n(runtime_adapters/in_memory/* and postgres/*)" as adp <<external>>
+
+p_mem <.. adp
+p_pay <.. adp
+p_chk <.. adp
+p_draft <.. adp
+p_sub <.. adp
+p_src <.. adp
+p_cite <.. adp
+p_ord <.. adp
+p_share <.. adp
+
+' --- Records used by ports ---
+p_mem ..> r_mem
+p_pay ..> r_pay
+p_chk ..> r_chk
+p_draft ..> r_draft
+p_sub ..> r_wfeed
+p_src ..> r_wfeed
+p_cite ..> r_cite
+p_ord ..> r_cite
+p_share ..> r_ws
+
+r_common <.. rec_pkg : value normalization +\nshared enums
+
+sch_pg ..> rec_pkg : DDL maps to records
+sch_mig ..> sch_pg
+
+' --- Consumers ---
+component "RuntimeApiService" as svc <<external>>
+component "RuntimeEventProducer" as ep <<external>>
+component "Worker handlers + jobs" as wkr <<external>>
+component "Capabilities (citations,\nordinal allocator)" as caps <<external>>
+
+svc --> p_mem
+svc --> p_share
+svc --> p_draft
+svc --> p_sub
+svc --> p_src
+ep --> rec_run : append outbox / events
+wkr --> rec_admin : usage rollup,\nretention sweep
+caps --> p_cite
+caps --> p_ord
+
+note bottom of ports_pkg
+  Ports are pure ``typing.Protocol`` definitions
+  with no implementation. Sync/async split lives
+  in agent_runtime/api/ports.py + async_ports.py
+  (PersistencePort, EventStorePort, RuntimeQueuePort
+   are defined there — the persistence/ ports cover
+   the higher-level surfaces beyond the base trio).
+end note
+
+@enduml

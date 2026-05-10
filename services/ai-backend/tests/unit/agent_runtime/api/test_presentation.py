@@ -535,6 +535,324 @@ async def test_event_producer_skips_enrichment_when_tool_template_renders() -> N
     assert presenter_calls == []
 
 
+async def test_event_producer_resolves_tool_template_via_context_var_when_no_instance_lookup() -> (
+    None
+):
+    """Phase 1 of the polish-removal refactor — the per-run handler binds
+    ``ToolDisplayLookupContext`` so the producer's default-constructed
+    ``PresentationGenerator`` (no instance-level lookup) still resolves
+    registered tool templates and skips the LLM polish path.
+
+    See docs/refactor/01-presentation-polish-removal.md §4 (Phase 1).
+    """
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
+
+    template = ToolDisplayTemplate(
+        title_template="Searching for {query}",
+        result_title_template="Found {count} results",
+    )
+    # Default constructor — no instance-level tool_display_lookup. Production
+    # constructs the producer this way at handler init time (before any run
+    # context exists). The lookup arrives via the ContextVar.
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    token = ToolDisplayLookupContext.bind_for_run(
+        lambda name: template if name == "web_search" else None
+    )
+    try:
+        envelope = await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload={
+                "tool_name": "web_search",
+                "call_id": "call_42",
+                "status": "completed",
+                "count": 7,
+            },
+        )
+        await producer.flush_pending_enrichment()
+    finally:
+        ToolDisplayLookupContext.unbind(token)
+
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Found 7 results"
+    assert len(event_store.drafts) == 1
+    assert presenter_calls == []
+
+
+async def test_event_producer_falls_through_when_no_lookup_bound() -> None:
+    """Without an instance-level lookup AND no ContextVar binding, the
+    minimal-envelope path runs and the polish presenter is consulted —
+    today's production behaviour. Pins the unbound state so a future
+    regression that defaults the ContextVar to a non-None lookup is caught.
+    """
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {
+            "title": "Polished title",
+            "status_label": "Done",
+            "kind": "result",
+        }
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    # Defensive sanity: nothing should be bound at module import time.
+    assert ToolDisplayLookupContext.active() is None
+
+    await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_RESULT,
+        payload={
+            "tool_name": "web_search",
+            "call_id": "call_77",
+            "status": "completed",
+        },
+    )
+    await producer.flush_pending_enrichment()
+
+    # Polish ran because no template resolved (matches today's production).
+    assert presenter_calls, "Polish presenter should run when no template is resolved"
+
+
+async def test_context_var_lookup_unbinds_to_previous_token() -> None:
+    """Bind / unbind preserves the prior value (matches the
+    ``CitationLedger.bind_for_run`` contract) so nested binds — e.g. an
+    in-process worker reusing a ContextVar across two runs — restore
+    correctly. Pins the lifecycle invariant the run handler depends on.
+    """
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+
+    assert ToolDisplayLookupContext.active() is None
+
+    outer_lookup = lambda _name: None  # noqa: E731
+    inner_lookup = lambda _name: None  # noqa: E731
+
+    outer_token = ToolDisplayLookupContext.bind_for_run(outer_lookup)
+    try:
+        assert ToolDisplayLookupContext.active() is outer_lookup
+        inner_token = ToolDisplayLookupContext.bind_for_run(inner_lookup)
+        try:
+            assert ToolDisplayLookupContext.active() is inner_lookup
+        finally:
+            ToolDisplayLookupContext.unbind(inner_token)
+        assert ToolDisplayLookupContext.active() is outer_lookup
+    finally:
+        ToolDisplayLookupContext.unbind(outer_token)
+
+    assert ToolDisplayLookupContext.active() is None
+
+
+async def test_event_producer_resolves_synthesised_mcp_template_for_dispatcher_event() -> (
+    None
+):
+    """Phase 2.B end-to-end — when ``call_mcp_tool`` dispatches an MCP tool,
+    the synthesised template registered by ``BackendMcpClient._tool_descriptor``
+    is resolved via ``McpDisplayRegistryContext`` and renders against the
+    *promoted* payload (inner ``args.arguments`` keys at the top level).
+
+    See docs/refactor/01-presentation-polish-removal.md §4 Phase 2.B.
+    """
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+    from agent_runtime.capabilities.mcp.descriptor_registry import (
+        McpDisplayRegistryContext,
+    )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
+
+    # The synthesised template — placeholders refer to the agent-supplied
+    # MCP tool args (``query``), not the dispatcher-shaped envelope.
+    synthesised = ToolDisplayTemplate(
+        title_template="List Linear issues for {query}",
+        result_title_template="Linear results",
+        synthetic=True,
+    )
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    mcp_registry: dict[str, ToolDisplayTemplate] = {"list_issues": synthesised}
+    mcp_token = McpDisplayRegistryContext.bind_for_run(mcp_registry)
+    lookup_token = ToolDisplayLookupContext.bind_for_run(
+        lambda name: McpDisplayRegistryContext.get(name)
+    )
+    try:
+        envelope = await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.TOOL_CALL,
+            payload={
+                # Dispatcher tool name — Phase 2.B's ``_effective_tool_name``
+                # extracts the inner MCP tool name for lookup.
+                "tool_name": "call_mcp_tool",
+                "call_id": "call_mcp_42",
+                "args": {
+                    "server_name": "linear",
+                    "tool_name": "list_issues",
+                    "arguments": {"query": "Q1 launch"},
+                },
+            },
+        )
+        await producer.flush_pending_enrichment()
+    finally:
+        ToolDisplayLookupContext.unbind(lookup_token)
+        McpDisplayRegistryContext.unbind(mcp_token)
+
+    # Title rendered from the synthesised template against the promoted
+    # payload — ``{query}`` resolved to ``"Q1 launch"``.
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "List Linear issues for Q1 launch"
+    # No polish call.
+    assert presenter_calls == []
+    # Single envelope written — no PRESENTATION_UPDATED follow-up.
+    assert len(event_store.drafts) == 1
+
+
+async def test_event_producer_dispatcher_event_falls_through_when_inner_tool_unknown() -> (
+    None
+):
+    """If the agent dispatches a tool name we never registered, the
+    extraction succeeds but the lookup returns None and the event takes
+    the existing minimal-envelope + polish path. Pins the safety net."""
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+    from agent_runtime.capabilities.mcp.descriptor_registry import (
+        McpDisplayRegistryContext,
+    )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+    presenter_calls: list[str] = []
+
+    def recording_presenter(prompt: str) -> dict[str, object]:
+        presenter_calls.append(prompt)
+        return {
+            "title": "Polished fallback",
+            "status_label": "Done",
+            "kind": "result",
+        }
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+    )
+
+    mcp_registry: dict[str, ToolDisplayTemplate] = {}  # empty
+    mcp_token = McpDisplayRegistryContext.bind_for_run(mcp_registry)
+    lookup_token = ToolDisplayLookupContext.bind_for_run(
+        lambda name: McpDisplayRegistryContext.get(name)
+    )
+    try:
+        await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.TOOL_CALL,
+            payload={
+                "tool_name": "call_mcp_tool",
+                "call_id": "call_mcp_99",
+                "args": {
+                    "server_name": "newserver",
+                    "tool_name": "unregistered_tool",
+                    "arguments": {"q": "x"},
+                },
+            },
+        )
+        await producer.flush_pending_enrichment()
+    finally:
+        ToolDisplayLookupContext.unbind(lookup_token)
+        McpDisplayRegistryContext.unbind(mcp_token)
+
+    # No template found → minimal envelope + polish (today's behaviour).
+    # The polish-removal goal is to *eventually* eliminate this path
+    # entirely (PRD §4 Phase 4). Until then, the safety net stays.
+    assert presenter_calls, "Polish should run when no MCP template is registered"
+
+
+async def test_event_producer_dispatcher_event_with_no_args_uses_dispatcher_name() -> (
+    None
+):
+    """Defensive: a malformed dispatcher event without ``args`` falls back
+    to looking up the dispatcher's own name (which won't be registered)
+    instead of crashing."""
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(),
+    )
+
+    lookup_calls: list[str] = []
+
+    def recording_lookup(name: str) -> object:
+        lookup_calls.append(name)
+        return None
+
+    token = ToolDisplayLookupContext.bind_for_run(recording_lookup)
+    try:
+        await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.TOOL_CALL,
+            payload={
+                "tool_name": "call_mcp_tool",
+                "call_id": "call_mcp_no_args",
+                # No "args" key.
+            },
+        )
+        await producer.flush_pending_enrichment()
+    finally:
+        ToolDisplayLookupContext.unbind(token)
+
+    # Lookup was called — and with the dispatcher name (the fallback when
+    # no inner tool name was extractable). Crucially: no exception.
+    assert "call_mcp_tool" in lookup_calls
+
+
 async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_call_id() -> (
     None
 ):

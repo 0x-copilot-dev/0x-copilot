@@ -1,0 +1,136 @@
+@startuml f5-citations
+title Flow 5 — Citations across MCPs, a subagent, and provider grounding
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "StreamingExecutor" as exec
+participant "Deep Agents graph\n(LangGraph)" as graph
+participant "LLM provider\n(Gemini grounding /\nOpenAI web search)" as llm
+participant "CallMcpTool +\nCitationProjectingMcpMiddleware" as mcp_mw
+participant "backend → MCP servers\n(Linear, Notion, …)" as mcp
+participant "Subagent runner\n(delegation/subagents/runner.py)" as sub
+participant "CitationStreamPipeline\n(execution/providers/\ncitation_pipeline.py)" as cite_pipe
+participant "ConversationOrdinalAllocator\n(capabilities/\nconversation_ordinals.py)" as ord
+participant "CitationLedger\n(capabilities/citations.py)" as led
+participant "Persistence ports\n(CitationStorePort,\nConversationToolOrdinalStorePort,\nSourceStorePort)" as p
+participant "RuntimeEventProducer\n+ EventStore" as ep
+participant "SSE → user" as sse
+
+note over exec, sse
+  Pre-condition: a research-style turn. The model has access
+  to MCP servers Linear + Notion, a "research-analyzer"
+  subagent, and a grounding-capable provider. Citations are
+  conversation-scoped — the same ordinal namespace persists
+  across turns and across the subagent fleet.
+end note
+
+== Turn 1 — MCP tool A (Linear) ==
+
+exec -> graph : drive stream
+graph -> llm : invoke with tools + grounding
+llm -->> graph : tool_call(linear_search, args)
+graph -> mcp_mw : call(linear_search)
+mcp_mw -> mcp : RPC call_tool
+mcp -->> mcp_mw : raw result\n(items with doc_id, url, title)
+
+mcp_mw -> ord : record(\n  conversation_id, tool_call_id,\n  conversation_ordinal=N,\n  tool_name="linear_search")
+ord -> p : ConversationToolOrdinalStorePort.record\n(idempotent on tool_call_id)
+ord --> mcp_mw : binding(N)
+
+loop for each cited source
+  mcp_mw -> led : ingest(SourceRef\n  {connector="linear",\n   doc_id, url, title})
+  led -> p : CitationStorePort.insert_or_get\n(idempotent on\n run_id+connector+doc_id)
+  led -> ep : append_api_event(SOURCE_INGESTED)
+  ep ->> sse : notify
+end
+
+mcp_mw -> mcp_mw : project [[N]] markers\ninto result text
+mcp_mw --> graph : projected MCP result
+exec -> ep : TOOL_CALL + TOOL_RESULT\n(payload contains\n linear:doc_id refs and ordinals)
+ep ->> sse : notify
+
+== Turn 2 — MCP tool B (Notion), same ordinal namespace ==
+
+graph -> llm : next turn
+llm -->> graph : tool_call(notion_query, args)
+graph -> mcp_mw : call(notion_query)
+mcp_mw -> mcp : RPC
+mcp -->> mcp_mw : raw result
+mcp_mw -> ord : record(N+1, …)
+mcp_mw -> led : ingest(\n  {connector="notion", …})
+led -> p : insert_or_get
+led -> ep : SOURCE_INGESTED
+mcp_mw --> graph : projected result
+exec -> ep : TOOL_CALL + TOOL_RESULT
+
+== Turn 3 — Subagent delegation (shared registry) ==
+
+llm -->> graph : task(research-analyzer,\n  goal="synthesize")
+graph -> sub : run subagent fleet
+sub -> ep : SUBAGENT_FLEET_STARTED, SUBAGENT_STARTED\n(parent_task_id linked)
+
+note right of sub
+  The subagent inherits the same
+  conversation_id, so it allocates
+  through the SAME ConversationOrdinalAllocator
+  and ingests into the SAME CitationLedger.
+  No fresh registry per subagent.
+end note
+
+sub -> mcp_mw : (subagent's own tool calls)
+mcp_mw -> ord : record(N+2 …)
+mcp_mw -> led : ingest(…)
+led -> ep : SOURCE_INGESTED
+sub -> ep : SUBAGENT_PROGRESS / SUBAGENT_COMPLETED
+sub --> graph : SubagentResult
+
+== Turn 4 — Provider grounding / web search ==
+
+graph -> llm : next turn (synthesize)
+llm -->> exec : streamed chunks +\nnative grounding metadata
+exec -> cite_pipe : forward chunk
+cite_pipe -> cite_pipe : ProviderCitationAdapter\n(Gemini / OpenAI variant)\nextract URLs, snippets
+cite_pipe -> led : ingest(\n  {connector="web", url, title})
+led -> p : insert_or_get
+led -> ep : SOURCE_INGESTED + CITATION_MADE\n(via CitationResolver)
+ep ->> sse : notify
+
+loop visible deltas
+  llm -->> exec : MODEL_DELTA chunk
+  exec -> ep : MODEL_DELTA
+  ep ->> sse : notify
+end
+
+== Final response — seal the registry ==
+
+llm -->> exec : final answer\n(text contains [[N]] markers)
+exec -> led : snapshot(run_id)
+led -> p : CitationStorePort.list_for_run(run_id)
+p --> led : ordered citations
+led --> exec : sealed citations
+exec -> ep : append_api_event(FINAL_RESPONSE)\npayload.citations = sealed list
+ep ->> sse : notify (final card with\nlive [[N]] → source links)
+exec -> ep : RUN_COMPLETED
+
+== Workspace pane — Sources tab ==
+
+u -> sse : open Sources tab\n(separate request)
+sse -> p : SourceStorePort.aggregate_for_conversation\n(grouped by connector + doc_id)
+p --> sse : SourceAggregate[]
+sse -->> u : connector-grouped source list
+
+note over led, p
+  CitationLedger is the only intended caller of
+  CitationStorePort — tools, MCP middleware, and
+  the provider pipeline all funnel through it so
+  the (run_id, connector, doc_id) idempotency key
+  is enforced exactly once. On approval-resume or
+  worker crash the registry is rebuilt by reading
+  CitationStorePort.list_for_run().
+end note
+
+@enduml

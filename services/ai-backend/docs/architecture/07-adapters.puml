@@ -1,0 +1,94 @@
+@startuml 07-adapters
+title C3 — Adapters (runtime_adapters/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "runtime_adapters/" as pkg #E8FBF6 {
+
+  [RuntimeAdapterFactory\n(factory.py)] as fac
+  [RuntimePorts /\nAsyncRuntimePorts\n(dataclasses)] as ports_dc
+  [async_wrappers.py\n(adapt_*_to_async via to_thread)] as wrap
+
+  package "in_memory/" as inmem_pkg {
+    [InMemoryRuntimeApiStore\n(persistence + event store + queue)] as im_main
+    [AsyncInMemoryRuntimeApiStore\n(thin async wrapper)] as im_async
+    [InMemoryDraftStore\n(draft_store.py)] as im_draft
+    [InMemoryShareStore\n(share_store.py)] as im_share
+    [InMemoryConversationToolOrdinalStore\n(conversation_tool_ordinal_store.py)] as im_ord
+    [InMemoryCitationStore\n(citation_store.py)] as im_cite
+  }
+
+  package "postgres/" as pg_pkg {
+    [PostgresRuntimeApiStore\n(persistence + event store + queue)] as pg_main
+    note right of pg_main
+      Hazard fixes (H1–H3):
+      • per-run sequence_no monotonic
+        (UNIQUE(run_id, sequence_no))
+      • SELECT … FOR UPDATE on agent_runs
+        before append_event → serialize
+        concurrent writes per run
+      • set_run_latest_sequence never rewinds
+    end note
+    [PostgresDraftStore\n(draft_store.py)] as pg_draft
+    [PostgresShareStore\n(share_store.py)] as pg_share
+    [PostgresConversationToolOrdinalStore\n(conversation_tool_ordinal_store.py)] as pg_ord
+    [Field codec / encryption helpers] as pg_codec
+  }
+}
+
+' --- External: ports + DB ---
+component "agent_runtime.api.ports +\nasync_ports + persistence.ports" as port_iface <<external>>
+database "Postgres\n(runtime_outbox, runtime_events,\nagent_runs, agent_messages,\nagent_conversations, runtime_*\nshare/draft/citation/ordinal/audit/\nretention/budget/usage)" as db
+
+' --- Factory selection ---
+fac --> ports_dc
+fac --> im_main : RUNTIME_STORE_BACKEND=in_memory
+fac --> im_async : RUNTIME_STORE_BACKEND=in_memory_async
+fac --> pg_main : RUNTIME_STORE_BACKEND=postgres
+fac --> im_draft
+fac --> im_share
+fac --> im_ord
+fac --> pg_draft : (when postgres)
+fac --> pg_share
+fac --> pg_ord
+
+' --- Async wrappers bridge sync ports for the worker ---
+wrap ..> im_main : adapt sync → async
+wrap ..> im_async
+
+' --- Implementations ---
+im_main ..|> port_iface : Persistence + EventStore + Queue
+im_async ..|> port_iface
+pg_main ..|> port_iface
+im_draft ..|> port_iface : DraftStorePort
+im_share ..|> port_iface : ShareStorePort
+im_ord ..|> port_iface : ConversationToolOrdinalStorePort
+im_cite ..|> port_iface : CitationStorePort
+pg_draft ..|> port_iface
+pg_share ..|> port_iface
+pg_ord ..|> port_iface
+
+' --- Pool sharing inside postgres ---
+pg_draft --> pg_main : reuse pool + FieldCodec
+pg_share --> pg_main
+pg_ord --> pg_main
+pg_codec ..> pg_main
+
+pg_main --> db : asyncpg pool\n(role=api or worker;\napplication_name visible\nin pg_stat_activity)
+
+note bottom of fac
+  Selection rules (factory.py):
+   • from_settings → in_memory only (sync ports)
+   • async_from_settings:
+       in_memory_async → AsyncInMemoryRuntimeApiStore
+       postgres        → PostgresRuntimeApiStore
+       (DATABASE_URL required)
+   • role param ("api" / "worker") tags the
+     pg connection for diagnostics.
+end note
+
+@enduml

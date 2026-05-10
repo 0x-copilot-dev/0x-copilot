@@ -284,22 +284,51 @@ class BackendMcpClient:
             raise McpConnectionError("MCP JSON-RPC proxy returned an invalid response.")
         return rpc_payload
 
-    @classmethod
-    def _tool_descriptor(cls, tool: dict[str, Any]) -> McpToolDescriptor:
-        name = cls._required_string(tool, Keys.Field.NAME, Values.Placeholder.TOOL_NAME)
+    def _tool_descriptor(self, tool: dict[str, Any]) -> McpToolDescriptor:
+        name = self._required_string(
+            tool, Keys.Field.NAME, Values.Placeholder.TOOL_NAME
+        )
+        input_schema = self._schema(
+            tool.get(Keys.NativeDescriptor.INPUT_SCHEMA_CAMEL)
+            or tool.get(Keys.Field.INPUT_SCHEMA)
+        )
+        output_shape = self._schema(
+            tool.get(Keys.NativeDescriptor.OUTPUT_SCHEMA_CAMEL)
+            or {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
+        )
+        # Polish-removal Phase 2.A — synthesise a deterministic display
+        # template at descriptor-build time so the presentation layer never
+        # falls through to the polish LLM for MCP tools. Uses the server
+        # card's ``display_name`` (or ``name`` as fallback) as the connector
+        # label. See ``docs/refactor/01-presentation-polish-removal.md``.
+        from agent_runtime.capabilities.middleware import (  # noqa: PLC0415
+            DisplayMetadataMiddleware,
+        )
+        from agent_runtime.capabilities.mcp.descriptor_registry import (  # noqa: PLC0415
+            McpDisplayRegistryContext,
+        )
+
+        connector_label = self.card.display_name or self.card.name
+        display = DisplayMetadataMiddleware.synthesise_for_mcp(
+            tool_name=name,
+            connector=connector_label,
+            input_schema=input_schema,
+            output_shape=output_shape,
+        )
+        # Phase 2.B — register on the per-run lookup so
+        # ``PresentationGenerator._resolve_tool_template`` can see this
+        # template for ``call_mcp_tool`` dispatcher events. ``register`` is
+        # a no-op when no registry is bound (replay / eval / tests that
+        # don't need the lookup), so unconditional registration is safe.
+        McpDisplayRegistryContext.register(name, display)
         return McpToolDescriptor(
             name=name,
-            description=cls._optional_string(tool.get("description"))
+            description=self._optional_string(tool.get("description"))
             or f"{name} MCP tool.",
-            input_schema=cls._schema(
-                tool.get(Keys.NativeDescriptor.INPUT_SCHEMA_CAMEL)
-                or tool.get(Keys.Field.INPUT_SCHEMA)
-            ),
-            output_shape=cls._schema(
-                tool.get(Keys.NativeDescriptor.OUTPUT_SCHEMA_CAMEL)
-                or {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
-            ),
+            input_schema=input_schema,
+            output_shape=output_shape,
             risk_level=McpRiskLevel.MEDIUM,
+            display=display,
         )
 
     def _resource_descriptor(self, resource: dict[str, Any]) -> McpResourceDescriptor:

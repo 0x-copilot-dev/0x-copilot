@@ -1,0 +1,108 @@
+@startuml f9-usage-metrics
+title Flow 9 — Usage / token metrics queries
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "Frontend\n(chat /context slash;\nUsage page)" as fe
+participant "backend-facade" as facade
+participant "RuntimeApiRoutes\n(http/routes.py)" as r
+participant "UsageApiRouter\n(/v1/usage prefix)" as ur
+participant "RuntimeApiService" as svc
+participant "ConversationContextBuilder\n(api/usage_service.py:236)" as ccb
+participant "UsageQueryService\n(api/usage_service.py:39)" as uqs
+participant "Persistence\n(RuntimeRunUsageRecord,\nRuntimeModelCallUsageRecord,\nCompressionEventRecord,\nModelPricingRecord)" as p
+participant "Worker\nUsageRollupLoop" as roll
+
+note over u, roll
+  Two distinct surfaces:
+   • In-chat /context — server-computed headroom for the
+     active conversation (so the FE never derives the %).
+   • /v1/usage/* — rolled-up token + cost rows for the
+     Usage page (per-user, per-org, per-connector).
+  All numbers come from telemetry rows the worker writes
+  during runs; nothing is recomputed from raw events.
+end note
+
+== Surface 1 — In-chat /context (single conversation) ==
+
+u -> fe : type "/context" in the\nactive conversation
+fe -> facade : GET /v1/agent/conversations/{id}/context
+facade -> r : same\n(routes.py:152 get_conversation_context)
+r -> svc : get_conversation_context(\n  org_id, user_id,\n  conversation_id)
+
+svc -> p : fetch latest run-usage row,\nper-call LLM rows for the run,\ncompression events,\nactive ModelPricingRecord
+p --> svc : telemetry tuple
+svc -> ccb : build(telemetry,\n  ModelConfig.max_input_tokens)
+
+ccb -> ccb : sum input + output tokens,\nfold compression events,\ncompute headroom_pct\n(integer, server-side)
+ccb --> svc : ConversationContextResponse {\n  context_window,\n  used_tokens,\n  available_tokens,\n  headroom_pct,\n  compression_events,\n  per_subagent_breakdown\n}
+svc --> r : same
+r --> facade : 200 + JSON
+facade --> fe : same
+fe -->> u : pill / slash card with\n"used 12 345 / 200 000\n(94 % headroom)"
+
+note right of ccb
+  ConversationContextBuilder is stateless and pure.
+  It collapses sub-agent rows up to the supervisor
+  before reporting per-task breakdowns so the FE
+  doesn't need to know about subagent topology.
+end note
+
+== Surface 2 — Usage page (per-user / per-org / per-connector) ==
+
+u -> fe : open Usage page (week selector)
+fe -> facade : GET /v1/usage/me?period=2026-W18
+facade -> ur : same (UsageApiRouter)
+ur -> svc : list_user_usage(\n  org_id, user_id, period)
+svc -> uqs : parse_period + days_between
+uqs -> p : SELECT RuntimeRunUsageRecord\n  WHERE org_id, user_id,\n  date in window
+p --> uqs : rows
+uqs -> uqs : _RollupBucket per day →\nrollup_user_rows
+uqs --> svc : (UserUsageRow[], totals)
+svc -> uqs : sum_totals(rows)
+uqs --> svc : grand totals
+svc --> ur : UsageResponse
+ur --> fe : per-day series + totals
+
+opt Per-connector breakdown (PR 7.2)
+  fe -> facade : GET /v1/usage/me/connectors\n?period=...
+  facade -> ur : same\n(routes.py:1010 — separate endpoint)
+  ur -> svc : list_user_connector_usage(...)
+  svc -> uqs : rollup_connector_rows
+  uqs -> p : SELECT RuntimeModelCallUsageRecord\n  + connector attribution
+  uqs --> svc : ConnectorUsageRow[]\n(one bucket per connector,\n includes "no_connector" bucket)
+  svc --> ur : same
+  ur --> fe : connector breakdown
+end
+
+opt Org-wide (admin only)
+  fe -> facade : GET /v1/usage/org?period=...
+  facade -> ur : same
+  ur -> svc : list_org_usage(\n  org_id, period,\n  caller_role=admin)
+  svc -> uqs : rollup_org_rows
+  uqs --> svc : OrgUsageRow[]
+  svc --> ur : same
+  ur --> fe : org chart
+end
+
+== Where the rows come from ==
+
+note over roll, p
+  RuntimeRunUsageRecord + RuntimeModelCallUsageRecord
+  rows are written by the StreamingExecutor and the
+  RunHandler at run completion (every MODEL_CALL_COMPLETED
+  carries the usage breakdown — input / output / cached_input
+  / reasoning_tokens). The UsageRollupLoop in the worker
+  keeps daily rollup tables warm so /v1/usage queries are
+  cheap. Cost (micro_usd) is computed by CostCalculator
+  using the active ModelPricingRecord at write time, so
+  pricing changes do NOT retroactively rewrite history.
+end note
+
+roll -> p : rollup recent windows\n(aggregate model_call rows\n into RuntimeRunUsageRecord)
+
+@enduml

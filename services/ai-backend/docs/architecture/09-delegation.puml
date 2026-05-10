@@ -1,0 +1,48 @@
+@startuml 09-delegation
+title C7 — Delegation (agent_runtime/delegation/subagents/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/delegation/subagents/" as pkg #FBEFE8 {
+  [contracts.py\n(SubagentDefinition,\nSubagentTask,\nSubagentResult,\nFilesystemPermission)] as contracts
+
+  [definitions.py\nDynamicSubagentCatalog\n(list / resolve filtered by\nSubagentPermissionPolicy)] as catalog
+
+  [handoff.py\n(supervisor handoff tool —\ninvokes subagent graph node)] as handoff
+
+  [runner.py\n(subagent execution loop;\nemits SUBAGENT_* events)] as runner
+
+  [constants.py\n(error codes, messages)] as const
+}
+
+' --- External wiring ---
+component "execution.factory\n(create_agent_runtime)" as factory <<external>>
+component "deep_agent_builder.py\n(LangGraph node graph)" as builder <<external>>
+component "Capabilities (tool registry,\nfs backends)" as caps <<external>>
+component "RuntimeEventProducer" as ep <<external>>
+component "PersistencePort\n(SubagentStorePort projection)" as persist <<external>>
+component "Worker.streaming_executor\n(stream_subagents.py)" as wkr <<external>>
+
+factory --> catalog : list_available_subagents(context)
+factory --> contracts : translate fs_permissions\ninto Deep Agents\nFilesystemPermission rules
+builder --> handoff : register handoff tool
+builder --> runner : graph node — drives\nsubagent loop
+runner --> caps : reuse parent's\nauthorized tools
+runner --> ep : emit SUBAGENT_STARTED,\nSUBAGENT_PROGRESS,\nSUBAGENT_COMPLETED,\nSUBAGENT_FLEET_*\n(parent_task_id linked)
+ep --> persist : event store →\nSubagentStorePort projects\none row per task_id
+wkr --> runner : feed graph subgraph\nstream chunks
+
+note bottom of catalog
+  Permission gate: the catalog filters
+  available subagents by role/scope before
+  the supervisor sees them. Each definition
+  carries its own model_profile + persona,
+  so subagents can run with a smaller/faster
+  model than the supervisor.
+end note
+
+@enduml

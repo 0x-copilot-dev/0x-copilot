@@ -10,6 +10,11 @@ from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistenceP
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.presentation import ToolDisplayLookupContext
+from agent_runtime.capabilities.mcp.descriptor_registry import (
+    McpDisplayRegistryContext,
+)
+from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
@@ -248,10 +253,23 @@ class RuntimeApprovalHandler:
             source=StreamEventSource.MODEL,
         )
         resolver_token = CitationResolver.bind_for_run(citation_resolver)
+        # Polish-removal Phase 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
+        # bind the per-run tool display lookup AND the MCP descriptor
+        # registry before the resumed graph starts emitting tool events.
+        # The resumed run runs in a fresh async task from the original
+        # handle(), so the bindings set by RuntimeRunHandler are no longer
+        # in scope. MCP descriptors loaded post-pause re-register on this
+        # fresh registry as the agent re-discovers servers.
+        dependencies = self.dependencies_factory(running.runtime_context)
+        mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
+        mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
+        display_token = ToolDisplayLookupContext.bind_for_run(
+            RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
+        )
         try:
             harness = self.agent_factory(
                 context=running.runtime_context,
-                dependencies=self.dependencies_factory(running.runtime_context),
+                dependencies=dependencies,
             )
             metrics = AssistantRunMetrics.from_run(running)
             result = await self._stream_resume(
@@ -288,6 +306,8 @@ class RuntimeApprovalHandler:
         finally:
             CitationResolver.unbind(resolver_token)
             ConversationOrdinalAllocator.unbind(allocator_token)
+            ToolDisplayLookupContext.unbind(display_token)
+            McpDisplayRegistryContext.unbind(mcp_display_token)
 
     # PR 3.2.5 Phase 3 — paired with the ``SUBAGENT_PAUSED`` emit in
     # ``stream_events.append_activity_events``. ``approval`` is the

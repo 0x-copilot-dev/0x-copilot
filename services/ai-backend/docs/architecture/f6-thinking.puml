@@ -1,0 +1,131 @@
+@startuml f6-thinking
+title Flow 6 — Reasoning / "thinking" model turn
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "RuntimeApiRoutes\n+ Service" as svc
+participant "RuntimeRunHandler" as h
+participant "create_agent_runtime\n(execution/factory.py)" as factory
+participant "provider_kwargs\nworkspace_model_kwargs +\nuser_policy_model_kwargs" as pkw
+participant "Provider stream adapter\n(Anthropic / OpenAI / Gemini)" as adp
+participant "LLM provider" as llm
+participant "StreamingExecutor +\nStreamOrchestrator\n(stream_parts.py /\nstream_messages.py)" as exec
+participant "RuntimeEventProducer\n+ EventStore" as ep
+participant "SSE → user" as sse
+participant "BudgetCharger +\nCostCalculator" as charger
+
+note over u, charger
+  Pre-condition: workspace + user policy enable reasoning.
+  ModelReasoningConfig {effort, summary, display, budget_tokens,
+  thinking_mode} is part of the resolved ModelConfig. Anthropic
+  uses thinking_mode {ENABLED, ADAPTIVE} and display
+  {OMITTED, SUMMARIZED}; OpenAI uses summary {AUTO, CONCISE,
+  DETAILED}; Gemini uses effort with grounding.
+end note
+
+== Run setup ==
+
+u -> svc : POST /v1/agent/runs\n(message, model_profile)
+svc -> h : (worker claims) handle(RunCommand)
+h -> factory : create_agent_runtime(context, deps)
+factory -> pkw : workspace_model_kwargs(context)\n+ user_policy_model_kwargs(context)
+pkw --> factory : provider kwargs\n(thinking, reasoning_effort,\nreasoning_summary,\nbudget_tokens, store=False, …)
+factory -> adp : init provider stream adapter\nwith reasoning kwargs
+
+== Model call begins ==
+
+h -> exec : run(stream, run, metrics, …)
+exec -> ep : MODEL_CALL_STARTED\n(payload.model, reasoning_config)
+ep ->> sse : notify (UI shows "thinking…")
+exec -> adp : astream(messages, tools)
+adp -> llm : streaming request
+
+== Reasoning summary stream (provider-specific) ==
+
+alt Anthropic thinking_mode in {ENABLED, ADAPTIVE}
+  loop thinking blocks
+    llm -->> adp : thinking delta
+    adp -->> exec : reasoning chunk
+    exec -> ep : REASONING_SUMMARY_DELTA\n(activity_kind=REASONING)
+    ep ->> sse : notify (UI streams\n  reasoning summary)
+  end
+  llm -->> adp : end_thinking
+  adp -->> exec : reasoning final
+  exec -> ep : REASONING_SUMMARY\n(full text, redaction-aware)
+  ep ->> sse : notify
+else OpenAI Responses API summary
+  llm -->> adp : reasoning_summary parts\n(summary={auto/concise/detailed})
+  loop
+    adp -->> exec : reasoning chunk
+    exec -> ep : REASONING_SUMMARY_DELTA
+  end
+  exec -> ep : REASONING_SUMMARY (closes the part)
+else Gemini grounding only
+  note right of adp
+    No native reasoning summary stream.
+    Inline grounding citations are
+    captured by CitationStreamPipeline
+    (see flow 5) but no REASONING_*
+    events fire.
+  end note
+end
+
+== Visible answer stream ==
+
+loop visible content deltas
+  llm -->> adp : content chunk
+  adp -->> exec : MODEL_DELTA chunk
+  exec -> ep : MODEL_DELTA\n(activity_kind=MESSAGE)
+  ep ->> sse : notify (UI streams\n  answer text)
+end
+
+== (optional) Tool call mid-turn ==
+
+note over exec
+  If the model emits a tool_call mid-stream,
+  the executor short-circuits the chunk loop,
+  invokes the tool (see flows 2 / 5), and
+  loops back into a new model call which may
+  emit its own REASONING_SUMMARY_* chunks.
+end note
+
+== Final response + telemetry ==
+
+llm -->> adp : final aggregated message\n(usage_metadata: input_tokens,\n output_tokens,\n reasoning_tokens, cached_input)
+adp -->> exec : final + usage
+exec -> ep : FINAL_RESPONSE
+exec -> ep : MODEL_CALL_COMPLETED\n(payload.usage breakdown,\n reasoning_tokens separate)
+ep ->> sse : notify
+exec -> ep : RUN_COMPLETED
+ep ->> sse : notify
+
+== Post-run charging ==
+
+h -> charger : charge_run(run_id, usage_records)
+charger -> charger : CostCalculator.compute(\n   tokens, ModelPricingCatalog)
+note right of charger
+  Pricing rows can carry a separate
+  reasoning_per_1m_micro_usd column when
+  the provider bills reasoning tokens
+  differently from output. CostCalculator
+  uses integer micro-USD with banker's
+  rounding; charger CAS-updates budgets.
+end note
+charger -> charger : update budget rows (CAS,\n idempotent on retry)
+
+note over ep, sse
+  REASONING_SUMMARY_DELTA + REASONING_SUMMARY
+  events have visibility=USER but are subject
+  to the same redaction pass as every other
+  payload (sensitive keys/values stripped by
+  ObservabilityRedactor on the field validator).
+  Anthropic display=OMITTED skips emitting any
+  reasoning events to the client; the tokens
+  still bill.
+end note
+
+@enduml

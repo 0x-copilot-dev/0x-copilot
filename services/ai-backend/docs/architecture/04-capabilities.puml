@@ -1,0 +1,133 @@
+@startuml 04-capabilities
+title C6 — Capabilities (agent_runtime/capabilities/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/capabilities/" as pkg #F4E8FB {
+
+  package "Tools subsystem" as tools_pkg {
+    [DynamicToolRegistry\n(tools/registry.py)] as t_reg
+    [ToolLoader\n(tools/loader.py)] as t_load
+    [ToolPermissionChecker\n(tools/permissions.py)] as t_perm
+    [ToolCard / LoadedToolSpec\n(tools/cards.py)] as t_cards
+    [LoadPriorToolResultTool\n(tools/prior_results.py)] as t_prior
+    [Tools constants] as t_const
+
+    package "tools/builtin/" as builtin_pkg {
+      [ask_a_question.py] as b_ask
+      [suggest_mcp_connector.py\n(progressive discovery)] as b_sugg
+      [load_tool.py (legacy)] as b_load
+    }
+  }
+
+  package "MCP subsystem" as mcp_pkg {
+    [DynamicMcpRegistry\n(mcp/registry.py)] as m_reg
+    [McpClientFactory\n(mcp/client.py)] as m_client
+    [McpPermissionPolicy\n(mcp/permissions.py)] as m_perm
+    [McpServerCard /\nMcpToolCallRequest /\nMcpToolCallResult\n(mcp/cards.py)] as m_cards
+    [MCP constants + errors] as m_const
+
+    package "mcp/middleware/" as mcp_mw {
+      [LoadMcpServerTool\n(dynamic_loader.py)] as mw_load
+      [CallMcpTool\n(call_tool.py)] as mw_call
+      [AuthMcpTool\n(auth_mcp.py — OAuth handoff)] as mw_auth
+      [CitationProjectingMcpMiddleware\n(cite_mcp.py)] as mw_cite
+    }
+  }
+
+  package "Skills subsystem" as skills_pkg {
+    [SkillSourceRegistry\n(skills/sources.py)] as s_src
+    [SkillManifest\n(skills/manifest.py)] as s_man
+    [LoadSkillTool\n(skills/middleware.py)] as s_mw
+    [SkillPermissionPolicy\n(skills/policy.py)] as s_perm
+  }
+
+  package "Guards / middleware" as guards_pkg {
+    [CapabilityAuthGate\n(auth_gate.py)] as g_auth
+    [ToolBudgetMiddleware\n(tool_budget_middleware.py)] as g_bud_mw
+    [ToolBudgetGuard\n(tool_budget_guard.py)] as g_bud_g
+  }
+
+  package "Citations" as cite_pkg {
+    [CitationLedger /\ncitation_resolver.py] as c_led
+    [citation_projection.py] as c_proj
+    [citation_capturing_tool.py] as c_cap
+    [citations.py (CitationRegistry)] as c_reg
+    [conversation_ordinals.py\n(allocator)] as c_ord
+  }
+
+  package "Backends" as backends_pkg {
+    [DraftBackend\n(backends/draft_backend.py)] as bk_draft
+  }
+}
+
+' --- External actors ---
+component "Deep Agents builder\n(execution/deep_agent_builder.py)" as core_builder <<external>>
+component "Persistence ports\n(CitationStore, ConversationToolOrdinalStore,\nDraftStore, PayloadStorage)" as ports <<external>>
+component "backend service\n(MCP registry / RPC proxy / OAuth)" as backend <<external>>
+component "Observability\n(redaction, tracing)" as obs <<external>>
+
+' --- Tools wiring ---
+core_builder --> t_reg : list_available_tools(context)
+t_reg --> t_perm : is_card_authorized?
+t_reg --> t_load : resolve(name)
+t_load --> t_cards
+t_load --> t_perm
+t_reg --> t_prior : LoadPriorToolResult
+t_reg --> builtin_pkg
+
+' --- MCP wiring ---
+core_builder --> m_reg : list_available_servers(context)
+m_reg --> m_perm : is_server_card_visible?
+m_reg --> m_client : create client per server
+m_reg --> m_cards
+m_reg --> mcp_mw : exposes Load/Call/Auth tools
+mw_call --> m_perm : tool-level auth check
+mw_call --> m_client : call_tool(...)
+mw_call --> mw_cite : project citations
+mw_auth --> backend : begin_oauth → emit MCP_AUTH_REQUIRED
+
+' --- Skills wiring ---
+core_builder --> s_src : skill_directories_for_deep_agent()
+s_src --> s_man
+s_mw --> s_perm
+s_mw --> s_man
+
+' --- Guards everywhere ---
+core_builder --> g_auth
+core_builder --> g_bud_mw
+g_bud_mw --> g_bud_g
+
+' --- Citations (cross-cutting on tool/MCP results) ---
+mw_cite --> c_led
+t_load --> c_cap
+c_led --> c_reg
+c_led --> c_ord
+c_led --> ports : insert_or_get(CitationRecord)
+c_ord --> ports : record / load(\nconversation_ordinal ↔ tool_call_id)
+c_proj --> c_led
+
+' --- Drafts ---
+bk_draft --> ports : DraftStorePort\n(insert_version / latest)
+
+' --- Backend egress ---
+m_client --> backend : /internal/v1/mcp/* RPC
+m_perm ..> backend : connector scopes / auth state
+
+' --- Observability ---
+mw_call ..> obs : redact tool I/O
+t_load ..> obs
+
+note bottom of mcp_pkg
+  Permission gate sits in front of every
+  capability surface. Auth state {none,
+  pending, valid, error} is part of the
+  card; system prompt only lists servers
+  the user is allowed to see.
+end note
+
+@enduml

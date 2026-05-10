@@ -1,0 +1,99 @@
+@startuml 02-runtime-api
+title C1 — API Edge (runtime_api/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+' --- Inbound ---
+node "backend-facade" as facade
+
+' --- The API package ---
+package "runtime_api/" as pkg #E8F1FB {
+
+  package "App + lifespan" as app_pkg {
+    [RuntimeApiAppFactory\n(app.py)] as app
+    note right of app
+      Lifespan order:
+      1. configure_logging
+      2. configure_telemetry +
+         instrument_httpx_clients
+      3. resolve_or_exit deployment
+      4. open async store
+      5. start in-process worker
+         (RUNTIME_START_IN_PROCESS_WORKER)
+      6. (yield)
+      7. stop worker → close store
+    end note
+  }
+
+  package "Identity + RBAC + errors" as auth_pkg {
+    [RuntimeServiceAuthenticator\n(auth.py)] as authn
+    [Identity helpers (identity.py)] as ident
+    [RBAC scopes (rbac.py)] as rbac
+    [RuntimeApiErrorMapper\n(http/errors.py)] as errors
+  }
+
+  package "HTTP route modules" as routes_pkg {
+    [RuntimeApiRouter\n(http/routes.py)] as r_main
+    [BudgetApiRouter] as r_budget
+    [UsageApiRouter] as r_usage
+    [InternalRuntimeApiRouter] as r_internal
+    [RetentionAdmin/MemberRouter\n(http/retention_routes.py)] as r_ret
+    [Drafts (http/drafts.py)] as r_draft
+    [Share / ShareFork / SelfFork\n(http/share*_routes.py,\nself_fork_routes.py)] as r_share
+    [Workspace + WorkspaceData\n+ WorkspaceDefaults] as r_ws
+    [AuditList (http/audit_list_routes.py)] as r_audit
+    [register_health_routes\n(routes/health.py)] as r_health
+  }
+
+  package "SSE + push bus" as sse_pkg {
+    [RuntimeSseAdapter\n(sse/adapter.py — replay+tail)] as sse_adapter
+    [RuntimeEventBus\n(sse/event_bus.py)] as ebus
+    [InboxSseAdapter\n(sse/inbox_adapter.py)] as ibx_adapter
+    [InboxEventBus\n(sse/inbox_bus.py)] as ibx_bus
+  }
+
+  package "Schemas (Pydantic contracts)" as schemas_pkg {
+    [events.py\n(RuntimeEventEnvelope,\nRuntimeApiEventType,\nRuntimeActivityKind,\nRuntimeEventPresentation,\nProjector)] as sch_events
+    [runs.py / approvals.py /\nconversations.py / drafts.py /\ncommands.py / shares.py /\nworkspace.py / inbox.py /\nbudgets.py / usage.py /\nretention.py / fork.py / errors.py /\ncommon.py] as sch_other
+  }
+
+  [system_skills.py\n(allow-listed system skills)] as sysk
+}
+
+' --- Out edges to runtime services ---
+component "RuntimeApiService\n(agent_runtime/api/)" as svc <<external>>
+component "RuntimeEventProducer\n(agent_runtime/api/events.py)" as ep <<external>>
+component "Persistence / EventStore /\nQueue ports" as ports <<external>>
+
+facade --> app : ASGI
+app --> authn : depends on every route
+authn --> ident
+authn --> rbac
+app --> routes_pkg : include_router(...)
+routes_pkg --> svc : commands + queries
+routes_pkg --> errors : raise + map → HTTP
+
+sse_adapter --> svc : replay_events()
+sse_adapter <.. ebus : wait(run_id)
+ibx_adapter <.. ibx_bus : per-user wakeups
+
+' Service notifies bus on every appended event
+ep ..> ebus : on_event_appended\n(notify_sync)
+
+routes_pkg ..> sch_events : request/response models
+sse_adapter ..> sch_events : RuntimeEventEnvelope\nformat: id=sequence_no
+
+note bottom of sse_pkg
+  **Resume contract:** client reconnects with
+  ?after_sequence=N. Adapter replays events
+  with sequence_no > N, then either returns
+  (terminal status) or `event_bus.wait(run_id)`
+  with FALLBACK_POLL_SECONDS=2s. SSE format:
+  `event: <name>\nid: <seq_no>\ndata: <json>\n\n`.
+end note
+
+@enduml

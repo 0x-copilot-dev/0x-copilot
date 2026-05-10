@@ -35,6 +35,14 @@ from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.presentation import (
+    ToolDisplayLookup,
+    ToolDisplayLookupContext,
+)
+from agent_runtime.capabilities.mcp.descriptor_registry import (
+    McpDisplayRegistryContext,
+)
+from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from agent_runtime.persistence.ports import (
     CitationStorePort,
@@ -292,11 +300,30 @@ class RuntimeRunHandler:
         # tool short-circuits to ``discovery_disabled`` in that case.
         discovery_service: McpDiscoveryService | None = None
         discovery_token: object | None = None
+        # Polish-removal Phase 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
+        # bind the per-run tool display lookup so every event the producer
+        # emits during this run consults the registry without the producer
+        # holding a direct reference. ``None`` until ``dependencies`` is
+        # built; cleared in the finally block.
+        #
+        # Bind the MCP descriptor registry FIRST so that any descriptor
+        # registered during the run (lazily, when the agent calls
+        # ``load_mcp_server``) lands in the dict our composite lookup
+        # consults — not in a pre-bind void.
+        display_token: object | None = None
+        mcp_display_token: object | None = None
+        mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
+            )
+            mcp_display_token = McpDisplayRegistryContext.bind_for_run(
+                mcp_display_registry
+            )
+            display_token = ToolDisplayLookupContext.bind_for_run(
+                self._build_tool_display_lookup(dependencies.tool_registry)
             )
             discovery_service = self._bind_mcp_discovery_service(
                 run=run,
@@ -479,6 +506,10 @@ class RuntimeRunHandler:
                 ToolBudgetGuard.unbind(budget_token)
             if discovery_token is not None:
                 McpDiscoveryService.unbind(discovery_token)
+            if display_token is not None:
+                ToolDisplayLookupContext.unbind(display_token)
+            if mcp_display_token is not None:
+                McpDisplayRegistryContext.unbind(mcp_display_token)
 
         completed = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
@@ -817,6 +848,43 @@ class RuntimeRunHandler:
         if observations.prompt_context is not None:
             self._insert_prior_tool_context(messages, observations.prompt_context)
         return tuple(messages)
+
+    @staticmethod
+    def _build_tool_display_lookup(tool_registry: object) -> ToolDisplayLookup:
+        """Build the per-run tool-display-template lookup for the producer.
+
+        Polish-removal Phases 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
+
+        - Phase 1 — probe ``tool_registry`` for ``display_for(name)``. Returns
+          a stub when the registry doesn't expose the method (today's
+          production chain wraps ``WebSearchToolRegistry``, which doesn't).
+        - Phase 2.B — fall through to the per-run MCP descriptor registry
+          populated by ``BackendMcpClient._tool_descriptor`` as servers
+          load. This is what makes synthesised MCP templates visible to
+          ``PresentationGenerator``.
+
+        Order: tool_registry first (author-written templates beat
+        synthesised MCP templates if a name collides), MCP registry second.
+        """
+
+        from agent_runtime.capabilities.mcp.descriptor_registry import (  # noqa: PLC0415
+            McpDisplayRegistryContext,
+        )
+
+        display_for = getattr(tool_registry, "display_for", None)
+        tool_registry_lookup: ToolDisplayLookup
+        if callable(display_for):
+            tool_registry_lookup = display_for  # type: ignore[assignment]
+        else:
+            tool_registry_lookup = lambda _name: None  # noqa: E731
+
+        def composite(tool_name: str) -> object:
+            template = tool_registry_lookup(tool_name)
+            if template is not None:
+                return template
+            return McpDisplayRegistryContext.get(tool_name)
+
+        return composite  # type: ignore[return-value]
 
     def _dependencies_for_run(
         self,

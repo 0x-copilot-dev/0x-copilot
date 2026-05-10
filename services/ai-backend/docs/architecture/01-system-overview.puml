@@ -1,0 +1,183 @@
+@startuml 01-system-overview
+title ai-backend — Cluster Overview
+
+!theme plain
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam ranksep 35
+skinparam nodesep 25
+skinparam ArrowColor #5B6770
+skinparam ArrowThickness 1
+skinparam defaultTextAlignment center
+
+' Layout hint: top→bottom flows nicely for request → worker → adapters
+top to bottom direction
+
+' =========================================================
+' External actors (top edge)
+' =========================================================
+together {
+  actor "Browser" as browser
+  rectangle "backend-facade\n(/v1/* proxy)" as facade
+}
+
+' =========================================================
+' API Edge + Worker — the two process surfaces
+' =========================================================
+together {
+  package "C1 — API Edge\nruntime_api/" as C1 #E8F1FB {
+    rectangle "FastAPI app\n+ lifespan" as edge_app
+    rectangle "HTTP routes\n+ RBAC + auth" as edge_routes
+    rectangle "SSE adapter\n+ EventBus" as edge_sse
+  }
+
+  package "C2 — Worker\nruntime_worker/" as C2 #FBE8E8 {
+    rectangle "Claim loop\n+ handlers" as wkr_loop
+    rectangle "StreamingExecutor\n+ stream channels" as wkr_exec
+    rectangle "Background jobs\n(retention, expiry)" as wkr_jobs
+  }
+}
+
+' =========================================================
+' Runtime Services — the coordinator
+' =========================================================
+package "C4 — Runtime Services\nagent_runtime/api/" as C4 #EAF7E8 {
+  rectangle "RuntimeApiService\n(coordinator, 2.4k LOC)" as svc_core
+  rectangle "RuntimeEventProducer\n+ PresentationGenerator" as svc_events
+  rectangle "Domain services\nDraft / Share / Fork /\nWorkspace / Usage" as svc_domain
+}
+
+' =========================================================
+' Agent runtime core + capabilities + delegation
+' =========================================================
+together {
+  package "C5 — Agent Runtime Core\nagent_runtime/execution/ + prompts/" as C5 #FFF6D6 {
+    rectangle "factory.create_agent_runtime" as core_factory
+    rectangle "Deep Agents +\nLangGraph builder" as core_builder
+    rectangle "Provider stream\nadapters" as core_providers
+  }
+
+  package "C6 — Capabilities\nagent_runtime/capabilities/" as C6 #F4E8FB {
+    rectangle "Tools" as cap_tools
+    rectangle "MCP" as cap_mcp
+    rectangle "Skills" as cap_skills
+    rectangle "Citations\n+ Guards" as cap_cite
+  }
+
+  package "C7 — Delegation\ndelegation/subagents/" as C7 #FBEFE8 {
+    rectangle "Subagent catalog\n+ runner" as deleg
+  }
+}
+
+' =========================================================
+' State + cross-cutting policies
+' =========================================================
+together {
+  package "C8a — State + Memory" as C8a #F0F0F0 {
+    rectangle "Persistence ports\n+ records + schema" as c8_persist
+    rectangle "Context + Memory\n(scopes, routes)" as c8_memory
+  }
+
+  package "C8b — Cross-cutting" as C8b #F0F0F0 {
+    rectangle "Observability\n(tracing, redaction, OTEL)" as c8_obs
+    rectangle "Budgets + Pricing" as c8_cost
+    rectangle "Retention\n+ Deployment profile" as c8_ret
+  }
+}
+
+' =========================================================
+' Adapters + Postgres (bottom)
+' =========================================================
+package "C3 — Adapters\nruntime_adapters/" as C3 #E8FBF6 {
+  rectangle "RuntimeAdapterFactory" as adp_factory
+  rectangle "InMemory store\n(sync + async)" as adp_inmem
+  rectangle "Postgres store\n(async, FOR UPDATE,\noutbox queue)" as adp_pg
+  rectangle "Draft / Share /\nCitation / ToolOrdinal" as adp_aux
+}
+
+database "Postgres" as pg
+
+' =========================================================
+' Off to the side: external services + LLM providers
+' =========================================================
+together {
+  cloud "LLM providers\nOpenAI / Anthropic / Google" as providers
+  cloud "MCP servers\n(3rd-party connectors)" as mcp_servers
+  rectangle "backend\n(MCP registry, OAuth,\nmembership, audit)" as backend
+}
+
+' =========================================================
+' Edges — request path (top → down)
+' =========================================================
+browser --> facade
+facade --> edge_routes
+edge_routes --> svc_core : commands
+edge_sse --> svc_core : replay_events()
+
+' Worker side
+svc_core --> wkr_loop : queue.enqueue\n(run / cancel / approval)
+wkr_loop --> wkr_exec
+wkr_exec --> core_factory : create_agent_runtime
+wkr_jobs --> c8_ret
+
+' Service emits events; bus pushes to SSE
+svc_events --> edge_sse : on_event_appended\n(notify_sync)
+wkr_exec --> svc_events : append events\n(monotonic sequence_no)
+
+' =========================================================
+' Edges — agent core uses capabilities + delegation
+' =========================================================
+core_factory --> core_builder
+core_builder --> cap_tools
+core_builder --> cap_mcp
+core_builder --> cap_skills
+core_builder --> deleg
+core_providers --> providers
+
+' =========================================================
+' Edges — capabilities outbound
+' =========================================================
+cap_mcp --> backend : RPC (OAuth state,\nclient sessions)
+backend --> mcp_servers
+cap_cite --> c8_persist : citations,\ntool ordinals
+
+' =========================================================
+' Edges — services + memberships out
+' =========================================================
+svc_domain --> backend : membership,\nsuggestible connectors
+
+' =========================================================
+' Edges — storage (services + worker → ports → adapters → DB)
+' =========================================================
+svc_core --> c8_persist
+svc_events --> c8_persist
+wkr_exec --> c8_persist
+c8_persist <.. adp_factory : satisfies ports
+adp_inmem ..|> c8_persist
+adp_pg ..|> c8_persist
+adp_aux ..|> c8_persist
+adp_pg --> pg
+
+' =========================================================
+' Cross-cutting (dotted, wide reach)
+' =========================================================
+edge_app ..> c8_obs
+wkr_exec ..> c8_obs
+wkr_loop ..> c8_cost : BudgetCharger.charge_run()
+svc_core ..> c8_ret
+c8_memory --> c8_persist
+
+' =========================================================
+' Stream back to user
+' =========================================================
+edge_sse --> facade : SSE\ntext/event-stream
+facade --> browser
+
+legend right
+  | Solid | sync call / data flow |
+  | Dashed | event / notification |
+  | Dotted | implements / cross-cutting |
+endlegend
+
+@enduml

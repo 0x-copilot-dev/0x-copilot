@@ -74,6 +74,14 @@ class ToolDisplayTemplate(RuntimeContract):
     result_summary_template: str | None = Field(default=None, max_length=480)
     result_preview_path: str | None = Field(default=None, max_length=120)
     result_preview_row: dict[str, str] | None = Field(default=None)
+    # Polish-removal Phase 2.A (docs/refactor/01-presentation-polish-removal.md):
+    # ``True`` when the template was produced by a synthesis path
+    # (``DisplayMetadataMiddleware.synthesise_for_mcp`` or the planned
+    # ``ToolDisplayTemplate.from_tool_name`` helper). Tier 3 (Phase 3 —
+    # agent-supplied ``_display_*`` in tool args) consults this flag to
+    # decide whether to override: synthetic templates yield to the agent's
+    # copy; author-written templates always win.
+    synthetic: bool = False
 
 
 class ToolCard(RuntimeContract):

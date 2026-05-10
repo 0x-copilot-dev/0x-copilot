@@ -1,0 +1,117 @@
+@startuml 05-runtime-services
+title C4 — Runtime Services (agent_runtime/api/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/api/" as pkg #EAF7E8 {
+
+  package "Coordinator + ports" as core_pkg {
+    [RuntimeApiService\n(service.py — 2.4k LOC)] as svc
+    [Sync ports (ports.py)\nPersistencePort, EventStorePort,\nRuntimeQueuePort] as p_sync
+    [Async ports (async_ports.py)\nAsyncPersistencePort,\nAsyncEventStorePort,\nAsyncRuntimeQueuePort] as p_async
+    [Constants (constants.py)\nKeys / Messages / Values] as const
+  }
+
+  package "Event production + presentation" as ev_pkg {
+    [RuntimeEventProducer\n(events.py)] as ep
+    [PresentationGenerator\n(presentation.py)] as pg
+    [presentation_templates.py\n(card templates)] as tpl
+    note right of ep
+      append_api_event:
+        1. payload_for_event (allow-list)
+        2. presentation_fields
+           (display_title, summary,
+            status, activity_kind)
+        3. preliminary presentation
+        4. event_store.append_event
+           → assigns sequence_no
+        5. set_run_latest_sequence
+        6. on_event_appended (notify)
+        7. spawn LLM polish →
+           PRESENTATION_UPDATED
+    end note
+  }
+
+  package "Domain services" as dom_pkg {
+    [DraftService\n(draft_service.py)] as d_draft
+    [ShareService + ShareToken\n(share_service.py, share_token.py)] as d_share
+    [ConversationFork (conversation_fork.py)] as d_cfork
+    [SelfFork (self_fork.py)] as d_sfork
+    [WorkspaceFeedService\n(workspace_feed_service.py)] as d_wfeed
+    [WorkspaceDefaultsService\n(workspace_defaults_service.py)] as d_wdef
+    [UsageService (usage_service.py)\n— context window, headroom_pct] as d_usage
+    [McpDiscoveryService\n(mcp_discovery_service.py)] as d_mcp
+  }
+
+  package "Resolvers + dispatchers" as res_pkg {
+    [MembershipResolver\n(membership.py — Http / InMem)] as r_mem
+    [UserPoliciesResolver\n(user_policies_resolver.py)] as r_pol
+    [SuggestibleConnectorsResolver\n(suggestible_connectors_resolver.py)] as r_sugg
+    [NotificationDispatcher\n(notifications.py — Inbox + Email)] as r_disp
+  }
+}
+
+' --- External components ---
+component "HTTP routes\n(runtime_api/http/*)" as http <<external>>
+component "Persistence + EventStore +\nQueue (adapters)" as adp <<external>>
+component "Capabilities (auth gate,\ntool/mcp registries)" as caps <<external>>
+component "Agent Runtime Core\n(execution.factory)" as core <<external>>
+component "RuntimeEventBus\n(runtime_api/sse/event_bus.py)" as ebus <<external>>
+component "backend service" as backend <<external>>
+
+http --> svc : create_run, cancel_run,\nrecord_approval_decision,\nlist_conversations / messages,\nget /context (UsageService)
+svc --> p_async : enqueue / read / write
+p_async --> adp
+svc --> ep : emit lifecycle + approval events
+ep --> p_async
+ep --> pg
+pg --> tpl
+ep ..> ebus : on_event_appended
+
+svc --> r_mem
+svc --> r_pol
+svc --> r_sugg
+svc --> r_disp
+r_mem --> backend : workspace membership
+r_sugg --> backend : MCP catalog suggestions
+r_disp --> ebus : approval inbox notifications
+
+svc --> d_draft
+svc --> d_share
+svc --> d_cfork
+svc --> d_sfork
+svc --> d_wfeed
+svc --> d_wdef
+svc --> d_usage
+svc --> d_mcp
+
+d_draft --> caps : CapabilityAuthGate.check\n(pre-send)
+d_share --> p_async
+d_cfork --> p_async
+d_sfork --> p_async
+d_wfeed --> p_async
+d_usage --> p_async
+
+' --- Worker uses these too ---
+component "Worker handlers\n(runtime_worker)" as wkr <<external>>
+wkr --> ep : append events
+wkr --> svc : update run status
+core ..> svc : runtime context (read-only)
+
+note bottom of core_pkg
+  RuntimeApiService is the single coordinator
+  the API and the worker both call. It owns:
+   • run lifecycle (queue + persistence)
+   • approval lifecycle
+   • notification fan-out
+   • replay / context summaries
+  Sync + async port pairs let test fakes wire
+  in_memory while production runs on
+  AsyncPersistencePort/AsyncEventStorePort.
+end note
+
+@enduml

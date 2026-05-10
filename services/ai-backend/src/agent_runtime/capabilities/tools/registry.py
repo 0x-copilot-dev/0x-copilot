@@ -14,6 +14,7 @@ from agent_runtime.validation import ValueNormalizer
 from agent_runtime.capabilities.tools.cards import (
     LoadedToolSpec,
     ToolCard,
+    ToolDisplayTemplate,
     ToolLoadError,
     ToolLoadErrorCode,
 )
@@ -90,6 +91,20 @@ class DynamicToolRegistry:
         """Runtime port adapter returning model-visible compact cards."""
 
         return self.list_tool_cards(ValueNormalizer.coerce_runtime_context(context))
+
+    def display_for(self, tool_name: str) -> ToolDisplayTemplate | None:
+        """Return the registered display template for ``tool_name``, or ``None``.
+
+        Walks the providers' compact cards. Returns ``None`` when no card
+        matches (unknown tool) or when the matching card was registered
+        without a ``display`` template (the field is currently optional —
+        Phase 5 of the polish-removal refactor makes it required).
+        """
+
+        for entry in self._collect_entries():
+            if entry.card.name == tool_name:
+                return entry.card.display
+        return None
 
     def resolve_tool(self, name: str) -> RegisteredTool | ToolLoadError:
         """Resolve a selected stable tool name to exactly one provider entry."""

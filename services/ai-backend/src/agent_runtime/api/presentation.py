@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -126,10 +127,14 @@ class PresentationGenerator:
                 return validated
 
         tool_template = self._resolve_tool_template(payload)
+        # Phase 2.B — promote inner MCP arguments to the top level for the
+        # template + projector. No-op for non-dispatcher events. See
+        # ``_effective_template_payload`` for the rationale.
+        effective_payload = self._effective_template_payload(payload)
         if tool_template is not None:
             tool_rendered = ToolTemplateRenderer.render(
                 event_type=event_type,
-                payload=payload,
+                payload=effective_payload,
                 template=tool_template,
                 group_key=group_key,
             )
@@ -143,7 +148,7 @@ class PresentationGenerator:
 
         return self._minimal_envelope(
             event_type=event_type,
-            payload=payload,
+            payload=effective_payload,
             timeline_fields=timeline_fields,
             group_key=group_key,
             template=tool_template,
@@ -614,19 +619,86 @@ class PresentationGenerator:
         words = value.replace("mcp_", "").replace("_com", "")
         return " ".join(words.split())
 
+    # Polish-removal Phase 2.B (docs/refactor/01-presentation-polish-removal.md).
+    # MCP tool calls flow through a single dispatcher tool. The runtime
+    # emits events with ``payload.tool_name`` set to the dispatcher's name;
+    # the *actual* MCP tool name lives nested inside ``payload.args``. Pin
+    # the dispatcher name here so the resolution chain knows when to
+    # extract instead of looking up the dispatcher itself.
+    _MCP_DISPATCHER_TOOL_NAME = "call_mcp_tool"
+
     def _resolve_tool_template(self, payload: JsonObject) -> ToolDisplayTemplate | None:
-        if self.tool_display_lookup is None:
+        name = self._effective_tool_name(payload)
+        if name is None:
             return None
+        # Instance-level injection (used by tests) wins over the per-run
+        # ContextVar (set by the run / approval handler at handle() entry).
+        # Either source returning ``None`` is treated the same as "no
+        # template registered" — fall through to the minimal envelope.
+        lookup = self.tool_display_lookup or ToolDisplayLookupContext.active()
+        if lookup is None:
+            return None
+        try:
+            return lookup(name)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Tool display lookup failed for %s", name, exc_info=True
+            )
+            return None
+
+    @classmethod
+    def _effective_tool_name(cls, payload: JsonObject) -> str | None:
+        """Return the tool name the lookup should resolve against.
+
+        For all events except the MCP dispatcher this is just
+        ``payload.tool_name``. When the event is a ``call_mcp_tool``
+        dispatcher invocation the actual MCP tool name lives inside
+        ``payload.args.tool_name`` (Phase 2.B); we extract it so the
+        synthesised MCP template resolves rather than the dispatcher
+        itself (which has no meaningful copy on its own).
+        """
+
         tool_name = payload.get("tool_name")
         if not isinstance(tool_name, str) or not tool_name.strip():
             return None
-        try:
-            return self.tool_display_lookup(tool_name.strip())
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "Tool display lookup failed for %s", tool_name, exc_info=True
-            )
-            return None
+        name = tool_name.strip()
+        if name != cls._MCP_DISPATCHER_TOOL_NAME:
+            return name
+        args = payload.get("args")
+        if not isinstance(args, Mapping):
+            return name
+        inner = args.get("tool_name")
+        if not isinstance(inner, str) or not inner.strip():
+            return name
+        return inner.strip()
+
+    @classmethod
+    def _effective_template_payload(cls, payload: JsonObject) -> JsonObject:
+        """Promote inner MCP arguments to the top level for template render.
+
+        The synthesised MCP template uses placeholders like ``{query}`` (the
+        agent-supplied tool argument). For non-dispatcher events those
+        placeholders already resolve against ``payload`` directly because
+        the agent's args ARE the top-level payload keys. For dispatcher
+        events the args are nested at ``payload.args.arguments``; without
+        this promotion ``ToolTemplateRenderer._safe_format`` would fail
+        every placeholder and fall back to the minimal envelope.
+
+        Same rationale applies to ``result_preview_path`` walking — the
+        synthesised path is e.g. ``"items"`` (a top-level key in the
+        underlying tool's output), not the dispatcher-shaped nested form.
+        """
+
+        tool_name = payload.get("tool_name")
+        if tool_name != cls._MCP_DISPATCHER_TOOL_NAME:
+            return payload
+        args = payload.get("args")
+        if not isinstance(args, Mapping):
+            return payload
+        arguments = args.get("arguments")
+        if isinstance(arguments, Mapping):
+            return {**payload, **arguments}
+        return payload
 
     @classmethod
     def _with_deterministic_fields(
@@ -738,3 +810,43 @@ class PresentationGenerator:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+
+_TOOL_DISPLAY_LOOKUP_CTX: ContextVar[ToolDisplayLookup | None] = ContextVar(
+    "tool_display_lookup",
+    default=None,
+)
+
+
+class ToolDisplayLookupContext:
+    """Per-run binding for the active tool-display-template lookup.
+
+    The run / approval handler binds a lookup callable at ``handle()`` entry
+    so every ``RuntimeEventProducer.append_*`` call made during that run
+    consults the per-run tool registry without the producer needing a
+    direct reference to it. Mirrors the ``CitationLedger.bind_for_run``
+    pattern so the binding is inherited by ``asyncio.Task`` children
+    spawned from the run's context.
+
+    Resolution order in :meth:`PresentationGenerator._resolve_tool_template`:
+    instance-level ``tool_display_lookup`` (used by unit tests) wins; this
+    ContextVar is the production fallback.
+    """
+
+    @classmethod
+    def bind_for_run(cls, lookup: ToolDisplayLookup) -> object:
+        """Set the active lookup; return the previous token for restoration."""
+
+        return _TOOL_DISPLAY_LOOKUP_CTX.set(lookup)
+
+    @classmethod
+    def unbind(cls, token: object) -> None:
+        """Restore the previous binding. Safe to call with the bind result."""
+
+        _TOOL_DISPLAY_LOOKUP_CTX.reset(token)  # type: ignore[arg-type]
+
+    @classmethod
+    def active(cls) -> ToolDisplayLookup | None:
+        """Return the active lookup or ``None`` (fallback / test helper)."""
+
+        return _TOOL_DISPLAY_LOOKUP_CTX.get(None)

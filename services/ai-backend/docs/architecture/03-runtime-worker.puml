@@ -1,0 +1,113 @@
+@startuml 03-runtime-worker
+title C2 — Worker (runtime_worker/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "runtime_worker/" as pkg #FBE8E8 {
+
+  package "Process entry + loop" as loop_pkg {
+    [RuntimeWorkerEntrypoint\n(__main__.py)] as entry
+    [RuntimeWorker\n(loop.py — claim + dispatch)] as wkr
+    note right of wkr
+      Loop = run_forever:
+        run_once → claim_next →
+          semaphore-bounded handler →
+          mark_complete or mark_retry / mark_dead_letter
+      Async by default; sync ports adapted
+      via to_thread (async_wrappers).
+      Concurrency: settings.execution.max_parallel_runs.
+    end note
+    [dependencies.py] as deps
+    [audit.py] as audit
+  }
+
+  package "Handlers" as h_pkg {
+    [RuntimeRunHandler\n(handlers/run.py)] as h_run
+    [RuntimeCancelHandler\n(handlers/cancel.py)] as h_cancel
+    [RuntimeApprovalHandler\n(handlers/approval.py)] as h_appr
+  }
+
+  package "Streaming pipeline" as stream_pkg {
+    [StreamingExecutor\n(streaming_executor.py)] as exec
+    [StreamOrchestrator\n(stream_events.py)] as orch
+    [stream_messages.py] as sm
+    [stream_parts.py] as sp
+    [stream_subagents.py] as ssub
+    [stream_tools.py] as stool
+    [ToolCallLedger\n(tool_call_ledger.py)] as ledger
+    [ToolObservations\n(tool_observations.py)] as obs
+    [ApprovalRecognisers\n(approval_recognisers.py)] as recog
+    [AssistantRunMetrics\n+ TokenUsageExtractor\n(run_metrics.py)] as metrics
+    note right of exec
+      action_interrupt_events =
+        { APPROVAL_REQUESTED,
+          MCP_AUTH_REQUIRED }
+      → graph stops, run pauses,
+        approval row written.
+    end note
+  }
+
+  package "Background jobs + loops" as job_pkg {
+    [ApprovalExpirySweeper\n(jobs/approval_expiry_sweeper.py)] as j_expiry
+    [RetentionSweeperLoop\n(jobs/retention_sweeper.py)] as j_ret
+    [EncryptExistingColumns\n(jobs/encrypt_existing_columns.py)] as j_enc
+    [UsageRollupLoop\n(usage_rollup_loop.py)] as j_usage
+  }
+}
+
+' --- Outbound dependencies ---
+component "Queue port\n(adapters)" as q <<external>>
+component "Persistence + EventStore ports" as ports <<external>>
+component "RuntimeEventProducer\n(agent_runtime/api/events.py)" as ep <<external>>
+component "agent_runtime.execution.factory\ncreate_agent_runtime" as core <<external>>
+component "PresentationGenerator\n(agent_runtime/api/presentation.py)" as pres <<external>>
+component "BudgetCharger\n(agent_runtime/budgets/)" as bud <<external>>
+component "RuntimeEventBus\n(runtime_api/sse/event_bus.py)" as ebus <<external>>
+
+entry --> wkr : compose ports +\nstart background loops
+wkr --> q : claim_next /\nmark_complete /\nmark_retry / mark_dead_letter
+wkr --> h_run : dispatch on RUN_REQUESTED
+wkr --> h_cancel : dispatch on RUN_CANCEL_REQUESTED
+wkr --> h_appr : dispatch on APPROVAL_RESOLVED
+
+h_run --> exec : drive streaming run
+h_appr --> exec : drive resumed run
+h_cancel --> ports : update run status,\nemit cancellation events
+
+exec --> core : create_agent_runtime\n(LangGraph + Deep Agents)
+exec --> orch
+orch --> sm
+orch --> sp
+orch --> ssub
+orch --> stool
+orch --> ledger
+orch --> obs
+orch --> recog
+exec --> metrics
+exec --> ep : append RuntimeEventEnvelope\n(per chunk → MODEL_DELTA,\nTOOL_CALL, TOOL_RESULT,\nFINAL_RESPONSE, RUN_COMPLETED, …)
+ep --> ports
+ep ..> ebus : on_event_appended\n(notify_sync)
+ep --> pres : preliminary presentation +\nasync polish (PRESENTATION_UPDATED)
+
+h_run --> bud : charge_run() post-completion
+
+j_ret --> ports
+j_expiry --> ports
+j_usage --> ports
+j_enc --> ports
+
+note bottom of stream_pkg
+  StreamingExecutor.run() is shared by RUN
+  and APPROVAL handlers — it iterates the
+  LangGraph stream, fans chunks through the
+  StreamOrchestrator (per-channel handlers),
+  appends typed events with monotonic
+  sequence_no per run, and short-circuits
+  on the action_interrupt_events set.
+end note
+
+@enduml

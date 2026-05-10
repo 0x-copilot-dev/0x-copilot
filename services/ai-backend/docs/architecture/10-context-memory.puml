@@ -1,0 +1,61 @@
+@startuml 10-context-memory
+title C8a — Context + Memory (agent_runtime/context/memory/)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/context/" as ctx_pkg #F0F0F0 {
+  package "memory/" as mem_pkg {
+    [contracts.py\n(MemoryScope, MemoryScopeType\n{USER, AGENT, ORGANIZATION},\nMemoryPathPolicy,\nMemoryAccessOperation\n{READ, WRITE},\nMemoryActorRole\n{USER, ASSISTANT, APPLICATION},\nManagedContextPayload,\nContextSummary)] as contracts
+
+    [policy.py\nMemoryPolicyAuthorizer.\ndefault_policies():\n• /memories  USER|ASSISTANT R/W\n• /policies  R(any) W(APP) shared\n• /skills    USER|ASSISTANT R/W\n+ MemoryPolicyDecision\n(allowed, safe_message)] as policy
+
+    [backends.py\nMemoryBackendRoute,\nMemoryRoutePlan.for_context()\n→ Deep Agents composite backend] as backends
+
+    [token_budget.py\n(turn-level token accounting)] as t_bud
+    [summarization.py\n(SUMMARIZE strategy)] as summ
+    [subagent_trace.py\n(/subagents/ read-only projection)] as sub_trace
+    [constants.py] as const
+
+    note right of contracts
+      ContextCompressionStrategy:
+        INLINE / OFFLOAD / SUMMARIZE
+        / FALLBACK_SUMMARY
+    end note
+  }
+}
+
+' --- External wiring ---
+component "execution.factory\n(create_agent_runtime)" as factory <<external>>
+component "Persistence ports\n(MemoryMetadataPort,\nPayloadStoragePort)" as persist <<external>>
+component "RuntimeEventProducer\n(emits COMPRESSION_NOTE)" as ep <<external>>
+component "Workspace pane\n(/drafts, /subagents reads)" as ws <<external>>
+
+factory --> backends : MemoryRoutePlan.for_context()
+backends --> contracts : MemoryScope.for_user() /\nfor_agent() / for_organization()
+backends --> policy : evaluate path policy\nbefore each access
+policy --> contracts : MemoryAccessRequest /\nMemoryPolicyDecision
+backends --> persist : list_items / upsert_item
+sub_trace --> persist : SubagentStorePort projection
+
+t_bud ..> summ : trigger when budget exceeded
+summ --> ep : COMPRESSION_NOTE\n(redacted metrics)
+summ --> persist : ContextPayloadRecord\n(OFFLOAD strategy)
+
+ws --> sub_trace
+ws --> backends : /drafts/, /subagents/\n— routed virtual paths
+
+note bottom of mem_pkg
+  Three scopes are tenant-isolated via
+  MemoryScope namespace. Path-policy default
+  forbids writes to /policies/* by anyone
+  except the APPLICATION actor (i.e. only
+  the runtime itself can mutate org policy).
+  Top-level legacy /agent_runtime/memory/
+  is empty; this is the live memory module.
+end note
+
+@enduml

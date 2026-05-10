@@ -1,0 +1,97 @@
+@startuml 11-cross-cutting
+title C8b — Cross-cutting (observability, budgets, pricing, retention, deployment)
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle folder
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+
+package "agent_runtime/observability/" as obs_pkg #F0F0F0 {
+  [tracing.py\n(RuntimeTracer, TraceContext,\nTraceNames.RUNTIME_INVOKE,\nidentity_hash, event_id)] as o_trace
+  [redaction.py\n(ObservabilityRedactor —\nsensitive key/value patterns;\nallow-list user content keys)] as o_redact
+  [logging.py + http_logging.py\n(RequestContextMiddleware,\nstructured JSON, trace_id)] as o_log
+  [otel.py\n(TelemetryBootstrap, instrument\nfastapi + httpx)] as o_otel
+  [usage_attribution.py\n(per-user/org/connector tokens)] as o_usage
+  [approval_metrics.py] as o_appr_m
+  [audit_chain.py\n(immutable hash-chain over audit log)] as o_chain
+  [db_statement_metrics.py] as o_dbm
+  [constants.py\n(Keys, UserContentKeys,\nPatterns.SENSITIVE_KEY/VALUE)] as o_const
+}
+
+package "agent_runtime/budgets/" as bud_pkg #F0F0F0 {
+  [charger.py\nBudgetCharger.charge_run()\n— CAS-based, idempotent] as b_chr
+  [enforcer.py\n(pre-execution policy check)] as b_enf
+  [estimator.py\n(forecast tokens / cost)] as b_est
+  [reservations.py\n(hold tokens during run)] as b_res
+  [period.py\n(daily / monthly windows)] as b_per
+}
+
+package "agent_runtime/pricing/" as pri_pkg #F0F0F0 {
+  [calculator.py\nCostCalculator.compute()\n(integer-only micro-USD,\nbanker's rounding)] as p_calc
+  [catalog.py\nModelPricingCatalog\n(input / output / cached_input)] as p_cat
+  [seed_loader.py + seeds/] as p_seed
+}
+
+package "agent_runtime/retention/" as ret_pkg #F0F0F0 {
+  [policy_resolver.py\nRetentionPolicyResolver — walks\nCONVERSATION > ASSISTANT >\nUSER > ORG > default;\nResolvedPolicy(kind, ttl, scope)] as r_resolver
+}
+
+package "agent_runtime/deployment/" as dep_pkg #F0F0F0 {
+  [profile.py\nDeploymentProfile\n{saas_multi_tenant,\n single_tenant_managed,\n single_tenant_self_hosted,\n development}\n+ DeploymentFeatureToggles\n(enforce_rls, require_kms_token_vault,\nrequire_field_level_encryption,\nallow_self_signup, dev_auth_bypass_allowed,\nsiem_export_required, …)] as d_prof
+  [resolve_or_exit() / log_profile() /\ntoggles_hash()] as d_res
+}
+
+' --- External consumers ---
+component "Worker handlers + jobs" as wkr <<external>>
+component "RuntimeApiService" as svc <<external>>
+component "RuntimeEventProducer" as ep <<external>>
+component "Agent Runtime Core\n(execution + capabilities)" as core <<external>>
+component "FastAPI app + lifespan" as app <<external>>
+component "Persistence ports\n(audit, telemetry, retention,\ntool_budgets)" as persist <<external>>
+
+' --- Observability fan-in ---
+core --> o_trace
+core --> o_redact
+ep --> o_redact : payload + metadata redaction
+app --> o_log
+app --> o_otel
+o_trace --> o_otel
+svc --> o_usage
+svc --> o_appr_m
+svc --> o_chain : audit chain append
+o_chain --> persist : AuditLogRecord
+o_dbm ..> persist
+
+' --- Budget + pricing flow ---
+wkr --> b_chr : post-run charge
+b_chr --> p_calc : compute(usage, pricing)
+p_calc --> p_cat
+p_cat --> p_seed
+b_chr --> persist : budget rows + invariant
+b_enf --> persist : pre-run policy + reservation
+svc --> b_enf
+svc --> b_est
+b_res --> b_per
+
+' --- Retention ---
+wkr --> r_resolver : retention sweep loop
+r_resolver --> persist : tombstone messages,\nevents, payloads, memory items
+
+' --- Deployment ---
+app --> d_res : resolve_or_exit()\nat startup
+d_res --> d_prof
+svc ..> d_prof : feature toggles\n(allow_embedded_provider_keys,\nrequire_*)
+core ..> d_prof
+d_prof ..> persist : default_retention_days\n(seed for r_resolver)
+
+note bottom of obs_pkg
+  Redaction is enforced on every event:
+  RuntimeEventEnvelope payload + metadata
+  pass through ObservabilityRedactor on
+  field validation. The audit chain in
+  audit_chain.py provides tamper-evident
+  append-only logging for compliance.
+end note
+
+@enduml
