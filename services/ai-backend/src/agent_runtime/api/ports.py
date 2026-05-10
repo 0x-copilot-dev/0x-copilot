@@ -24,9 +24,22 @@ from runtime_api.schemas import (
     WorkspaceDefaultsRecord,
 )
 from agent_runtime.persistence.records import (
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetWithState,
+    ChargeOutcome,
+    CompressionEventRecord,
+    ModelPricingRecord,
+    RetentionPolicyRecord,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
     ToolBudgetRecord,
+    UsageConversationAggregateRecord,
+    UsageDailyConnectorRow,
+    UsageDailyOrgRow,
+    UsageDailyUserRow,
 )
 
 
@@ -334,6 +347,309 @@ class PersistencePort(Protocol):
         :class:`ToolBudgetMiddleware` performs its own most-specific-wins
         resolution against this snapshot.
         """
+
+    # ------------------------------------------------------------------
+    # Usage + pricing (B1, B2, B3, B4).
+    #
+    # Sync mirror of :class:`AsyncPersistencePort`'s usage surface, kept
+    # in lockstep so the bridge in ``runtime_adapters.async_wrappers``
+    # can wrap each call without ``# type: ignore``. Idempotency rules
+    # match the async port: ``record_run_usage`` on ``run_id``,
+    # ``record_model_call_usage`` on the row's UUID id.
+    # ------------------------------------------------------------------
+
+    def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+        """Idempotent write of a per-run usage row (B1)."""
+
+    def record_model_call_usage(self, record: RuntimeModelCallUsageRecord) -> None:
+        """Append a per-LLM-call usage row (B2)."""
+
+    def update_run_usage_cost(
+        self,
+        *,
+        run_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        """Stamp computed cost onto an existing run-usage row (B3)."""
+
+    def update_model_call_usage_cost(
+        self,
+        *,
+        usage_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        """Stamp computed cost onto an existing per-call usage row (B3)."""
+
+    def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+        """Insert or update a pricing row keyed by (provider, model, region) (B3).
+
+        Implementations close the previous active row by setting
+        ``effective_until`` when a row with a later ``effective_from``
+        replaces it, so the partial unique index on ``effective_until IS
+        NULL`` stays satisfied.
+        """
+
+    def lookup_pricing(
+        self,
+        *,
+        provider: str,
+        model_name: str,
+        region: str,
+        at: datetime,
+    ) -> ModelPricingRecord | None:
+        """Return the pricing row in effect for ``at`` or ``None`` (B3)."""
+
+    def list_runs_missing_cost(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run-usage rows where ``cost_micro_usd IS NULL`` for backfill (B3)."""
+
+    def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        """Idempotent UPSERT of one daily per-user rollup row (B4)."""
+
+    def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        """Idempotent UPSERT of one daily per-org rollup row (B4)."""
+
+    def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        """Idempotent UPSERT of one daily per-connector rollup row (PR 7.2)."""
+
+    def query_user_daily_usage(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyUserRow]:
+        """Read per-user rollup rows in ``[start_day, end_day]`` (B4)."""
+
+    def query_org_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyOrgRow]:
+        """Read per-org rollup rows in ``[start_day, end_day]`` (B4)."""
+
+    def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyConnectorRow]:
+        """Read per-connector rollup rows in ``[start_day, end_day]`` (PR 7.2)."""
+
+    def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Scan per-LLM-call usage rows for the connector rollup loop +
+        cold-start fallback (PR 7.2).
+
+        ``org_id=None`` is the rollup-loop signal to scan across tenants.
+        """
+
+    def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        """Paginated read across ``runtime_audit_log`` (PR 7.1)."""
+
+    def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ) -> str | None:
+        """Return the connector_slug of the most recent completed tool
+        invocation on ``run_id`` whose ``completed_at`` is strictly before
+        ``before`` (PR 7.2 attribution rule).
+        """
+
+    def query_run_usage(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        """Look up a single run-usage row scoped to org (B4)."""
+
+    def query_run_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        user_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        """Read raw run-usage rows for the rollup loop + cold-start fallback.
+
+        ``org_id=None`` is the rollup-loop signal to scan across tenants.
+        """
+
+    def query_top_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> Sequence[UsageConversationAggregateRecord]:
+        """Return top conversation aggregates by total tokens for the range."""
+
+    def query_model_call_usage_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return per-LLM-call rows for a run, scoped by org (B4 / B5)."""
+
+    def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        """Return the most recently-completed run usage row for a conversation (B5).
+
+        Excludes rows where ``pii_purged_at IS NOT NULL``. Returns ``None``
+        when the conversation has no completed runs yet.
+        """
+
+    def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[CompressionEventRecord]:
+        """Return compression events for a run, ordered by ``created_at`` (B5)."""
+
+    # ------------------------------------------------------------------
+    # Budgets (B7).
+    #
+    # ``lookup_budgets_for_run`` is the hot path on the worker preflight.
+    # ``charge_budget`` is post-run; CAS on ``row_version`` AND idempotency
+    # on ``last_charged_run_id`` mean the same run cannot double-charge
+    # under retry.
+    # ------------------------------------------------------------------
+
+    def lookup_budgets_for_run(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        now: datetime | None = None,
+    ) -> Sequence[BudgetWithState]:
+        """Active budgets matching ``(org_id, user_id)`` plus their state.
+
+        When ``now`` is provided, implementations MUST use it for period
+        window computation instead of wall-clock ``datetime.now()`` so
+        the enforcer keeps one consistent clock across preflight + reserve.
+        """
+
+    def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,  # datetime.date — typed as object to avoid an extra import
+        period_end: object,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now: datetime,
+    ) -> ChargeOutcome:
+        """Apply a charge to a budget's state via CAS UPDATE.
+
+        Returns :class:`ChargeOutcome.IDEMPOTENT_NOOP` when the same
+        ``run_id`` has already been charged, :class:`APPLIED` on a fresh
+        write, and :class:`EXHAUSTED_RETRIES` when row_version drift does
+        not stabilize within the adapter's internal retry budget.
+        """
+
+    def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,  # datetime.date
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now: datetime,
+    ) -> BudgetReservationRecord | None:
+        """Create a pre-flight reservation, idempotent on (budget_id, run_id).
+
+        Returns ``None`` when the run already holds an unconsumed
+        reservation against this budget.
+        """
+
+    def consume_budget_reservation(self, *, reservation_id: str, now: datetime) -> None:
+        """Mark a reservation consumed so the reaper skips it."""
+
+    def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+        """Purge reservations whose ``expires_at < now`` and are unconsumed.
+
+        Returns the number purged, for observability.
+        """
+
+    def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        """List configured budgets for an org (admin endpoint)."""
+
+    def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        """Fetch one budget scoped to an org."""
+
+    def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Insert a new budget."""
+
+    def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Update mutable fields on an existing budget."""
+
+    def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        """Hard-delete a budget (cascades to state + reservations)."""
+
+    # ------------------------------------------------------------------
+    # Retention (C8).
+    #
+    # The cross-tenant sweep methods (``list_retention_orgs``,
+    # ``sweep_retention_kind``) are async-only — they live on
+    # :class:`AsyncPersistencePort` and are called by the worker's
+    # retention sweeper, which runs only against the async backend.
+    # ------------------------------------------------------------------
+
+    def list_retention_policies(
+        self, *, org_id: str
+    ) -> Sequence[RetentionPolicyRecord]:
+        """Return every retention policy for an org (small list, no paging)."""
+
+    def upsert_retention_policy(
+        self, record: RetentionPolicyRecord
+    ) -> RetentionPolicyRecord:
+        """Idempotent insert or update keyed by ``(org_id, scope, resource_id, kind)``."""
+
+    def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        """Remove one retention policy."""
 
 
 @runtime_checkable

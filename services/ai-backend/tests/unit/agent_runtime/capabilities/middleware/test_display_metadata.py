@@ -412,3 +412,520 @@ def test_author_written_template_defaults_synthetic_false() -> None:
 
     template = ToolDisplayTemplate(title_template="Authored title")
     assert template.synthetic is False
+
+
+# --- Phase 3.A receive-side helpers ---------------------------------------
+
+
+def test_wrap_args_schema_extends_with_optional_display_fields() -> None:
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+        wrap_args_schema,
+    )
+
+    class OriginalArgs(BaseModel):
+        query: str
+
+    Wrapped = wrap_args_schema(OriginalArgs)
+
+    # Original field still required.
+    instance = Wrapped(query="Q1 launch")
+    assert instance.query == "Q1 launch"
+    # Display fields default to None.
+    assert getattr(instance, "display_title") is None
+    assert getattr(instance, "display_summary") is None
+
+    # Agent fills them via the wire alias (the underscore-prefixed key).
+    filled = Wrapped(
+        **{
+            "query": "Q1 launch",
+            DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+            DISPLAY_SUMMARY_KEY: "Risk-tagged tickets opened in Q1",
+        }
+    )
+    assert filled.display_title == "Looking up Q1 launch tickets"
+    assert filled.display_summary == "Risk-tagged tickets opened in Q1"
+
+    # JSON-schema (the form the agent sees in its tool block) carries
+    # both fields with their underscore-prefixed names.
+    schema = Wrapped.model_json_schema()
+    assert DISPLAY_TITLE_KEY in schema["properties"]
+    assert DISPLAY_SUMMARY_KEY in schema["properties"]
+    # No max_length cap (PRD §8 — brevity comes from the field
+    # ``description``, not validation rejection).
+    assert "maxLength" not in schema["properties"][DISPLAY_TITLE_KEY]
+    assert "maxLength" not in schema["properties"][DISPLAY_SUMMARY_KEY]
+
+
+def test_wrap_args_schema_with_none_returns_display_only_model() -> None:
+    """Some LangChain tools have no ``args_schema``. The wrap returns a
+    model with just the display fields so the wrap is uniform."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        wrap_args_schema,
+    )
+
+    Wrapped = wrap_args_schema(None)
+    instance = Wrapped()
+    assert getattr(instance, "display_title") is None
+    schema = Wrapped.model_json_schema()
+    assert DISPLAY_TITLE_KEY in schema["properties"]
+
+
+def test_wrap_args_schema_is_idempotent() -> None:
+    """Wrapping a wrapped schema returns the wrapped schema unchanged.
+    Pins the contract that ``build_deep_agent`` (Phase 3.B) can call the
+    wrap on any tools list without double-wrapping."""
+
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_args_schema,
+    )
+
+    class OriginalArgs(BaseModel):
+        query: str
+
+    once = wrap_args_schema(OriginalArgs)
+    twice = wrap_args_schema(once)
+    assert once is twice
+
+
+def test_wrap_args_schema_rejects_unknown_display_keys() -> None:
+    """``extra="forbid"`` on ``_DisplayFields`` prevents typos like
+    ``_display_summery`` from silently dropping the field. The wrap
+    fails loudly during testing rather than degrading at runtime."""
+
+    from pydantic import BaseModel, ValidationError
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_args_schema,
+    )
+
+    class OriginalArgs(BaseModel):
+        query: str
+
+    Wrapped = wrap_args_schema(OriginalArgs)
+    try:
+        Wrapped(query="x", _display_summery="typo")  # type: ignore[call-arg]
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("expected ValidationError on typoed display key")
+
+
+def test_strip_display_splits_args_and_returns_both_keys() -> None:
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+        strip_display,
+    )
+
+    real, display = strip_display(
+        {
+            "query": "Q1 launch",
+            DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+            DISPLAY_SUMMARY_KEY: "Risk-tagged tickets opened in Q1",
+        }
+    )
+    assert real == {"query": "Q1 launch"}
+    assert display == {
+        DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+        DISPLAY_SUMMARY_KEY: "Risk-tagged tickets opened in Q1",
+    }
+
+
+def test_strip_display_backfills_missing_display_keys() -> None:
+    """The wrapped tool's invoke always reads both display keys; backfill
+    so the caller doesn't need a separate guard."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+        strip_display,
+    )
+
+    real, display = strip_display({"query": "x"})
+    assert real == {"query": "x"}
+    assert display == {DISPLAY_TITLE_KEY: None, DISPLAY_SUMMARY_KEY: None}
+
+
+def test_strip_display_tolerates_none_input() -> None:
+    """Defensive: misshaped LangChain invocations may pass ``None``."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+        strip_display,
+    )
+
+    real, display = strip_display(None)
+    assert real == {}
+    assert display == {DISPLAY_TITLE_KEY: None, DISPLAY_SUMMARY_KEY: None}
+
+
+def test_strip_display_drops_non_string_display_values() -> None:
+    """Pydantic should never let a non-string ``_display_*`` reach the
+    wire, but defensive: ``strip_display`` coerces non-strings to None
+    so the projector never has to type-check."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        strip_display,
+    )
+
+    _, display = strip_display({DISPLAY_TITLE_KEY: 42})
+    assert display[DISPLAY_TITLE_KEY] is None
+
+
+# --- agent_display_from_payload ------------------------------------------
+
+
+def test_agent_display_from_payload_reads_args_keys() -> None:
+    """The agent's ``_display_*`` lands at ``payload.args._display_*``
+    (same shape for regular tools and the ``call_mcp_tool`` dispatcher)."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+        agent_display_from_payload,
+    )
+
+    title, summary = agent_display_from_payload(
+        {
+            "tool_name": "search_docs",
+            "args": {
+                "query": "Q1",
+                DISPLAY_TITLE_KEY: "Looking up Q1 docs",
+                DISPLAY_SUMMARY_KEY: "Recent launch documents",
+            },
+        }
+    )
+    assert title == "Looking up Q1 docs"
+    assert summary == "Recent launch documents"
+
+
+def test_agent_display_from_payload_returns_none_when_args_missing() -> None:
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        agent_display_from_payload,
+    )
+
+    title, summary = agent_display_from_payload(
+        {"tool_name": "search_docs"}  # no ``args``
+    )
+    assert title is None and summary is None
+
+
+def test_agent_display_from_payload_treats_empty_strings_as_missing() -> None:
+    """An empty title would render an empty card; treat as absent so the
+    Tier-2 fallback wins."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        agent_display_from_payload,
+    )
+
+    title, _ = agent_display_from_payload(
+        {"args": {"query": "x", DISPLAY_TITLE_KEY: "   "}}
+    )
+    assert title is None
+
+
+def test_agent_display_from_payload_strips_whitespace() -> None:
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        agent_display_from_payload,
+    )
+
+    _, summary = agent_display_from_payload(
+        {"args": {DISPLAY_SUMMARY_KEY: "  Q1 risks  "}}
+    )
+    assert summary == "Q1 risks"
+
+
+def test_agent_display_from_payload_dispatcher_args_top_level() -> None:
+    """For ``call_mcp_tool`` dispatcher events the agent puts
+    ``_display_*`` at the TOP of args, not nested in ``args.arguments``.
+    Pin this explicitly — Phase 3.B's dispatcher wrap depends on it."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        agent_display_from_payload,
+    )
+
+    title, _ = agent_display_from_payload(
+        {
+            "tool_name": "call_mcp_tool",
+            "args": {
+                "server_name": "linear",
+                "tool_name": "list_issues",
+                "arguments": {"query": "Q1"},
+                DISPLAY_TITLE_KEY: "Looking up Q1 Linear tickets",
+            },
+        }
+    )
+    assert title == "Looking up Q1 Linear tickets"
+
+
+# --- Phase 3.B tool-binding wrap -----------------------------------------
+
+
+def test_wrap_tool_with_display_extends_structured_tool_schema() -> None:
+    """``StructuredTool`` is the dominant shape (every custom dataclass
+    adapter goes through ``factory._structured_tool``). The wrap copies
+    the tool with an extended args_schema; existing fields stay required."""
+
+    import asyncio
+
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        wrap_tool_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    received: list[dict[str, object]] = []
+
+    async def _adapter(**kwargs: object) -> str:
+        received.append(kwargs)
+        return f"got query={kwargs['query']!r}"
+
+    tool = StructuredTool.from_function(
+        coroutine=_adapter,
+        name="search_docs",
+        description="Search the document corpus.",
+        args_schema=FakeArgs,
+    )
+
+    wrapped = wrap_tool_with_display(tool)
+
+    # New args_schema accepts both the original required field AND the
+    # display fields (optional, defaulted to None).
+    schema = wrapped.args_schema.model_json_schema()
+    assert "query" in schema["properties"]
+    assert DISPLAY_TITLE_KEY in schema["properties"]
+
+    # Underlying adapter never sees ``_display_*`` — the wrap strips first.
+    result = asyncio.run(
+        wrapped.ainvoke(
+            {
+                "query": "Q1 launch",
+                DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+            }
+        )
+    )
+    assert result == "got query='Q1 launch'"
+    assert received == [{"query": "Q1 launch"}]
+
+
+def test_wrap_tool_with_display_idempotent_via_schema_marker() -> None:
+    """A tool whose args_schema already carries the ``__display_wrapped__``
+    marker is returned unchanged. Pins the contract that
+    ``build_deep_agent`` can call the wrap twice safely (e.g. subagent
+    re-binding the supervisor's tools)."""
+
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    async def _adapter(**kwargs: object) -> str:
+        return ""
+
+    tool = StructuredTool.from_function(
+        coroutine=_adapter,
+        name="t",
+        description="d",
+        args_schema=FakeArgs,
+    )
+
+    once = wrap_tool_with_display(tool)
+    twice = wrap_tool_with_display(once)
+    assert once is twice  # idempotent — second call short-circuits
+
+
+def test_wrap_tool_with_display_returns_unknown_shape_unchanged() -> None:
+    """Anything that isn't a recognised LangChain tool is returned as-is.
+    This is the safety contract — never break a working tool."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class _Bare:
+        name = "bare"
+
+    plain = _Bare()
+    assert wrap_tool_with_display(plain) is plain
+    assert wrap_tool_with_display("not a tool") == "not a tool"
+    assert wrap_tool_with_display(None) is None
+
+
+def test_wrap_tool_with_display_wraps_base_tool_via_delegation() -> None:
+    """Generic ``BaseTool`` subclasses (e.g. ``DuckDuckGoSearchResults``)
+    don't expose ``func`` / ``coroutine`` for ``model_copy`` to rewrite.
+    The wrap creates a NEW ``StructuredTool`` whose coroutine delegates
+    to the original via ``ainvoke(stripped_dict)``."""
+
+    import asyncio
+
+    from langchain_core.tools import BaseTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        wrap_tool_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    received: list[dict[str, object]] = []
+
+    class FakeBaseTool(BaseTool):
+        name: str = "fake"
+        description: str = "Fake tool that records what it received."
+        args_schema: type[BaseModel] = FakeArgs
+
+        def _run(self, query: str) -> str:  # type: ignore[override]
+            return f"sync got query={query!r}"
+
+        async def _arun(self, query: str) -> str:  # type: ignore[override]
+            received.append({"query": query})
+            return f"got query={query!r}"
+
+    tool = FakeBaseTool()
+
+    wrapped = wrap_tool_with_display(tool)
+    # Wrap returns a NEW StructuredTool — different instance, same name.
+    assert wrapped is not tool
+    assert wrapped.name == "fake"
+
+    schema = wrapped.args_schema.model_json_schema()
+    assert DISPLAY_TITLE_KEY in schema["properties"]
+
+    result = asyncio.run(
+        wrapped.ainvoke({"query": "x", DISPLAY_TITLE_KEY: "Custom Title"})
+    )
+    assert result == "got query='x'"
+    assert received == [{"query": "x"}]
+
+
+def test_wrap_tools_with_display_returns_a_new_list_per_tool() -> None:
+    """``wrap_tools_with_display`` is the entry point ``build_deep_agent``
+    calls. It must return a new list with each entry wrapped (or returned
+    unchanged for unknown shapes)."""
+
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tools_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    async def _adapter(**kwargs: object) -> str:
+        return ""
+
+    tool_a = StructuredTool.from_function(
+        coroutine=_adapter, name="a", description="a", args_schema=FakeArgs
+    )
+    tool_b = StructuredTool.from_function(
+        coroutine=_adapter, name="b", description="b", args_schema=FakeArgs
+    )
+
+    wrapped = wrap_tools_with_display([tool_a, tool_b])
+    assert isinstance(wrapped, list)
+    assert len(wrapped) == 2
+    # Each is a fresh wrapped copy.
+    assert wrapped[0] is not tool_a
+    assert wrapped[1] is not tool_b
+    # Both args_schemas carry the marker.
+    assert getattr(wrapped[0].args_schema, "__display_wrapped__", False) is True
+    assert getattr(wrapped[1].args_schema, "__display_wrapped__", False) is True
+
+
+def test_wrap_tool_preserves_sync_func_when_present() -> None:
+    """A tool with a sync ``func`` (rare in our codebase but valid in
+    LangChain) gets its sync path wrapped too — ``_display_*`` never
+    reaches the underlying function."""
+
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        wrap_tool_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    received: list[dict[str, object]] = []
+
+    def _sync_adapter(**kwargs: object) -> str:
+        received.append(kwargs)
+        return ""
+
+    tool = StructuredTool.from_function(
+        func=_sync_adapter,
+        name="sync_tool",
+        description="d",
+        args_schema=FakeArgs,
+    )
+
+    wrapped = wrap_tool_with_display(tool)
+    wrapped.invoke({"query": "x", DISPLAY_TITLE_KEY: "ignored by underlying func"})
+
+    assert received == [{"query": "x"}]
+
+
+def test_wrap_tool_does_not_break_invocation_when_agent_omits_display() -> None:
+    """Agent leaves ``_display_*`` as ``None`` — the wrap still strips
+    them out (they were defaulted to ``None`` by the wrapped schema) and
+    the underlying tool runs normally. Pin the no-op path."""
+
+    import asyncio
+
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class FakeArgs(BaseModel):
+        query: str
+
+    received: list[dict[str, object]] = []
+
+    async def _adapter(**kwargs: object) -> str:
+        received.append(kwargs)
+        return "ok"
+
+    tool = StructuredTool.from_function(
+        coroutine=_adapter,
+        name="t",
+        description="d",
+        args_schema=FakeArgs,
+    )
+
+    wrapped = wrap_tool_with_display(tool)
+    asyncio.run(wrapped.ainvoke({"query": "x"}))
+    # Underlying adapter received only ``query`` — no display keys.
+    assert received == [{"query": "x"}]

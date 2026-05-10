@@ -175,12 +175,22 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     """Build a Deep Agents graph with an explicit, version-pinned API call."""
 
     _ensure_web_harness_profiles_registered()
+    # Polish-removal Phase 3.B (docs/refactor/01-presentation-polish-removal.md):
+    # wrap every bound tool's args_schema so the agent's tool block carries
+    # the optional ``_display_*`` fields and the wrapped invocation strips
+    # them before delegating to the underlying tool implementation.
+    # Idempotent — safe to call on a tools list that's already been wrapped
+    # (e.g. subagent re-binding).
+    from agent_runtime.capabilities.middleware import (  # noqa: PLC0415
+        wrap_tools_with_display,
+    )
+
     kwargs: dict[str, object] = {
         "model": build_chat_model(
             request.model_config,
             extra_kwargs=request.extra_model_kwargs,
         ),
-        "tools": list(request.tools),
+        "tools": wrap_tools_with_display(request.tools),
         "system_prompt": request.system_prompt,
         "subagents": list(request.subagents) or None,
         "skills": list(request.skill_directories) or None,

@@ -1,19 +1,21 @@
 """Deterministic presentation templates that render UI cards without an LLM call.
 
-`PresentationGenerator` consults these first; the LLM only ever runs as a
-polish layer on top of an already-complete envelope. The resolution chain is:
+Polish-removal Phase 4 (docs/refactor/01-presentation-polish-removal.md):
+the LLM polish path is gone. ``PresentationGenerator`` resolution is now
+entirely deterministic:
 
-1. `DeterministicTemplates` for events whose presentation is fully derivable
+1. ``DeterministicTemplates`` for events whose presentation is fully derivable
    from the payload (approval / auth / error / tool_call_delta).
-2. `ToolTemplateRenderer` for events whose tool author registered a
-   `ToolDisplayTemplate` — fills title/summary placeholders from the payload.
-3. `PayloadProjector` for `TOOL_RESULT` / `TOOL_CALL_COMPLETED` — synthesizes
-   `result_preview` rows from the tool's output payload (either via the
-   tool's declared `result_preview_path` / `result_preview_row`, or via
-   field-name heuristics on common shapes). Runs after the tool template so
-   declared text wins, but the projector still fills the body if the
-   template didn't.
-4. Minimal envelope fallback — humanized tool name + status. Always returns
+2. ``ToolTemplateRenderer`` for events whose tool author registered a
+   ``ToolDisplayTemplate`` (or the MCP descriptor synthesiser built one) —
+   fills title/summary placeholders from the payload.
+3. ``PayloadProjector`` for ``TOOL_RESULT`` / ``TOOL_CALL_COMPLETED`` —
+   synthesizes ``result_preview`` rows from the tool's output payload
+   (either via the tool's declared ``result_preview_path`` /
+   ``result_preview_row``, or via field-name heuristics on common shapes).
+4. Agent-supplied ``_display_*`` (Phase 3) overrides synthetic templates
+   and fills the minimal envelope.
+5. Minimal envelope fallback — humanized tool name + status. Always returns
    something so a card never renders empty.
 """
 
@@ -23,36 +25,10 @@ import json
 from collections.abc import Mapping
 from string import Formatter
 
-from pydantic import BaseModel, Field
-
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from runtime_api.schemas import RuntimeApiEventType
 
 JsonObject = dict[str, object]
-
-
-class PresentationPreviewRowOutput(BaseModel):
-    """Structured-output schema for a single result preview row."""
-
-    title: str = Field(min_length=1, max_length=120)
-    subtitle: str | None = Field(default=None, max_length=240)
-    url: str | None = Field(default=None, max_length=500)
-    badge: str | None = Field(default=None, max_length=40)
-
-
-class PresentationOutput(BaseModel):
-    """Structured-output schema returned by the small presentation LLM.
-
-    Only fields the LLM polish layer is responsible for. ``status_label``,
-    ``kind``, ``group_key`` and ``debug_label`` are filled deterministically
-    by the generator and frozen across the patch event.
-    """
-
-    title: str = Field(min_length=1, max_length=80)
-    summary: str | None = Field(default=None, max_length=240)
-    primary_entity: str | None = Field(default=None, max_length=80)
-    action_label: str | None = Field(default=None, max_length=60)
-    result_preview: list[PresentationPreviewRowOutput] = Field(default_factory=list)
 
 
 class _StatusLabel:

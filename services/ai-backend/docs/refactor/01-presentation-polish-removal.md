@@ -269,19 +269,41 @@ The phasing below is designed so each phase is independently shippable, behavior
 
 ### Phase 3 — Add `_display_*` Tier 3 (2-3 days)
 
-**Goal:** Long-tail coverage. When the deterministic synthesis would produce a generic title (e.g. `"Run workflow"`), the agent fills `_display_title` / `_display_summary` on the same call as the tool args. Zero extra LLM call; output-token budget on the primary model only when needed.
+**Note on scope:** Phase 3 splits the same way Phase 2 did. **3.A receive-side** ships the helpers + the Tier-3 read in `PresentationGenerator` (pure functions, easy to test, zero risk to existing code). **3.B tool-wrap** is the more invasive change that wraps every bound tool's `args_schema` so the agent's emissions actually reach the wire. 3.A is shippable on its own — it makes the receive-side ready, and an end-to-end test that simulates the agent emitting `_display_*` proves the path works.
+
+**Goal of 3.A:** Pure helpers + Tier-3 read. Long-tail coverage starts working the moment 3.B wires the wrap into bind time.
 
 **Changes:**
 
-1. In `display_metadata.py`, add `wrap_args_schema(args_schema)` → returns a Pydantic model that extends `args_schema` with two optional fields: `_display_title: str | None` and `_display_summary: str | None`. **No `max_length` caps.** Both have an `alias` and `populate_by_name=True` so the LLM can emit either form. Brevity comes from the field `description` + examples in the JSON schema (see §9), not from validation rejection or runtime truncation.
-2. In `display_metadata.py`, add `strip_display(args)` → `(real_args, display_dict)`.
-3. In [`deep_agent_builder.py`](../../src/agent_runtime/execution/deep_agent_builder.py): wrap every tool's `args_schema` before binding. The wrapper closure also calls a hook to thread the stripped `_display_*` values onto the next `tool_call` event payload. (Concretely: store on a `ContextVar` keyed by `tool_call_id`, read in `stream_tools.py` when projecting the event.)
-4. In [`stream_tools.py`](../../src/runtime_worker/stream_tools.py): when emitting a `TOOL_CALL` / `TOOL_CALL_STARTED` event, pull the `_display_*` from the ContextVar (if present) and add them to `payload`.
-5. In `PresentationGenerator`: add a Tier-3 step between `tool_template` and `minimal_envelope` that reads `payload["_display_title"]` / `payload["_display_summary"]`. Tier 3 only wins when the tool template was synthesized (`synthetic=True`) or absent.
+1. In `display_metadata.py`, add `wrap_args_schema(args_schema) → type[BaseModel]` — returns a Pydantic model that extends `args_schema` with two optional fields: `_display_title: str | None` and `_display_summary: str | None`. **No `max_length` caps** (per §8 — brevity comes from the field `description` shown to the model, not from rejection / truncation). Both have an `alias` and `populate_by_name=True` so the LLM can emit either form. `extra="forbid"` is preserved if the original had it.
+2. In `display_metadata.py`, add `strip_display(args) → (real_args, display_dict)` — splits a wrapped-args dict into the original args and the `_display_*` payload.
+3. In `PresentationGenerator`: add a Tier-3 read between Tier-2 (tool template) and the minimal-envelope fallback. Reads `payload.args._display_title` / `payload.args._display_summary` (consistent for both regular tools and the `call_mcp_tool` dispatcher — for dispatcher events the agent puts `_display_*` at the top of `args`, **not** inside `args.arguments`). Tier-3 wins only when the matched template has `synthetic=True` (or no template was found). Author-written templates always beat the agent.
+4. Tests: helper round-trip + Tier-3 wins for synthetic + Tier-3 ignored for author-written + end-to-end TOOL*CALL event with simulated `\_display*\*` in args renders the agent-supplied title.
 
-**Risk:** Medium-High. Touches the tool-binding layer; an args-schema wrap that goes wrong silently breaks every tool call. Validation: every test in `tests/unit/agent_runtime/capabilities/tools/` should pass unmodified after this phase.
+**Observable change in production:** none yet. No tool's `args_schema` is wrapped, so the agent doesn't see `_display_*` in its tool block and never emits them. The receive-side is correct and tested; 3.B closes the loop.
 
-**Rollback:** Don't wrap; don't read `_display_*` in `stream_tools.py`. The Tier-2 chain still works.
+**Risk:** Low. Pure helpers + a small read in the existing chain. No tool binding touched.
+
+**Rollback:** Revert the Tier-3 read in `PresentationGenerator`. Helpers remain importable but unused.
+
+### Phase 3.B — Wire `_display_*` into tool binding (2-3 days)
+
+**Goal:** Every tool the agent sees has `_display_title` / `_display_summary` in its JSON schema, and the wrapped invoke strips them before delegating to the underlying tool function.
+
+**Why this is its own phase:** the LangChain tool-binding layer has multiple shapes — `BaseTool` subclasses, `StructuredTool` instances, our custom dataclasses (`CallMcpTool`, `LoadMcpServerTool`), and connector-specific wrappers (`ToolBudgetGuardedTool`, `CitationCapturingTool`). A naive wrap breaks one of them. The safe approach is a per-tool-shape strategy with a fallback for unknown types.
+
+**Changes:**
+
+1. In `display_metadata.py`, add `wrap_tool_with_display(tool) → tool_like` — strategy-pattern wrap that handles each tool shape (most cases via `StructuredTool.copy(update={...})`; custom dataclasses via dataclass replace).
+2. In `build_deep_agent` ([deep_agent_builder.py](../../src/agent_runtime/execution/deep_agent_builder.py)): apply `wrap_tool_with_display` to every tool in `request.tools` before passing to `create_deep_agent`. Idempotent (no-op if already wrapped).
+3. Update `CallMcpTool` and `LoadMcpServerTool` to accept and strip `_display_*` from the parsed input before dispatching the actual MCP RPC.
+4. Tests: each tool-shape wraps correctly; underlying tool function never receives `_display_*`; agent's `_display_*` appears in the emitted `TOOL_CALL` event payload's `args`; end-to-end run of a wrapped fake tool with simulated agent input renders the agent-supplied title.
+
+**Observable change:** the agent's tool block in the system prompt grows by ~30 input tokens per tool (the two new optional fields); for ambiguous tools where the synthesised title would be too generic the agent fills `_display_*` and the card title comes out personalised. Polish still runs as a fallback for tools where neither Tier-2 nor Tier-3 fires.
+
+**Risk:** Medium-High. Touches every tool the agent sees. Mitigation: per-tool-shape strategy with explicit fallback, every existing tool test must pass unmodified, plus a new "underlying tool never sees `_display_*`" test per shape.
+
+**Rollback:** Don't apply the wrap in `build_deep_agent`. Helpers remain importable but unused.
 
 ### Phase 4 — Delete the polish path (1 day)
 

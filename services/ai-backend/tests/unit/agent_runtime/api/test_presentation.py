@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 
 from agent_runtime.api.events import RuntimeEventProducer
@@ -16,42 +15,29 @@ from runtime_api.schemas import (
 )
 
 
-async def resolve_presentation(
+def resolve_presentation(
     generator: PresentationGenerator,
     *,
-    run: RunRecord,
     event_type: RuntimeApiEventType,
-    source: StreamEventSource,
     payload: Mapping[str, object],
     metadata: Mapping[str, object],
     timeline_fields: Mapping[str, object],
 ) -> Mapping[str, object] | None:
-    """Mirror the producer's split: preliminary, then conditional enrichment.
+    """Single-shot deterministic presentation resolution.
 
-    Production splits the call so the SSE stream gets a card immediately
-    (preliminary, sync) and the LLM polish lands as a follow-up
-    ``presentation_updated`` event (enrich, async, off the hot path).
-    Tests exercise the same composition through this helper instead of a
-    single combined wrapper.
+    Polish-removal Phase 4 (docs/refactor/01-presentation-polish-removal.md):
+    the producer's old "preliminary then optional async enrichment" split
+    is gone — the deterministic chain produces the final envelope
+    synchronously. This helper just wraps the single call so existing test
+    bodies stay readable.
     """
 
-    preliminary = generator.preliminary_presentation_for_event(
+    return generator.preliminary_presentation_for_event(
         event_type=event_type,
         payload=payload,
         metadata=metadata,
         timeline_fields=timeline_fields,
     )
-    if not generator.event_eligible_for_enrichment(event_type, payload, metadata):
-        return preliminary
-    enriched = await generator.enrich_presentation_for_event(
-        run=run,
-        event_type=event_type,
-        source=source,
-        payload=payload,
-        metadata=metadata,
-        timeline_fields=timeline_fields,
-    )
-    return enriched or preliminary
 
 
 class RecordingPersistence:
@@ -130,6 +116,9 @@ def run_record() -> RunRecord:
             trace_id="trace_123",
         ),
     )
+
+
+# --- Schema / projector tests --------------------------------------------
 
 
 def test_runtime_event_presentation_sanitizes_text() -> None:
@@ -214,74 +203,19 @@ def test_ask_a_question_approval_payload_preserves_question_fields() -> None:
     ]
 
 
-async def test_presentation_generator_uses_valid_llm_json() -> None:
-    generator = PresentationGenerator(
-        presenter=lambda _: {
-            "title": "Searched the web",
-            "summary": "Found official Slack MCP setup sources.",
-            "status_label": "Done",
-            "kind": "result",
-            "result_preview": [
-                {
-                    "title": "Slack Developer Docs",
-                    "subtitle": "Official MCP overview",
-                    "url": "https://docs.slack.dev/ai/slack-mcp-server/",
-                    "badge": "Official",
-                }
-            ],
-            "debug_label": "Tool details",
-        }
-    )
+# --- Deterministic chain --------------------------------------------------
 
-    presentation = await resolve_presentation(
+
+def test_approval_requested_uses_deterministic_template() -> None:
+    """``APPROVAL_REQUESTED`` is in ``DeterministicTemplates.HANDLED`` so it
+    always renders from the deterministic template — never via tool-template
+    lookup or minimal envelope. No raw protocol identifiers leak."""
+
+    generator = PresentationGenerator()
+
+    presentation = resolve_presentation(
         generator,
-        run=run_record(),
-        event_type=RuntimeApiEventType.TOOL_RESULT,
-        source=StreamEventSource.RUNTIME,
-        payload={
-            "tool_name": "web_search",
-            "call_id": "call_123",
-            "status": "completed",
-            "output": {"results": ["redacted"]},
-        },
-        metadata={},
-        timeline_fields={"status": "completed", "span_id": "call_123"},
-    )
-
-    assert presentation == {
-        "title": "Searched the web",
-        "summary": "Found official Slack MCP setup sources.",
-        "status_label": "Done",
-        "kind": "result",
-        "result_preview": [
-            {
-                "title": "Slack Developer Docs",
-                "subtitle": "Official MCP overview",
-                "url": "https://docs.slack.dev/ai/slack-mcp-server/",
-                "badge": "Official",
-            }
-        ],
-        "debug_label": "Tool details",
-        "group_key": "call_123",
-    }
-
-
-async def test_approval_requested_uses_deterministic_template_without_calling_llm() -> (
-    None
-):
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
-
-    generator = PresentationGenerator(presenter=recording_presenter)
-
-    presentation = await resolve_presentation(
-        generator,
-        run=run_record(),
         event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
-        source=StreamEventSource.RUNTIME,
         payload={
             "approval_id": "approval_123",
             "server_name": "mcp_clickup_com",
@@ -295,54 +229,20 @@ async def test_approval_requested_uses_deterministic_template_without_calling_ll
     assert presentation is not None
     assert presentation["status_label"] == "Waiting for permission"
     assert presentation["kind"] == "approval"
-    # Tool name humanized in the title, no raw protocol identifiers leaked.
     assert "Clickup Resolve Assignees" in presentation["title"]
     assert "mcp_clickup_com" not in str(presentation)
     assert "clickup_resolve_assignees" not in str(presentation)
-    # The LLM presenter must not be consulted for deterministic event types.
-    assert presenter_calls == []
 
 
-async def test_presentation_context_uses_display_facts_not_raw_protocol_names() -> None:
+def test_tool_call_completed_returns_no_presentation() -> None:
+    """``TOOL_CALL_COMPLETED`` is outside ``_PRESENTATION_TARGET_EVENT_TYPES``
+    (the FE renders the prior ``TOOL_CALL`` / ``TOOL_RESULT`` envelope, not
+    a separate completed card)."""
+
     generator = PresentationGenerator()
-    presentation = await resolve_presentation(
+    presentation = resolve_presentation(
         generator,
-        run=run_record(),
-        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
-        source=StreamEventSource.RUNTIME,
-        payload={
-            "approval_id": "approval_123",
-            "server_name": "mcp_clickup_com",
-            "tool_name": "clickup_resolve_assignees",
-            "display_name": "ClickUp",
-            "read_only": True,
-            "risk_level": "low",
-            "status": "pending",
-        },
-        metadata={},
-        timeline_fields={"status": "pending", "span_id": "span_123"},
-    )
-
-    assert presentation is not None
-    presentation_str = str(presentation)
-    assert "mcp_clickup_com" not in presentation_str
-    assert "clickup_resolve_assignees" not in presentation_str
-
-
-async def test_tool_call_completed_does_not_generate_weaker_presentation() -> None:
-    generator = PresentationGenerator(
-        presenter=lambda _: {
-            "title": "Weak completion",
-            "status_label": "Done",
-            "kind": "progress",
-        }
-    )
-
-    presentation = await resolve_presentation(
-        generator,
-        run=run_record(),
         event_type=RuntimeApiEventType.TOOL_CALL_COMPLETED,
-        source=StreamEventSource.RUNTIME,
         payload={
             "tool_name": "web_search",
             "call_id": "call_123",
@@ -355,72 +255,20 @@ async def test_tool_call_completed_does_not_generate_weaker_presentation() -> No
     assert presentation is None
 
 
-async def test_tool_result_context_includes_preview_rows() -> None:
-    captured_prompt = ""
-
-    def presenter(prompt: str) -> dict[str, object]:
-        nonlocal captured_prompt
-        captured_prompt = prompt
-        return {
-            "title": "Searched sources",
-            "status_label": "Done",
-            "kind": "result",
-            "result_preview": [
-                {
-                    "title": "Slack Developer Docs",
-                    "subtitle": "Official docs",
-                    "url": "https://docs.slack.dev/ai/slack-mcp-server/",
-                    "badge": "Official",
-                }
-            ],
-        }
-
-    generator = PresentationGenerator(presenter=presenter)
-    presentation = await resolve_presentation(
-        generator,
-        run=run_record(),
-        event_type=RuntimeApiEventType.TOOL_RESULT,
-        source=StreamEventSource.RUNTIME,
-        payload={
-            "tool_name": "web_search",
-            "call_id": "call_123",
-            "status": "completed",
-            "output": {
-                "results": [
-                    {
-                        "title": "Slack Developer Docs",
-                        "snippet": "Official docs",
-                        "link": "https://docs.slack.dev/ai/slack-mcp-server/",
-                    }
-                ]
-            },
-        },
-        metadata={},
-        timeline_fields={"status": "completed", "span_id": "call_123"},
-    )
-
-    assert presentation is not None
-    assert presentation["result_preview"][0]["title"] == "Slack Developer Docs"
-    assert '"result_preview"' in captured_prompt
-    assert "Slack Developer Docs" in captured_prompt
+# --- RuntimeEventProducer (deterministic only — no polish) ---------------
 
 
-async def test_event_producer_attaches_presentation_metadata() -> None:
+async def test_event_producer_attaches_presentation_synchronously() -> None:
+    """The producer attaches the deterministic presentation in the same
+    event append. There is no follow-up ``PRESENTATION_UPDATED`` envelope
+    after Phase 4 — the chain is synchronous."""
+
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    generator = PresentationGenerator(
-        presenter=lambda _: {
-            "title": "Searched the web",
-            "summary": "Found official sources.",
-            "status_label": "Done",
-            "kind": "result",
-            "debug_label": "Tool details",
-        }
-    )
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=generator,
+        presentation_generator=PresentationGenerator(),
     )
 
     envelope = await producer.append_api_event(
@@ -434,75 +282,24 @@ async def test_event_producer_attaches_presentation_metadata() -> None:
         },
     )
 
-    # Preliminary presentation is attached synchronously so the SSE stream
-    # gets a card immediately. The minimal-envelope path always produces
-    # title + status + kind from the event lifecycle.
     assert envelope.presentation is not None
     assert envelope.presentation.status_label == "Done"
     assert envelope.presentation.kind == "result"
     assert envelope.event_type == RuntimeApiEventType.TOOL_RESULT
-    preliminary_title = envelope.presentation.title
-
-    # Background polish task patches body fields only via PRESENTATION_UPDATED.
-    # Title / status_label / kind are owned by the event lifecycle and stay
-    # frozen across the patch.
-    await producer.flush_pending_enrichment(run_id=envelope.run_id)
-    assert len(event_store.drafts) == 2
-    patch = event_store.drafts[1]
-    assert patch.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
-    assert patch.presentation is not None
-    assert patch.presentation.title == preliminary_title
-    assert patch.presentation.status_label == "Done"
-    assert patch.presentation.kind == "result"
-    assert patch.presentation.summary == "Found official sources."
-    assert patch.payload["call_id"] == "call_123"
-    # Patch list names the body fields the polish layer changed.
-    assert "summary" in patch.payload["patches"]
-    assert persistence.latest_sequence_no == 2
-
-
-async def test_event_producer_skips_enrichment_for_deterministic_event_types() -> None:
-    event_store = RecordingEventStore()
-    persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
-
-    producer = RuntimeEventProducer(
-        persistence=persistence,
-        event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
-    )
-
-    await producer.append_api_event(
-        run=run_record(),
-        source=StreamEventSource.RUNTIME,
-        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
-        payload={
-            "approval_id": "approval_123",
-            "tool_name": "gmail_send",
-            "status": "pending",
-        },
-    )
-    await producer.flush_pending_enrichment()
-
+    # Single envelope written — no async polish patch event follows.
     assert len(event_store.drafts) == 1
-    assert presenter_calls == []  # No LLM call for deterministic types.
+    assert persistence.latest_sequence_no == 1
 
 
-async def test_event_producer_skips_enrichment_when_tool_template_renders() -> None:
+async def test_event_producer_uses_tool_template_when_lookup_resolves() -> None:
+    """When the tool registry resolves a template (via ``tool_display_lookup``)
+    the producer renders it from the payload; the minimal envelope is never
+    consulted."""
+
     from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
-
     template = ToolDisplayTemplate(
         title_template="Searching for {query}",
         result_title_template="Found {count} results",
@@ -511,7 +308,6 @@ async def test_event_producer_skips_enrichment_when_tool_template_renders() -> N
         persistence=persistence,
         event_store=event_store,
         presentation_generator=PresentationGenerator(
-            presenter=recording_presenter,
             tool_display_lookup=lambda name: template if name == "web_search" else None,
         ),
     )
@@ -527,36 +323,24 @@ async def test_event_producer_skips_enrichment_when_tool_template_renders() -> N
             "count": 7,
         },
     )
-    await producer.flush_pending_enrichment()
 
     assert envelope.presentation is not None
     assert envelope.presentation.title == "Found 7 results"
     assert len(event_store.drafts) == 1
-    assert presenter_calls == []
 
 
 async def test_event_producer_resolves_tool_template_via_context_var_when_no_instance_lookup() -> (
     None
 ):
-    """Phase 1 of the polish-removal refactor — the per-run handler binds
-    ``ToolDisplayLookupContext`` so the producer's default-constructed
-    ``PresentationGenerator`` (no instance-level lookup) still resolves
-    registered tool templates and skips the LLM polish path.
-
-    See docs/refactor/01-presentation-polish-removal.md §4 (Phase 1).
-    """
+    """Phase 1 — the per-run handler binds ``ToolDisplayLookupContext`` so
+    the producer's default-constructed ``PresentationGenerator`` (no
+    instance-level lookup) still resolves registered tool templates."""
 
     from agent_runtime.api.presentation import ToolDisplayLookupContext
     from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
-
     template = ToolDisplayTemplate(
         title_template="Searching for {query}",
         result_title_template="Found {count} results",
@@ -567,7 +351,7 @@ async def test_event_producer_resolves_tool_template_via_context_var_when_no_ins
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
     token = ToolDisplayLookupContext.bind_for_run(
@@ -585,47 +369,33 @@ async def test_event_producer_resolves_tool_template_via_context_var_when_no_ins
                 "count": 7,
             },
         )
-        await producer.flush_pending_enrichment()
     finally:
         ToolDisplayLookupContext.unbind(token)
 
     assert envelope.presentation is not None
     assert envelope.presentation.title == "Found 7 results"
     assert len(event_store.drafts) == 1
-    assert presenter_calls == []
 
 
-async def test_event_producer_falls_through_when_no_lookup_bound() -> None:
+async def test_event_producer_renders_minimal_envelope_when_no_lookup_bound() -> None:
     """Without an instance-level lookup AND no ContextVar binding, the
-    minimal-envelope path runs and the polish presenter is consulted —
-    today's production behaviour. Pins the unbound state so a future
-    regression that defaults the ContextVar to a non-None lookup is caught.
-    """
+    minimal-envelope path renders a humanised fallback title. Phase 4
+    removed the polish path — the minimal envelope IS the safety net now."""
 
     from agent_runtime.api.presentation import ToolDisplayLookupContext
 
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {
-            "title": "Polished title",
-            "status_label": "Done",
-            "kind": "result",
-        }
-
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
     # Defensive sanity: nothing should be bound at module import time.
     assert ToolDisplayLookupContext.active() is None
 
-    await producer.append_api_event(
+    envelope = await producer.append_api_event(
         run=run_record(),
         source=StreamEventSource.RUNTIME,
         event_type=RuntimeApiEventType.TOOL_RESULT,
@@ -635,18 +405,25 @@ async def test_event_producer_falls_through_when_no_lookup_bound() -> None:
             "status": "completed",
         },
     )
-    await producer.flush_pending_enrichment()
 
-    # Polish ran because no template resolved (matches today's production).
-    assert presenter_calls, "Polish presenter should run when no template is resolved"
+    # Minimal envelope rendered — terminal lifecycle, non-empty title.
+    # The exact title comes from the timeline projector's ``display_title``
+    # hint (which the runtime fills from ``tool_name``); the minimal-envelope
+    # path honours the hint when present, falling back to the humanised
+    # tool name when absent.
+    assert envelope.presentation is not None
+    assert envelope.presentation.kind == "result"
+    assert envelope.presentation.status_label == "Done"
+    assert envelope.presentation.title  # non-empty
+    # Single envelope — no PRESENTATION_UPDATED follow-up after Phase 4.
+    assert len(event_store.drafts) == 1
 
 
 async def test_context_var_lookup_unbinds_to_previous_token() -> None:
     """Bind / unbind preserves the prior value (matches the
     ``CitationLedger.bind_for_run`` contract) so nested binds — e.g. an
     in-process worker reusing a ContextVar across two runs — restore
-    correctly. Pins the lifecycle invariant the run handler depends on.
-    """
+    correctly."""
 
     from agent_runtime.api.presentation import ToolDisplayLookupContext
 
@@ -670,16 +447,16 @@ async def test_context_var_lookup_unbinds_to_previous_token() -> None:
     assert ToolDisplayLookupContext.active() is None
 
 
+# --- MCP dispatcher (Phase 2.B) ------------------------------------------
+
+
 async def test_event_producer_resolves_synthesised_mcp_template_for_dispatcher_event() -> (
     None
 ):
     """Phase 2.B end-to-end — when ``call_mcp_tool`` dispatches an MCP tool,
     the synthesised template registered by ``BackendMcpClient._tool_descriptor``
     is resolved via ``McpDisplayRegistryContext`` and renders against the
-    *promoted* payload (inner ``args.arguments`` keys at the top level).
-
-    See docs/refactor/01-presentation-polish-removal.md §4 Phase 2.B.
-    """
+    *promoted* payload (inner ``args.arguments`` keys at the top level)."""
 
     from agent_runtime.api.presentation import ToolDisplayLookupContext
     from agent_runtime.capabilities.mcp.descriptor_registry import (
@@ -689,24 +466,16 @@ async def test_event_producer_resolves_synthesised_mcp_template_for_dispatcher_e
 
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
 
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {"title": "should not be used", "status_label": "Done", "kind": "result"}
-
-    # The synthesised template — placeholders refer to the agent-supplied
-    # MCP tool args (``query``), not the dispatcher-shaped envelope.
     synthesised = ToolDisplayTemplate(
         title_template="List Linear issues for {query}",
         result_title_template="Linear results",
         synthetic=True,
     )
-
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
     mcp_registry: dict[str, ToolDisplayTemplate] = {"list_issues": synthesised}
@@ -720,8 +489,6 @@ async def test_event_producer_resolves_synthesised_mcp_template_for_dispatcher_e
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.TOOL_CALL,
             payload={
-                # Dispatcher tool name — Phase 2.B's ``_effective_tool_name``
-                # extracts the inner MCP tool name for lookup.
                 "tool_name": "call_mcp_tool",
                 "call_id": "call_mcp_42",
                 "args": {
@@ -731,27 +498,22 @@ async def test_event_producer_resolves_synthesised_mcp_template_for_dispatcher_e
                 },
             },
         )
-        await producer.flush_pending_enrichment()
     finally:
         ToolDisplayLookupContext.unbind(lookup_token)
         McpDisplayRegistryContext.unbind(mcp_token)
 
-    # Title rendered from the synthesised template against the promoted
-    # payload — ``{query}`` resolved to ``"Q1 launch"``.
     assert envelope.presentation is not None
     assert envelope.presentation.title == "List Linear issues for Q1 launch"
-    # No polish call.
-    assert presenter_calls == []
-    # Single envelope written — no PRESENTATION_UPDATED follow-up.
     assert len(event_store.drafts) == 1
 
 
-async def test_event_producer_dispatcher_event_falls_through_when_inner_tool_unknown() -> (
+async def test_event_producer_dispatcher_event_renders_minimal_when_inner_tool_unknown() -> (
     None
 ):
     """If the agent dispatches a tool name we never registered, the
-    extraction succeeds but the lookup returns None and the event takes
-    the existing minimal-envelope + polish path. Pins the safety net."""
+    extraction succeeds but the lookup returns None and the minimal-envelope
+    path renders a humanised dispatcher fallback. Phase 4: no polish to
+    fall through to."""
 
     from agent_runtime.api.presentation import ToolDisplayLookupContext
     from agent_runtime.capabilities.mcp.descriptor_registry import (
@@ -761,20 +523,11 @@ async def test_event_producer_dispatcher_event_falls_through_when_inner_tool_unk
 
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        return {
-            "title": "Polished fallback",
-            "status_label": "Done",
-            "kind": "result",
-        }
 
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
     mcp_registry: dict[str, ToolDisplayTemplate] = {}  # empty
@@ -783,7 +536,7 @@ async def test_event_producer_dispatcher_event_falls_through_when_inner_tool_unk
         lambda name: McpDisplayRegistryContext.get(name)
     )
     try:
-        await producer.append_api_event(
+        envelope = await producer.append_api_event(
             run=run_record(),
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.TOOL_CALL,
@@ -797,15 +550,13 @@ async def test_event_producer_dispatcher_event_falls_through_when_inner_tool_unk
                 },
             },
         )
-        await producer.flush_pending_enrichment()
     finally:
         ToolDisplayLookupContext.unbind(lookup_token)
         McpDisplayRegistryContext.unbind(mcp_token)
 
-    # No template found → minimal envelope + polish (today's behaviour).
-    # The polish-removal goal is to *eventually* eliminate this path
-    # entirely (PRD §4 Phase 4). Until then, the safety net stays.
-    assert presenter_calls, "Polish should run when no MCP template is registered"
+    # Minimal envelope from the dispatcher tool name — never crashes.
+    assert envelope.presentation is not None
+    assert envelope.presentation.kind == "progress"
 
 
 async def test_event_producer_dispatcher_event_with_no_args_uses_dispatcher_name() -> (
@@ -844,7 +595,6 @@ async def test_event_producer_dispatcher_event_with_no_args_uses_dispatcher_name
                 # No "args" key.
             },
         )
-        await producer.flush_pending_enrichment()
     finally:
         ToolDisplayLookupContext.unbind(token)
 
@@ -853,77 +603,242 @@ async def test_event_producer_dispatcher_event_with_no_args_uses_dispatcher_name
     assert "call_mcp_tool" in lookup_calls
 
 
-async def test_event_producer_cancels_stale_enrichment_on_newer_event_for_same_call_id() -> (
-    None
-):
+# --- Tier-3 agent-supplied display (Phase 3.A) ---------------------------
+
+
+async def test_event_producer_tier3_overrides_synthetic_template_title() -> None:
+    """Phase 3.A — when the matched template is ``synthetic=True`` and the
+    agent supplied ``_display_title`` in the tool args, Tier-3 overrides
+    the rendered title."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+    )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    presenter_calls: list[str] = []
 
-    async def slow_presenter(prompt: str) -> dict[str, object]:
-        presenter_calls.append(prompt)
-        # The STARTED enrichment sleeps long enough that the RESULT event
-        # arrives and cancels it before it can patch the card. The RESULT
-        # enrichment returns immediately.
-        if "tool_call_started" in prompt:
-            await asyncio.sleep(2.0)
-            return {
-                "title": "Stale STARTED",
-                "summary": "Stale running summary.",
-                "status_label": "Running",
-                "kind": "progress",
-            }
-        return {
-            "title": "Fresh RESULT",
-            "summary": "Fresh polished result summary.",
-            "status_label": "Done",
-            "kind": "result",
-        }
+    synthesised = ToolDisplayTemplate(
+        title_template="Run Workflow",  # generic; agent will override
+        synthetic=True,
+    )
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(
+            tool_display_lookup=lambda name: (
+                synthesised if name == "run_workflow" else None
+            ),
+        ),
+    )
+
+    envelope = await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_CALL,
+        payload={
+            "tool_name": "run_workflow",
+            "call_id": "call_workflow_42",
+            "args": {
+                "workflow_id": "wf_q1_launch",
+                DISPLAY_TITLE_KEY: "Approving Q1 budget",
+            },
+        },
+    )
+
+    # Tier-3 wins over the synthesised template's generic title.
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Approving Q1 budget"
+
+
+async def test_event_producer_tier3_does_not_override_author_template() -> None:
+    """Phase 3.A invariant — when the matched template is author-written
+    (``synthetic=False``), the agent's ``_display_*`` is ignored."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+    )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+
+    # Author-written template — synthetic defaults to False.
+    authored = ToolDisplayTemplate(
+        title_template="Searching for {query}",
+        result_title_template="Found {count} results",
+    )
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(
+            tool_display_lookup=lambda name: (
+                authored if name == "search_docs" else None
+            ),
+        ),
+    )
+
+    envelope = await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_CALL,
+        payload={
+            "tool_name": "search_docs",
+            "call_id": "call_search_42",
+            "query": "Q1",  # template placeholder lives at top level today
+            "args": {
+                "query": "Q1",
+                # Agent tries to override an authored template — should be ignored.
+                DISPLAY_TITLE_KEY: "DO NOT USE THIS TITLE",
+            },
+        },
+    )
+
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Searching for Q1"
+
+
+async def test_event_producer_tier3_overrides_minimal_envelope_when_no_template() -> (
+    None
+):
+    """Phase 3.A — when no template is registered for the tool, the agent's
+    ``_display_*`` overrides the minimal-envelope default."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
+        DISPLAY_TITLE_KEY,
+    )
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
 
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=slow_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
-    await producer.append_api_event(
+    envelope = await producer.append_api_event(
         run=run_record(),
         source=StreamEventSource.RUNTIME,
-        event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-        payload={"tool_name": "web_search", "call_id": "call_77"},
-    )
-    # Yield control so the STARTED enrichment task starts running and enters
-    # the asyncio.sleep above.
-    await asyncio.sleep(0)
-
-    await producer.append_api_event(
-        run=run_record(),
-        source=StreamEventSource.RUNTIME,
-        event_type=RuntimeApiEventType.TOOL_RESULT,
+        event_type=RuntimeApiEventType.TOOL_CALL,
         payload={
-            "tool_name": "web_search",
-            "call_id": "call_77",
-            "status": "completed",
+            "tool_name": "obscure_tool",
+            "call_id": "call_obscure_42",
+            "args": {
+                "param": "x",
+                DISPLAY_TITLE_KEY: "Cataloguing Q1 risks",
+                DISPLAY_SUMMARY_KEY: "Building risk register from Slack threads",
+            },
         },
     )
-    await producer.flush_pending_enrichment()
 
-    presentation_updates = [
-        draft
-        for draft in event_store.drafts
-        if draft.event_type == RuntimeApiEventType.PRESENTATION_UPDATED
-    ]
-    # Exactly one PRESENTATION_UPDATED — the RESULT polish. The STARTED
-    # polish was cancelled before it could append a stale patch.
-    assert len(presentation_updates) == 1
-    assert presentation_updates[0].presentation is not None
-    # Patch carries the polished body but keeps the preliminary's terminal
-    # lifecycle (kind=result, status=Done) — the LLM never owns those.
-    assert presentation_updates[0].presentation.kind == "result"
-    assert presentation_updates[0].presentation.status_label == "Done"
-    assert (
-        presentation_updates[0].presentation.summary == "Fresh polished result summary."
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Cataloguing Q1 risks"
+    assert envelope.presentation.summary == "Building risk register from Slack threads"
+
+
+async def test_event_producer_tier3_summary_only_override() -> None:
+    """Agent supplies summary but not title — title stays from the
+    template / minimal envelope, only summary overrides."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_SUMMARY_KEY,
     )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+
+    synthesised = ToolDisplayTemplate(
+        title_template="List Linear issues",
+        synthetic=True,
+    )
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(
+            tool_display_lookup=lambda name: (
+                synthesised if name == "list_issues" else None
+            ),
+        ),
+    )
+
+    envelope = await producer.append_api_event(
+        run=run_record(),
+        source=StreamEventSource.RUNTIME,
+        event_type=RuntimeApiEventType.TOOL_CALL,
+        payload={
+            "tool_name": "list_issues",
+            "call_id": "call_xyz",
+            "args": {DISPLAY_SUMMARY_KEY: "Risk-tagged tickets opened in Q1"},
+        },
+    )
+
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "List Linear issues"  # template kept
+    assert envelope.presentation.summary == "Risk-tagged tickets opened in Q1"
+
+
+async def test_event_producer_tier3_for_dispatcher_event_uses_top_level_args() -> None:
+    """Phase 3.A end-to-end — for a ``call_mcp_tool`` dispatcher event the
+    agent puts ``_display_*`` at the top of ``args``, not inside
+    ``args.arguments``. Tier-3 reads from there and combines with Phase
+    2.B's MCP template lookup + payload promotion."""
+
+    from agent_runtime.api.presentation import ToolDisplayLookupContext
+    from agent_runtime.capabilities.mcp.descriptor_registry import (
+        McpDisplayRegistryContext,
+    )
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+    )
+    from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+    event_store = RecordingEventStore()
+    persistence = RecordingPersistence()
+
+    synthesised = ToolDisplayTemplate(
+        title_template="List Linear issues for {query}",
+        synthetic=True,
+    )
+    producer = RuntimeEventProducer(
+        persistence=persistence,
+        event_store=event_store,
+        presentation_generator=PresentationGenerator(),
+    )
+
+    mcp_registry: dict[str, ToolDisplayTemplate] = {"list_issues": synthesised}
+    mcp_token = McpDisplayRegistryContext.bind_for_run(mcp_registry)
+    lookup_token = ToolDisplayLookupContext.bind_for_run(
+        lambda name: McpDisplayRegistryContext.get(name)
+    )
+    try:
+        envelope = await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.TOOL_CALL,
+            payload={
+                "tool_name": "call_mcp_tool",
+                "call_id": "call_mcp_xyz",
+                "args": {
+                    "server_name": "linear",
+                    "tool_name": "list_issues",
+                    "arguments": {"query": "Q1 launch"},
+                    DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets in Linear",
+                },
+            },
+        )
+    finally:
+        ToolDisplayLookupContext.unbind(lookup_token)
+        McpDisplayRegistryContext.unbind(mcp_token)
+
+    assert envelope.presentation is not None
+    assert envelope.presentation.title == "Looking up Q1 launch tickets in Linear"
+
+
+# --- Minimal envelope failure / success paths ----------------------------
 
 
 def test_failed_tool_result_renders_error_kind_card() -> None:
@@ -1012,8 +927,6 @@ def test_failed_tool_result_skips_payload_projector() -> None:
             "call_id": "call_err",
             "status": "failed",
             "error_code": "tool_exception",
-            # A list-shaped output that the projector would happily render
-            # if we let it run; we should suppress it on failures.
             "output": {
                 "results": [
                     {"title": "row 1", "url": "https://example.com/1"},
@@ -1027,14 +940,12 @@ def test_failed_tool_result_skips_payload_projector() -> None:
 
     assert presentation is not None
     assert presentation["kind"] == "error"
-    # The projector populates result_preview only on success paths; on a
-    # failed card the field is absent or empty, never the noisy heuristic rows.
     assert not presentation.get("result_preview")
 
 
 def test_successful_tool_result_still_renders_done_with_projector_rows() -> None:
-    """Regression guard: my error-kind branch must not regress the happy path —
-    a successful tool_result still goes through the projector and renders kind='result'."""
+    """Regression guard: a successful tool_result still goes through the
+    projector and renders kind='result'."""
 
     generator = PresentationGenerator()
     presentation = generator.preliminary_presentation_for_event(
@@ -1063,50 +974,171 @@ def test_successful_tool_result_still_renders_done_with_projector_rows() -> None
     assert presentation["result_preview"][0]["title"] == "Slack docs"
 
 
-async def test_event_producer_forwards_agent_intent_hint_into_presentation_prompt() -> (
-    None
-):
+# --- Phase 4 sentinel: polish path is gone -------------------------------
+
+
+def test_polish_apis_are_removed() -> None:
+    """Pin the Phase 4 deletion: the polish path is gone for good.
+
+    Future regressions that try to re-introduce polish (re-add ``presenter``
+    / ``presentation_settings`` / ``cache`` to the generator, or
+    ``flush_pending_enrichment`` / ``_enrich_and_patch`` /
+    ``_intent_buffer`` to the producer) will fail this test before they
+    can ship. Also pins that no LLM client is constructed when the
+    deterministic chain runs.
+
+    See ``docs/refactor/01-presentation-polish-removal.md`` §4 Phase 4.
+    """
+
+    # PresentationGenerator surface — every polish-only field / method
+    # must be gone.
+    generator = PresentationGenerator()
+    for removed_attr in (
+        "presenter",
+        "presentation_settings",
+        "llm_factory",
+        "cache",
+        "_cached_model",
+        "llm_eligible_event_types",
+        "event_eligible_for_enrichment",
+        "enrich_presentation_for_event",
+        "_generate",
+        "_structured_model",
+        "_prompt",
+        "_context",
+        "_safe_json",
+        "_display_facts",
+        "_with_deterministic_fields",
+        "_deterministic_card_fields",
+    ):
+        assert not hasattr(generator, removed_attr), (
+            f"PresentationGenerator still exposes polish-only attribute "
+            f"{removed_attr!r}; Phase 4 removed the polish path"
+        )
+
+    # RuntimeEventProducer surface — same.
+    producer = RuntimeEventProducer(
+        persistence=RecordingPersistence(),
+        event_store=RecordingEventStore(),
+    )
+    for removed_attr in (
+        "flush_pending_enrichment",
+        "_pending_enrichment",
+        "_intent_buffer",
+        "_track_intent",
+        "_inject_intent_hint",
+        "_spawn_enrichment",
+        "_enrich_and_patch",
+        "_merge_polish",
+        "_POLISH_BODY_FIELDS",
+    ):
+        assert not hasattr(producer, removed_attr), (
+            f"RuntimeEventProducer still exposes polish-only attribute "
+            f"{removed_attr!r}; Phase 4 removed the polish path"
+        )
+
+    # PresentationOutput / PresentationPreviewRowOutput were the LLM's
+    # structured-output schemas; they must be unimportable.
+    import agent_runtime.api.presentation_templates as templates_module
+
+    assert not hasattr(templates_module, "PresentationOutput")
+    assert not hasattr(templates_module, "PresentationPreviewRowOutput")
+
+    # RuntimePresentationSettings + the polish env keys must be gone too.
+    import agent_runtime.settings as settings_module
+
+    assert not hasattr(settings_module, "RuntimePresentationSettings")
+    assert not hasattr(settings_module._EnvFields, "PRESENTATION_MODEL")
+    assert not hasattr(settings_module._EnvFields, "PRESENTATION_TIMEOUT_SECONDS")
+
+
+async def test_deterministic_chain_runs_without_any_llm_client() -> None:
+    """The deterministic chain must produce a complete envelope without
+    instantiating any LLM client. Pins the Phase 4 invariant that the
+    presentation path is provider-agnostic and offline-safe.
+
+    Verified by running the full chain and asserting no ``langchain_core``
+    chat model module is touched at runtime.
+    """
+
+    import sys
+
+    # Snapshot which langchain modules are loaded BEFORE the chain runs.
+    before = {name for name in sys.modules if name.startswith("langchain")}
+
     event_store = RecordingEventStore()
     persistence = RecordingPersistence()
-    captured_prompts: list[str] = []
-
-    def recording_presenter(prompt: str) -> dict[str, object]:
-        captured_prompts.append(prompt)
-        return {
-            "title": "Looking up Acme invoice",
-            "summary": "Searching Gmail for the Q3 Acme invoice.",
-            "status_label": "Done",
-            "kind": "result",
-        }
-
     producer = RuntimeEventProducer(
         persistence=persistence,
         event_store=event_store,
-        presentation_generator=PresentationGenerator(presenter=recording_presenter),
+        presentation_generator=PresentationGenerator(),
     )
 
-    # First, the agent emits a model_delta that captures intent.
-    await producer.append_api_event(
-        run=run_record(),
-        source=StreamEventSource.MODEL,
-        event_type=RuntimeApiEventType.MODEL_DELTA,
-        payload={"delta": "I'll search Gmail for the Q3 Acme invoice."},
-    )
+    # Drive every event-type branch the deterministic chain handles.
+    for event_type, payload in (
+        (
+            RuntimeApiEventType.APPROVAL_REQUESTED,
+            {
+                "approval_id": "a1",
+                "tool_name": "x",
+                "status": "pending",
+            },
+        ),
+        (
+            RuntimeApiEventType.TOOL_CALL,
+            {"tool_name": "search_docs", "call_id": "c1", "args": {"query": "Q1"}},
+        ),
+        (
+            RuntimeApiEventType.TOOL_RESULT,
+            {
+                "tool_name": "search_docs",
+                "call_id": "c1",
+                "status": "completed",
+                "output": {"results": [{"title": "row", "url": "https://x"}]},
+            },
+        ),
+        (
+            RuntimeApiEventType.TOOL_RESULT,
+            {
+                "tool_name": "search_docs",
+                "call_id": "c2",
+                "status": "failed",
+                "error_code": "tool_exception",
+            },
+        ),
+        (
+            RuntimeApiEventType.MCP_AUTH_REQUIRED,
+            {
+                "approval_id": "a2",
+                "server_name": "linear",
+                "display_name": "Linear",
+                "status": "pending",
+            },
+        ),
+    ):
+        envelope = await producer.append_api_event(
+            run=run_record(),
+            source=StreamEventSource.RUNTIME,
+            event_type=event_type,
+            payload=payload,
+        )
+        # Every appended event has a complete presentation envelope.
+        assert envelope.presentation is not None
 
-    # Then a tool result arrives — the LLM prompt should include intent_hint.
-    await producer.append_api_event(
-        run=run_record(),
-        source=StreamEventSource.RUNTIME,
-        event_type=RuntimeApiEventType.TOOL_RESULT,
-        payload={
-            "tool_name": "gmail_search",
-            "call_id": "call_99",
-            "status": "completed",
-        },
-    )
-    await producer.flush_pending_enrichment()
-
-    assert any(
-        "I'll search Gmail" in prompt and "agent_intent_hint" in prompt
-        for prompt in captured_prompts
+    # No LLM-client modules were imported by the chain. Anything in
+    # ``before`` is whatever the test harness already loaded; the diff
+    # must be empty.
+    after = {name for name in sys.modules if name.startswith("langchain")}
+    new_modules = after - before
+    # We tolerate ``langchain_core`` already being present (other tests
+    # in the suite may have pulled it in). The invariant is no NEW
+    # ``langchain_*_models`` provider modules get loaded.
+    new_provider_modules = {
+        name
+        for name in new_modules
+        if "chat_models" in name or "language_models" in name
+    }
+    assert new_provider_modules == set(), (
+        f"Deterministic presentation chain pulled in LLM client modules: "
+        f"{new_provider_modules}"
     )

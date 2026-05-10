@@ -25,8 +25,21 @@ from agent_runtime.api.async_ports import (
 )
 from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.persistence.records import (
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetWithState,
+    ChargeOutcome,
+    CompressionEventRecord,
+    ModelPricingRecord,
+    RetentionPolicyRecord,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
+    UsageConversationAggregateRecord,
+    UsageDailyConnectorRow,
+    UsageDailyOrgRow,
+    UsageDailyUserRow,
 )
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -380,12 +393,20 @@ class SyncToAsyncPersistence:
             now=now,
         )
 
-    # Usage + pricing (B1, B2, B3, B4) — defer to the underlying sync port.
+    # ------------------------------------------------------------------
+    # Usage + pricing (B1, B2, B3, B4).
+    #
+    # Sync port now declares these methods (PR 1 of the async-only ports
+    # refactor). Wrapper signatures match the async port exactly so type
+    # checkers can verify both ends.
+    # ------------------------------------------------------------------
 
-    async def record_run_usage(self, record):  # type: ignore[no-untyped-def]
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
         await asyncio.to_thread(self._port.record_run_usage, record)
 
-    async def record_model_call_usage(self, record):  # type: ignore[no-untyped-def]
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
         await asyncio.to_thread(self._port.record_model_call_usage, record)
 
     async def update_run_usage_cost(
@@ -420,117 +441,350 @@ class SyncToAsyncPersistence:
             pricing_version=pricing_version,
         )
 
-    async def upsert_pricing(self, record):  # type: ignore[no-untyped-def]
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
         return await asyncio.to_thread(self._port.upsert_pricing, record)
 
-    async def lookup_pricing(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.lookup_pricing, **kwargs)
+    async def lookup_pricing(
+        self,
+        *,
+        provider: str,
+        model_name: str,
+        region: str,
+        at: datetime,
+    ) -> ModelPricingRecord | None:
+        return await asyncio.to_thread(
+            self._port.lookup_pricing,
+            provider=provider,
+            model_name=model_name,
+            region=region,
+            at=at,
+        )
 
-    async def list_runs_missing_cost(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.list_runs_missing_cost, **kwargs)
+    async def list_runs_missing_cost(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        return await asyncio.to_thread(
+            self._port.list_runs_missing_cost,
+            limit=limit,
+            cursor=cursor,
+        )
 
-    async def upsert_user_daily_usage(self, row):  # type: ignore[no-untyped-def]
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
         await asyncio.to_thread(self._port.upsert_user_daily_usage, row)
 
-    async def upsert_org_daily_usage(self, row):  # type: ignore[no-untyped-def]
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
         await asyncio.to_thread(self._port.upsert_org_daily_usage, row)
 
-    async def upsert_connector_daily_usage(self, row):  # type: ignore[no-untyped-def]
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
         await asyncio.to_thread(self._port.upsert_connector_daily_usage, row)
 
-    async def query_user_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_user_daily_usage, **kwargs)
-
-    async def query_org_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_org_daily_usage, **kwargs)
-
-    async def query_connector_daily_usage(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_connector_daily_usage, **kwargs)
-
-    async def query_run_usage(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_run_usage, **kwargs)
-
-    async def query_run_usage_for_range(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_run_usage_for_range, **kwargs)
-
-    async def query_model_call_usage_for_range(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_user_daily_usage(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyUserRow]:
         return await asyncio.to_thread(
-            self._port.query_model_call_usage_for_range, **kwargs
+            self._port.query_user_daily_usage,
+            org_id=org_id,
+            user_id=user_id,
+            start_day=start_day,
+            end_day=end_day,
         )
 
-    async def query_last_completed_tool_connector_slug(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_org_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyOrgRow]:
         return await asyncio.to_thread(
-            self._port.query_last_completed_tool_connector_slug, **kwargs
+            self._port.query_org_daily_usage,
+            org_id=org_id,
+            start_day=start_day,
+            end_day=end_day,
         )
 
-    async def list_audit_log_events(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.list_audit_log_events, **kwargs)
-
-    async def query_top_conversations(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.query_top_conversations, **kwargs)
-
-    async def query_model_call_usage_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_connector_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyConnectorRow]:
         return await asyncio.to_thread(
-            self._port.query_model_call_usage_for_run, **kwargs
+            self._port.query_connector_daily_usage,
+            org_id=org_id,
+            start_day=start_day,
+            end_day=end_day,
         )
 
-    async def query_latest_run_usage_for_conversation(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_run_usage(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> RuntimeRunUsageRecord | None:
         return await asyncio.to_thread(
-            self._port.query_latest_run_usage_for_conversation, **kwargs
+            self._port.query_run_usage,
+            org_id=org_id,
+            run_id=run_id,
         )
 
-    async def query_compression_events_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_run_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        user_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeRunUsageRecord]:
         return await asyncio.to_thread(
-            self._port.query_compression_events_for_run, **kwargs
+            self._port.query_run_usage_for_range,
+            org_id=org_id,
+            user_id=user_id,
+            start=start,
+            end=end,
         )
 
-    # Budgets (B7) ---------------------------------------------------------
-
-    async def lookup_budgets_for_run(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.lookup_budgets_for_run, **kwargs)
-
-    async def charge_budget(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.charge_budget, **kwargs)
-
-    async def reserve_budget(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.reserve_budget, **kwargs)
-
-    async def consume_budget_reservation(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.consume_budget_reservation, **kwargs)
-
-    async def reap_expired_budget_reservations(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def query_model_call_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
         return await asyncio.to_thread(
-            self._port.reap_expired_budget_reservations, **kwargs
+            self._port.query_model_call_usage_for_range,
+            org_id=org_id,
+            start=start,
+            end=end,
         )
 
-    async def list_budgets(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.list_budgets, **kwargs)
+    async def query_last_completed_tool_connector_slug(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        before: datetime,
+    ) -> str | None:
+        return await asyncio.to_thread(
+            self._port.query_last_completed_tool_connector_slug,
+            org_id=org_id,
+            run_id=run_id,
+            before=before,
+        )
 
-    async def list_tool_budgets_for_org(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.list_tool_budgets_for_org, **kwargs)
+    async def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        return await asyncio.to_thread(
+            self._port.list_audit_log_events,
+            org_id=org_id,
+            after_seq=after_seq,
+            limit=limit,
+            action_prefix=action_prefix,
+            actor_user_id=actor_user_id,
+            since=since,
+            until=until,
+        )
 
-    async def get_budget(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.get_budget, **kwargs)
+    async def query_top_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> Sequence[UsageConversationAggregateRecord]:
+        return await asyncio.to_thread(
+            self._port.query_top_conversations,
+            org_id=org_id,
+            user_id=user_id,
+            start=start,
+            end=end,
+            limit=limit,
+        )
 
-    async def create_budget(self, record):  # type: ignore[no-untyped-def]
+    async def query_model_call_usage_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        return await asyncio.to_thread(
+            self._port.query_model_call_usage_for_run,
+            org_id=org_id,
+            run_id=run_id,
+        )
+
+    async def query_latest_run_usage_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> RuntimeRunUsageRecord | None:
+        return await asyncio.to_thread(
+            self._port.query_latest_run_usage_for_conversation,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+
+    async def query_compression_events_for_run(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+    ) -> Sequence[CompressionEventRecord]:
+        return await asyncio.to_thread(
+            self._port.query_compression_events_for_run,
+            org_id=org_id,
+            run_id=run_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Budgets (B7).
+    # ------------------------------------------------------------------
+
+    async def lookup_budgets_for_run(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        now: datetime | None = None,
+    ) -> Sequence[BudgetWithState]:
+        return await asyncio.to_thread(
+            self._port.lookup_budgets_for_run,
+            org_id=org_id,
+            user_id=user_id,
+            now=now,
+        )
+
+    async def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,
+        period_end: object,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now: datetime,
+    ) -> ChargeOutcome:
+        return await asyncio.to_thread(
+            self._port.charge_budget,
+            budget_id=budget_id,
+            period_start=period_start,
+            period_end=period_end,
+            delta_micro_usd=delta_micro_usd,
+            delta_tokens=delta_tokens,
+            run_id=run_id,
+            now=now,
+        )
+
+    async def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start: object,
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now: datetime,
+    ) -> BudgetReservationRecord | None:
+        return await asyncio.to_thread(
+            self._port.reserve_budget,
+            budget_id=budget_id,
+            period_start=period_start,
+            run_id=run_id,
+            reserved_micro_usd=reserved_micro_usd,
+            reserved_tokens=reserved_tokens,
+            now=now,
+        )
+
+    async def consume_budget_reservation(
+        self, *, reservation_id: str, now: datetime
+    ) -> None:
+        await asyncio.to_thread(
+            self._port.consume_budget_reservation,
+            reservation_id=reservation_id,
+            now=now,
+        )
+
+    async def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+        return await asyncio.to_thread(
+            self._port.reap_expired_budget_reservations,
+            now=now,
+        )
+
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        return await asyncio.to_thread(self._port.list_budgets, org_id=org_id)
+
+    async def list_tool_budgets_for_org(self, *, org_id: str) -> Sequence:
+        return await asyncio.to_thread(
+            self._port.list_tool_budgets_for_org, org_id=org_id
+        )
+
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        return await asyncio.to_thread(
+            self._port.get_budget, org_id=org_id, budget_id=budget_id
+        )
+
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
         return await asyncio.to_thread(self._port.create_budget, record)
 
-    async def update_budget(self, record):  # type: ignore[no-untyped-def]
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
         return await asyncio.to_thread(self._port.update_budget, record)
 
-    async def delete_budget(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.delete_budget, **kwargs)
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        await asyncio.to_thread(
+            self._port.delete_budget, org_id=org_id, budget_id=budget_id
+        )
 
-    # Retention (C8) -------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Retention (C8).
+    #
+    # Cross-tenant sweep methods (``list_retention_orgs`` and
+    # ``sweep_retention_kind``) are async-only — the worker's retention
+    # sweeper runs only against the async backend, and the sync port
+    # never declared them.
+    # ------------------------------------------------------------------
 
-    async def list_retention_policies(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.list_retention_policies, **kwargs)
+    async def list_retention_policies(
+        self, *, org_id: str
+    ) -> Sequence[RetentionPolicyRecord]:
+        return await asyncio.to_thread(
+            self._port.list_retention_policies, org_id=org_id
+        )
 
-    async def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+    async def upsert_retention_policy(
+        self, record: RetentionPolicyRecord
+    ) -> RetentionPolicyRecord:
         return await asyncio.to_thread(self._port.upsert_retention_policy, record)
 
-    async def delete_retention_policy(self, **kwargs):  # type: ignore[no-untyped-def]
-        return await asyncio.to_thread(self._port.delete_retention_policy, **kwargs)
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        await asyncio.to_thread(
+            self._port.delete_retention_policy,
+            org_id=org_id,
+            policy_id=policy_id,
+        )
 
 
 class SyncToAsyncEventStore:
