@@ -66,6 +66,7 @@ def _seeded_store() -> InMemoryIdentityStore:
             org_id="org_acme",
             user_id="usr_sarah",
             role_id=role.role_id,
+            granted_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
         )
     )
     return store

@@ -24,6 +24,12 @@ services:
     environment:
       RUNTIME_STORE_BACKEND: postgres
       DATABASE_URL: postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
+      # P2 — API and worker are separate processes here, so the in-memory
+      # asyncio.Condition bus would never deliver wakeups across them and
+      # SSE would fall back to a 2s poll. Postgres LISTEN/NOTIFY makes the
+      # cross-process wakeup work in milliseconds; the API holds a
+      # dedicated LISTEN connection for the channel.
+      RUNTIME_EVENT_BUS_BACKEND: postgres
       PORT: 8000
     ports:
       - "8000:8000"
@@ -41,6 +47,10 @@ services:
     environment:
       RUNTIME_STORE_BACKEND: postgres
       DATABASE_URL: postgresql://ai_backend:ai_backend@postgres:5432/ai_backend
+      # P2 — must match the API's bus backend. The postgres adapter only
+      # fires NOTIFY when this is set (otherwise the LISTEN side has
+      # nothing to wake on).
+      RUNTIME_EVENT_BUS_BACKEND: postgres
     depends_on:
       postgres:
         condition: service_healthy

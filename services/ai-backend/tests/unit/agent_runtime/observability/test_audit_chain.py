@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_runtime.observability.audit_chain import (
+from enterprise_audit_chain import (
     AuditChainRow,
     AuditChainSigner,
     ChainSignature,

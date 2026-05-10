@@ -81,36 +81,6 @@ class RuntimeHarness:
     skill_cards: tuple[object, ...] = ()
 
 
-def create_agent_runtime(
-    *,
-    context: AgentRuntimeContext | dict[str, Any],
-    dependencies: RuntimeDependencies | dict[str, Any],
-    instructions: str = DEFAULT_INSTRUCTIONS,
-    agent_builder: AgentBuilder | None = None,
-) -> RuntimeHarness:
-    """Create a request-scoped Deep Agents runtime (synchronous wrapper).
-
-    Thin shim over :func:`acreate_agent_runtime` for the sync LangChain
-    Runnable ``invoke`` path in :mod:`agent_runtime.execution.graph` and
-    for sync unit-test fixtures. Async callers (workers, ``ainvoke``)
-    should call :func:`acreate_agent_runtime` directly.
-
-    Must NOT be called from inside a running event loop — use
-    :func:`acreate_agent_runtime` there. ``asyncio.run`` raises
-    ``RuntimeError`` if a loop is already running, which is the right
-    behavior — the call site needs to switch to the async variant.
-    """
-
-    return asyncio.run(
-        acreate_agent_runtime(
-            context=context,
-            dependencies=dependencies,
-            instructions=instructions,
-            agent_builder=agent_builder,
-        )
-    )
-
-
 async def acreate_agent_runtime(
     *,
     context: AgentRuntimeContext | dict[str, Any],
@@ -118,7 +88,7 @@ async def acreate_agent_runtime(
     instructions: str = DEFAULT_INSTRUCTIONS,
     agent_builder: AgentBuilder | None = None,
 ) -> RuntimeHarness:
-    """Async variant of :func:`create_agent_runtime`.
+    """Create a request-scoped Deep Agents runtime (async-native).
 
     The five registry-listing calls (tools / mcp / subagents / skill
     directories / skill cards) are run concurrently via ``asyncio.gather``.

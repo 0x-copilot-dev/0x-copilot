@@ -161,7 +161,7 @@ async def test_invoke_runtime_logs_safe_error_without_raw_exception(
     assert "secret" not in str(payloads)
 
 
-def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(
+async def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(
     runtime_context_admin: AgentRuntimeContext,
     fake_dependencies: RuntimeDependencies,
 ) -> None:
@@ -181,7 +181,7 @@ def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(
     )
 
     handle = graph.start(context)
-    result = graph.invoke({"context": context, "messages": [{"role": "user"}]})
+    result = await graph.ainvoke({"context": context, "messages": [{"role": "user"}]})
 
     assert handle.run_id == "run_123"
     assert result == {

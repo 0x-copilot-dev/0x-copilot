@@ -78,7 +78,7 @@ class _ConfigurableAuthGate(CapabilityAuthGate):
         self.outcome = outcome
         self.calls: list[str] = []
 
-    def check(  # type: ignore[override]
+    async def check(  # type: ignore[override]
         self, *, target_connector: str, runtime_context: object
     ) -> CapabilityAuthCheck:
         self.calls.append(target_connector)
@@ -117,14 +117,11 @@ class _RecordingPersistence:
         self.approvals.append(record)
         return record
 
-    # Sync — both the API service and the worker handler call this through
-    # ``_maybe_await`` so a sync return value is correct on both sides; the
-    # async-equivalent shape would leak unawaited coroutines.
-    def write_audit_log(self, *, event_type: str, record: dict) -> None:
+    # Async — matches the unified async PersistencePort surface.
+    async def write_audit_log(self, *, event_type: str, record: dict) -> None:
         self.audit_calls.append((event_type, record))
 
-    # Worker handler probes these synchronously through ``_maybe_await``.
-    def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> object:
+    async def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> object:
         self.run_status_updates.append(status)
         return _RUN_RECORD
 

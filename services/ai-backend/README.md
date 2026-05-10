@@ -124,6 +124,18 @@ DATABASE_URL=
 RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
 RUNTIME_WORKER_LOCK_SECONDS=60
 RUNTIME_START_IN_PROCESS_WORKER=true
+# P4 Stage 1 — fold append_event INSERT + agent_runs cursor UPDATE into
+# one transaction (default on; flip false to roll back).
+RUNTIME_EVENT_WRITE_CONSOLIDATED=true
+# P4 Stage 2 — worker-side MODEL_DELTA coalesce window (ms). 0 disabled.
+# Recommended 50 once measured on staging.
+RUNTIME_DELTA_COALESCE_WINDOW_MS=0
+RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
+# P2 — SSE bus. ``in_memory`` is the legacy single-process default;
+# ``postgres`` enables Postgres LISTEN/NOTIFY for cross-process SSE
+# wakeups (drops p50 SSE delivery from ~1s to ~50ms in multi-process
+# deploys; needs DATABASE_URL configured).
+RUNTIME_EVENT_BUS_BACKEND=in_memory
 ```
 
 Run requests should not include API keys. Provider credentials are loaded by

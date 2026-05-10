@@ -1,11 +1,8 @@
 """``acreate_agent_runtime`` parallel-listing contract.
 
-The async factory must:
-  * produce a ``RuntimeHarness`` indistinguishable from the sync
-    ``create_agent_runtime`` for the same inputs;
-  * run the four sync registry-listing calls concurrently via
-    ``asyncio.gather(asyncio.to_thread(...), ...)`` so the worker's
-    asyncio loop is not blocked by sync HTTP inside a provider.
+The async factory must run the registry-listing calls concurrently via
+``asyncio.gather`` (for async-native registries) and ``asyncio.to_thread``
+(for CPU-only registries) so the worker's event loop is never blocked.
 
 These tests use the shared ``fake_dependencies`` / ``runtime_context_admin``
 fixtures from ``tests/unit/conftest.py`` and patch the registry methods to
@@ -16,67 +13,45 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
 )
-from agent_runtime.execution.factory import (
-    acreate_agent_runtime,
-    create_agent_runtime,
-)
+from agent_runtime.execution.factory import acreate_agent_runtime
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
 
 
-class TestAsyncFactoryEquivalence:
-    """``acreate_agent_runtime`` must produce the same shape as the sync path."""
-
-    async def test_async_harness_matches_sync_harness(
-        self,
-        runtime_context_admin: AgentRuntimeContext,
-        fake_dependencies: RuntimeDependencies,
-    ) -> None:
-        sync_harness = create_agent_runtime(
-            context=runtime_context_admin,
-            dependencies=fake_dependencies,
-            agent_builder=CapturingAgentBuilder(),
-        )
-        async_harness = await acreate_agent_runtime(
-            context=runtime_context_admin,
-            dependencies=fake_dependencies,
-            agent_builder=CapturingAgentBuilder(),
-        )
-
-        # Resolved capability sets are byte-identical.
-        assert async_harness.tools == sync_harness.tools
-        assert async_harness.mcp_servers == sync_harness.mcp_servers
-        assert async_harness.subagents == sync_harness.subagents
-        assert async_harness.skill_directories == sync_harness.skill_directories
-        # Context propagates unchanged.
-        assert async_harness.context == sync_harness.context
-
-
 class TestAsyncFactoryParallelism:
-    """The four listing calls must run concurrently."""
+    """The five listing calls must run concurrently.
+
+    Three listings go through ``asyncio.to_thread`` (tools / subagents /
+    skill directories) and two are async-native (mcp servers / skill cards).
+    The cross-coordination barrier therefore needs all five parties to be
+    in flight at once — async-native listings reach the barrier via a
+    nested ``asyncio.to_thread`` so a single ``threading.Barrier`` works
+    across both groups.
+    """
 
     async def test_listing_calls_run_in_parallel(
         self,
         runtime_context_admin: AgentRuntimeContext,
         fake_dependencies: RuntimeDependencies,
     ) -> None:
-        """Four-way barrier — would deadlock if any pair of listings ran
-        sequentially. ``asyncio.to_thread`` runs each on a thread, so we
-        use a ``threading.Barrier`` (cross-thread) not ``asyncio.Barrier``.
-        """
-
         import threading
 
-        barrier = threading.Barrier(4, timeout=2.0)
+        barrier = threading.Barrier(5, timeout=2.0)
 
         def _gated(value: object) -> object:
             barrier.wait()
             return value
+
+        async def _agated_ctx(_ctx: object) -> object:
+            return await asyncio.to_thread(_gated, ())
+
+        async def _agated_kwargs(**_kwargs: object) -> object:
+            return await asyncio.to_thread(_gated, ())
 
         with (
             patch.object(
@@ -87,7 +62,8 @@ class TestAsyncFactoryParallelism:
             patch.object(
                 fake_dependencies.mcp_registry,
                 "list_available_servers",
-                side_effect=lambda _ctx: _gated(()),
+                new_callable=AsyncMock,
+                side_effect=_agated_ctx,
             ),
             patch.object(
                 fake_dependencies.subagent_catalog,
@@ -97,6 +73,11 @@ class TestAsyncFactoryParallelism:
             patch(
                 "agent_runtime.execution.factory.SkillSourceRegistry.skill_directories_for_deep_agent",
                 side_effect=lambda _config: _gated(()),
+            ),
+            patch(
+                "agent_runtime.execution.factory._skill_cards",
+                new_callable=AsyncMock,
+                side_effect=_agated_kwargs,
             ),
         ):
             harness = await asyncio.wait_for(

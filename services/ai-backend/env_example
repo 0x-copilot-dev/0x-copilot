@@ -28,6 +28,19 @@ RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
 RUNTIME_WORKER_LOCK_SECONDS=60
 RUNTIME_START_IN_PROCESS_WORKER=true
 RUNTIME_ALLOW_EMPTY_CAPABILITIES=false
+# P4 Stage 1 — fold append_event INSERT + agent_runs.latest_sequence_no
+# UPDATE into one transaction (default on; flip to false to roll back to
+# the pre-P4 two-transaction path).
+RUNTIME_EVENT_WRITE_CONSOLIDATED=true
+# P4 Stage 2 — worker-side MODEL_DELTA coalesce window (ms). 0 = disabled
+# (default; ships dark). Recommended 50 once measured on staging.
+RUNTIME_DELTA_COALESCE_WINDOW_MS=0
+RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
+# P2 — SSE event-bus backend. in_memory (default) is single-process; flip
+# to postgres to enable cross-process LISTEN/NOTIFY wakeups (drops SSE
+# delivery latency from ~1s to ~50ms in multi-process deploys; needs
+# DATABASE_URL configured).
+RUNTIME_EVENT_BUS_BACKEND=in_memory
 MCP_BACKEND_REGISTRY_URL=
 MCP_AUTH_REDIRECT_URI=http://127.0.0.1:5173/mcp/oauth/callback
 SKILLS_BACKEND_REGISTRY_URL=
