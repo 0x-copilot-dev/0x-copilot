@@ -14,7 +14,6 @@ charged against the budget post-completion.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
 
 from agent_runtime.api.service import RuntimeApiService
@@ -49,32 +48,28 @@ def _settings() -> RuntimeSettings:
     )
 
 
-def _seed_run(store: InMemoryRuntimeApiStore, settings: RuntimeSettings) -> str:
+async def _seed_run(store: InMemoryRuntimeApiStore, settings: RuntimeSettings) -> str:
     service = RuntimeApiService(
         persistence=store, event_store=store, queue=store, settings=settings
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    response = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="A run that should be rejected by budget.",
-                model={
-                    "provider": "openai",
-                    "model_name": "gpt-5.4-mini",
-                    "max_input_tokens": 128_000,
-                },
-            )
+    response = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="A run that should be rejected by budget.",
+            model={
+                "provider": "openai",
+                "model_name": "gpt-5.4-mini",
+                "max_input_tokens": 128_000,
+            },
         )
     )
     return response.run_id
@@ -104,13 +99,13 @@ async def _allow_invoker(_harness, _messages: Sequence[object]):
 
 
 class TestBudgetDenyPath:
-    def test_hard_cap_rejects_run_before_model_call(self) -> None:
+    async def test_hard_cap_rejects_run_before_model_call(self) -> None:
         store = InMemoryRuntimeApiStore()
         settings = _settings()
         # 1-token cap is impossible to fit any real run inside (the
         # estimator's worst-case is the model's max_input_tokens), so
         # this Denies regardless of whether pricing is seeded.
-        store.create_budget(
+        await store.create_budget(
             BudgetRecord(
                 org_id="org_123",
                 user_id="user_123",
@@ -123,7 +118,7 @@ class TestBudgetDenyPath:
                 created_by_user_id="user_123",
             )
         )
-        run_id = _seed_run(store, settings)
+        run_id = await _seed_run(store, settings)
         worker = RuntimeWorker(
             persistence=store,
             event_store=store,
@@ -136,7 +131,7 @@ class TestBudgetDenyPath:
                 runtime_invoker=_never_invoker,
             ),
         )
-        processed = asyncio.run(worker.run_until_idle())
+        processed = await worker.run_until_idle()
         assert processed == 1
 
         run = store.runs[run_id]
@@ -151,10 +146,10 @@ class TestBudgetDenyPath:
 
 
 class TestBudgetAllowPath:
-    def test_allow_path_runs_to_completion_and_charges(self) -> None:
+    async def test_allow_path_runs_to_completion_and_charges(self) -> None:
         store = InMemoryRuntimeApiStore()
         settings = _settings()
-        budget = store.create_budget(
+        budget = await store.create_budget(
             BudgetRecord(
                 org_id="org_123",
                 user_id="user_123",
@@ -167,7 +162,7 @@ class TestBudgetAllowPath:
                 created_by_user_id="user_123",
             )
         )
-        run_id = _seed_run(store, settings)
+        run_id = await _seed_run(store, settings)
         worker = RuntimeWorker(
             persistence=store,
             event_store=store,
@@ -180,7 +175,7 @@ class TestBudgetAllowPath:
                 runtime_invoker=_allow_invoker,
             ),
         )
-        processed = asyncio.run(worker.run_until_idle())
+        processed = await worker.run_until_idle()
         assert processed == 1
         assert store.runs[run_id].status == "completed"
         # State row created with last_charged_run_id = run_id (idempotency

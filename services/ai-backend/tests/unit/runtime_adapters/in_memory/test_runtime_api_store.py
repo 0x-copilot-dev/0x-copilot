@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from agent_runtime.api.service import RuntimeApiService
@@ -18,7 +17,7 @@ from agent_runtime.persistence.records import RuntimeWorkerResult
 class TestInMemoryRuntimeQueueLifecycle:
     """Queue claim, retry, and dead-letter transitions."""
 
-    def test_claim_retry_and_dead_letter(self) -> None:
+    async def test_claim_retry_and_dead_letter(self) -> None:
         store = InMemoryRuntimeApiStore()
         command = RuntimeRunCommand(
             run_id="run_123",
@@ -46,8 +45,8 @@ class TestInMemoryRuntimeQueueLifecycle:
             },
         )
 
-        store.enqueue_run(command)
-        first_claim = store.claim_next(
+        await store.enqueue_run(command)
+        first_claim = await store.claim_next(
             worker_id="worker_1",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
@@ -55,21 +54,21 @@ class TestInMemoryRuntimeQueueLifecycle:
         assert first_claim is not None
         assert first_claim.run_id == "run_123"
         assert (
-            store.claim_next(
+            await store.claim_next(
                 worker_id="worker_2",
                 lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
             is None
         )
 
-        store.mark_retry(
+        await store.mark_retry(
             result=RuntimeWorkerResult(
                 command_id=first_claim.command_id,
                 succeeded=False,
                 retry_available_at=datetime.now(timezone.utc),
             )
         )
-        retry_claim = store.claim_next(
+        retry_claim = await store.claim_next(
             worker_id="worker_2",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
@@ -77,13 +76,13 @@ class TestInMemoryRuntimeQueueLifecycle:
         assert retry_claim is not None
         assert retry_claim.attempts == 2
 
-        store.mark_dead_letter(
+        await store.mark_dead_letter(
             result=RuntimeWorkerResult(
                 command_id=retry_claim.command_id, succeeded=False
             )
         )
         assert (
-            store.claim_next(
+            await store.claim_next(
                 worker_id="worker_3",
                 lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
@@ -94,7 +93,7 @@ class TestInMemoryRuntimeQueueLifecycle:
 class TestInMemoryRegenerateMessage:
     """Regeneration re-uses the original parent user message."""
 
-    def test_regenerate_reuses_parent_user_message(self) -> None:
+    async def test_regenerate_reuses_parent_user_message(self) -> None:
         store = InMemoryRuntimeApiStore()
         service = RuntimeApiService(
             persistence=store,
@@ -108,27 +107,23 @@ class TestInMemoryRegenerateMessage:
                 }
             ),
         )
-        conversation = asyncio.run(
-            service.create_conversation(
-                CreateConversationRequest(
-                    org_id="org_123",
-                    user_id="user_123",
-                    assistant_id="assistant_123",
-                )
+        conversation = await service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
             )
         )
-        first = asyncio.run(
-            service.create_run(
-                CreateRunRequest(
-                    conversation_id=conversation.conversation_id,
-                    org_id="org_123",
-                    user_id="user_123",
-                    user_input="Original question",
-                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-                )
+        first = await service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Original question",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
             )
         )
-        assistant = store.append_message(
+        assistant = await store.append_message(
             store.messages[first.user_message_id].model_copy(
                 update={
                     "message_id": "assistant_123",
@@ -140,17 +135,15 @@ class TestInMemoryRegenerateMessage:
             )
         )
 
-        regenerated = asyncio.run(
-            service.create_run(
-                CreateRunRequest(
-                    conversation_id=conversation.conversation_id,
-                    org_id="org_123",
-                    user_id="user_123",
-                    user_input="Regenerate",
-                    regenerate_from_message_id=assistant.message_id,
-                    branch_id="branch_retry",
-                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-                )
+        regenerated = await service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Regenerate",
+                regenerate_from_message_id=assistant.message_id,
+                branch_id="branch_retry",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
             )
         )
 

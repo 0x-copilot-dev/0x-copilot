@@ -2,16 +2,17 @@
 
 Each persisted audit row is signed with HMAC-SHA256 over the row's canonical
 JSON plus the previous row's signature ("prev_hash"). The chain is per-stream
-(per audit table, per ``org_id``) so SIEM export and verification stay scoped
-to one tenant. Tampering -- altering a row, deleting a row, reordering rows,
+(typically per audit table, per ``org_id``) so verification stays scoped to
+one tenant. Tampering -- altering a row, deleting a row, reordering rows,
 or replaying a row from a different chain -- breaks the chain because the
 recomputed signature will not match the stored one.
 
 Key material lives in ``AUDIT_HMAC_KEY`` (hex-encoded). ``AUDIT_HMAC_KEY_VERSION``
-identifies which key signed a given row so we can rotate without rewriting
-history; the verifier keeps a small map of {version -> key} and picks the
-right one per row. Production fails closed without ``AUDIT_HMAC_KEY``,
-mirroring the ``ENTERPRISE_AUTH_SECRET`` policy.
+identifies which key signed a given row so callers can rotate without
+rewriting history; the verifier keeps a small map of {version -> key} and
+picks the right one per row. Production (the environment env var the
+caller passes equals "production") fails closed when ``AUDIT_HMAC_KEY`` is
+unset.
 
 The signed envelope is::
 
@@ -23,7 +24,12 @@ The signed envelope is::
 
 Sorted keys + tight separators give one canonical byte sequence per logical
 record. ``datetime`` values are ISO-8601 strings, ``bytes`` become hex,
-``UUID`` becomes its canonical string -- types we can verify deterministically.
+``UUID`` becomes its canonical string -- types we can verify
+deterministically.
+
+Replaces the in-tree duplicates that previously lived at
+``services/backend/src/backend_app/audit_chain.py`` and
+``services/ai-backend/src/agent_runtime/observability/audit_chain.py``.
 """
 
 from __future__ import annotations
@@ -43,6 +49,11 @@ _DEFAULT_KEY_VERSION_ENV = "AUDIT_HMAC_KEY_VERSION"
 _PREVIOUS_KEY_ENV_PREFIX = "AUDIT_HMAC_KEY_V"  # e.g. AUDIT_HMAC_KEY_V0 for rotation
 _MIN_KEY_BYTES = 16
 
+# Sentinel dev key. Byte-identical to the value the legacy in-tree
+# implementations used so dev fixtures and pre-recorded chains keep
+# verifying after the consolidation.
+_DEV_SENTINEL_KEY = b"dev-audit-hmac-sentinel-key-32by"  # 32 bytes
+
 
 @dataclass(frozen=True)
 class ChainSignature:
@@ -60,6 +71,17 @@ class ChainVerificationResult:
     ok: bool
     broken_at_seq: int | None = None
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditChainRow:
+    """One row of audit data, including chain fields, used by the verifier."""
+
+    seq: int
+    payload: dict[str, Any]
+    prev_hash: bytes | None
+    signature: bytes
+    key_version: int
 
 
 class AuditChainSigner:
@@ -91,19 +113,31 @@ class AuditChainSigner:
         self._active_version = active_version
 
     @classmethod
-    def from_env(cls, *, fail_closed: bool | None = None) -> "AuditChainSigner":
+    def from_env(
+        cls,
+        *,
+        environment_env_var: str,
+        fail_closed: bool | None = None,
+    ) -> "AuditChainSigner":
         """Load keys from environment.
 
         ``AUDIT_HMAC_KEY`` is the active key (hex-encoded);
         ``AUDIT_HMAC_KEY_VERSION`` is its integer version (default 1).
         ``AUDIT_HMAC_KEY_V<N>`` provides additional historical keys for
-        verification only. In production (env=BACKEND_ENVIRONMENT=production)
-        a missing key raises; in dev/test we fall back to a fixed sentinel
-        key so tests run without configuration. Tests can pass
-        ``fail_closed=False`` to opt out of the env check.
+        verification only.
+
+        ``environment_env_var`` is the name of the environment variable the
+        caller's service uses to identify the runtime environment (e.g.
+        ``"BACKEND_ENVIRONMENT"`` or ``"RUNTIME_ENVIRONMENT"``). When that
+        var equals ``"production"`` and ``AUDIT_HMAC_KEY`` is unset, this
+        method raises. Otherwise we fall back to a fixed sentinel key so
+        local development without configured keys still produces a
+        verifiable chain.
+
+        Tests can pass ``fail_closed=False`` to opt out of the env check.
         """
 
-        env = os.environ.get("BACKEND_ENVIRONMENT", "development").strip().lower()
+        env = os.environ.get(environment_env_var, "development").strip().lower()
         is_prod = env == "production"
         if fail_closed is None:
             fail_closed = is_prod
@@ -114,8 +148,7 @@ class AuditChainSigner:
                 raise RuntimeError(
                     f"{_DEFAULT_KEY_ENV} must be set in production",
                 )
-            sentinel = b"dev-audit-hmac-sentinel-key-32by"  # 32 bytes
-            return cls(keys={0: sentinel}, active_version=0)
+            return cls(keys={0: _DEV_SENTINEL_KEY}, active_version=0)
 
         try:
             active_key = bytes.fromhex(active_hex)
@@ -188,7 +221,7 @@ class AuditChainSigner:
         expected = hmac.new(key, canonical, hashlib.sha256).digest()
         return hmac.compare_digest(expected, signature)
 
-    def verify_chain(self, rows: list["AuditChainRow"]) -> ChainVerificationResult:
+    def verify_chain(self, rows: list[AuditChainRow]) -> ChainVerificationResult:
         """Verify a sequence of rows ordered by ``seq`` ascending.
 
         Returns ``ok=True`` only if every row's signature recomputes correctly
@@ -245,14 +278,3 @@ class AuditChainSigner:
             f"audit chain canonicalization rejected unserializable type: "
             f"{type(value).__name__}"
         )
-
-
-@dataclass(frozen=True)
-class AuditChainRow:
-    """One row of audit data, including chain fields, used by the verifier."""
-
-    seq: int
-    payload: dict[str, Any]
-    prev_hash: bytes | None
-    signature: bytes
-    key_version: int

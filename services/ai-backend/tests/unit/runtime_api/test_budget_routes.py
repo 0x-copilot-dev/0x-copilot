@@ -84,9 +84,9 @@ class TestBudgetCRUD:
         )
         assert second.status_code == 409
 
-    def test_patch_updates_status(self) -> None:
+    async def test_patch_updates_status(self) -> None:
         client, store = _client()
-        record = store.create_budget(
+        record = await store.create_budget(
             BudgetRecord(
                 org_id="org_a",
                 user_id=None,
@@ -108,9 +108,9 @@ class TestBudgetCRUD:
         assert body["status"] == "disabled"
         assert body["limit_micro_usd"] == 2_000_000
 
-    def test_delete_cascades_to_state(self) -> None:
+    async def test_delete_cascades_to_state(self) -> None:
         client, store = _client()
-        record = store.create_budget(
+        record = await store.create_budget(
             BudgetRecord(
                 org_id="org_a",
                 user_id=None,
@@ -135,9 +135,9 @@ class TestBudgetCRUD:
 
 
 class TestBudgetMe:
-    def test_returns_remaining_headroom(self) -> None:
+    async def test_returns_remaining_headroom(self) -> None:
         client, store = _client()
-        store.create_budget(
+        await store.create_budget(
             BudgetRecord(
                 org_id="org_a",
                 user_id="user_1",

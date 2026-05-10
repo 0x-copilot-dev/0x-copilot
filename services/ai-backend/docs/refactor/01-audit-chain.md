@@ -2,7 +2,7 @@
 
 **Refactor target:** the HMAC hash-chained audit log subsystem (originally flagged as finding [1.3 in the architecture audit](../architecture/refactor-audit.md#13-custom-hash-chained-audit-log)).
 
-**Status:** Investigation complete; refactor plan proposed. Awaiting decision before any code change.
+**Status:** Implemented. Package created at [packages/audit-chain/](../../../../packages/audit-chain/); both services migrated; legacy files deleted; compat-fixture tests pinning legacy signatures pass in both services. The original audit finding is marked Resolved at [refactor-audit.md §1.3](../architecture/refactor-audit.md#13-custom-hash-chained-audit-log--resolved-de-duplicated-not-deleted).
 
 **Author note:** This PRD reads the code against the original finding rather than starting from the conclusion. The investigation reversed the original recommendation. The detail is intentional — the user's standing rule is "no functionality missed and no bugs added."
 

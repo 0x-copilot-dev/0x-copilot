@@ -12,8 +12,8 @@ class ConversationFixtureMixin:
     ORG_ID = "org_pr12"
     USER_ID = "user_pr12"
 
-    def seed_conversation(self, store: InMemoryRuntimeApiStore) -> str:
-        record = store.create_conversation(
+    async def seed_conversation(self, store: InMemoryRuntimeApiStore) -> str:
+        record = await store.create_conversation(
             CreateConversationRequest(
                 org_id=self.ORG_ID,
                 user_id=self.USER_ID,
@@ -25,12 +25,12 @@ class ConversationFixtureMixin:
 
 
 class TestUpdateConversationConnectors(ConversationFixtureMixin):
-    def test_merge_patch_overwrites_present_keys_only(self) -> None:
+    async def test_merge_patch_overwrites_present_keys_only(self) -> None:
         store = InMemoryRuntimeApiStore()
-        conversation_id = self.seed_conversation(store)
+        conversation_id = await self.seed_conversation(store)
         now = datetime.now(timezone.utc)
 
-        first = store.update_conversation_connectors(
+        first = await store.update_conversation_connectors(
             org_id=self.ORG_ID,
             user_id=self.USER_ID,
             conversation_id=conversation_id,
@@ -46,7 +46,7 @@ class TestUpdateConversationConnectors(ConversationFixtureMixin):
 
         # Second patch only touches `slack`; `drive` survives untouched.
         later = now.replace(microsecond=0)
-        second = store.update_conversation_connectors(
+        second = await store.update_conversation_connectors(
             org_id=self.ORG_ID,
             user_id=self.USER_ID,
             conversation_id=conversation_id,
@@ -60,10 +60,10 @@ class TestUpdateConversationConnectors(ConversationFixtureMixin):
         }
         assert second.runtime_connector_scopes() == {"drive": ("read", "comment")}
 
-    def test_returns_none_for_foreign_org(self) -> None:
+    async def test_returns_none_for_foreign_org(self) -> None:
         store = InMemoryRuntimeApiStore()
-        conversation_id = self.seed_conversation(store)
-        result = store.update_conversation_connectors(
+        conversation_id = await self.seed_conversation(store)
+        result = await store.update_conversation_connectors(
             org_id="other_org",
             user_id=self.USER_ID,
             conversation_id=conversation_id,
@@ -72,17 +72,17 @@ class TestUpdateConversationConnectors(ConversationFixtureMixin):
         )
         assert result is None
 
-    def test_runtime_connector_scopes_drops_paused(self) -> None:
+    async def test_runtime_connector_scopes_drops_paused(self) -> None:
         store = InMemoryRuntimeApiStore()
-        conversation_id = self.seed_conversation(store)
-        store.update_conversation_connectors(
+        conversation_id = await self.seed_conversation(store)
+        await store.update_conversation_connectors(
             org_id=self.ORG_ID,
             user_id=self.USER_ID,
             conversation_id=conversation_id,
             scopes_patch={"slack": None, "notion": ("read",)},
             now=datetime.now(timezone.utc),
         )
-        record = store.get_conversation(
+        record = await store.get_conversation(
             org_id=self.ORG_ID,
             user_id=self.USER_ID,
             conversation_id=conversation_id,

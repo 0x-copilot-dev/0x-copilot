@@ -17,9 +17,6 @@ from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 from runtime_adapters.in_memory.share_snapshot_store import InMemoryShareSnapshotStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import (
@@ -44,7 +41,7 @@ class _RouteFixtureMixin:
         self, *, wire_fork: bool = True
     ) -> tuple[TestClient, InMemoryRuntimeApiStore, InMemoryShareSnapshotStore]:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",
@@ -75,7 +72,7 @@ class _RouteFixtureMixin:
     async def seed_source(
         self, sync_store: InMemoryRuntimeApiStore, *, message_count: int = 2
     ) -> None:
-        record = sync_store.create_conversation(
+        record = await sync_store.create_conversation(
             CreateConversationRequest(
                 org_id=self.Values.ORG,
                 user_id=self.Values.SHARING_USER,
@@ -85,7 +82,7 @@ class _RouteFixtureMixin:
         record = record.model_copy(update={"conversation_id": self.Values.SOURCE_CONV})
         sync_store.conversations[self.Values.SOURCE_CONV] = record
         for index in range(message_count):
-            sync_store.append_message(
+            await sync_store.append_message(
                 MessageRecord(
                     message_id=f"m{index}",
                     conversation_id=self.Values.SOURCE_CONV,

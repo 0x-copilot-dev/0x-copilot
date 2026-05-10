@@ -9,7 +9,6 @@ matched lifecycle the FE reducer expects.
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 # RuntimeEventProducer's enrichment path constructs an OpenAI client; this
@@ -50,10 +49,10 @@ async def _empty_resumer(_: object, __: object):
         yield {}
 
 
-def _seed_run_and_subagent_approval(store: InMemoryRuntimeApiStore) -> None:
+async def _seed_run_and_subagent_approval(store: InMemoryRuntimeApiStore) -> None:
     from runtime_api.schemas import MessageRecord
 
-    store.append_message(
+    await store.append_message(
         MessageRecord(
             message_id=_USER_MESSAGE_ID,
             conversation_id=_CONVERSATION_ID,
@@ -89,7 +88,7 @@ def _seed_run_and_subagent_approval(store: InMemoryRuntimeApiStore) -> None:
         ),
     )
     store.events_by_run.setdefault(_RUN_ID, [])
-    store.seed_approval_request(
+    await store.seed_approval_request(
         ApprovalRequestRecord(
             approval_id=_APPROVAL_ID,
             run_id=_RUN_ID,
@@ -117,9 +116,9 @@ def _make_handler(store: InMemoryRuntimeApiStore) -> RuntimeApprovalHandler:
     )
 
 
-def test_handle_emits_subagent_resumed_for_subagent_scoped_approval() -> None:
+async def test_handle_emits_subagent_resumed_for_subagent_scoped_approval() -> None:
     store = InMemoryRuntimeApiStore()
-    _seed_run_and_subagent_approval(store)
+    await _seed_run_and_subagent_approval(store)
     handler = _make_handler(store)
     command = RuntimeApprovalResolvedCommand(
         approval_id=_APPROVAL_ID,
@@ -128,7 +127,7 @@ def test_handle_emits_subagent_resumed_for_subagent_scoped_approval() -> None:
         decision=ApprovalDecision.APPROVED,
     )
 
-    asyncio.run(handler.handle(command))
+    await handler.handle(command)
 
     persisted = store.events_by_run[_RUN_ID]
     resumed = [
@@ -146,12 +145,14 @@ def test_handle_emits_subagent_resumed_for_subagent_scoped_approval() -> None:
     assert resumed[0].parent_task_id == _PARENT_TASK_ID
 
 
-def test_handle_skips_subagent_resumed_when_metadata_lacks_parent_task_id() -> None:
+async def test_handle_skips_subagent_resumed_when_metadata_lacks_parent_task_id() -> (
+    None
+):
     """Supervisor-scoped approvals have no `parent_task_id` on metadata —
     the handler should not emit a stray resume event."""
 
     store = InMemoryRuntimeApiStore()
-    _seed_run_and_subagent_approval(store)
+    await _seed_run_and_subagent_approval(store)
     # Strip the parent_task_id, simulating a supervisor-scoped interrupt.
     approval = store.approval_requests[_APPROVAL_ID]
     metadata = dict(approval.metadata)
@@ -168,7 +169,7 @@ def test_handle_skips_subagent_resumed_when_metadata_lacks_parent_task_id() -> N
         decision=ApprovalDecision.APPROVED,
     )
 
-    asyncio.run(handler.handle(command))
+    await handler.handle(command)
 
     resumed = [
         event
@@ -178,9 +179,9 @@ def test_handle_skips_subagent_resumed_when_metadata_lacks_parent_task_id() -> N
     assert resumed == []
 
 
-def test_handle_emits_subagent_resumed_with_rejected_reason_on_reject() -> None:
+async def test_handle_emits_subagent_resumed_with_rejected_reason_on_reject() -> None:
     store = InMemoryRuntimeApiStore()
-    _seed_run_and_subagent_approval(store)
+    await _seed_run_and_subagent_approval(store)
     handler = _make_handler(store)
     command = RuntimeApprovalResolvedCommand(
         approval_id=_APPROVAL_ID,
@@ -189,7 +190,7 @@ def test_handle_emits_subagent_resumed_with_rejected_reason_on_reject() -> None:
         decision=ApprovalDecision.REJECTED,
     )
 
-    asyncio.run(handler.handle(command))
+    await handler.handle(command)
 
     resumed = [
         event
@@ -200,14 +201,14 @@ def test_handle_emits_subagent_resumed_with_rejected_reason_on_reject() -> None:
     assert dict(resumed[0].payload)["reason"] == "rejected"
 
 
-def test_subagent_resumed_idempotent_on_handler_replay() -> None:
+async def test_subagent_resumed_idempotent_on_handler_replay() -> None:
     """AC-5 — a transient retry of ``handle()`` for the same approval must
     not re-emit ``SUBAGENT_RESUMED``. The handler tracks
     ``(run_id, parent_task_id)`` per-instance and skips duplicates.
     """
 
     store = InMemoryRuntimeApiStore()
-    _seed_run_and_subagent_approval(store)
+    await _seed_run_and_subagent_approval(store)
     handler = _make_handler(store)
     command = RuntimeApprovalResolvedCommand(
         approval_id=_APPROVAL_ID,
@@ -217,12 +218,12 @@ def test_subagent_resumed_idempotent_on_handler_replay() -> None:
     )
 
     # First invocation emits the resume.
-    asyncio.run(handler.handle(command))
+    await handler.handle(command)
     # Second invocation on the same handler instance for the same approval
     # must NOT re-emit. Many upstream paths short-circuit before reaching
     # the resume code (e.g. the run is no longer WAITING_FOR_APPROVAL), but
     # this dedup is the belt-and-braces inside the handler itself.
-    asyncio.run(handler.handle(command))
+    await handler.handle(command)
 
     resumed = [
         event

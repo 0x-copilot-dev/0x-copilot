@@ -10,8 +10,8 @@ from starlette import status
 
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
-from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from enterprise_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     BudgetEnforcement,
     BudgetRecord,
@@ -83,7 +83,9 @@ class InMemoryRuntimeApiStore:
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
         self.audit_log: list[tuple[str, dict[str, object]]] = []
-        self._audit_chain_signer = AuditChainSigner.from_env()
+        self._audit_chain_signer = AuditChainSigner.from_env(
+            environment_env_var="RUNTIME_ENVIRONMENT"
+        )
         self._audit_chain_heads_by_org: dict[str, bytes] = {}
         self._audit_chain_counts_by_org: dict[str, int] = {}
         self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
@@ -138,7 +140,7 @@ class InMemoryRuntimeApiStore:
             ),
         }
 
-    def create_conversation(
+    async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationRecord:
         """Create or idempotently return a scoped conversation."""
@@ -164,7 +166,7 @@ class InMemoryRuntimeApiStore:
             ] = conversation.conversation_id
         return conversation
 
-    def get_conversation(
+    async def get_conversation(
         self,
         *,
         org_id: str,
@@ -180,7 +182,7 @@ class InMemoryRuntimeApiStore:
             return None
         return conversation
 
-    def get_conversation_for_org(
+    async def get_conversation_for_org(
         self,
         *,
         org_id: str,
@@ -193,7 +195,7 @@ class InMemoryRuntimeApiStore:
             return None
         return conversation
 
-    def list_conversations(
+    async def list_conversations(
         self,
         *,
         org_id: str,
@@ -231,7 +233,7 @@ class InMemoryRuntimeApiStore:
             )[:limit]
         )
 
-    def list_messages(
+    async def list_messages(
         self,
         *,
         org_id: str,
@@ -250,7 +252,7 @@ class InMemoryRuntimeApiStore:
             records = [message for message in records if message.deleted_at is None]
         return tuple(sorted(records, key=lambda message: message.created_at)[:limit])
 
-    def append_message(self, message: MessageRecord) -> MessageRecord:
+    async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
 
         self.messages[message.message_id] = message
@@ -261,7 +263,7 @@ class InMemoryRuntimeApiStore:
             )
         return message
 
-    def insert_forked_conversation(
+    async def insert_forked_conversation(
         self, conversation: ConversationRecord
     ) -> ConversationRecord:
         """Insert a fork-authored conversation row verbatim (PR 6.2).
@@ -275,7 +277,7 @@ class InMemoryRuntimeApiStore:
         self.conversations[conversation.conversation_id] = conversation
         return conversation
 
-    def update_conversation_connectors(
+    async def update_conversation_connectors(
         self,
         *,
         org_id: str,
@@ -286,7 +288,7 @@ class InMemoryRuntimeApiStore:
     ) -> ConversationRecord | None:
         """RFC 7396 merge-patch enabled_connectors and stamp the timestamp."""
 
-        conversation = self.get_conversation(
+        conversation = await self.get_conversation(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
         if conversation is None:
@@ -307,10 +309,12 @@ class InMemoryRuntimeApiStore:
 
     # --- PR 1.6: workspace defaults + conversation lifecycle ---------- #
 
-    def get_workspace_defaults(self, *, org_id: str) -> WorkspaceDefaultsRecord | None:
+    async def get_workspace_defaults(
+        self, *, org_id: str
+    ) -> WorkspaceDefaultsRecord | None:
         return self.workspace_defaults.get(org_id)
 
-    def upsert_workspace_defaults(
+    async def upsert_workspace_defaults(
         self, *, record: WorkspaceDefaultsRecord
     ) -> WorkspaceDefaultsRecord:
         # Retention is composed by the service from ``retention_policies``;
@@ -320,7 +324,7 @@ class InMemoryRuntimeApiStore:
         self.workspace_defaults[record.org_id] = persisted
         return persisted
 
-    def update_conversation(
+    async def update_conversation(
         self,
         *,
         org_id: str,
@@ -342,7 +346,7 @@ class InMemoryRuntimeApiStore:
         round-trip an idempotent no-op.
         """
 
-        conversation = self.get_conversation(
+        conversation = await self.get_conversation(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
         if conversation is None:
@@ -363,7 +367,7 @@ class InMemoryRuntimeApiStore:
         self.conversations[conversation_id] = updated
         return updated
 
-    def soft_delete_conversation(
+    async def soft_delete_conversation(
         self,
         *,
         org_id: str,
@@ -378,7 +382,7 @@ class InMemoryRuntimeApiStore:
         before invoking this method.
         """
 
-        conversation = self.get_conversation(
+        conversation = await self.get_conversation(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
         if conversation is None:
@@ -389,7 +393,7 @@ class InMemoryRuntimeApiStore:
         self.conversations[conversation_id] = updated
         return updated
 
-    def restore_conversation(
+    async def restore_conversation(
         self,
         *,
         org_id: str,
@@ -399,7 +403,7 @@ class InMemoryRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Clear ``deleted_at``. Returns ``None`` if the row was reaped."""
 
-        conversation = self.get_conversation(
+        conversation = await self.get_conversation(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
         )
         if conversation is None:
@@ -413,7 +417,7 @@ class InMemoryRuntimeApiStore:
         self.conversations[conversation_id] = updated
         return updated
 
-    def create_run_with_user_message(
+    async def create_run_with_user_message(
         self,
         *,
         request: CreateRunRequest,
@@ -510,7 +514,7 @@ class InMemoryRuntimeApiStore:
             return None
         return max(matches, key=lambda m: m.created_at).message_id
 
-    def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
+    async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
 
         run = self.runs.get(run_id)
@@ -518,7 +522,7 @@ class InMemoryRuntimeApiStore:
             return None
         return run
 
-    def get_active_run_for_conversation(
+    async def get_active_run_for_conversation(
         self,
         *,
         org_id: str,
@@ -543,7 +547,9 @@ class InMemoryRuntimeApiStore:
             return None
         return max(candidates, key=lambda run: run.created_at)
 
-    def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
+    async def update_run_status(
+        self, *, run_id: str, status: AgentRunStatus
+    ) -> RunRecord:
         """Update run status and relevant timestamps."""
 
         run = self.runs[run_id]
@@ -554,7 +560,7 @@ class InMemoryRuntimeApiStore:
         self.runs[run_id] = updated
         return updated
 
-    def set_run_latest_sequence(
+    async def set_run_latest_sequence(
         self, *, run_id: str, latest_sequence_no: int
     ) -> RunRecord:
         """Persist latest event sequence for run inspection."""
@@ -565,7 +571,7 @@ class InMemoryRuntimeApiStore:
         self.runs[run_id] = updated
         return updated
 
-    def record_approval_decision(
+    async def record_approval_decision(
         self,
         *,
         record: ApprovalDecisionRecord,
@@ -586,7 +592,7 @@ class InMemoryRuntimeApiStore:
         )
         return record
 
-    def create_approval_request(
+    async def create_approval_request(
         self,
         *,
         record: ApprovalRequestRecord,
@@ -604,7 +610,7 @@ class InMemoryRuntimeApiStore:
         self.approval_requests[record.approval_id] = record
         return record
 
-    def forward_approval_request(
+    async def forward_approval_request(
         self,
         *,
         parent_approval_id: str,
@@ -691,7 +697,7 @@ class InMemoryRuntimeApiStore:
         )
         return updated_parent, normalized_child
 
-    def get_approval_request(
+    async def get_approval_request(
         self,
         *,
         org_id: str,
@@ -704,7 +710,7 @@ class InMemoryRuntimeApiStore:
             return None
         return approval
 
-    def list_assigned_approvals(
+    async def list_assigned_approvals(
         self,
         *,
         org_id: str,
@@ -743,7 +749,7 @@ class InMemoryRuntimeApiStore:
         )
         return tuple(rows[:limit])
 
-    def list_pending_expired_approvals(
+    async def list_pending_expired_approvals(
         self,
         *,
         now: datetime,
@@ -769,7 +775,7 @@ class InMemoryRuntimeApiStore:
         rows.sort(key=lambda record: (record.expires_at or now, record.approval_id))
         return tuple(rows[:limit])
 
-    def list_pending_approvals_for_membership_audit(
+    async def list_pending_approvals_for_membership_audit(
         self,
         *,
         limit: int,
@@ -786,7 +792,9 @@ class InMemoryRuntimeApiStore:
         rows.sort(key=lambda record: (record.created_at, record.approval_id))
         return tuple(rows[:limit])
 
-    def write_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
+    async def write_audit_log(
+        self, *, event_type: str, record: dict[str, object]
+    ) -> None:
         """Append an audit record with HMAC hash-chain fields attached.
 
         Chain is per-(audit_log, org_id). The record dict gains ``seq``,
@@ -838,7 +846,7 @@ class InMemoryRuntimeApiStore:
         signable["__event_type__"] = event_type
         return signable
 
-    def delete_user_history(
+    async def delete_user_history(
         self,
         *,
         org_id: str,
@@ -901,7 +909,7 @@ class InMemoryRuntimeApiStore:
             and self.runs[run_id].user_id == user_id
         )
         audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
-        self.write_audit_log(
+        await self.write_audit_log(
             event_type="user_history_deleted",
             record={
                 _Fields.AUDIT_EVENT_ID: audit_event_id,
@@ -923,17 +931,19 @@ class InMemoryRuntimeApiStore:
 
     # Usage + pricing (B1, B2, B3, B4) -----------------------------------
 
-    def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
         """Idempotent on ``run_id``; second write is a no-op."""
 
         if record.run_id in self.run_usage:
             return
         self.run_usage[record.run_id] = record
 
-    def record_model_call_usage(self, record: RuntimeModelCallUsageRecord) -> None:
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
         self.model_call_usage.append(record)
 
-    def update_run_usage_cost(
+    async def update_run_usage_cost(
         self,
         *,
         run_id: str,
@@ -952,7 +962,7 @@ class InMemoryRuntimeApiStore:
             }
         )
 
-    def update_model_call_usage_cost(
+    async def update_model_call_usage_cost(
         self,
         *,
         usage_id: str,
@@ -971,7 +981,7 @@ class InMemoryRuntimeApiStore:
                 )
                 return
 
-    def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
         # Close the active row for the same triple if its effective_from is
         # strictly earlier; preserves the partial unique index semantics.
         for index, existing in enumerate(self.pricing_rows):
@@ -988,7 +998,7 @@ class InMemoryRuntimeApiStore:
         self.pricing_rows.append(record)
         return record
 
-    def lookup_pricing(
+    async def lookup_pricing(
         self,
         *,
         provider: str,
@@ -1009,7 +1019,7 @@ class InMemoryRuntimeApiStore:
             return None
         return max(candidates, key=lambda row: row.effective_from)
 
-    def list_runs_missing_cost(
+    async def list_runs_missing_cost(
         self,
         *,
         limit: int,
@@ -1023,7 +1033,7 @@ class InMemoryRuntimeApiStore:
             rows = [row for row in rows if row.id > cursor]
         return tuple(rows[:limit])
 
-    def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
         key = (
             row.org_id,
             row.user_id,
@@ -1033,7 +1043,7 @@ class InMemoryRuntimeApiStore:
         )
         self.user_daily_usage[key] = row
 
-    def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
         key = (
             row.org_id,
             row.day.isoformat(),
@@ -1042,11 +1052,11 @@ class InMemoryRuntimeApiStore:
         )
         self.org_daily_usage[key] = row
 
-    def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
         key = (row.org_id, row.day.isoformat(), row.connector_slug)
         self.connector_daily_usage[key] = row
 
-    def query_user_daily_usage(
+    async def query_user_daily_usage(
         self,
         *,
         org_id: str,
@@ -1068,7 +1078,7 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def query_org_daily_usage(
+    async def query_org_daily_usage(
         self,
         *,
         org_id: str,
@@ -1087,7 +1097,7 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def query_connector_daily_usage(
+    async def query_connector_daily_usage(
         self,
         *,
         org_id: str,
@@ -1106,7 +1116,7 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def query_model_call_usage_for_range(
+    async def query_model_call_usage_for_range(
         self,
         *,
         org_id: str | None,
@@ -1126,7 +1136,7 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def list_audit_log_events(
+    async def list_audit_log_events(
         self,
         *,
         org_id: str,
@@ -1176,7 +1186,7 @@ class InMemoryRuntimeApiStore:
         )
         return tuple(rows[:limit])
 
-    def query_last_completed_tool_connector_slug(
+    async def query_last_completed_tool_connector_slug(
         self,
         *,
         org_id: str,
@@ -1196,7 +1206,7 @@ class InMemoryRuntimeApiStore:
         candidates.sort(key=lambda pair: pair[1], reverse=True)
         return candidates[0][0]
 
-    def query_run_usage(
+    async def query_run_usage(
         self,
         *,
         org_id: str,
@@ -1207,7 +1217,7 @@ class InMemoryRuntimeApiStore:
             return None
         return record
 
-    def query_run_usage_for_range(
+    async def query_run_usage_for_range(
         self,
         *,
         org_id: str | None,
@@ -1230,7 +1240,7 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def query_top_conversations(
+    async def query_top_conversations(
         self,
         *,
         org_id: str,
@@ -1289,7 +1299,7 @@ class InMemoryRuntimeApiStore:
             return left
         return left + right
 
-    def query_model_call_usage_for_run(
+    async def query_model_call_usage_for_run(
         self,
         *,
         org_id: str,
@@ -1301,7 +1311,7 @@ class InMemoryRuntimeApiStore:
             if row.org_id == org_id and row.run_id == run_id
         )
 
-    def query_latest_run_usage_for_conversation(
+    async def query_latest_run_usage_for_conversation(
         self,
         *,
         org_id: str,
@@ -1320,7 +1330,7 @@ class InMemoryRuntimeApiStore:
             return None
         return max(candidates, key=lambda r: r.completed_at)
 
-    def query_compression_events_for_run(
+    async def query_compression_events_for_run(
         self,
         *,
         org_id: str,
@@ -1341,7 +1351,7 @@ class InMemoryRuntimeApiStore:
     # Budgets (B7).
     # ------------------------------------------------------------------
 
-    def lookup_budgets_for_run(
+    async def lookup_budgets_for_run(
         self,
         *,
         org_id: str,
@@ -1421,7 +1431,7 @@ class InMemoryRuntimeApiStore:
         _ = (date, BudgetEnforcement)
         return tuple(results)
 
-    def charge_budget(
+    async def charge_budget(
         self,
         *,
         budget_id: str,
@@ -1456,7 +1466,7 @@ class InMemoryRuntimeApiStore:
         )
         return ChargeOutcome.APPLIED
 
-    def reserve_budget(
+    async def reserve_budget(
         self,
         *,
         budget_id: str,
@@ -1492,7 +1502,7 @@ class InMemoryRuntimeApiStore:
         self.budget_reservations[record.reservation_id] = record
         return record
 
-    def consume_budget_reservation(
+    async def consume_budget_reservation(
         self,
         *,
         reservation_id: str,
@@ -1505,7 +1515,7 @@ class InMemoryRuntimeApiStore:
             update={"consumed_at": now}
         )
 
-    def reap_expired_budget_reservations(self, *, now) -> int:
+    async def reap_expired_budget_reservations(self, *, now) -> int:
         purged = 0
         for reservation_id, record in list(self.budget_reservations.items()):
             if record.consumed_at is None and record.expires_at < now:
@@ -1513,7 +1523,7 @@ class InMemoryRuntimeApiStore:
                 purged += 1
         return purged
 
-    def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
         return tuple(
             sorted(
                 (b for b in self.budgets.values() if b.org_id == org_id),
@@ -1522,7 +1532,9 @@ class InMemoryRuntimeApiStore:
             )
         )
 
-    def list_tool_budgets_for_org(self, *, org_id: str) -> Sequence[ToolBudgetRecord]:
+    async def list_tool_budgets_for_org(
+        self, *, org_id: str
+    ) -> Sequence[ToolBudgetRecord]:
         """Return per-tool budgets visible to ``org_id`` (org rows + global).
 
         Mirrors the ``runtime_tool_budgets`` SELECT used by the postgres
@@ -1537,13 +1549,13 @@ class InMemoryRuntimeApiStore:
             if b.org_id == org_id or b.org_id is None
         )
 
-    def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
         record = self.budgets.get(budget_id)
         if record is None or record.org_id != org_id:
             return None
         return record
 
-    def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
         # Enforce the spec's UNIQUE (org_id, COALESCE(user_id,'<org>'), scope, period).
         for existing in self.budgets.values():
             if (
@@ -1556,13 +1568,13 @@ class InMemoryRuntimeApiStore:
         self.budgets[record.id] = record
         return record
 
-    def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
         if record.id not in self.budgets:
             raise KeyError(record.id)
         self.budgets[record.id] = record
         return record
 
-    def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
         record = self.budgets.get(budget_id)
         if record is None or record.org_id != org_id:
             return
@@ -1583,10 +1595,10 @@ class InMemoryRuntimeApiStore:
 
     # Retention (C8) ----------------------------------------------------
 
-    def list_retention_policies(self, *, org_id: str) -> Sequence:
+    async def list_retention_policies(self, *, org_id: str) -> Sequence:
         return tuple(self.retention_policies.get(org_id, ()))
 
-    def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+    async def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
         bucket = list(self.retention_policies.get(record.org_id, ()))
         bucket = [
             row
@@ -1598,13 +1610,13 @@ class InMemoryRuntimeApiStore:
         self.retention_policies[record.org_id] = tuple(bucket)
         return record
 
-    def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
         bucket = self.retention_policies.get(org_id, ())
         self.retention_policies[org_id] = tuple(
             row for row in bucket if row.id != policy_id
         )
 
-    def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
+    async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with a monotonically increasing run sequence number."""
 
         events = self.events_by_run.setdefault(event.run_id, [])
@@ -1638,7 +1650,7 @@ class InMemoryRuntimeApiStore:
         events.append(envelope)
         return envelope
 
-    def list_events_after(
+    async def list_events_after(
         self,
         *,
         org_id: str,
@@ -1647,7 +1659,7 @@ class InMemoryRuntimeApiStore:
     ) -> Sequence[RuntimeEventEnvelope]:
         """Return persisted events after a sequence number."""
 
-        run = self.get_run(org_id=org_id, run_id=run_id)
+        run = await self.get_run(org_id=org_id, run_id=run_id)
         if run is None:
             return ()
         return tuple(
@@ -1656,12 +1668,12 @@ class InMemoryRuntimeApiStore:
             if event.sequence_no > after_sequence
         )
 
-    def get_latest_sequence(self, *, run_id: str) -> int:
+    async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
         return len(self.events_by_run.get(run_id, ()))
 
-    def enqueue_run(self, command: RuntimeRunCommand) -> None:
+    async def enqueue_run(self, command: RuntimeRunCommand) -> None:
         """Enqueue a run command for deterministic worker tests."""
 
         self.run_commands.append(command)
@@ -1674,7 +1686,7 @@ class InMemoryRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
-    def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
+    async def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         """Enqueue a cancel command for deterministic worker tests."""
 
         self.cancel_commands.append(command)
@@ -1687,7 +1699,7 @@ class InMemoryRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
-    def enqueue_approval_resolved(
+    async def enqueue_approval_resolved(
         self, command: RuntimeApprovalResolvedCommand
     ) -> None:
         """Enqueue an approval resolution command for deterministic worker tests."""
@@ -1702,7 +1714,7 @@ class InMemoryRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
-    def claim_next(
+    async def claim_next(
         self,
         *,
         worker_id: str,
@@ -1730,13 +1742,13 @@ class InMemoryRuntimeApiStore:
             return claim
         return None
 
-    def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
         """Mark a claimed command complete."""
 
         self._queue_statuses[result.command_id] = OutboxStatus.COMPLETED
         self._queue_claims.pop(result.command_id, None)
 
-    def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
         """Release a command so another worker may claim it later."""
 
         self._queue_statuses[result.command_id] = OutboxStatus.RETRY
@@ -1745,13 +1757,13 @@ class InMemoryRuntimeApiStore:
         )
         self._queue_claims.pop(result.command_id, None)
 
-    def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
         """Mark a command permanently failed after retries are exhausted."""
 
         self._queue_statuses[result.command_id] = OutboxStatus.DEAD_LETTER
         self._queue_claims.pop(result.command_id, None)
 
-    def seed_approval_request(
+    async def seed_approval_request(
         self, record: ApprovalRequestRecord
     ) -> ApprovalRequestRecord:
         """Add a pending approval request for API tests or future worker fakes."""

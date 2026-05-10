@@ -21,7 +21,7 @@ def _audit_hmac_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RBAC_MODE", "enforce")
 
 
-def _seed_audit(
+async def _seed_audit(
     store: InMemoryRuntimeApiStore,
     *,
     org_id: str,
@@ -29,7 +29,7 @@ def _seed_audit(
     action: str,
     when: datetime,
 ) -> None:
-    store.write_audit_log(
+    await store.write_audit_log(
         event_type="audit",
         record={
             "audit_id": f"audit-{action}-{when.isoformat()}",
@@ -65,17 +65,17 @@ def _client() -> tuple[TestClient, InMemoryRuntimeApiStore]:
 
 
 class TestAuditListRoute:
-    def test_returns_audit_rows_newest_first(self) -> None:
+    async def test_returns_audit_rows_newest_first(self) -> None:
         client, store = _client()
         now = datetime.now(timezone.utc)
-        _seed_audit(
+        await _seed_audit(
             store,
             org_id="org_a",
             user_id="user_1",
             action="approval.created",
             when=now - timedelta(seconds=2),
         )
-        _seed_audit(
+        await _seed_audit(
             store,
             org_id="org_a",
             user_id="user_1",
@@ -99,17 +99,17 @@ class TestAuditListRoute:
         assert body["rows"][1]["action"] == "approval.created"
         assert body["rows"][0]["chain"]["seq"] is not None
 
-    def test_filter_action_prefix(self) -> None:
+    async def test_filter_action_prefix(self) -> None:
         client, store = _client()
         now = datetime.now(timezone.utc)
-        _seed_audit(
+        await _seed_audit(
             store,
             org_id="org_a",
             user_id="user_1",
             action="approval.decided",
             when=now,
         )
-        _seed_audit(
+        await _seed_audit(
             store,
             org_id="org_a",
             user_id="user_1",

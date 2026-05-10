@@ -54,28 +54,28 @@ def _usage(
 
 
 class TestRunUsageInMemoryStore:
-    def test_record_run_usage_inserts_row(self) -> None:
+    async def test_record_run_usage_inserts_row(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.record_run_usage(_usage(run_id="run_1"))
+        await store.record_run_usage(_usage(run_id="run_1"))
         assert "run_1" in store.run_usage
         row = store.run_usage["run_1"]
         assert row.input_tokens == 1_000
         assert row.cost_micro_usd is None  # B3 hook stamps later
 
-    def test_record_run_usage_is_idempotent(self) -> None:
+    async def test_record_run_usage_is_idempotent(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.record_run_usage(_usage(run_id="run_1"))
+        await store.record_run_usage(_usage(run_id="run_1"))
         # Second write with different values -> no-op (run-completion event
         # is the source of truth; usage row is derived).
         modified = _usage(run_id="run_1")
         modified = modified.model_copy(update={"input_tokens": 9_999})
-        store.record_run_usage(modified)
+        await store.record_run_usage(modified)
         assert store.run_usage["run_1"].input_tokens == 1_000
 
-    def test_update_run_usage_cost_stamps_columns(self) -> None:
+    async def test_update_run_usage_cost_stamps_columns(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.record_run_usage(_usage(run_id="run_1"))
-        store.update_run_usage_cost(
+        await store.record_run_usage(_usage(run_id="run_1"))
+        await store.update_run_usage_cost(
             run_id="run_1",
             cost_micro_usd=4_500,
             pricing_id="pricing-abc",
@@ -86,10 +86,10 @@ class TestRunUsageInMemoryStore:
         assert row.pricing_id == "pricing-abc"
         assert row.pricing_version == "anthropic-2026-q1.v1"
 
-    def test_update_cost_no_op_when_run_missing(self) -> None:
+    async def test_update_cost_no_op_when_run_missing(self) -> None:
         store = InMemoryRuntimeApiStore()
         # Should not raise; no row for this run_id yet.
-        store.update_run_usage_cost(
+        await store.update_run_usage_cost(
             run_id="missing_run",
             cost_micro_usd=1,
             pricing_id="x",
@@ -97,17 +97,17 @@ class TestRunUsageInMemoryStore:
         )
         assert "missing_run" not in store.run_usage
 
-    def test_query_run_usage_scoped_by_org(self) -> None:
+    async def test_query_run_usage_scoped_by_org(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.record_run_usage(_usage(run_id="run_1", org_id="org_a"))
-        store.record_run_usage(_usage(run_id="run_2", org_id="org_b"))
-        assert store.query_run_usage(org_id="org_a", run_id="run_1") is not None
+        await store.record_run_usage(_usage(run_id="run_1", org_id="org_a"))
+        await store.record_run_usage(_usage(run_id="run_2", org_id="org_b"))
+        assert await store.query_run_usage(org_id="org_a", run_id="run_1") is not None
         # Cross-tenant lookup returns None.
-        assert store.query_run_usage(org_id="org_b", run_id="run_1") is None
+        assert await store.query_run_usage(org_id="org_b", run_id="run_1") is None
 
-    def test_query_top_conversations_excludes_pii_purged(self) -> None:
+    async def test_query_top_conversations_excludes_pii_purged(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.insert_forked_conversation(
+        await store.insert_forked_conversation(
             ConversationRecord(
                 conversation_id="conv_1",
                 org_id="org_a",
@@ -116,13 +116,13 @@ class TestRunUsageInMemoryStore:
                 title="Quarterly planning",
             )
         )
-        store.record_run_usage(_usage(run_id="run_1"))
-        store.record_run_usage(_usage(run_id="run_3", cost_micro_usd=4_500))
+        await store.record_run_usage(_usage(run_id="run_1"))
+        await store.record_run_usage(_usage(run_id="run_3", cost_micro_usd=4_500))
         purged = _usage(run_id="run_2").model_copy(
             update={"pii_purged_at": datetime(2026, 6, 1, tzinfo=timezone.utc)}
         )
-        store.record_run_usage(purged)
-        rows = store.query_top_conversations(
+        await store.record_run_usage(purged)
+        rows = await store.query_top_conversations(
             org_id="org_a",
             user_id="user_1",
             start=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -143,10 +143,10 @@ class TestRunUsageInMemoryStore:
 
 
 class TestPricingUpsertReplacesActiveRow:
-    def test_later_pricing_closes_prior_active(self) -> None:
+    async def test_later_pricing_closes_prior_active(self) -> None:
         store = InMemoryRuntimeApiStore()
         v1 = _pricing()
-        store.upsert_pricing(v1)
+        await store.upsert_pricing(v1)
         v2 = v1.model_copy(
             update={
                 "id": "different",
@@ -155,7 +155,7 @@ class TestPricingUpsertReplacesActiveRow:
                 "input_per_1m_micro_usd": 1_200_000,
             }
         )
-        store.upsert_pricing(v2)
+        await store.upsert_pricing(v2)
         # The old row's effective_until should now equal v2's effective_from.
         rows = [
             r for r in store.pricing_rows if r.pricing_version == v1.pricing_version
@@ -163,7 +163,7 @@ class TestPricingUpsertReplacesActiveRow:
         assert len(rows) == 1
         assert rows[0].effective_until == v2.effective_from
         # Lookup at the boundary returns v2 (effective_until is exclusive).
-        active = store.lookup_pricing(
+        active = await store.lookup_pricing(
             provider="openai",
             model_name="gpt-5.4-mini",
             region="global",
@@ -172,10 +172,10 @@ class TestPricingUpsertReplacesActiveRow:
         assert active is not None
         assert active.pricing_version == "openai-2026-q2.v1"
 
-    def test_lookup_at_historical_time_returns_old_pricing(self) -> None:
+    async def test_lookup_at_historical_time_returns_old_pricing(self) -> None:
         store = InMemoryRuntimeApiStore()
         v1 = _pricing()
-        store.upsert_pricing(v1)
+        await store.upsert_pricing(v1)
         v2 = v1.model_copy(
             update={
                 "id": "v2",
@@ -183,9 +183,9 @@ class TestPricingUpsertReplacesActiveRow:
                 "pricing_version": "openai-2026-q2.v1",
             }
         )
-        store.upsert_pricing(v2)
+        await store.upsert_pricing(v2)
         # Run completed in March -> still v1 pricing.
-        historical = store.lookup_pricing(
+        historical = await store.lookup_pricing(
             provider="openai",
             model_name="gpt-5.4-mini",
             region="global",

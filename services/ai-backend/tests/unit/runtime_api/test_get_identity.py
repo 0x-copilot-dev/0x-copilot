@@ -115,14 +115,10 @@ class TestWorkspaceRoutesUseStrictIdentity:
         from runtime_api.app import RuntimeApiAppFactory
         from agent_runtime.api.service import RuntimeApiService
         from agent_runtime.settings import RuntimeSettings
-        from runtime_adapters.in_memory import (
-            AsyncInMemoryRuntimeApiStore,
-            InMemoryRuntimeApiStore,
-        )
+        from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
-        sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",

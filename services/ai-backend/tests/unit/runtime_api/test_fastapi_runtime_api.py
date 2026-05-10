@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -142,10 +141,12 @@ class FastApiRuntimeApiTestMixin:
 
 
 class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
-    def test_conversation_endpoints_return_scoped_redacted_contracts(self) -> None:
+    async def test_conversation_endpoints_return_scoped_redacted_contracts(
+        self,
+    ) -> None:
         client, _store = self.create_client()
 
-        created = self.create_conversation(client)
+        created = await self.create_conversation(client)
         conversation_id = created["conversation_id"]
 
         assert created["metadata"]["token"] == "[redacted]"
@@ -163,10 +164,10 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert messages.status_code == 200
         assert messages.json()["messages"] == []
 
-    def test_list_conversations_returns_scoped_recent_conversations(self) -> None:
+    async def test_list_conversations_returns_scoped_recent_conversations(self) -> None:
         client, _store = self.create_client()
 
-        first = self.create_conversation(client)
+        first = await self.create_conversation(client)
         second_payload = {
             **self.conversation_payload(),
             "title": "Follow-up review",
@@ -188,9 +189,11 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         }
         assert all(item["metadata"]["token"] == "[redacted]" for item in conversations)
 
-    def test_run_submission_is_idempotent_and_enqueues_worker_command(self) -> None:
+    async def test_run_submission_is_idempotent_and_enqueues_worker_command(
+        self,
+    ) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
 
         first = self.create_run(client, conversation["conversation_id"])
         second_response = client.post(
@@ -258,9 +261,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert run.runtime_context.model_profile.model_name == "gpt-5.4-mini"
         assert run.runtime_context.max_parallel_tasks == 4
 
-    def test_run_submission_round_trips_composer_metadata(self) -> None:
+    async def test_run_submission_round_trips_composer_metadata(self) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         payload = self.run_payload(conversation["conversation_id"])
         payload["idempotency_key"] = "idem_composer_metadata"
         payload["content"] = [{"type": "text", "text": self.Values.USER_INPUT}]
@@ -304,22 +307,20 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert run.runtime_context.trace_metadata["branch_id"] == "branch_1"
         assert run.runtime_context.trace_metadata["branch"] == payload["branch"]
 
-    def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
+    async def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
         client, _store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         run = self.create_run(client, conversation["conversation_id"])
 
         replay = client.get(
             f"/v1/agent/runs/{run['run_id']}/events",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
         )
-        stream_text = asyncio.run(
-            self.collect_sse_stream(
-                client,
-                run["run_id"],
-                after_sequence=1,
-                follow=False,
-            )
+        stream_text = await self.collect_sse_stream(
+            client,
+            run["run_id"],
+            after_sequence=1,
+            follow=False,
         )
 
         assert replay.status_code == 200
@@ -328,9 +329,9 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert "event: runtime_event" in stream_text
         assert '"event_type":"heartbeat"' in stream_text
 
-    def test_cancel_run_persists_cancelling_state_event_and_command(self) -> None:
+    async def test_cancel_run_persists_cancelling_state_event_and_command(self) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         run = self.create_run(client, conversation["conversation_id"])
 
         response = client.post(
@@ -354,11 +355,11 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "run_cancelling",
         ]
 
-    def test_approval_decision_persists_and_enqueues_resume_command(self) -> None:
+    async def test_approval_decision_persists_and_enqueues_resume_command(self) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         run = self.create_run(client, conversation["conversation_id"])
-        store.seed_approval_request(
+        await store.seed_approval_request(
             ApprovalRequestRecord(
                 approval_id=self.Values.APPROVAL_ID,
                 run_id=run["run_id"],
@@ -379,16 +380,16 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert len(store.approval_commands) == 1
         assert store.approval_requests[self.Values.APPROVAL_ID].status == "approved"
 
-    def test_worker_queue_claim_retry_and_dead_letter_semantics(self) -> None:
+    async def test_worker_queue_claim_retry_and_dead_letter_semantics(self) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         run = self.create_run(client, conversation["conversation_id"])
 
-        first_claim = store.claim_next(
+        first_claim = await store.claim_next(
             worker_id="worker_1",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
-        locked_claim = store.claim_next(
+        locked_claim = await store.claim_next(
             worker_id="worker_2",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
@@ -398,14 +399,14 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert first_claim.attempts == 1
         assert locked_claim is None
 
-        store.mark_retry(
+        await store.mark_retry(
             result=RuntimeWorkerResult(
                 command_id=first_claim.command_id,
                 succeeded=False,
                 retry_available_at=datetime.now(timezone.utc),
             )
         )
-        retry_claim = store.claim_next(
+        retry_claim = await store.claim_next(
             worker_id="worker_2",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
@@ -414,61 +415,59 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert retry_claim.locked_by == "worker_2"
         assert retry_claim.attempts == 2
 
-        store.mark_dead_letter(
+        await store.mark_dead_letter(
             result=RuntimeWorkerResult(
                 command_id=retry_claim.command_id, succeeded=False
             )
         )
         assert (
-            store.claim_next(
+            await store.claim_next(
                 worker_id="worker_3",
                 lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
             is None
         )
 
-    def test_runtime_api_acceptance_flow_covers_multi_turn_lifecycle(self) -> None:
+    async def test_runtime_api_acceptance_flow_covers_multi_turn_lifecycle(
+        self,
+    ) -> None:
         client, store = self.create_client()
-        conversation = self.create_conversation(client)
+        conversation = await self.create_conversation(client)
         conversation_id = conversation["conversation_id"]
         producer = RuntimeEventProducer(persistence=store, event_store=store)
 
         first_run = self.create_run(client, conversation_id)
-        first_claim = store.claim_next(
+        first_claim = await store.claim_next(
             worker_id="worker_1",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
         assert first_claim is not None
         assert first_claim.run_id == first_run["run_id"]
 
-        running = store.update_run_status(
+        running = await store.update_run_status(
             run_id=first_run["run_id"],
             status=AgentRunStatus.RUNNING,
         )
-        asyncio.run(
-            producer.append_api_event(
-                run=running,
-                source=StreamEventSource.RUNTIME,
-                event_type=RuntimeApiEventType.RUN_STARTED,
-                payload={
-                    "message": "Worker started.",
-                    "authorization": self.Values.SECRET,
-                },
-            )
+        await producer.append_api_event(
+            run=running,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_STARTED,
+            payload={
+                "message": "Worker started.",
+                "authorization": self.Values.SECRET,
+            },
         )
-        completed = store.update_run_status(
+        completed = await store.update_run_status(
             run_id=first_run["run_id"],
             status=AgentRunStatus.COMPLETED,
         )
-        asyncio.run(
-            producer.append_api_event(
-                run=completed,
-                source=StreamEventSource.RUNTIME,
-                event_type=RuntimeApiEventType.RUN_COMPLETED,
-                payload={"message": "Worker completed."},
-            )
+        await producer.append_api_event(
+            run=completed,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_COMPLETED,
+            payload={"message": "Worker completed."},
         )
-        store.mark_complete(
+        await store.mark_complete(
             result=RuntimeWorkerResult(
                 command_id=first_claim.command_id, succeeded=True
             )
@@ -483,13 +482,11 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
                 "follow": False,
             },
         )
-        stream_text = asyncio.run(
-            self.collect_sse_stream(
-                client,
-                first_run["run_id"],
-                after_sequence=1,
-                follow=False,
-            )
+        stream_text = await self.collect_sse_stream(
+            client,
+            first_run["run_id"],
+            after_sequence=1,
+            follow=False,
         )
 
         assert replay.status_code == 200
@@ -517,7 +514,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             f"/v1/agent/conversations/{conversation_id}/messages",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
         )
-        second_claim = store.claim_next(
+        second_claim = await store.claim_next(
             worker_id="worker_2",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
@@ -530,7 +527,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "Now focus only on launch risks without named owners.",
         ]
 
-        store.seed_approval_request(
+        await store.seed_approval_request(
             ApprovalRequestRecord(
                 approval_id=self.Values.APPROVAL_ID,
                 run_id=second_run["run_id"],
@@ -570,7 +567,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "run_cancelling",
         ]
         approval_handler = RuntimeApprovalHandler(persistence=store, event_store=store)
-        asyncio.run(approval_handler.handle(store.approval_commands[0]))
+        await approval_handler.handle(store.approval_commands[0])
         after_worker_replay = client.get(
             f"/v1/agent/runs/{second_run['run_id']}/events",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},

@@ -20,9 +20,6 @@ import pytest
 from agent_runtime.api.conversation_fork import ConversationForkService
 from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from agent_runtime.execution.contracts import RuntimeErrorCode
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_adapters.in_memory.share_snapshot_store import InMemoryShareSnapshotStore
 from runtime_api.http.errors import RuntimeApiError
@@ -65,9 +62,9 @@ class _ForkFixtureMixin:
 
     def make_store(
         self,
-    ) -> tuple[AsyncInMemoryRuntimeApiStore, InMemoryRuntimeApiStore]:
+    ) -> tuple[InMemoryRuntimeApiStore, InMemoryRuntimeApiStore]:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         return async_store, sync_store
 
     def make_share_store(self) -> InMemoryShareSnapshotStore:
@@ -81,7 +78,7 @@ class _ForkFixtureMixin:
     def make_service(
         self,
         *,
-        async_store: AsyncInMemoryRuntimeApiStore,
+        async_store: InMemoryRuntimeApiStore,
         share_store: InMemoryShareSnapshotStore,
         audit: WorkerAuditEmitter,
         notifications=None,
@@ -97,7 +94,7 @@ class _ForkFixtureMixin:
 
     async def seed_source_conversation(
         self,
-        async_store: AsyncInMemoryRuntimeApiStore,
+        async_store: InMemoryRuntimeApiStore,
         *,
         message_count: int = 3,
         deleted: bool = False,
@@ -116,10 +113,10 @@ class _ForkFixtureMixin:
         # The default record is fine — overwrite the conversation_id so
         # later assertions can pin the share row to a known id.
         record = record.model_copy(update={"conversation_id": self.Values.SOURCE_CONV})
-        async_store.underlying.conversations[self.Values.SOURCE_CONV] = record
+        async_store.conversations[self.Values.SOURCE_CONV] = record
         if deleted:
-            async_store.underlying.conversations[self.Values.SOURCE_CONV] = (
-                record.model_copy(update={"deleted_at": datetime.now(timezone.utc)})
+            async_store.conversations[self.Values.SOURCE_CONV] = record.model_copy(
+                update={"deleted_at": datetime.now(timezone.utc)}
             )
         for index in range(message_count):
             message = MessageRecord(
@@ -137,7 +134,7 @@ class _ForkFixtureMixin:
                 + timedelta(seconds=index),
             )
             await async_store.append_message(message)
-        return async_store.underlying.conversations[self.Values.SOURCE_CONV]
+        return async_store.conversations[self.Values.SOURCE_CONV]
 
     def register_share(
         self,

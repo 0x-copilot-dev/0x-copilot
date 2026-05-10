@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend_app.audit_chain import (
+from enterprise_audit_chain import (
     AuditChainRow,
     AuditChainSigner,
     ChainSignature,

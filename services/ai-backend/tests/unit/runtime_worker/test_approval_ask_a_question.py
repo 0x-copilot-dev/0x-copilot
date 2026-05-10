@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -24,11 +23,11 @@ class _Values:
     APPROVAL_ID = "ask_a_question:run_test_aq:trace_aq"
 
 
-def _seed_run_and_approval(store: InMemoryRuntimeApiStore) -> None:
+async def _seed_run_and_approval(store: InMemoryRuntimeApiStore) -> None:
     from agent_runtime.execution.contracts import AgentRuntimeContext
     from runtime_api.schemas import MessageRecord, RunRecord
 
-    store.append_message(
+    await store.append_message(
         MessageRecord(
             message_id=_Values.USER_MESSAGE_ID,
             conversation_id=_Values.CONVERSATION_ID,
@@ -64,7 +63,7 @@ def _seed_run_and_approval(store: InMemoryRuntimeApiStore) -> None:
         ),
     )
     store.events_by_run.setdefault(_Values.RUN_ID, [])
-    store.seed_approval_request(
+    await store.seed_approval_request(
         ApprovalRequestRecord(
             approval_id=_Values.APPROVAL_ID,
             run_id=_Values.RUN_ID,
@@ -133,14 +132,16 @@ class TestAskAQuestionApprovalResume:
 
         assert resume == {"decisions": [{"type": "reject"}]}
 
-    def test_handle_resumes_run_without_appending_user_message_on_answer(self) -> None:
+    async def test_handle_resumes_run_without_appending_user_message_on_answer(
+        self,
+    ) -> None:
         """The user's answer must reach the agent via the LangGraph resume value
         (and the tool's return value), NOT as a stray top-level USER message in
         the chat thread. Persisting it as a USER message used to surface a
         duplicate user-bubble in the UI disconnected from the question card."""
 
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_approval(store)
+        await _seed_run_and_approval(store)
         captured: list[object] = []
         handler = RuntimeApprovalHandler(
             persistence=store,
@@ -156,7 +157,7 @@ class TestAskAQuestionApprovalResume:
             answer="Tokyo",
         )
 
-        asyncio.run(handler.handle(command))
+        await handler.handle(command)
 
         run_user_messages = [
             message
@@ -173,9 +174,9 @@ class TestAskAQuestionApprovalResume:
         ]
         assert store.runs[_Values.RUN_ID].status == AgentRunStatus.COMPLETED
 
-    def test_handle_skips_user_message_when_no_answer_provided(self) -> None:
+    async def test_handle_skips_user_message_when_no_answer_provided(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_approval(store)
+        await _seed_run_and_approval(store)
         handler = RuntimeApprovalHandler(
             persistence=store,
             event_store=store,
@@ -190,7 +191,7 @@ class TestAskAQuestionApprovalResume:
             answer=None,
         )
 
-        asyncio.run(handler.handle(command))
+        await handler.handle(command)
 
         user_messages = [
             message

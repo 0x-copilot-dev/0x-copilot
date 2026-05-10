@@ -9,10 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from agent_runtime.persistence.records import RuntimeRunUsageRecord
-from runtime_adapters.in_memory import (
-    AsyncInMemoryRuntimeApiStore,
-    InMemoryRuntimeApiStore,
-)
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_worker.usage_rollup_loop import UsageRollupLoop, UsageRollupLoopEnv
 
 
@@ -50,7 +47,7 @@ class TestRefresh:
     @pytest.mark.asyncio
     async def test_refresh_writes_user_and_org_rollups(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         completed = datetime.now(timezone.utc) - timedelta(hours=2)
         _seed_run(
             sync_store,
@@ -85,7 +82,7 @@ class TestRefresh:
     @pytest.mark.asyncio
     async def test_refresh_idempotent(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         completed = datetime.now(timezone.utc) - timedelta(hours=1)
         _seed_run(sync_store, run_id="r1", completed_at=completed)
 
@@ -113,7 +110,7 @@ class TestRefresh:
     @pytest.mark.asyncio
     async def test_refresh_skips_runs_outside_window(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         old = datetime.now(timezone.utc) - timedelta(days=10)
         _seed_run(sync_store, run_id="old", completed_at=old)
 
@@ -243,7 +240,7 @@ class TestUsageRollupLoopLifecycle:
     @pytest.mark.asyncio
     async def test_start_then_stop_returns_cleanly(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         loop = UsageRollupLoop(
             persistence=async_store,
             interval_seconds=0.05,
@@ -257,7 +254,7 @@ class TestUsageRollupLoopLifecycle:
     @pytest.mark.asyncio
     async def test_start_is_idempotent(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         loop = UsageRollupLoop(
             persistence=async_store,
             interval_seconds=0.05,
@@ -270,7 +267,7 @@ class TestUsageRollupLoopLifecycle:
     @pytest.mark.asyncio
     async def test_stop_when_never_started_is_a_no_op(self) -> None:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         loop = UsageRollupLoop(persistence=async_store)
         await loop.stop()  # safe: no task to await
 
@@ -305,7 +302,7 @@ class TestUsageRollupLoopLifecycle:
             loop_with_running_task._stop.set()  # noqa: SLF001 — exercising private branch
 
         with caplog.at_level("WARNING", logger="runtime_worker.usage_rollup_loop"):
-            await asyncio.gather(loop_with_running_task._run(), _stop_soon())  # noqa: SLF001
+            await asyncio.gather(loop_with_running_task._run(), await _stop_soon())  # noqa: SLF001
         assert any(
             "usage_rollup_refresh_failed" in record.getMessage()
             for record in caplog.records
@@ -315,7 +312,7 @@ class TestUsageRollupLoopLifecycle:
 # --- per-row UPSERT failure paths (best-effort logging) --------------------
 
 
-class _SelectiveFailureStore(AsyncInMemoryRuntimeApiStore):
+class _SelectiveFailureStore(InMemoryRuntimeApiStore):
     """In-memory store that raises on a chosen UPSERT method.
 
     Wraps the real async store so the rest of the refresh path runs

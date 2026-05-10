@@ -54,7 +54,7 @@ class _Values:
     USER_MESSAGE_ID = "msg_141_user"
 
 
-def _seed_run_and_pending_approval(
+async def _seed_run_and_pending_approval(
     store: InMemoryRuntimeApiStore,
     *,
     approval_kind: str = "action",
@@ -62,7 +62,7 @@ def _seed_run_and_pending_approval(
     from agent_runtime.execution.contracts import AgentRuntimeContext
     from runtime_api.schemas import MessageRecord, MessageRole, RunRecord
 
-    store.append_message(
+    await store.append_message(
         MessageRecord(
             message_id=_Values.USER_MESSAGE_ID,
             conversation_id=_Values.CONVERSATION_ID,
@@ -111,7 +111,7 @@ def _seed_run_and_pending_approval(
             "action_summary": "Post draft to #launch-aurora",
         },
     )
-    store.seed_approval_request(record)
+    await store.seed_approval_request(record)
     return record
 
 
@@ -199,47 +199,47 @@ class TestMembershipCache:
 
 
 class TestHttpMembershipResolver:
-    def test_active_member_returned_truthy(self) -> None:
+    async def test_active_member_returned_truthy(self) -> None:
         async def fetch(url, headers):
             return 200, {"org_id": "o1", "status": "active", "removed_at": None}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
-        result = asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+        result = await resolver.is_active_member(org_id="o1", user_id="u1")
         assert result is True
 
-    def test_inactive_user_returned_falsy(self) -> None:
+    async def test_inactive_user_returned_falsy(self) -> None:
         async def fetch(url, headers):
             return 200, {"org_id": "o1", "status": "inactive", "removed_at": None}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
-        result = asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+        result = await resolver.is_active_member(org_id="o1", user_id="u1")
         assert result is False
 
-    def test_cross_org_user_returned_falsy(self) -> None:
+    async def test_cross_org_user_returned_falsy(self) -> None:
         async def fetch(url, headers):
             return 200, {"org_id": "o2", "status": "active", "removed_at": None}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
-        result = asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+        result = await resolver.is_active_member(org_id="o1", user_id="u1")
         assert result is False
 
-    def test_404_returned_falsy(self) -> None:
+    async def test_404_returned_falsy(self) -> None:
         async def fetch(url, headers):
             return 404, {}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
-        result = asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+        result = await resolver.is_active_member(org_id="o1", user_id="u1")
         assert result is False
 
-    def test_5xx_raises_unavailable(self) -> None:
+    async def test_5xx_raises_unavailable(self) -> None:
         async def fetch(url, headers):
             return 503, {}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
         with pytest.raises(MembershipResolverUnavailable):
-            asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+            await resolver.is_active_member(org_id="o1", user_id="u1")
 
-    def test_cache_hits_skip_fetch(self) -> None:
+    async def test_cache_hits_skip_fetch(self) -> None:
         calls = []
 
         async def fetch(url, headers):
@@ -247,17 +247,17 @@ class TestHttpMembershipResolver:
             return 200, {"org_id": "o1", "status": "active", "removed_at": None}
 
         resolver = HttpWorkspaceMembershipResolver(fetch=fetch)
-        asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
-        asyncio.run(resolver.is_active_member(org_id="o1", user_id="u1"))
+        await resolver.is_active_member(org_id="o1", user_id="u1")
+        await resolver.is_active_member(org_id="o1", user_id="u1")
         assert len(calls) == 1
 
 
 class TestServiceForwardWithMembershipResolver:
     """The service's _guard_forwardable now consults the resolver."""
 
-    def test_forward_to_unknown_user_rejected_with_422(self) -> None:
+    async def test_forward_to_unknown_user_rejected_with_422(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         # Resolver knows only the requester. Forward target is unknown.
         service = _make_service(
             store,
@@ -271,18 +271,16 @@ class TestServiceForwardWithMembershipResolver:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 422
 
-    def test_forward_to_inactive_user_rejected_with_422(self) -> None:
+    async def test_forward_to_inactive_user_rejected_with_422(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(
             store,
             membership={
@@ -298,18 +296,16 @@ class TestServiceForwardWithMembershipResolver:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 422
 
-    def test_forward_to_active_user_accepted(self) -> None:
+    async def test_forward_to_active_user_accepted(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
         request = ApprovalDecisionRequest(
             decision=ApprovalDecision.FORWARDED,
@@ -318,19 +314,17 @@ class TestServiceForwardWithMembershipResolver:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        response = asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        response = await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
         assert response.status is ApprovalStatus.FORWARDED
         assert response.forwarded_to_user_id == _Values.FORWARD_TARGET_USER_ID
 
-    def test_resolver_unavailable_rejected_with_503(self) -> None:
+    async def test_resolver_unavailable_rejected_with_503(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
 
         class _UnavailableResolver:
             async def is_active_member(self, **_):
@@ -361,12 +355,10 @@ class TestServiceForwardWithMembershipResolver:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 503
         assert exc.value.envelope.retryable is True
@@ -397,9 +389,9 @@ class _RecordingDispatcher:
 
 
 class TestNotificationDispatch:
-    def test_forward_dispatches_assigned_to_recipient(self) -> None:
+    async def test_forward_dispatches_assigned_to_recipient(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         dispatcher = _RecordingDispatcher()
         service = _make_service(store, dispatcher=dispatcher)
         request = ApprovalDecisionRequest(
@@ -421,13 +413,13 @@ class TestNotificationDispatch:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        asyncio.run(_exercise())
+        await _exercise()
         assert len(dispatcher.assigned_calls) == 1
         child_approval_id, forwarded_by = dispatcher.assigned_calls[0]
         assert forwarded_by == _Values.REQUESTER_USER_ID
         assert child_approval_id != _Values.PARENT_APPROVAL_ID
 
-    def test_dispatcher_failure_does_not_roll_back_forward(self) -> None:
+    async def test_dispatcher_failure_does_not_roll_back_forward(self) -> None:
         class _FailingDispatcher:
             async def notify_approval_assigned(self, **_):
                 raise RuntimeError("simulated dispatch failure")
@@ -436,7 +428,7 @@ class TestNotificationDispatch:
                 raise RuntimeError("simulated dispatch failure")
 
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
 
         # Wrap the failing dispatcher in the production composite so we
         # exercise its "swallow-and-log" contract.
@@ -465,7 +457,7 @@ class TestNotificationDispatch:
             await asyncio.sleep(0)
             return response
 
-        response = asyncio.run(_exercise())
+        response = await _exercise()
         # Forward succeeded — chain exists; only the dispatch was swallowed.
         assert response.status is ApprovalStatus.FORWARDED
         # Parent transitioned, child exists.
@@ -481,7 +473,7 @@ class TestNotificationDispatch:
 
 
 class TestInboxEventBus:
-    def test_publish_and_replay(self) -> None:
+    async def test_publish_and_replay(self) -> None:
         bus = InboxEventBus()
 
         async def _exercise():
@@ -504,13 +496,13 @@ class TestInboxEventBus:
                 actor_user_id="u2",
             )
 
-        asyncio.run(_exercise())
+        await _exercise()
         events = list(bus.list_after(user_id="u1", after_sequence=0))
         assert len(events) == 2
         assert events[0].sequence_no == 1
         assert events[1].sequence_no == 2
 
-    def test_replay_after_sequence_is_exclusive(self) -> None:
+    async def test_replay_after_sequence_is_exclusive(self) -> None:
         bus = InboxEventBus()
 
         async def _publish_two():
@@ -533,11 +525,11 @@ class TestInboxEventBus:
                 actor_user_id="u2",
             )
 
-        asyncio.run(_publish_two())
+        await _publish_two()
         events = list(bus.list_after(user_id="u1", after_sequence=1))
         assert [event.sequence_no for event in events] == [2]
 
-    def test_per_user_isolation(self) -> None:
+    async def test_per_user_isolation(self) -> None:
         bus = InboxEventBus()
 
         async def _exercise():
@@ -560,7 +552,7 @@ class TestInboxEventBus:
                 actor_user_id="u1",
             )
 
-        asyncio.run(_exercise())
+        await _exercise()
         u1_events = list(bus.list_after(user_id="u1", after_sequence=0))
         u2_events = list(bus.list_after(user_id="u2", after_sequence=0))
         assert [event.approval_id for event in u1_events] == ["a1"]
@@ -568,7 +560,7 @@ class TestInboxEventBus:
 
 
 class TestInboxAndEmailDispatcherPublish:
-    def test_assigned_publishes_to_inbox_bus(self) -> None:
+    async def test_assigned_publishes_to_inbox_bus(self) -> None:
         bus = InboxEventBus()
 
         async def _publish_inbox(approval, event_type, actor_user_id):
@@ -592,11 +584,9 @@ class TestInboxAndEmailDispatcherPublish:
             org_id=_Values.ORG_ID,
             user_id=_Values.FORWARD_TARGET_USER_ID,
         )
-        asyncio.run(
-            dispatcher.notify_approval_assigned(
-                approval=approval,
-                forwarded_by_user_id=_Values.REQUESTER_USER_ID,
-            )
+        await dispatcher.notify_approval_assigned(
+            approval=approval,
+            forwarded_by_user_id=_Values.REQUESTER_USER_ID,
         )
         events = list(
             bus.list_after(user_id=_Values.FORWARD_TARGET_USER_ID, after_sequence=0)
@@ -608,9 +598,9 @@ class TestInboxAndEmailDispatcherPublish:
 
 
 class TestListAssignedApprovals:
-    def test_filters_to_recipient_and_status(self) -> None:
+    async def test_filters_to_recipient_and_status(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
 
         # Forward — creates a child addressed to FORWARD_TARGET_USER_ID
@@ -621,23 +611,19 @@ class TestListAssignedApprovals:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
 
         # Recipient inbox — should see one pending row.
-        response = asyncio.run(
-            service.list_assigned_approvals(
-                org_id=_Values.ORG_ID,
-                user_id=_Values.FORWARD_TARGET_USER_ID,
-                status_filter=ApprovalStatus.PENDING,
-                limit=50,
-                cursor=None,
-            )
+        response = await service.list_assigned_approvals(
+            org_id=_Values.ORG_ID,
+            user_id=_Values.FORWARD_TARGET_USER_ID,
+            status_filter=ApprovalStatus.PENDING,
+            limit=50,
+            cursor=None,
         )
         assert len(response.approvals) == 1
         assigned = response.approvals[0]
@@ -645,9 +631,9 @@ class TestListAssignedApprovals:
         assert assigned.forwarded_by_user_id == _Values.REQUESTER_USER_ID
         assert assigned.action_summary == "Post draft to #launch-aurora"
 
-    def test_other_user_sees_empty_inbox(self) -> None:
+    async def test_other_user_sees_empty_inbox(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
         request = ApprovalDecisionRequest(
             decision=ApprovalDecision.FORWARDED,
@@ -656,28 +642,24 @@ class TestListAssignedApprovals:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
 
-        response = asyncio.run(
-            service.list_assigned_approvals(
-                org_id=_Values.ORG_ID,
-                user_id=_Values.OTHER_USER_ID,
-                status_filter=ApprovalStatus.PENDING,
-                limit=50,
-                cursor=None,
-            )
+        response = await service.list_assigned_approvals(
+            org_id=_Values.ORG_ID,
+            user_id=_Values.OTHER_USER_ID,
+            status_filter=ApprovalStatus.PENDING,
+            limit=50,
+            cursor=None,
         )
         assert response.approvals == ()
 
-    def test_pagination_round_trips(self) -> None:
+    async def test_pagination_round_trips(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         # Build three child rows directly so we have something to paginate.
         from datetime import timedelta
 
@@ -697,26 +679,22 @@ class TestListAssignedApprovals:
             )
         service = _make_service(store)
         # Page 1: limit=2 — newest first.
-        page_1 = asyncio.run(
-            service.list_assigned_approvals(
-                org_id=_Values.ORG_ID,
-                user_id=_Values.FORWARD_TARGET_USER_ID,
-                status_filter=ApprovalStatus.PENDING,
-                limit=2,
-                cursor=None,
-            )
+        page_1 = await service.list_assigned_approvals(
+            org_id=_Values.ORG_ID,
+            user_id=_Values.FORWARD_TARGET_USER_ID,
+            status_filter=ApprovalStatus.PENDING,
+            limit=2,
+            cursor=None,
         )
         assert [row.approval_id for row in page_1.approvals] == ["child_c", "child_b"]
         assert page_1.next_cursor is not None
         # Page 2: continue with the cursor.
-        page_2 = asyncio.run(
-            service.list_assigned_approvals(
-                org_id=_Values.ORG_ID,
-                user_id=_Values.FORWARD_TARGET_USER_ID,
-                status_filter=ApprovalStatus.PENDING,
-                limit=2,
-                cursor=page_1.next_cursor,
-            )
+        page_2 = await service.list_assigned_approvals(
+            org_id=_Values.ORG_ID,
+            user_id=_Values.FORWARD_TARGET_USER_ID,
+            status_filter=ApprovalStatus.PENDING,
+            limit=2,
+            cursor=page_1.next_cursor,
         )
         assert [row.approval_id for row in page_2.approvals] == ["child_a"]
 
@@ -729,9 +707,9 @@ class TestListAssignedApprovals:
 class TestInMemoryForwardRaceGuard:
     """Postgres uses ``WHERE status='pending'``; in-memory now mirrors."""
 
-    def test_second_forward_after_resolve_rejected(self) -> None:
+    async def test_second_forward_after_resolve_rejected(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
         # First forward succeeds.
         request = ApprovalDecisionRequest(
@@ -741,31 +719,27 @@ class TestInMemoryForwardRaceGuard:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
         # Second forward — simulates the double-click race. Validator
         # rejects with 409 because the parent isn't pending anymore.
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 409
 
-    def test_persistence_layer_directly_raises_on_race(self) -> None:
+    async def test_persistence_layer_directly_raises_on_race(self) -> None:
         """The adapter raises a deterministic RuntimeError so the
         service can map it to 409 — same surface as the postgres path."""
 
         store = InMemoryRuntimeApiStore()
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         # Force the parent to a non-pending state directly.
         store.approval_requests[parent.approval_id] = parent.model_copy(
             update={"status": ApprovalStatus.APPROVED}
@@ -779,7 +753,7 @@ class TestInMemoryForwardRaceGuard:
             metadata=parent.metadata,
         )
         with pytest.raises(RuntimeError) as exc:
-            store.forward_approval_request(
+            await store.forward_approval_request(
                 parent_approval_id=parent.approval_id,
                 org_id=parent.org_id,
                 decided_by_user_id=parent.user_id,
@@ -803,14 +777,14 @@ class TestInMemoryForwardRaceGuard:
 class TestChainDepthColumn:
     """The persisted chain_depth column makes the cap honour exactly 3."""
 
-    def test_root_approval_has_depth_zero(self) -> None:
+    async def test_root_approval_has_depth_zero(self) -> None:
         store = InMemoryRuntimeApiStore()
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         assert parent.chain_depth == 0
 
-    def test_first_forward_child_has_depth_one(self) -> None:
+    async def test_first_forward_child_has_depth_one(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
         request = ApprovalDecisionRequest(
             decision=ApprovalDecision.FORWARDED,
@@ -819,22 +793,20 @@ class TestChainDepthColumn:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        response = asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        response = await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
         assert response.child_approval_id is not None
         child = store.approval_requests[response.child_approval_id]
         assert child.chain_depth == 1
 
-    def test_chain_depth_increments_with_each_hop(self) -> None:
+    async def test_chain_depth_increments_with_each_hop(self) -> None:
         """Walk the chain manually past depth 1 — each hop's child must be +1."""
 
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         # Pre-seed a wider membership so successive hops don't fail at #1.
         membership = {
             (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
@@ -843,46 +815,42 @@ class TestChainDepthColumn:
         }
         service = _make_service(store, membership=membership)
         # Hop 1: requester -> target (depth 1)
-        first = asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=ApprovalDecisionRequest(
-                    decision=ApprovalDecision.FORWARDED,
-                    decided_by_user_id=_Values.REQUESTER_USER_ID,
-                    forward_to=ApprovalForwardTarget(
-                        kind="workspace_user",
-                        user_id=_Values.FORWARD_TARGET_USER_ID,
-                    ),
+        first = await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=ApprovalDecisionRequest(
+                decision=ApprovalDecision.FORWARDED,
+                decided_by_user_id=_Values.REQUESTER_USER_ID,
+                forward_to=ApprovalForwardTarget(
+                    kind="workspace_user",
+                    user_id=_Values.FORWARD_TARGET_USER_ID,
                 ),
-            )
+            ),
         )
         assert first.child_approval_id is not None
         # Hop 2: target -> other (depth 2)
-        second = asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=first.child_approval_id,
-                request=ApprovalDecisionRequest(
-                    decision=ApprovalDecision.FORWARDED,
-                    decided_by_user_id=_Values.FORWARD_TARGET_USER_ID,
-                    forward_to=ApprovalForwardTarget(
-                        kind="workspace_user", user_id=_Values.OTHER_USER_ID
-                    ),
+        second = await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=first.child_approval_id,
+            request=ApprovalDecisionRequest(
+                decision=ApprovalDecision.FORWARDED,
+                decided_by_user_id=_Values.FORWARD_TARGET_USER_ID,
+                forward_to=ApprovalForwardTarget(
+                    kind="workspace_user", user_id=_Values.OTHER_USER_ID
                 ),
-            )
+            ),
         )
         assert second.child_approval_id is not None
         depth_2_child = store.approval_requests[second.child_approval_id]
         assert depth_2_child.chain_depth == 2
 
-    def test_cap_rejects_at_max_chain_depth(self) -> None:
+    async def test_cap_rejects_at_max_chain_depth(self) -> None:
         store = InMemoryRuntimeApiStore()
         # Seed a child row already at depth = MAX so the next forward
         # crosses the cap. The cap value lives on the service constant
         # so changing it forces this test (intentional coupling).
         cap = RuntimeApiService.APPROVAL_FORWARD_MAX_CHAIN_DEPTH
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         store.approval_requests[parent.approval_id] = parent.model_copy(
             update={"chain_depth": cap}
         )
@@ -899,11 +867,9 @@ class TestChainDepthColumn:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 422

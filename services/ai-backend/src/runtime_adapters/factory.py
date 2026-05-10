@@ -18,10 +18,7 @@ from agent_runtime.persistence.ports import (
     ShareStorePort,
 )
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters.in_memory import (
-    AsyncInMemoryRuntimeApiStore,
-    InMemoryRuntimeApiStore,
-)
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
@@ -67,7 +64,7 @@ class AsyncRuntimePorts:
     backend: str
     # Concrete store reference so the lifespan owner can call open()/close()
     # without re-introspecting the trio of ports.
-    store: PostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore
+    store: PostgresRuntimeApiStore | InMemoryRuntimeApiStore
     # PR 1.3.5 — Workspace-pane Draft store. Postgres backend wraps the
     # parent store's pool + FieldCodec; in_memory backends use the
     # process-local InMemoryDraftStore.
@@ -85,35 +82,19 @@ class RuntimeAdapterFactory:
     def from_settings(
         cls, settings: RuntimeSettings, *, migrate: bool = True
     ) -> RuntimePorts:
-        """Build the sync port trio for the legacy ``in_memory`` backend.
+        """Sync factory — RETIRED.
 
-        ``postgres`` is no longer offered as a sync backend — it is async
-        only. Callers asking for postgres should use
-        :meth:`async_from_settings`.
+        The runtime persistence layer is now async-native end-to-end (PR 2
+        of the async-only ports refactor). Use :meth:`async_from_settings`.
+        This method is kept only to surface a typed error for any caller
+        that hasn't migrated yet; PR 5 deletes it entirely along with the
+        sync :class:`RuntimePorts` dataclass.
         """
 
-        backend = settings.store.backend
-        if backend == "in_memory":
-            store = InMemoryRuntimeApiStore()
-            return RuntimePorts(
-                persistence=store,
-                event_store=store,
-                queue=store,
-                backend=backend,
-                draft_store=InMemoryDraftStore(),
-                share_store=InMemoryShareStore(),
-                conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
-            )
-        if backend == "postgres":
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "RUNTIME_STORE_BACKEND=postgres requires the async wiring; "
-                "use RuntimeAdapterFactory.async_from_settings.",
-                retryable=False,
-            )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,
-            f"Unsupported runtime store backend '{backend}'.",
+            "RuntimeAdapterFactory.from_settings is retired; use "
+            "async_from_settings — the runtime is async-native.",
             retryable=False,
         )
 
@@ -139,9 +120,13 @@ class RuntimeAdapterFactory:
         """
 
         backend = settings.store.backend
-        if backend == "in_memory_async":
-            store: PostgresRuntimeApiStore | AsyncInMemoryRuntimeApiStore = (
-                AsyncInMemoryRuntimeApiStore()
+        # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
+        # now route to the async-native InMemoryRuntimeApiStore. The sync
+        # backend was retired with the sync port surface (PR 2 of the
+        # async-only ports refactor).
+        if backend in {"in_memory_async", "in_memory"}:
+            store: PostgresRuntimeApiStore | InMemoryRuntimeApiStore = (
+                InMemoryRuntimeApiStore()
             )
             return AsyncRuntimePorts(
                 persistence=store,

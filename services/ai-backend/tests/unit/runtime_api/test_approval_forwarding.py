@@ -9,7 +9,6 @@ semantics that the design depends on.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from pydantic import ValidationError
@@ -39,7 +38,7 @@ class _Values:
     USER_MESSAGE_ID = "msg_user"
 
 
-def _seed_run_and_pending_approval(
+async def _seed_run_and_pending_approval(
     store: InMemoryRuntimeApiStore,
     *,
     approval_kind: str = "action",
@@ -49,7 +48,7 @@ def _seed_run_and_pending_approval(
     from agent_runtime.execution.contracts import AgentRuntimeContext
     from runtime_api.schemas import MessageRecord, MessageRole, RunRecord
 
-    store.append_message(
+    await store.append_message(
         MessageRecord(
             message_id=_Values.USER_MESSAGE_ID,
             conversation_id=_Values.CONVERSATION_ID,
@@ -98,7 +97,7 @@ def _seed_run_and_pending_approval(
             "action_summary": "Post draft to #launch-aurora",
         },
     )
-    store.seed_approval_request(record)
+    await store.seed_approval_request(record)
     return record
 
 
@@ -198,11 +197,11 @@ class TestApprovalDecisionRequestForwardValidators:
 class TestInMemoryForwardApproval:
     """The atomic parent→FORWARDED + child INSERT is the persistence anchor."""
 
-    def test_forward_persists_chain(self) -> None:
+    async def test_forward_persists_chain(self) -> None:
         from datetime import datetime, timezone
 
         store = InMemoryRuntimeApiStore()
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         now = datetime.now(timezone.utc)
         child = ApprovalRequestRecord(
             approval_id="approval_child_1",
@@ -212,7 +211,7 @@ class TestInMemoryForwardApproval:
             user_id=_Values.FORWARD_TARGET_USER_ID,
             metadata=parent.metadata,
         )
-        updated_parent, inserted_child = store.forward_approval_request(
+        updated_parent, inserted_child = await store.forward_approval_request(
             parent_approval_id=parent.approval_id,
             org_id=parent.org_id,
             decided_by_user_id=parent.user_id,
@@ -233,11 +232,11 @@ class TestInMemoryForwardApproval:
             is ApprovalStatus.FORWARDED
         )
 
-    def test_forward_idempotent_on_replay(self) -> None:
+    async def test_forward_idempotent_on_replay(self) -> None:
         from datetime import datetime, timezone
 
         store = InMemoryRuntimeApiStore()
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         child = ApprovalRequestRecord(
             approval_id="approval_child_idempotent",
             run_id=parent.run_id,
@@ -247,7 +246,7 @@ class TestInMemoryForwardApproval:
             metadata=parent.metadata,
         )
         now = datetime.now(timezone.utc)
-        first_parent, first_child = store.forward_approval_request(
+        first_parent, first_child = await store.forward_approval_request(
             parent_approval_id=parent.approval_id,
             org_id=parent.org_id,
             decided_by_user_id=parent.user_id,
@@ -256,7 +255,7 @@ class TestInMemoryForwardApproval:
             child=child,
             now=now,
         )
-        second_parent, second_child = store.forward_approval_request(
+        second_parent, second_child = await store.forward_approval_request(
             parent_approval_id=parent.approval_id,
             org_id=parent.org_id,
             decided_by_user_id=parent.user_id,
@@ -287,9 +286,9 @@ class TestInMemoryForwardApproval:
 class TestServiceDecideForwarded:
     """The service emits the three events + audit row + leaves run paused."""
 
-    def test_decide_forwarded_emits_chain_events(self) -> None:
+    async def test_decide_forwarded_emits_chain_events(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
 
         request = ApprovalDecisionRequest(
@@ -300,12 +299,10 @@ class TestServiceDecideForwarded:
             ),
             reason="Marcus must approve",
         )
-        response = asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        response = await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
 
         assert response.status is ApprovalStatus.FORWARDED
@@ -339,9 +336,9 @@ class TestServiceDecideForwarded:
             for cmd in store.approval_commands
         )
 
-    def test_decide_forwarded_writes_audit_row(self) -> None:
+    async def test_decide_forwarded_writes_audit_row(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         service = _make_service(store)
 
         request = ApprovalDecisionRequest(
@@ -351,12 +348,10 @@ class TestServiceDecideForwarded:
                 kind="workspace_user", user_id=_Values.FORWARD_TARGET_USER_ID
             ),
         )
-        asyncio.run(
-            service.record_approval_decision(
-                org_id=_Values.ORG_ID,
-                approval_id=_Values.PARENT_APPROVAL_ID,
-                request=request,
-            )
+        await service.record_approval_decision(
+            org_id=_Values.ORG_ID,
+            approval_id=_Values.PARENT_APPROVAL_ID,
+            request=request,
         )
 
         events = [(name, payload) for name, payload in store.audit_log]
@@ -368,11 +363,11 @@ class TestServiceDecideForwarded:
         assert meta["chain_parent_approval_id"] == _Values.PARENT_APPROVAL_ID
         assert meta["forwarded_to_user_id"] == _Values.FORWARD_TARGET_USER_ID
 
-    def test_decide_forwarded_rejects_ask_a_question_kind(self) -> None:
+    async def test_decide_forwarded_rejects_ask_a_question_kind(self) -> None:
         from runtime_api.http.errors import RuntimeApiError
 
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store, approval_kind="ask_a_question")
+        await _seed_run_and_pending_approval(store, approval_kind="ask_a_question")
         service = _make_service(store)
 
         request = ApprovalDecisionRequest(
@@ -383,16 +378,14 @@ class TestServiceDecideForwarded:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 422
 
-    def test_decide_forwarded_rejects_mcp_auth_kind(self) -> None:
+    async def test_decide_forwarded_rejects_mcp_auth_kind(self) -> None:
         """PR 1.4.1 Gap #4 — mcp_auth was previously listed in
         APPROVAL_FORWARDABLE_KINDS but the OAuth flow binds tokens to
         whoever completes it; forwarding either silently rebinds to the
@@ -404,7 +397,7 @@ class TestServiceDecideForwarded:
         from runtime_api.http.errors import RuntimeApiError
 
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store, approval_kind="mcp_auth")
+        await _seed_run_and_pending_approval(store, approval_kind="mcp_auth")
         service = _make_service(store)
 
         request = ApprovalDecisionRequest(
@@ -415,20 +408,18 @@ class TestServiceDecideForwarded:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 422
 
-    def test_decide_forwarded_rejects_already_resolved_parent(self) -> None:
+    async def test_decide_forwarded_rejects_already_resolved_parent(self) -> None:
         from runtime_api.http.errors import RuntimeApiError
 
         store = InMemoryRuntimeApiStore()
-        parent = _seed_run_and_pending_approval(store)
+        parent = await _seed_run_and_pending_approval(store)
         store.approval_requests[parent.approval_id] = parent.model_copy(
             update={"status": ApprovalStatus.APPROVED}
         )
@@ -442,12 +433,10 @@ class TestServiceDecideForwarded:
             ),
         )
         with pytest.raises(RuntimeApiError) as exc:
-            asyncio.run(
-                service.record_approval_decision(
-                    org_id=_Values.ORG_ID,
-                    approval_id=_Values.PARENT_APPROVAL_ID,
-                    request=request,
-                )
+            await service.record_approval_decision(
+                org_id=_Values.ORG_ID,
+                approval_id=_Values.PARENT_APPROVAL_ID,
+                request=request,
             )
         assert exc.value.http_status == 409
 
@@ -460,9 +449,9 @@ class TestServiceDecideForwarded:
 class TestWorkerForwardedSkip:
     """The worker discriminates on decision so the graph stays paused."""
 
-    def test_handle_returns_without_resume_on_forwarded(self) -> None:
+    async def test_handle_returns_without_resume_on_forwarded(self) -> None:
         store = InMemoryRuntimeApiStore()
-        _seed_run_and_pending_approval(store)
+        await _seed_run_and_pending_approval(store)
         captured_resumes: list[object] = []
 
         async def _capturing_resumer(harness: object, resume: object):
@@ -488,7 +477,7 @@ class TestWorkerForwardedSkip:
             org_id=_Values.ORG_ID,
             decision=ApprovalDecision.FORWARDED,
         )
-        asyncio.run(handler.handle(command))
+        await handler.handle(command)
 
         assert captured_resumes == []
         # Run remains paused — the worker did not flip status to RUNNING.

@@ -82,56 +82,56 @@ class TestInMemoryAttributionLookup:
 
         return InMemoryRuntimeApiStore()
 
-    def test_returns_most_recent_completion_before_cutoff(self) -> None:
+    async def test_returns_most_recent_completion_before_cutoff(self) -> None:
         store = self._store()
         t0 = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
         store.tool_invocation_completions.append(("org_a", "run-1", "slack", t0))
         store.tool_invocation_completions.append(
             ("org_a", "run-1", "notion", t0 + timedelta(seconds=5))
         )
-        slug = store.query_last_completed_tool_connector_slug(
+        slug = await store.query_last_completed_tool_connector_slug(
             org_id="org_a",
             run_id="run-1",
             before=t0 + timedelta(seconds=10),
         )
         assert slug == "notion"
 
-    def test_strict_before_filter(self) -> None:
+    async def test_strict_before_filter(self) -> None:
         # The cutoff is strict — equal completed_at does NOT attribute.
         store = self._store()
         t0 = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
         store.tool_invocation_completions.append(("org_a", "run-1", "slack", t0))
-        slug = store.query_last_completed_tool_connector_slug(
+        slug = await store.query_last_completed_tool_connector_slug(
             org_id="org_a", run_id="run-1", before=t0
         )
         assert slug is None
 
-    def test_other_run_excluded(self) -> None:
+    async def test_other_run_excluded(self) -> None:
         store = self._store()
         t0 = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
         store.tool_invocation_completions.append(("org_a", "other-run", "slack", t0))
-        slug = store.query_last_completed_tool_connector_slug(
+        slug = await store.query_last_completed_tool_connector_slug(
             org_id="org_a", run_id="run-1", before=t0 + timedelta(minutes=1)
         )
         assert slug is None
 
-    def test_other_org_excluded(self) -> None:
+    async def test_other_org_excluded(self) -> None:
         store = self._store()
         t0 = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
         store.tool_invocation_completions.append(("other_org", "run-1", "slack", t0))
-        slug = store.query_last_completed_tool_connector_slug(
+        slug = await store.query_last_completed_tool_connector_slug(
             org_id="org_a", run_id="run-1", before=t0 + timedelta(minutes=1)
         )
         assert slug is None
 
-    def test_empty_slug_treated_as_none(self) -> None:
+    async def test_empty_slug_treated_as_none(self) -> None:
         # An empty connector_slug ('') should not pretend to attribute —
         # the cold-turn (unattributed) sentinel is filtered out so the
         # lookup returns None.
         store = self._store()
         t0 = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
         store.tool_invocation_completions.append(("org_a", "run-1", "", t0))
-        slug = store.query_last_completed_tool_connector_slug(
+        slug = await store.query_last_completed_tool_connector_slug(
             org_id="org_a", run_id="run-1", before=t0 + timedelta(seconds=1)
         )
         assert slug is None

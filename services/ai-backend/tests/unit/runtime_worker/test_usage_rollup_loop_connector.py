@@ -11,9 +11,6 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     UsageDailyConnectorRow,
 )
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_worker.usage_rollup_loop import UsageRollupLoop
 
@@ -82,7 +79,7 @@ class TestConnectorRollup:
     @pytest.mark.asyncio
     async def test_rollup_aggregates_per_connector(self) -> None:
         store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(store)
+        async_store = store
         # Use real-now so the loop's `datetime.now(timezone.utc)` window
         # encompasses our seeded `completed_at`.
         now = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -148,7 +145,7 @@ class TestConnectorRollup:
     @pytest.mark.asyncio
     async def test_rollup_distinct_users(self) -> None:
         store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(store)
+        async_store = store
         # Use real-now so the loop's `datetime.now(timezone.utc)` window
         # encompasses our seeded `completed_at`.
         now = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -200,7 +197,7 @@ class TestConnectorRollup:
     async def test_rollup_idempotent(self) -> None:
         # Running the loop twice must produce identical rows.
         store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(store)
+        async_store = store
         # Use real-now so the loop's `datetime.now(timezone.utc)` window
         # encompasses our seeded `completed_at`.
         now = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -243,7 +240,7 @@ class TestReconciliation:
         # every call belongs to a run we count. This guards against the
         # rollup loop drifting from the truth.
         store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(store)
+        async_store = store
         # Use real-now so the loop's `datetime.now(timezone.utc)` window
         # encompasses our seeded `completed_at`.
         now = datetime.now(timezone.utc) - timedelta(seconds=1)

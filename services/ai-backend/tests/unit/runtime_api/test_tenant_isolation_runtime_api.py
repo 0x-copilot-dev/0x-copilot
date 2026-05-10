@@ -8,7 +8,6 @@ tenant. Error message bodies must not include the other tenant's data.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -174,7 +173,7 @@ class TestTenantIsolationRuntimeApi(TenantIsolationRuntimeMixin):
             == 404
         )
 
-    def test_org_b_cannot_stream_org_a_run_via_sse_adapter(self) -> None:
+    async def test_org_b_cannot_stream_org_a_run_via_sse_adapter(self) -> None:
         """HTTP StreamingResponse may start before replay validates scope; assert at adapter layer."""
 
         client, _store = self.create_client()
@@ -204,7 +203,7 @@ class TestTenantIsolationRuntimeApi(TenantIsolationRuntimeMixin):
             await stream.__anext__()
 
         with pytest.raises(RuntimeApiError):
-            asyncio.run(first_sse_chunk())
+            await first_sse_chunk()
 
     def test_org_b_cannot_cancel_org_a_run(self) -> None:
         client, _store = self.create_client()
@@ -230,7 +229,7 @@ class TestTenantIsolationRuntimeApi(TenantIsolationRuntimeMixin):
         )
         assert cancel.status_code == 404
 
-    def test_org_b_cannot_decide_org_a_approval(self) -> None:
+    async def test_org_b_cannot_decide_org_a_approval(self) -> None:
         client, store = self.create_client()
         h_a = self.headers(self.ORG_A, self.USER_A)
         conv = client.post(
@@ -244,7 +243,7 @@ class TestTenantIsolationRuntimeApi(TenantIsolationRuntimeMixin):
             json=self.run_payload(conv["conversation_id"], self.ORG_A, self.USER_A),
         ).json()
         approval_id = "approval_iso_1"
-        store.seed_approval_request(
+        await store.seed_approval_request(
             ApprovalRequestRecord(
                 approval_id=approval_id,
                 run_id=run["run_id"],

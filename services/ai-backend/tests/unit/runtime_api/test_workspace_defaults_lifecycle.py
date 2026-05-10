@@ -569,7 +569,7 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
     the queue / worker.
     """
 
-    def test_create_run_uses_workspace_default_when_request_omits_model(
+    async def test_create_run_uses_workspace_default_when_request_omits_model(
         self,
     ) -> None:
         client, store = self.create_client()
@@ -613,12 +613,10 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
             assert request.model is not None
             return request.model.model_name or ""
 
-        import asyncio
-
-        resolved = asyncio.run(_exercise())
+        resolved = await _exercise()
         assert resolved == "claude-opus-4-7", resolved
 
-    def test_create_run_falls_back_to_settings_when_no_defaults(self) -> None:
+    async def test_create_run_falls_back_to_settings_when_no_defaults(self) -> None:
         # No defaults row → ``_apply_workspace_default_model`` is a
         # no-op (request.model stays None) and the existing chain in
         # ``_request_with_runtime_context`` lands on
@@ -647,13 +645,11 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
             after = await service._apply_workspace_default_model(request=request)
             return after.model is None
 
-        import asyncio
-
         # No defaults persisted → no fallback applied; the resolver
         # downstream will use settings.default_model.
-        assert asyncio.run(_exercise()) is True
+        assert await _exercise() is True
 
-    def test_create_run_request_model_wins_over_workspace_default(self) -> None:
+    async def test_create_run_request_model_wins_over_workspace_default(self) -> None:
         client, _ = self.create_client()
         admin_headers = self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS))
         payload = self._defaults_payload()
@@ -693,6 +689,4 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
             assert after.model is not None
             return after.model.model_name or ""
 
-        import asyncio
-
-        assert asyncio.run(_exercise()) == "gpt-5.4-mini"
+        assert await _exercise() == "gpt-5.4-mini"

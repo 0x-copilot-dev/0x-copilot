@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_api.schemas import (
@@ -24,7 +23,7 @@ class RuntimeEventTimelineTestMixin:
         TASK_ID = "task_123"
         USER_INPUT = "Find launch risks."
 
-    def create_store_and_run(
+    async def create_store_and_run(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> tuple[InMemoryRuntimeApiStore, RuntimeApiService, RunRecord]:
@@ -42,74 +41,68 @@ class RuntimeEventTimelineTestMixin:
             queue=store,
             settings=settings,
         )
-        conversation = asyncio.run(
-            service.create_conversation(
-                CreateConversationRequest(
-                    org_id=runtime_context_admin.org_id,
-                    user_id=runtime_context_admin.user_id,
-                    title=self.Values.CONVERSATION_TITLE,
-                )
+        conversation = await service.create_conversation(
+            CreateConversationRequest(
+                org_id=runtime_context_admin.org_id,
+                user_id=runtime_context_admin.user_id,
+                title=self.Values.CONVERSATION_TITLE,
             )
         )
-        run_response = asyncio.run(
-            service.create_run(
-                CreateRunRequest(
-                    conversation_id=conversation.conversation_id,
-                    org_id=runtime_context_admin.org_id,
-                    user_id=runtime_context_admin.user_id,
-                    user_input=self.Values.USER_INPUT,
-                    model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-                    request_context={
-                        "roles": sorted(runtime_context_admin.roles),
-                        "permission_scopes": sorted(
-                            runtime_context_admin.permission_scopes
-                        ),
-                        "connector_scopes": {
-                            key: sorted(value)
-                            for key, value in runtime_context_admin.connector_scopes.items()
-                        },
-                        "feature_flags": [
-                            flag.value for flag in runtime_context_admin.feature_flags
-                        ],
+        run_response = await service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id=runtime_context_admin.org_id,
+                user_id=runtime_context_admin.user_id,
+                user_input=self.Values.USER_INPUT,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+                request_context={
+                    "roles": sorted(runtime_context_admin.roles),
+                    "permission_scopes": sorted(
+                        runtime_context_admin.permission_scopes
+                    ),
+                    "connector_scopes": {
+                        key: sorted(value)
+                        for key, value in runtime_context_admin.connector_scopes.items()
                     },
-                )
+                    "feature_flags": [
+                        flag.value for flag in runtime_context_admin.feature_flags
+                    ],
+                },
             )
         )
         return store, service, store.runs[run_response.run_id]
 
 
 class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
-    def test_tool_call_stream_event_projects_to_ui_lifecycle_envelope(
+    async def test_tool_call_stream_event_projects_to_ui_lifecycle_envelope(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        store, service, run = self.create_store_and_run(runtime_context_admin)
+        store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        asyncio.run(
-            RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
-                run=run,
-                chunk={
-                    "type": "messages",
-                    "ns": (),
-                    "data": (
-                        {
-                            "tool_call_chunks": (
-                                {
-                                    "name": "doc_search",
-                                    "id": self.Values.CALL_ID,
-                                    "summary": "Searching launch docs",
-                                    "args": {
-                                        "query": "launch risks",
-                                        "authorization": "bearer secret-token",
-                                    },
+        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "tool_call_chunks": (
+                            {
+                                "name": "doc_search",
+                                "id": self.Values.CALL_ID,
+                                "summary": "Searching launch docs",
+                                "args": {
+                                    "query": "launch risks",
+                                    "authorization": "bearer secret-token",
                                 },
-                            ),
-                        },
-                        {},
-                    ),
-                },
-                delta=None,
-            )
+                            },
+                        ),
+                    },
+                    {},
+                ),
+            },
+            delta=None,
         )
         envelope = store.events_by_run[run.run_id][-1]
 
@@ -125,47 +118,43 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         }
         assert store.runs[run.run_id].latest_sequence_no == 2
 
-    def test_tool_delta_and_result_events_project_to_specific_api_types(
+    async def test_tool_delta_and_result_events_project_to_specific_api_types(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        _store, service, run = self.create_store_and_run(runtime_context_admin)
+        _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        asyncio.run(
-            RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
-                run=run,
-                chunk={
-                    "type": "custom",
-                    "ns": (),
-                    "data": {
-                        "api_event_type": "tool_call_delta",
-                        "tool_name": "doc_search",
-                        "call_id": self.Values.CALL_ID,
-                        "delta": "Searching",
-                    },
+        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+            run=run,
+            chunk={
+                "type": "custom",
+                "ns": (),
+                "data": {
+                    "api_event_type": "tool_call_delta",
+                    "tool_name": "doc_search",
+                    "call_id": self.Values.CALL_ID,
+                    "delta": "Searching",
                 },
-                delta=None,
-            )
+            },
+            delta=None,
         )
         delta_envelope = _store.events_by_run[run.run_id][-1]
-        asyncio.run(
-            RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
-                run=run,
-                chunk={
-                    "type": "messages",
-                    "ns": (),
-                    "data": (
-                        {
-                            "type": "tool",
-                            "name": "doc_search",
-                            "tool_call_id": self.Values.CALL_ID,
-                            "content": "Found launch risks",
-                        },
-                        {},
-                    ),
-                },
-                delta=None,
-            )
+        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "doc_search",
+                        "tool_call_id": self.Values.CALL_ID,
+                        "content": "Found launch risks",
+                    },
+                    {},
+                ),
+            },
+            delta=None,
         )
         result_envelope = next(
             event
@@ -180,11 +169,11 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         assert result_envelope.status == "completed"
         assert result_envelope.display_title == "doc_search result"
 
-    def test_incremental_tool_call_chunks_keep_stable_tool_identity(
+    async def test_incremental_tool_call_chunks_keep_stable_tool_identity(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        store, service, run = self.create_store_and_run(runtime_context_admin)
+        store, service, run = await self.create_store_and_run(runtime_context_admin)
         adapter = RuntimeStreamPartAdapter(service.event_producer)
 
         for chunk in (
@@ -200,36 +189,32 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             },
             {"index": 0, "args": {"delta": ',"status":"pending"}]}'}},
         ):
-            asyncio.run(
-                adapter.append_activity_events(
-                    run=run,
-                    chunk={
-                        "type": "messages",
-                        "ns": (),
-                        "data": ({"tool_call_chunks": (chunk,)}, {}),
-                    },
-                    delta=None,
-                )
-            )
-
-        asyncio.run(
-            adapter.append_activity_events(
+            await adapter.append_activity_events(
                 run=run,
                 chunk={
                     "type": "messages",
                     "ns": (),
-                    "data": (
-                        {
-                            "type": "tool",
-                            "name": "write_todos",
-                            "tool_call_id": self.Values.CALL_ID,
-                            "content": "Updated todo list.",
-                        },
-                        {},
-                    ),
+                    "data": ({"tool_call_chunks": (chunk,)}, {}),
                 },
                 delta=None,
             )
+
+        await adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "write_todos",
+                        "tool_call_id": self.Values.CALL_ID,
+                        "content": "Updated todo list.",
+                    },
+                    {},
+                ),
+            },
+            delta=None,
         )
 
         tool_events = [
@@ -258,11 +243,11 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             "unknown_tool" not in store.events_by_run[run.run_id][-1].model_dump_json()
         )
 
-    def test_incremental_task_tool_chunks_project_to_subagent_lifecycle(
+    async def test_incremental_task_tool_chunks_project_to_subagent_lifecycle(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        store, service, run = self.create_store_and_run(runtime_context_admin)
+        store, service, run = await self.create_store_and_run(runtime_context_admin)
         adapter = RuntimeStreamPartAdapter(service.event_producer)
 
         for chunk in (
@@ -280,86 +265,78 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
                 },
             },
         ):
-            asyncio.run(
-                adapter.append_activity_events(
-                    run=run,
-                    chunk={
-                        "type": "messages",
-                        "ns": (),
-                        "data": ({"tool_call_chunks": (chunk,)}, {}),
-                    },
-                    delta=None,
-                )
-            )
-
-        asyncio.run(
-            adapter.append_activity_events(
-                run=run,
-                chunk={
-                    "type": "updates",
-                    "ns": (),
-                    "data": {
-                        "model_request": {
-                            "messages": [
-                                {
-                                    "tool_calls": [
-                                        {
-                                            "name": "task",
-                                            "id": self.Values.TASK_ID,
-                                            "args": {
-                                                "description": "Write a prime checker.",
-                                                "subagent_type": "coder",
-                                            },
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    },
-                },
-                delta=None,
-            )
-        )
-        asyncio.run(
-            adapter.append_activity_events(
+            await adapter.append_activity_events(
                 run=run,
                 chunk={
                     "type": "messages",
                     "ns": (),
-                    "data": (
-                        {
-                            "type": "tool",
-                            "name": "task",
-                            "tool_call_id": self.Values.TASK_ID,
-                            "content": "Prime checker written.",
-                        },
-                        {},
-                    ),
+                    "data": ({"tool_call_chunks": (chunk,)}, {}),
                 },
                 delta=None,
             )
+
+        await adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "model_request": {
+                        "messages": [
+                            {
+                                "tool_calls": [
+                                    {
+                                        "name": "task",
+                                        "id": self.Values.TASK_ID,
+                                        "args": {
+                                            "description": "Write a prime checker.",
+                                            "subagent_type": "coder",
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+            },
+            delta=None,
         )
-        asyncio.run(
-            adapter.append_activity_events(
-                run=run,
-                chunk={
-                    "type": "updates",
-                    "ns": (),
-                    "data": {
-                        "tools": {
-                            "messages": [
-                                {
-                                    "type": "tool",
-                                    "name": "task",
-                                    "tool_call_id": self.Values.TASK_ID,
-                                    "content": "Prime checker written.",
-                                }
-                            ]
-                        }
+        await adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    {
+                        "type": "tool",
+                        "name": "task",
+                        "tool_call_id": self.Values.TASK_ID,
+                        "content": "Prime checker written.",
                     },
+                    {},
+                ),
+            },
+            delta=None,
+        )
+        await adapter.append_activity_events(
+            run=run,
+            chunk={
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "tools": {
+                        "messages": [
+                            {
+                                "type": "tool",
+                                "name": "task",
+                                "tool_call_id": self.Values.TASK_ID,
+                                "content": "Prime checker written.",
+                            }
+                        ]
+                    }
                 },
-                delta=None,
-            )
+            },
+            delta=None,
         )
 
         activity_events = store.events_by_run[run.run_id]
@@ -389,26 +366,24 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             RuntimeApiEventType.SUBAGENT_COMPLETED
         ) == 1
 
-    def test_reasoning_summary_event_does_not_expose_raw_thought_payload(
+    async def test_reasoning_summary_event_does_not_expose_raw_thought_payload(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        _store, service, run = self.create_store_and_run(runtime_context_admin)
+        _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        asyncio.run(
-            RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
-                run=run,
-                chunk={
-                    "type": "custom",
-                    "ns": (),
-                    "data": {
-                        "api_event_type": "reasoning_summary",
-                        "summary": "Checking source coverage",
-                        "raw_thought": self.Values.RAW_THOUGHT,
-                    },
+        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+            run=run,
+            chunk={
+                "type": "custom",
+                "ns": (),
+                "data": {
+                    "api_event_type": "reasoning_summary",
+                    "summary": "Checking source coverage",
+                    "raw_thought": self.Values.RAW_THOUGHT,
                 },
-                delta=None,
-            )
+            },
+            delta=None,
         )
         envelope = _store.events_by_run[run.run_id][-1]
 
@@ -418,28 +393,26 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         assert envelope.payload == {"summary": "Checking source coverage"}
         assert self.Values.RAW_THOUGHT not in envelope.model_dump_json()
 
-    def test_subagent_lifecycle_event_populates_task_span_fields(
+    async def test_subagent_lifecycle_event_populates_task_span_fields(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
-        _store, service, run = self.create_store_and_run(runtime_context_admin)
+        _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        asyncio.run(
-            RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
-                run=run,
-                chunk={
-                    "type": "custom",
-                    "ns": ("tools:parent_task_123",),
-                    "data": {
-                        "api_event_type": "subagent_completed",
-                        "task_id": self.Values.TASK_ID,
-                        "subagent_name": self.Values.SUBAGENT_NAME,
-                        "status": "completed",
-                        "summary": "Researcher finished source review",
-                    },
+        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+            run=run,
+            chunk={
+                "type": "custom",
+                "ns": ("tools:parent_task_123",),
+                "data": {
+                    "api_event_type": "subagent_completed",
+                    "task_id": self.Values.TASK_ID,
+                    "subagent_name": self.Values.SUBAGENT_NAME,
+                    "status": "completed",
+                    "summary": "Researcher finished source review",
                 },
-                delta=None,
-            )
+            },
+            delta=None,
         )
         envelope = _store.events_by_run[run.run_id][-1]
 

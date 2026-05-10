@@ -26,9 +26,6 @@ from agent_runtime.persistence.records import (
     ChargeOutcome,
 )
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 
 
 _NOW = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
@@ -74,14 +71,14 @@ def store() -> InMemoryRuntimeApiStore:
 
 
 @pytest.fixture
-def persistence(store: InMemoryRuntimeApiStore) -> AsyncInMemoryRuntimeApiStore:
-    return AsyncInMemoryRuntimeApiStore(store)
+def persistence(store: InMemoryRuntimeApiStore) -> InMemoryRuntimeApiStore:
+    return store
 
 
 class TestPreflightDecisions:
     @pytest.mark.asyncio
     async def test_allow_when_no_budgets_configured(
-        self, persistence: AsyncInMemoryRuntimeApiStore
+        self, persistence: InMemoryRuntimeApiStore
     ) -> None:
         from agent_runtime.budgets import BudgetPreflightAllow
 
@@ -99,11 +96,11 @@ class TestPreflightDecisions:
     async def test_allow_when_estimate_within_remaining(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
         from agent_runtime.budgets import BudgetPreflightAllow
 
-        store.create_budget(_budget(limit_micro_usd=1_000_000))
+        await store.create_budget(_budget(limit_micro_usd=1_000_000))
         decision = await BudgetEnforcer(persistence).preflight(
             org_id="org_a",
             user_id="user_1",
@@ -119,11 +116,11 @@ class TestPreflightDecisions:
     async def test_deny_when_hard_cap_would_be_exceeded(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
         from agent_runtime.budgets import BudgetPreflightDeny
 
-        store.create_budget(
+        await store.create_budget(
             _budget(limit_micro_usd=500_000, enforcement=BudgetEnforcement.HARD)
         )
         decision = await BudgetEnforcer(persistence).preflight(
@@ -140,11 +137,11 @@ class TestPreflightDecisions:
     async def test_warn_when_soft_cap_would_be_exceeded(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
         from agent_runtime.budgets import BudgetPreflightWarn
 
-        store.create_budget(
+        await store.create_budget(
             _budget(limit_micro_usd=500_000, enforcement=BudgetEnforcement.SOFT)
         )
         decision = await BudgetEnforcer(persistence).preflight(
@@ -160,11 +157,11 @@ class TestPreflightDecisions:
     async def test_disabled_budget_short_circuits_to_allow(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
         from agent_runtime.budgets import BudgetPreflightAllow
 
-        store.create_budget(
+        await store.create_budget(
             _budget(
                 limit_micro_usd=1, status=BudgetStatus.DISABLED
             )  # would deny if active
@@ -184,14 +181,14 @@ class TestConcurrentReservation:
     async def test_two_concurrent_runs_against_one_dollar_each_admit_one_each(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
         # $1.00 budget remaining; each run estimates $0.60. Without
         # reservations, both would Allow. With reservations, the second
         # Denies because the first reservation is now part of "current spend".
         from agent_runtime.budgets import BudgetPreflightAllow, BudgetPreflightDeny
 
-        store.create_budget(_budget(limit_micro_usd=1_000_000))
+        await store.create_budget(_budget(limit_micro_usd=1_000_000))
         enforcer = BudgetEnforcer(persistence)
 
         first = await enforcer.preflight(
@@ -217,9 +214,9 @@ class TestCharger:
     async def test_charge_applies_observed_spend(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
-        budget = store.create_budget(_budget(limit_micro_usd=1_000_000))
+        budget = await store.create_budget(_budget(limit_micro_usd=1_000_000))
         outcomes = await BudgetCharger(persistence).charge_run(
             org_id="org_a",
             user_id="user_1",
@@ -234,9 +231,9 @@ class TestCharger:
     async def test_same_run_id_is_idempotent(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
-        budget = store.create_budget(_budget(limit_micro_usd=1_000_000))
+        budget = await store.create_budget(_budget(limit_micro_usd=1_000_000))
         charger = BudgetCharger(persistence)
         first = await charger.charge_run(
             org_id="org_a",
@@ -264,9 +261,9 @@ class TestCharger:
     async def test_consume_reservation_marks_it_consumed(
         self,
         store: InMemoryRuntimeApiStore,
-        persistence: AsyncInMemoryRuntimeApiStore,
+        persistence: InMemoryRuntimeApiStore,
     ) -> None:
-        budget = store.create_budget(_budget(limit_micro_usd=1_000_000))
+        budget = await store.create_budget(_budget(limit_micro_usd=1_000_000))
         decision = await BudgetEnforcer(persistence).preflight(
             org_id="org_a",
             user_id="user_1",

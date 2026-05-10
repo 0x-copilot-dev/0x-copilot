@@ -173,10 +173,10 @@ class TestVerifyChainRotation:
 
 
 class TestInMemoryStoreIntegration:
-    def test_audit_log_records_carry_chain_fields(self) -> None:
+    async def test_audit_log_records_carry_chain_fields(self) -> None:
         store = InMemoryRuntimeApiStore()
         for i in range(5):
-            store.write_audit_log(
+            await store.write_audit_log(
                 event_type="conversation_created",
                 record={"org_id": "org_a", "audit_id": f"a{i}"},
             )
@@ -188,11 +188,11 @@ class TestInMemoryStoreIntegration:
         seqs = [record["seq"] for _, record in store.audit_log]
         assert seqs == [1, 2, 3, 4, 5]
 
-    def test_chain_is_per_org(self) -> None:
+    async def test_chain_is_per_org(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.write_audit_log(event_type="x", record={"org_id": "org_a"})
-        store.write_audit_log(event_type="x", record={"org_id": "org_b"})
-        store.write_audit_log(event_type="x", record={"org_id": "org_a"})
+        await store.write_audit_log(event_type="x", record={"org_id": "org_a"})
+        await store.write_audit_log(event_type="x", record={"org_id": "org_b"})
+        await store.write_audit_log(event_type="x", record={"org_id": "org_a"})
         a_records = [r for et, r in store.audit_log if r["org_id"] == "org_a"]
         b_records = [r for et, r in store.audit_log if r["org_id"] == "org_b"]
         assert [r["seq"] for r in a_records] == [1, 2]
@@ -201,9 +201,9 @@ class TestInMemoryStoreIntegration:
         assert a_records[1]["prev_hash"] == a_records[0]["signature"]
         assert b_records[0]["prev_hash"] is None  # first row in org_b chain
 
-    def test_delete_user_history_audit_is_chained(self) -> None:
+    async def test_delete_user_history_audit_is_chained(self) -> None:
         store = InMemoryRuntimeApiStore()
-        store.delete_user_history(org_id="org_a", user_id="u", reason="GDPR")
+        await store.delete_user_history(org_id="org_a", user_id="u", reason="GDPR")
         assert len(store.audit_log) == 1
         event_type, record = store.audit_log[0]
         assert event_type == "user_history_deleted"

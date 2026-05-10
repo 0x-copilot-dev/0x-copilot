@@ -21,7 +21,7 @@ from runtime_api.schemas import (
 )
 
 
-def _bootstrap(
+async def _bootstrap(
     *,
     org_id: str = "org_a",
     user_id: str = "user_1",
@@ -41,11 +41,11 @@ def _bootstrap(
         queue=store,
         settings=settings,
     )
-    conv = store.create_conversation(
+    conv = await store.create_conversation(
         CreateConversationRequest(org_id=org_id, user_id=user_id, title="Demo")
     )
     if seed_pricing:
-        store.upsert_pricing(
+        await store.upsert_pricing(
             ModelPricingRecord(
                 provider="openai",
                 model_name="gpt-5.4-mini",
@@ -96,8 +96,8 @@ def _seed_run(
 
 
 class TestConversationContextRoute:
-    def test_empty_conversation_returns_zero_slice(self) -> None:
-        client, _, conv_id = _bootstrap()
+    async def test_empty_conversation_returns_zero_slice(self) -> None:
+        client, _, conv_id = await _bootstrap()
         response = client.get(
             f"/v1/agent/conversations/{conv_id}/context",
             params={"org_id": "org_a", "user_id": "user_1"},
@@ -108,8 +108,8 @@ class TestConversationContextRoute:
         assert body["current"]["headroom_pct"] is None
         assert body["model"]["provider"] == "openai"
 
-    def test_populated_run_returns_window_and_headroom(self) -> None:
-        client, store, conv_id = _bootstrap()
+    async def test_populated_run_returns_window_and_headroom(self) -> None:
+        client, store, conv_id = await _bootstrap()
         completed = datetime.now(timezone.utc) - timedelta(minutes=1)
         _seed_run(
             store,
@@ -132,8 +132,8 @@ class TestConversationContextRoute:
         assert body["current"]["available_tokens"] == 127_000
         assert body["model"]["context_window_tokens"] == 128_000
 
-    def test_picks_latest_run_when_multiple_exist(self) -> None:
-        client, store, conv_id = _bootstrap()
+    async def test_picks_latest_run_when_multiple_exist(self) -> None:
+        client, store, conv_id = await _bootstrap()
         early = datetime.now(timezone.utc) - timedelta(hours=2)
         late = datetime.now(timezone.utc) - timedelta(minutes=1)
         _seed_run(
@@ -158,8 +158,8 @@ class TestConversationContextRoute:
         assert body["current"]["last_run_id"] == "r-late"
         assert body["current"]["input_tokens"] == 900
 
-    def test_404_for_foreign_tenant(self) -> None:
-        client, _, conv_id = _bootstrap()
+    async def test_404_for_foreign_tenant(self) -> None:
+        client, _, conv_id = await _bootstrap()
         response = client.get(
             f"/v1/agent/conversations/{conv_id}/context",
             params={"org_id": "org_b", "user_id": "user_xx"},
@@ -167,8 +167,8 @@ class TestConversationContextRoute:
         # 404 — does NOT 403, to avoid leaking conversation existence.
         assert response.status_code == 404
 
-    def test_per_call_breakdown_present_when_calls_exist(self) -> None:
-        client, store, conv_id = _bootstrap()
+    async def test_per_call_breakdown_present_when_calls_exist(self) -> None:
+        client, store, conv_id = await _bootstrap()
         completed = datetime.now(timezone.utc) - timedelta(minutes=1)
         _seed_run(
             store,
@@ -217,8 +217,8 @@ class TestConversationContextRoute:
         assert len(body["breakdown"]["by_subagent"]) == 1
         assert body["breakdown"]["by_subagent"][0]["subagent_id"] == "sub-x"
 
-    def test_unknown_model_returns_null_headroom(self) -> None:
-        client, store, conv_id = _bootstrap(seed_pricing=False)
+    async def test_unknown_model_returns_null_headroom(self) -> None:
+        client, store, conv_id = await _bootstrap(seed_pricing=False)
         completed = datetime.now(timezone.utc) - timedelta(minutes=1)
         _seed_run(
             store,
@@ -236,10 +236,10 @@ class TestConversationContextRoute:
         assert body["current"]["headroom_pct"] is None
         assert body["current"]["available_tokens"] is None
 
-    def test_archived_conversation_still_returns_context(self) -> None:
+    async def test_archived_conversation_still_returns_context(self) -> None:
         # Archive shouldn't 404 the context view — users open /context to
         # inspect a conversation they just archived.
-        client, store, conv_id = _bootstrap()
+        client, store, conv_id = await _bootstrap()
         store.conversations[conv_id] = store.conversations[conv_id].model_copy(
             update={"status": ConversationStatus.ARCHIVED}
         )

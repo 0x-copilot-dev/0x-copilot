@@ -29,7 +29,6 @@ from psycopg_pool import AsyncConnectionPool
 from starlette import status
 
 from agent_runtime.api.constants import Messages
-from agent_runtime.observability.audit_chain import AuditChainSigner
 from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
@@ -43,6 +42,7 @@ from agent_runtime.persistence.encryption import (
     FieldEncryptionFactory,
 )
 from agent_runtime.persistence.pool_metrics import PoolMetrics
+from enterprise_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     BudgetEnforcement,
     BudgetPeriod,
@@ -1643,7 +1643,7 @@ class PostgresRuntimeApiStore:
         ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
         audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
         org_id = str(data.get(_Fields.ORG_ID, "unknown"))
-        signer = AuditChainSigner.from_env()
+        signer = AuditChainSigner.from_env(environment_env_var="RUNTIME_ENVIRONMENT")
         async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.transaction():
                 await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
@@ -1862,7 +1862,9 @@ class PostgresRuntimeApiStore:
                 # then sign and insert with full chain fields. The outer
                 # transaction is already open so the lock auto-releases on
                 # commit alongside the rest of the deletion.
-                signer = AuditChainSigner.from_env()
+                signer = AuditChainSigner.from_env(
+                    environment_env_var="RUNTIME_ENVIRONMENT"
+                )
                 await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
                 last_seq, prev_hash = await _read_runtime_audit_chain_head_async(
                     conn, org_id=org_id

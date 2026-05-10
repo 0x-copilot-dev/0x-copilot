@@ -11,6 +11,8 @@ BACKEND_PYTHON := services/backend/.venv/bin/python
 FACADE_PYTHON := services/backend-facade/.venv/bin/python
 AI_BACKEND_PYTHON := services/ai-backend/.venv/bin/python
 SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
+AUDIT_CHAIN_PATH := ../../packages/audit-chain/src
+SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 
 .PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down test
 
@@ -90,7 +92,7 @@ dev: check-local-env check-provider-key
 		ENTERPRISE_AUTH_SECRET=$(DEV_AUTH_SECRET) \
 		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		MCP_TOKEN_VAULT_PROVIDER=local \
-		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
+		PYTHONPATH=$(SHARED_PYTHONPATH) \
 		.venv/bin/python -m uvicorn backend_app.app:app --host $(BIND_HOST) --port $(BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/ai-backend && \
 		RUNTIME_ENVIRONMENT=development \
@@ -99,7 +101,7 @@ dev: check-local-env check-provider-key
 		RUNTIME_START_IN_PROCESS_WORKER=true \
 		MCP_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		SKILLS_BACKEND_REGISTRY_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
-		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
+		PYTHONPATH=$(SHARED_PYTHONPATH) \
 		.venv/bin/python -m uvicorn runtime_api.app:app --host $(BIND_HOST) --port $(AI_BACKEND_PORT)) & pids="$$pids $$!"; \
 	(cd services/backend-facade && \
 		FACADE_ENVIRONMENT=development \
@@ -107,7 +109,7 @@ dev: check-local-env check-provider-key
 		ENTERPRISE_SERVICE_TOKEN=$(DEV_SERVICE_TOKEN) \
 		BACKEND_URL=http://$(BIND_HOST):$(BACKEND_PORT) \
 		AI_BACKEND_URL=http://$(BIND_HOST):$(AI_BACKEND_PORT) \
-		PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) \
+		PYTHONPATH=$(SHARED_PYTHONPATH) \
 		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
 	(npm run dev --workspace @enterprise-search/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
 	wait $$pids
@@ -152,6 +154,6 @@ prod-build:
 	docker build -f apps/frontend/Dockerfile -t enterprise-search-frontend:prod .
 
 test:
-	cd services/backend && PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) .venv/bin/python -m pytest tests/test_mcp_api_flow.py tests/test_skills_api_flow.py
-	cd services/backend-facade && PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) .venv/bin/python -m pytest tests/test_facade_settings.py
-	cd services/ai-backend && PYTHONPATH=src:$(SERVICE_CONTRACTS_PATH) .venv/bin/python -m pytest tests/unit/agent_runtime/mcp/test_mcp_auth_tool.py tests/unit/agent_runtime/skills/test_virtual_skills.py tests/unit/agent_runtime/memory/test_context_memory_management.py tests/unit/agent_runtime/agent/test_runtime_factory.py tests/unit/agent_runtime/agent/test_skills_runtime_factory.py
+	cd services/backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_mcp_api_flow.py tests/test_skills_api_flow.py
+	cd services/backend-facade && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_facade_settings.py
+	cd services/ai-backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/unit/agent_runtime/mcp/test_mcp_auth_tool.py tests/unit/agent_runtime/skills/test_virtual_skills.py tests/unit/agent_runtime/memory/test_context_memory_management.py tests/unit/agent_runtime/agent/test_runtime_factory.py tests/unit/agent_runtime/agent/test_skills_runtime_factory.py

@@ -10,7 +10,8 @@ from datetime import datetime
 import json
 from typing import Any
 
-from backend_app.audit_chain import AuditChainSigner
+from enterprise_audit_chain import AuditChainSigner
+
 from backend_app.contracts import (
     AuditEventRecord,
     DeployAuditEventRecord,
@@ -101,7 +102,9 @@ class _AuditChain:
     """
 
     def __init__(self, signer: AuditChainSigner | None = None) -> None:
-        self._signer = signer or AuditChainSigner.from_env()
+        self._signer = signer or AuditChainSigner.from_env(
+            environment_env_var="BACKEND_ENVIRONMENT"
+        )
         self._heads_by_org: dict[str, bytes] = {}
         self._counts_by_org: dict[str, int] = {}
 
@@ -640,7 +643,7 @@ class PostgresMcpStore:
     def append_audit(
         self, record: AuditEventRecord, *, conn: Any | None = None
     ) -> AuditEventRecord:
-        signer = AuditChainSigner.from_env()
+        signer = AuditChainSigner.from_env(environment_env_var="BACKEND_ENVIRONMENT")
         with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 _take_audit_chain_lock(
@@ -1126,7 +1129,7 @@ class PostgresSkillStore:
         *,
         conn: Any | None = None,
     ) -> SkillAuditEventRecord:
-        signer = AuditChainSigner.from_env()
+        signer = AuditChainSigner.from_env(environment_env_var="BACKEND_ENVIRONMENT")
         with self._connect_or_inherit(conn, org_id=record.org_id) as connection:
             with connection.cursor() as cur:
                 _take_audit_chain_lock(

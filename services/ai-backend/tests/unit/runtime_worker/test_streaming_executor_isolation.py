@@ -11,7 +11,6 @@ are either done or paused.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -26,9 +25,6 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-isolation")
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -134,28 +130,26 @@ async def _fake_stream_one_interrupt_then_sibling_completion() -> AsyncIterator[
     }
 
 
-def test_interrupt_does_not_cancel_sibling_subagent_completion() -> None:
+async def test_interrupt_does_not_cancel_sibling_subagent_completion() -> None:
     """Phase 2 acceptance: with an APPROVAL_REQUESTED arriving while sibling
     subagents are still in flight, the executor keeps draining the stream so
     siblings' SUBAGENT_COMPLETED events are observed and persisted."""
 
     sync_store = InMemoryRuntimeApiStore()
     run = _persist_run(sync_store, "run_phase2_iso")
-    store = AsyncInMemoryRuntimeApiStore(sync_store)
+    store = sync_store
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     orchestrator = StreamOrchestrator(event_producer=producer)
     metrics = AssistantRunMetrics(started_at=datetime.now(timezone.utc))
 
-    result = asyncio.run(
-        StreamingExecutor.run(
-            stream=_fake_stream_one_interrupt_then_sibling_completion(),
-            run=run,
-            metrics=metrics,
-            event_store=store,
-            event_producer=producer,
-            stream_event_mapper=orchestrator,
-            track_subagents=True,
-        )
+    result = await StreamingExecutor.run(
+        stream=_fake_stream_one_interrupt_then_sibling_completion(),
+        run=run,
+        metrics=metrics,
+        event_store=store,
+        event_producer=producer,
+        stream_event_mapper=orchestrator,
+        track_subagents=True,
     )
 
     # The interrupt event was seen, so the run will transition to
@@ -218,7 +212,7 @@ async def _fake_stream_supervisor_only_interrupt() -> AsyncIterator[object]:
     }
 
 
-def test_supervisor_only_interrupt_terminates_promptly() -> None:
+async def test_supervisor_only_interrupt_terminates_promptly() -> None:
     """Phase 2 regression guard: a run with no parallel branches still
     flips `action_interrupted` and reaches the end of the stream without
     deadlocking. The fake stream simulates LangGraph's astream returning
@@ -226,21 +220,19 @@ def test_supervisor_only_interrupt_terminates_promptly() -> None:
 
     sync_store = InMemoryRuntimeApiStore()
     run = _persist_run(sync_store, "run_phase2_solo")
-    store = AsyncInMemoryRuntimeApiStore(sync_store)
+    store = sync_store
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     orchestrator = StreamOrchestrator(event_producer=producer)
     metrics = AssistantRunMetrics(started_at=datetime.now(timezone.utc))
 
-    result = asyncio.run(
-        StreamingExecutor.run(
-            stream=_fake_stream_supervisor_only_interrupt(),
-            run=run,
-            metrics=metrics,
-            event_store=store,
-            event_producer=producer,
-            stream_event_mapper=orchestrator,
-            track_subagents=True,
-        )
+    result = await StreamingExecutor.run(
+        stream=_fake_stream_supervisor_only_interrupt(),
+        run=run,
+        metrics=metrics,
+        event_store=store,
+        event_producer=producer,
+        stream_event_mapper=orchestrator,
+        track_subagents=True,
     )
 
     assert result.action_interrupted is True
@@ -275,26 +267,24 @@ async def _fake_stream_ask_a_question_inside_subagent() -> AsyncIterator[object]
     }
 
 
-def test_ask_a_question_inside_subagent_emits_paused_with_ask_a_question_reason() -> (
+async def test_ask_a_question_inside_subagent_emits_paused_with_ask_a_question_reason() -> (
     None
 ):
     sync_store = InMemoryRuntimeApiStore()
     run = _persist_run(sync_store, "run_phase3_aaq")
-    store = AsyncInMemoryRuntimeApiStore(sync_store)
+    store = sync_store
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     orchestrator = StreamOrchestrator(event_producer=producer)
     metrics = AssistantRunMetrics(started_at=datetime.now(timezone.utc))
 
-    asyncio.run(
-        StreamingExecutor.run(
-            stream=_fake_stream_ask_a_question_inside_subagent(),
-            run=run,
-            metrics=metrics,
-            event_store=store,
-            event_producer=producer,
-            stream_event_mapper=orchestrator,
-            track_subagents=True,
-        )
+    await StreamingExecutor.run(
+        stream=_fake_stream_ask_a_question_inside_subagent(),
+        run=run,
+        metrics=metrics,
+        event_store=store,
+        event_producer=producer,
+        stream_event_mapper=orchestrator,
+        track_subagents=True,
     )
 
     persisted = sync_store.events_by_run["run_phase3_aaq"]
@@ -337,24 +327,22 @@ async def _fake_stream_mcp_auth_inside_subagent() -> AsyncIterator[object]:
     }
 
 
-def test_mcp_auth_inside_subagent_emits_paused_with_mcp_auth_reason() -> None:
+async def test_mcp_auth_inside_subagent_emits_paused_with_mcp_auth_reason() -> None:
     sync_store = InMemoryRuntimeApiStore()
     run = _persist_run(sync_store, "run_phase3_mcp")
-    store = AsyncInMemoryRuntimeApiStore(sync_store)
+    store = sync_store
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     orchestrator = StreamOrchestrator(event_producer=producer)
     metrics = AssistantRunMetrics(started_at=datetime.now(timezone.utc))
 
-    asyncio.run(
-        StreamingExecutor.run(
-            stream=_fake_stream_mcp_auth_inside_subagent(),
-            run=run,
-            metrics=metrics,
-            event_store=store,
-            event_producer=producer,
-            stream_event_mapper=orchestrator,
-            track_subagents=True,
-        )
+    await StreamingExecutor.run(
+        stream=_fake_stream_mcp_auth_inside_subagent(),
+        run=run,
+        metrics=metrics,
+        event_store=store,
+        event_producer=producer,
+        stream_event_mapper=orchestrator,
+        track_subagents=True,
     )
 
     persisted = sync_store.events_by_run["run_phase3_mcp"]
@@ -414,7 +402,7 @@ async def _fake_stream_resume_then_immediate_pause() -> AsyncIterator[object]:
     }
 
 
-def test_chained_pause_cycle_emits_paired_paused_events_per_interrupt() -> None:
+async def test_chained_pause_cycle_emits_paired_paused_events_per_interrupt() -> None:
     """AC-equivalent of `test_resume_then_immediate_pause_emits_both_events`.
     The chunk-side worker is the only emit path for SUBAGENT_PAUSED; both
     interrupts in the chained sequence should produce their own paused
@@ -422,21 +410,19 @@ def test_chained_pause_cycle_emits_paired_paused_events_per_interrupt() -> None:
 
     sync_store = InMemoryRuntimeApiStore()
     run = _persist_run(sync_store, "run_phase3_chain")
-    store = AsyncInMemoryRuntimeApiStore(sync_store)
+    store = sync_store
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     orchestrator = StreamOrchestrator(event_producer=producer)
     metrics = AssistantRunMetrics(started_at=datetime.now(timezone.utc))
 
-    asyncio.run(
-        StreamingExecutor.run(
-            stream=_fake_stream_resume_then_immediate_pause(),
-            run=run,
-            metrics=metrics,
-            event_store=store,
-            event_producer=producer,
-            stream_event_mapper=orchestrator,
-            track_subagents=True,
-        )
+    await StreamingExecutor.run(
+        stream=_fake_stream_resume_then_immediate_pause(),
+        run=run,
+        metrics=metrics,
+        event_store=store,
+        event_producer=producer,
+        stream_event_mapper=orchestrator,
+        track_subagents=True,
     )
 
     persisted = sync_store.events_by_run["run_phase3_chain"]

@@ -11,17 +11,14 @@ from fastapi.testclient import TestClient
 
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters.in_memory import (
-    AsyncInMemoryRuntimeApiStore,
-    InMemoryRuntimeApiStore,
-)
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
 
 class TestAuditCursor:
     def _client(self) -> TestClient:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+        async_store = sync_store
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",

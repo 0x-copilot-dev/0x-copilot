@@ -69,7 +69,7 @@ class _TestSettings:
 
 class _TestHelpers:
     @staticmethod
-    def create_queued_run(
+    async def create_queued_run(
         store: InMemoryRuntimeApiStore,
         settings: RuntimeSettings,
         *,
@@ -81,24 +81,20 @@ class _TestHelpers:
             queue=store,
             settings=settings,
         )
-        conversation = asyncio.run(
-            service.create_conversation(
-                CreateConversationRequest(
-                    org_id="org_123",
-                    user_id="user_123",
-                    assistant_id="assistant_123",
-                )
+        conversation = await service.create_conversation(
+            CreateConversationRequest(
+                org_id="org_123",
+                user_id="user_123",
+                assistant_id="assistant_123",
             )
         )
-        response = asyncio.run(
-            service.create_run(
-                CreateRunRequest(
-                    conversation_id=conversation.conversation_id,
-                    org_id="org_123",
-                    user_id="user_123",
-                    user_input="Summarize launch risks.",
-                    model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
-                )
+        response = await service.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_123",
+                user_id="user_123",
+                user_input="Summarize launch risks.",
+                model=model or {"provider": "openai", "model_name": "gpt-5.4-mini"},
             )
         )
         return response.run_id
@@ -226,10 +222,10 @@ def test_stream_namespace_parses_documented_deep_agents_subagent_segments() -> N
     assert unsupported.subagent_task_id is None
 
 
-def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
+async def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
     seen_messages: list[Sequence[object]] = []
 
     def fake_agent_factory(
@@ -269,7 +265,7 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     assert store.runs[run_id].status == "completed"
@@ -287,7 +283,7 @@ def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> None:
     assert assistant_messages[0].content_text == "Hello from the worker."
 
 
-def test_runtime_worker_builds_history_from_selected_branch() -> None:
+async def test_runtime_worker_builds_history_from_selected_branch() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -296,27 +292,23 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Original question",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Original question",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_1",
             conversation_id=conversation.conversation_id,
@@ -327,7 +319,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    store.append_message(
+    await store.append_message(
         MessageRecord(
             message_id="sibling_user",
             conversation_id=conversation.conversation_id,
@@ -337,18 +329,16 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
             parent_message_id=assistant.message_id,
         )
     )
-    edited = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Edited question",
-                parent_message_id=assistant.message_id,
-                source_message_id="sibling_user",
-                branch_id="branch_edit",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    edited = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Edited question",
+            parent_message_id=assistant.message_id,
+            source_message_id="sibling_user",
+            branch_id="branch_edit",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -358,9 +348,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = asyncio.run(
-        handler._messages_for_run(command, store.runs[edited.run_id])
-    )
+    messages = await handler._messages_for_run(command, store.runs[edited.run_id])
 
     message_prompts = [
         message["content"].split("\n\n", maxsplit=1)[0] for message in messages
@@ -373,7 +361,7 @@ def test_runtime_worker_builds_history_from_selected_branch() -> None:
     assert "Sibling branch that should not leak" not in messages[-1]["content"]
 
 
-def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
+async def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -382,27 +370,23 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Remember that the launch is on Tuesday.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Remember that the launch is on Tuesday.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="persisted_assistant_1",
             conversation_id=conversation.conversation_id,
@@ -414,16 +398,14 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         )
     )
 
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="What day is the launch?",
-                parent_message_id=f"assistant-{first.run_id}",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What day is the launch?",
+            parent_message_id=f"assistant-{first.run_id}",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -437,9 +419,7 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = asyncio.run(
-        handler._messages_for_run(command, store.runs[follow_up.run_id])
-    )
+    messages = await handler._messages_for_run(command, store.runs[follow_up.run_id])
 
     assert [message["content"] for message in messages] == [
         "Remember that the launch is on Tuesday.",
@@ -448,7 +428,7 @@ def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
     ]
 
 
-def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
+async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -457,28 +437,24 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="What are my open Jira blockers?",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What are my open Jira blockers?",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_jira_answer",
             conversation_id=conversation.conversation_id,
@@ -489,16 +465,14 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Which one is highest priority?",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Which one is highest priority?",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -507,11 +481,9 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = asyncio.run(
-        handler._messages_for_run(
-            store.run_commands[-1],
-            store.runs[follow_up.run_id],
-        )
+    messages = await handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
     )
 
     assert [message["role"] for message in messages] == [
@@ -528,7 +500,7 @@ def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
     assert "Which one is highest priority?" == messages[-1]["content"]
 
 
-def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
+async def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
     """The run-create response surfaces prior run ids reached via the parent
     chain so on-call can correlate a turn back to the runs whose events
     shaped its prompt context."""
@@ -541,28 +513,24 @@ def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="What are my open Jira blockers?",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What are my open Jira blockers?",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     assert first.prior_run_ids == ()
-    first_assistant = store.append_message(
+    first_assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_first",
             conversation_id=conversation.conversation_id,
@@ -573,23 +541,21 @@ def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    second = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="And the medium-priority ones?",
-                parent_message_id=first_assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    second = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="And the medium-priority ones?",
+            parent_message_id=first_assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
     assert second.prior_run_ids == (first.run_id,)
 
 
-def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
+async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
     """SUBAGENT_COMPLETED events from prior turns must surface in the next turn's
     prompt context so the model can reuse the subagent's research instead of
     re-dispatching."""
@@ -602,24 +568,20 @@ def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Call a research subagent on AI agents.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Call a research subagent on AI agents.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_subagent_observation(
@@ -633,7 +595,7 @@ def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
             "are hallucinations and tool misuse. Sources: openai.com, anthropic.com."
         ),
     )
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_subagent_summary",
             conversation_id=conversation.conversation_id,
@@ -644,16 +606,14 @@ def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Based on the prior research, what are the top 3 risks?",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Based on the prior research, what are the top 3 risks?",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     handler = RuntimeRunHandler(
@@ -661,11 +621,9 @@ def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = asyncio.run(
-        handler._messages_for_run(
-            store.run_commands[-1],
-            store.runs[follow_up.run_id],
-        )
+    messages = await handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
     )
 
     context = messages[-2]["content"]
@@ -676,7 +634,7 @@ def test_runtime_worker_injects_prior_subagent_results_into_next_turn() -> None:
     assert "Reuse a prior subagent summary instead of re-dispatching" in context
 
 
-def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:
+async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -685,28 +643,24 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Find blockers.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Find blockers.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_prior_tool",
             conversation_id=conversation.conversation_id,
@@ -717,16 +671,14 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Show full details for the first result.",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Show full details for the first result.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     handler = RuntimeRunHandler(
@@ -736,7 +688,7 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
     )
     command = store.run_commands[-1]
     run = store.runs[follow_up.run_id]
-    index = asyncio.run(handler._tool_observation_index(command, run))
+    index = await handler._tool_observation_index(command, run)
     dependencies = handler._dependencies_for_run(command, index)
 
     assert dependencies.prior_tool_result_loader is not None
@@ -757,7 +709,7 @@ def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> Non
     assert missing["error_code"] == "observation_not_found"
 
 
-def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
+async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -766,24 +718,20 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Find blockers.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Find blockers.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(
@@ -792,7 +740,7 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         run_id=first.run_id,
         output={"issues": [{"key": "AUTH-123"}]},
     )
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_branch_root",
             conversation_id=conversation.conversation_id,
@@ -803,16 +751,14 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    sibling = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Different branch question.",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    sibling = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Different branch question.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(
@@ -822,16 +768,14 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         call_id="call_sibling",
         output={"issues": [{"key": "SIBLING-999"}]},
     )
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Continue from the original answer.",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Continue from the original answer.",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -840,11 +784,9 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = asyncio.run(
-        handler._messages_for_run(
-            store.run_commands[-1],
-            store.runs[follow_up.run_id],
-        )
+    messages = await handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
     )
     context = messages[-2]["content"]
 
@@ -852,7 +794,7 @@ def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
     assert "SIBLING-999" not in context
 
 
-def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
+async def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -861,24 +803,20 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    first = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Search sensitive logs.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    first = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Search sensitive logs.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(
@@ -896,7 +834,7 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         redaction_state=RuntimeEventRedactionState.OFFLOADED,
         output={"payload_ref": "/large_tool_results/result_1"},
     )
-    assistant = store.append_message(
+    assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_sensitive",
             conversation_id=conversation.conversation_id,
@@ -907,16 +845,14 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="What did the logs say?",
-                parent_message_id=assistant.message_id,
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    follow_up = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="What did the logs say?",
+            parent_message_id=assistant.message_id,
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -925,11 +861,9 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         event_store=store,
         settings=settings,
     )
-    messages = asyncio.run(
-        handler._messages_for_run(
-            store.run_commands[-1],
-            store.runs[follow_up.run_id],
-        )
+    messages = await handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[follow_up.run_id],
     )
 
     assert [message["role"] for message in messages] == ["user", "assistant", "user"]
@@ -938,7 +872,9 @@ def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
     )
 
 
-def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() -> None:
+async def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() -> (
+    None
+):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -947,24 +883,20 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    current = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Search now.",
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    current = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Search now.",
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
     _TestHelpers.append_tool_observation(
@@ -979,17 +911,15 @@ def test_runtime_worker_excludes_current_run_tool_results_from_initial_prompt() 
         event_store=store,
         settings=settings,
     )
-    messages = asyncio.run(
-        handler._messages_for_run(
-            store.run_commands[-1],
-            store.runs[current.run_id],
-        )
+    messages = await handler._messages_for_run(
+        store.run_commands[-1],
+        store.runs[current.run_id],
     )
 
     assert messages == ({"role": "user", "content": "Search now."},)
 
 
-def test_runtime_worker_includes_structured_composer_context() -> None:
+async def test_runtime_worker_includes_structured_composer_context() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
     service = RuntimeApiService(
@@ -998,46 +928,42 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
         queue=store,
         settings=settings,
     )
-    conversation = asyncio.run(
-        service.create_conversation(
-            CreateConversationRequest(
-                org_id="org_123",
-                user_id="user_123",
-                assistant_id="assistant_123",
-            )
+    conversation = await service.create_conversation(
+        CreateConversationRequest(
+            org_id="org_123",
+            user_id="user_123",
+            assistant_id="assistant_123",
         )
     )
-    response = asyncio.run(
-        service.create_run(
-            CreateRunRequest(
-                conversation_id=conversation.conversation_id,
-                org_id="org_123",
-                user_id="user_123",
-                user_input="Review the launch brief.",
-                content=[
-                    {"type": "text", "text": "Review the launch brief."},
-                    {
-                        "type": "document",
-                        "filename": "launch-plan.md",
-                        "mime_type": "text/markdown",
-                        "text": "Launch plan risks",
-                    },
-                ],
-                attachments=[
-                    {
-                        "id": "attachment_1",
-                        "type": "document",
-                        "name": "brief.txt",
-                        "content_type": "text/plain",
-                        "size": 12,
-                        "content": [{"type": "text", "text": "Budget risk"}],
-                    }
-                ],
-                quote={"text": "quoted selection", "source": "assistant_1"},
-                branch_id="branch_edit",
-                branch={"replace_from_message_id": "assistant_old"},
-                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
-            )
+    response = await service.create_run(
+        CreateRunRequest(
+            conversation_id=conversation.conversation_id,
+            org_id="org_123",
+            user_id="user_123",
+            user_input="Review the launch brief.",
+            content=[
+                {"type": "text", "text": "Review the launch brief."},
+                {
+                    "type": "document",
+                    "filename": "launch-plan.md",
+                    "mime_type": "text/markdown",
+                    "text": "Launch plan risks",
+                },
+            ],
+            attachments=[
+                {
+                    "id": "attachment_1",
+                    "type": "document",
+                    "name": "brief.txt",
+                    "content_type": "text/plain",
+                    "size": 12,
+                    "content": [{"type": "text", "text": "Budget risk"}],
+                }
+            ],
+            quote={"text": "quoted selection", "source": "assistant_1"},
+            branch_id="branch_edit",
+            branch={"replace_from_message_id": "assistant_old"},
+            model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
 
@@ -1047,9 +973,7 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
         settings=settings,
     )
     command = store.run_commands[-1]
-    messages = asyncio.run(
-        handler._messages_for_run(command, store.runs[response.run_id])
-    )
+    messages = await handler._messages_for_run(command, store.runs[response.run_id])
     content = messages[-1]["content"]
 
     assert "Review the launch brief." in content
@@ -1062,10 +986,10 @@ def test_runtime_worker_includes_structured_composer_context() -> None:
     assert "- replace_from_message_id: assistant_old" in content
 
 
-def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
+async def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(
@@ -1152,7 +1076,7 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     events = store.events_by_run[run_id]
@@ -1199,10 +1123,10 @@ def test_runtime_worker_streams_model_deltas_before_final_response() -> None:
     assert run_completed.metadata["performance_metrics"]["chunk_count"] == 3
 
 
-def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
+async def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(
+    run_id = await _TestHelpers.create_queued_run(
         store,
         settings,
         model={
@@ -1253,7 +1177,7 @@ def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     assert store.runs[run_id].status == AgentRunStatus.TIMED_OUT
@@ -1267,7 +1191,7 @@ def test_runtime_worker_completes_queue_item_when_stream_times_out() -> None:
     assert set(store._queue_statuses.values()) == {OutboxStatus.COMPLETED}
 
 
-def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
+async def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
     """Run-level asyncio.timeout fires while a tool_call is in-flight without
     a matching tool_result. The handler must emit synthetic terminal
     `tool_result` + `tool_call_completed` events for the orphan call BEFORE
@@ -1277,7 +1201,7 @@ def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
 
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(
+    run_id = await _TestHelpers.create_queued_run(
         store,
         settings,
         model={
@@ -1346,7 +1270,7 @@ def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
         ),
     )
 
-    asyncio.run(worker.run_until_idle())
+    await worker.run_until_idle()
 
     events = store.events_by_run[run_id]
     event_types = [event.event_type for event in events]
@@ -1371,10 +1295,10 @@ def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
     assert store.runs[run_id].status == AgentRunStatus.TIMED_OUT
 
 
-def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
+async def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1429,7 +1353,7 @@ def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     model_delta_events = [
@@ -1453,10 +1377,12 @@ def test_runtime_worker_reconciles_deltas_with_final_stream_value() -> None:
     assert assistant_messages[0].content_text == "Clean final."
 
 
-def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> None:
+async def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> (
+    None
+):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1518,7 +1444,7 @@ def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> 
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     model_delta_events = [
@@ -1536,10 +1462,12 @@ def test_runtime_worker_does_not_merge_subagent_deltas_into_final_response() -> 
     assert assistant_messages[0].content_text == "Main answer done."
 
 
-def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -> None:
+async def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -> (
+    None
+):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     class FakeChunk:
         def __init__(self, content: object) -> None:
@@ -1633,7 +1561,7 @@ def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     model_delta_events = [
@@ -1653,10 +1581,10 @@ def test_runtime_worker_streams_model_deltas_while_task_subagents_are_active() -
     assert final_response.payload["message"] == "Clean final."
 
 
-def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
+async def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1715,7 +1643,7 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     auth_events = [
@@ -1734,7 +1662,7 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
         auth_events[0].payload["auth_url"] == "https://mcp.example.com/oauth/authorize"
     )
     assert auth_events[0].payload["approval_id"] == "mcp_auth_run_123_server_123"
-    approval = store.get_approval_request(
+    approval = await store.get_approval_request(
         org_id="org_123",
         approval_id="mcp_auth_run_123_server_123",
     )
@@ -1744,16 +1672,16 @@ def test_runtime_worker_persists_mcp_auth_required_event_and_waits() -> None:
     assert final_events == []
 
 
-def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
+async def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
-    run = store.update_run_status(
+    run_id = await _TestHelpers.create_queued_run(store, settings)
+    run = await store.update_run_status(
         run_id=run_id,
         status=AgentRunStatus.WAITING_FOR_APPROVAL,
     )
     approval_id = "mcp_auth_run_123_server_123"
-    store.create_approval_request(
+    await store.create_approval_request(
         record=ApprovalRequestRecord(
             approval_id=approval_id,
             run_id=run.run_id,
@@ -1775,15 +1703,13 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
         queue=store,
         settings=settings,
     )
-    asyncio.run(
-        service.record_approval_decision(
-            org_id=run.org_id,
-            approval_id=approval_id,
-            request=ApprovalDecisionRequest(
-                decision="approved",
-                decided_by_user_id=run.user_id,
-            ),
-        )
+    await service.record_approval_decision(
+        org_id=run.org_id,
+        approval_id=approval_id,
+        request=ApprovalDecisionRequest(
+            decision="approved",
+            decided_by_user_id=run.user_id,
+        ),
     )
 
     class NoopRunHandler:
@@ -1832,7 +1758,7 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 2
     assert store.runs[run_id].status == AgentRunStatus.COMPLETED
@@ -1846,10 +1772,10 @@ def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> None:
     assert event_types.count("run_completed") == 1
 
 
-def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
+async def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -1997,7 +1923,7 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     events = store.events_by_run[run_id]
@@ -2055,10 +1981,12 @@ def test_runtime_worker_persists_normalized_activity_stream_events() -> None:
     assert task_completed.summary == "Research complete."
 
 
-def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -> None:
+async def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -> (
+    None
+):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2208,7 +2136,7 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     events = store.events_by_run[run_id]
@@ -2236,10 +2164,12 @@ def test_runtime_worker_collapses_incremental_tool_chunks_to_stable_activity() -
     )
 
 
-def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> None:
+async def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> (
+    None
+):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2313,7 +2243,7 @@ def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> No
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     events = store.events_by_run[run_id]
@@ -2333,10 +2263,10 @@ def test_runtime_worker_projects_call_mcp_tool_as_visible_tool_lifecycle() -> No
     assert tool_events[1].payload["output"]["content"] == "ClickUp returned two tasks."
 
 
-def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
+async def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2405,11 +2335,11 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
-    approval = store.get_approval_request(
+    approval = await store.get_approval_request(
         org_id="org_123",
         approval_id="approval_mcp_123",
     )
@@ -2419,10 +2349,10 @@ def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None:
     assert approval.metadata["native_interrupt_id"] == "approval_mcp_123"
 
 
-def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
+async def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
 
     def fake_agent_factory(
         *,
@@ -2487,7 +2417,7 @@ def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
         ),
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 1
     assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
@@ -2499,7 +2429,7 @@ def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
     assert len(approval_events) == 1
     assert approval_events[0].payload["approval_id"] == "approval_native_123"
     assert approval_events[0].payload["tool_name"] == "clickup_filter_tasks"
-    approval = store.get_approval_request(
+    approval = await store.get_approval_request(
         org_id="org_123",
         approval_id="approval_native_123",
     )
@@ -2508,7 +2438,7 @@ def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
     assert approval.metadata["allowed_decisions"] == ["approve", "reject"]
 
 
-def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
+async def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create(max_retries=1)
     command = RuntimeRunCommand(
@@ -2519,7 +2449,7 @@ def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
         trace_id="trace_retry",
         runtime_context=_TestSettings.runtime_context("run_retry"),
     )
-    store.enqueue_run(command)
+    await store.enqueue_run(command)
 
     class FailingRunHandler:
         attempts = 0
@@ -2542,17 +2472,17 @@ def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
         run_handler=handler,
     )
 
-    assert asyncio.run(worker.run_once())
-    assert asyncio.run(worker.run_once())
-    assert not asyncio.run(worker.run_once())
+    assert await worker.run_once()
+    assert await worker.run_once()
+    assert not await worker.run_once()
     assert handler.attempts == 2
 
 
-def test_runtime_worker_respects_max_parallel_runs() -> None:
+async def test_runtime_worker_respects_max_parallel_runs() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create(max_parallel_runs=2)
     for run_id in ("run_1", "run_2"):
-        store.enqueue_run(
+        await store.enqueue_run(
             RuntimeRunCommand(
                 run_id=run_id,
                 conversation_id="conversation_123",
@@ -2582,7 +2512,7 @@ def test_runtime_worker_respects_max_parallel_runs() -> None:
         run_handler=handler,
     )
 
-    processed = asyncio.run(worker.run_until_idle())
+    processed = await worker.run_until_idle()
 
     assert processed == 2
     assert handler.max_active == 2

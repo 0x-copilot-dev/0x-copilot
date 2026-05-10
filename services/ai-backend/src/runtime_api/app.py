@@ -46,7 +46,7 @@ from runtime_api.sse.event_bus import RuntimeEventBus
 from runtime_worker import RuntimeWorker
 
 
-_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres"})
+_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres", "in_memory"})
 
 
 class RuntimeApiAppFactory:
@@ -198,32 +198,17 @@ class RuntimeApiAppFactory:
         )
 
         suggestible_resolver = SuggestibleConnectorsResolverFactory.default()
-        if settings.store.backend in _ASYNC_BACKENDS:
-            async_ports = RuntimeAdapterFactory.async_from_settings(settings)
-            app.state.async_runtime_ports = async_ports
-            return RuntimeApiService(
-                persistence=async_ports.persistence,
-                event_store=async_ports.event_store,
-                queue=async_ports.queue,
-                settings=settings,
-                on_event_appended=event_bus.notify_sync,
-                notification_dispatcher=notification_dispatcher
-                if isinstance(
-                    notification_dispatcher, InboxAndEmailNotificationDispatcher
-                )
-                else LoggingNotificationDispatcher(),
-                membership_resolver=membership_resolver,
-                suggestible_connectors_resolver=suggestible_resolver,
-            )
-        ports = RuntimeAdapterFactory.from_settings(settings)
-        app.state.runtime_ports = ports
+        async_ports = RuntimeAdapterFactory.async_from_settings(settings)
+        app.state.async_runtime_ports = async_ports
         return RuntimeApiService(
-            persistence=ports.persistence,
-            event_store=ports.event_store,
-            queue=ports.queue,
+            persistence=async_ports.persistence,
+            event_store=async_ports.event_store,
+            queue=async_ports.queue,
             settings=settings,
             on_event_appended=event_bus.notify_sync,
-            notification_dispatcher=notification_dispatcher,
+            notification_dispatcher=notification_dispatcher
+            if isinstance(notification_dispatcher, InboxAndEmailNotificationDispatcher)
+            else LoggingNotificationDispatcher(),
             membership_resolver=membership_resolver,
             suggestible_connectors_resolver=suggestible_resolver,
         )

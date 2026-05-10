@@ -15,7 +15,6 @@ The middleware itself is exercised in
 
 from __future__ import annotations
 
-import asyncio
 
 from langchain_core.tools import BaseTool
 
@@ -114,18 +113,18 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         # Inner tool was actually invoked; the guard didn't gate it.
         assert len(inner.calls) == 1
 
-    def test_passthrough_when_no_guard_bound_async(self) -> None:
+    async def test_passthrough_when_no_guard_bound_async(self) -> None:
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
             name=inner.name,
             description=inner.description,
             inner=inner,
         )
-        result = asyncio.run(wrapped._arun("hello"))
+        result = await wrapped._arun("hello")
         assert result == "echo-ok"
         assert len(inner.calls) == 1
 
-    def test_admits_under_cap_and_records_into_ledger(self) -> None:
+    async def test_admits_under_cap_and_records_into_ledger(self) -> None:
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
             name=inner.name,
@@ -141,14 +140,14 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = asyncio.run(wrapped._arun("hi"))
+            result = await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
         assert result == "echo-ok"
         # One admitted call landed on the ledger.
         assert ledger.charged_calls("echo") == 1
 
-    def test_returns_safe_message_on_hard_reject(self) -> None:
+    async def test_returns_safe_message_on_hard_reject(self) -> None:
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
             name=inner.name,
@@ -167,7 +166,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = asyncio.run(wrapped._arun("hi"))
+            result = await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
         # The safe message is what the model will see — it doesn't carry
@@ -176,7 +175,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         assert "budget" in result.lower()
         assert inner.calls == []  # inner tool short-circuited.
 
-    def test_soft_warn_emits_budget_warning_and_admits(self) -> None:
+    async def test_soft_warn_emits_budget_warning_and_admits(self) -> None:
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
             name=inner.name,
@@ -204,7 +203,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = asyncio.run(wrapped._arun("hi"))
+            result = await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
         assert result == "echo-ok"
@@ -271,9 +270,9 @@ class TestToolBudgetGuardedRegistry:
 
 
 class TestToolBudgetSnapshotLoader:
-    def test_in_memory_seed_default_returns_global_row(self) -> None:
+    async def test_in_memory_seed_default_returns_global_row(self) -> None:
         store = InMemoryRuntimeApiStore()
-        rows = store.list_tool_budgets_for_org(org_id="any-org")
+        rows = await store.list_tool_budgets_for_org(org_id="any-org")
         assert len(rows) == 1
         seed = rows[0]
         assert seed.id == "seed_default"
@@ -281,7 +280,7 @@ class TestToolBudgetSnapshotLoader:
         assert seed.tool_name == "*"
         assert seed.enforcement == ToolBudgetEnforcement.HARD
 
-    def test_per_org_row_is_returned_alongside_global(self) -> None:
+    async def test_per_org_row_is_returned_alongside_global(self) -> None:
         store = InMemoryRuntimeApiStore()
         store.tool_budgets["custom"] = ToolBudgetRecord(
             id="custom",
@@ -290,10 +289,10 @@ class TestToolBudgetSnapshotLoader:
             max_calls_per_run=3,
             enforcement=ToolBudgetEnforcement.HARD,
         )
-        rows_for_org_y = store.list_tool_budgets_for_org(org_id="org-y")
+        rows_for_org_y = await store.list_tool_budgets_for_org(org_id="org-y")
         # Both rows visible.
         assert len(rows_for_org_y) == 2
-        rows_for_other_org = store.list_tool_budgets_for_org(org_id="org-z")
+        rows_for_other_org = await store.list_tool_budgets_for_org(org_id="org-z")
         # The org-y row is invisible to org-z; only the global remains.
         assert len(rows_for_other_org) == 1
         assert rows_for_other_org[0].id == "seed_default"

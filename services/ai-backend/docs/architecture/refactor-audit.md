@@ -59,17 +59,22 @@ Together these two are a few hundred lines of change with no API surface impact 
 
 **Risk.** Medium. Touches every service that depends on either Protocol family. Mechanical but wide. Recommended approach: write the async in-memory adapter first, run the suite, _then_ delete the sync code path file by file.
 
-### 1.3 Custom hash-chained audit log
+### 1.3 Custom hash-chained audit log — RESOLVED (de-duplicated, not deleted)
 
-**What we see.** [`agent_runtime/observability/audit_chain.py`](../../src/agent_runtime/observability/audit_chain.py) provides "immutable hash-chain over audit log" — bespoke tamper-evident append-only logging.
+**Status.** Resolved. The original recommendation ("delete the chain, rely on SIEM-side integrity") was reversed after a code-level investigation found:
 
-**Why it's a problem.** Audit log integrity is normally the receiving SIEM's job, not the source application's. Hash chaining at the source assumes nothing else writes to the table, requires careful lock discipline on append, and complicates legitimate operational tasks (re-encrypting columns, retention sweeps).
+- A SIEM cursor already exists at [`/internal/v1/audit/cursor`](../../src/runtime_api/http/routes.py); the SIEM-export pattern was already in place.
+- Append-only enforcement is already three-layer (Postgres `audit_writer` role with revoked UPDATE/DELETE, a constraint trigger on `runtime_audit_log`, and the chain itself).
+- The chain catches tampering in the **write → SIEM-export window** (minutes-to-hours during pump outages); SIEM alone cannot.
 
-**The change.** Move integrity to the export layer: stream audit events to the customer's SIEM (Splunk / Elasticsearch / S3 with object-lock) and let them assert immutability. If in-app integrity is genuinely required for a regulated buyer, use a managed service (e.g. AWS QLDB) rather than maintaining the chain in code.
+The actual smell was code duplication between `services/backend` and `services/ai-backend`. Both files implemented the same HMAC chain primitive and had drifted in line count.
 
-**What must survive.** `AuditLogRecord` schema (clients consume it). Append-only semantics from the application's point of view (no UPDATE / DELETE).
+**What landed.** A new shared package `packages/audit-chain/` (`enterprise_audit_chain`) hosts the single canonical implementation. Both services import from it. Per-service `from_env(environment_env_var=...)` makes the env var dependency explicit. Compat-fixture tests in both services pin pre-refactor signatures to byte-identical values so historical chains keep verifying.
 
-**Risk.** Medium. Compliance-adjacent; needs explicit sign-off from whoever specified hash chaining originally. May be required for a specific buyer — check before deleting.
+- New package: [packages/audit-chain/](../../../../packages/audit-chain/)
+- PRD with full investigation, behavior preservation, phasing, and risk analysis: [docs/refactor/01-audit-chain.md](../refactor/01-audit-chain.md)
+- Compat tests: [ai-backend test_audit_chain_compat.py](../../tests/unit/agent_runtime/observability/test_audit_chain_compat.py), [backend test_audit_chain_compat.py](../../../backend/tests/test_audit_chain_compat.py)
+- Removed: `services/ai-backend/src/agent_runtime/observability/audit_chain.py`, `services/backend/src/backend_app/audit_chain.py`
 
 ### 1.4 Custom redactor
 

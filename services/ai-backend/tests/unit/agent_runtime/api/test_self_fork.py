@@ -15,9 +15,6 @@ import pytest
 
 from agent_runtime.api.self_fork import SelfForkService
 from agent_runtime.execution.contracts import RuntimeErrorCode
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
-)
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -45,15 +42,15 @@ class _Values:
     TITLE = "FY26 Q1 launch announcement draft"
 
 
-def _make_store() -> tuple[AsyncInMemoryRuntimeApiStore, InMemoryRuntimeApiStore]:
+def _make_store() -> tuple[InMemoryRuntimeApiStore, InMemoryRuntimeApiStore]:
     sync_store = InMemoryRuntimeApiStore()
-    async_store = AsyncInMemoryRuntimeApiStore(sync_store)
+    async_store = sync_store
     return async_store, sync_store
 
 
 def _make_service(
     *,
-    async_store: AsyncInMemoryRuntimeApiStore,
+    async_store: InMemoryRuntimeApiStore,
     max_messages: int | None = None,
 ) -> SelfForkService:
     return SelfForkService(
@@ -64,7 +61,7 @@ def _make_service(
 
 
 async def _seed_source(
-    async_store: AsyncInMemoryRuntimeApiStore,
+    async_store: InMemoryRuntimeApiStore,
     *,
     message_count: int = 4,
     deleted: bool = False,
@@ -79,9 +76,9 @@ async def _seed_source(
         )
     )
     record = record.model_copy(update={"conversation_id": _Values.SOURCE_CONV})
-    async_store.underlying.conversations[_Values.SOURCE_CONV] = record
+    async_store.conversations[_Values.SOURCE_CONV] = record
     if deleted:
-        async_store.underlying.conversations[_Values.SOURCE_CONV] = record.model_copy(
+        async_store.conversations[_Values.SOURCE_CONV] = record.model_copy(
             update={"deleted_at": datetime.now(timezone.utc)}
         )
     for index in range(message_count):
@@ -100,7 +97,7 @@ async def _seed_source(
             + timedelta(seconds=index),
         )
         await async_store.append_message(message)
-    return async_store.underlying.conversations[_Values.SOURCE_CONV]
+    return async_store.conversations[_Values.SOURCE_CONV]
 
 
 class TestSelfForkHappyPath:

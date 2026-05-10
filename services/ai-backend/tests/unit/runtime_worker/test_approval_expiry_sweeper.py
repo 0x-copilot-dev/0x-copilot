@@ -15,16 +15,12 @@ assert against the queue + count semantics, not a full handler trip.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from agent_runtime.api.constants import Messages, Values
 from agent_runtime.api.membership import (
     InMemoryWorkspaceMembershipResolver,
     MembershipResolverUnavailable,
-)
-from runtime_adapters.in_memory.async_runtime_api_store import (
-    AsyncInMemoryRuntimeApiStore,
 )
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -78,7 +74,7 @@ def _seed_run(store: InMemoryRuntimeApiStore) -> None:
     )
 
 
-def _seed_pending(
+async def _seed_pending(
     store: InMemoryRuntimeApiStore,
     *,
     approval_id: str,
@@ -95,38 +91,38 @@ def _seed_pending(
         expires_at=expires_at,
         metadata={"approval_kind": "action", "action_summary": "test"},
     )
-    store.seed_approval_request(record)
+    await store.seed_approval_request(record)
     return record
 
 
 class TestExpiryPass:
-    def test_picks_up_expired_rows(self) -> None:
+    async def test_picks_up_expired_rows(self) -> None:
         store = InMemoryRuntimeApiStore()
         _seed_run(store)
         # One expired, one not.
         now = datetime.now(timezone.utc)
-        _seed_pending(
+        await _seed_pending(
             store,
             approval_id="a_expired",
             user_id=_Values.USER_ID,
             expires_at=now - timedelta(minutes=5),
         )
-        _seed_pending(
+        await _seed_pending(
             store,
             approval_id="a_not_expired",
             user_id=_Values.USER_ID,
             expires_at=now + timedelta(hours=1),
         )
         sweeper = ApprovalExpirySweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=InMemoryWorkspaceMembershipResolver(
                 {(_Values.ORG_ID, _Values.USER_ID): True}
             ),
             interval_seconds=999,
             clock=lambda: now,
         )
-        expired, revoked = asyncio.run(sweeper.sweep_once())
+        expired, revoked = await sweeper.sweep_once()
         assert expired == 1
         assert revoked == 0
         # One synthetic rejection enqueued, addressed at the right approval.
@@ -137,10 +133,10 @@ class TestExpiryPass:
         assert cmd.decided_by_user_id == Values.SYSTEM_USER_ID
         assert cmd.reason == Messages.Audit.APPROVAL_REASON_EXPIRED
 
-    def test_skips_resolved_rows(self) -> None:
+    async def test_skips_resolved_rows(self) -> None:
         store = InMemoryRuntimeApiStore()
         _seed_run(store)
-        approval = _seed_pending(
+        approval = await _seed_pending(
             store,
             approval_id="a_already_approved",
             user_id=_Values.USER_ID,
@@ -150,23 +146,25 @@ class TestExpiryPass:
             update={"status": ApprovalStatus.APPROVED}
         )
         sweeper = ApprovalExpirySweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=InMemoryWorkspaceMembershipResolver(
                 {(_Values.ORG_ID, _Values.USER_ID): True}
             ),
             interval_seconds=999,
         )
-        expired, _ = asyncio.run(sweeper.sweep_once())
+        expired, _ = await sweeper.sweep_once()
         assert expired == 0
         assert store.approval_commands == []
 
 
 class TestMembershipCascadePass:
-    def test_rejects_inactive_recipients(self) -> None:
+    async def test_rejects_inactive_recipients(self) -> None:
         store = InMemoryRuntimeApiStore()
         _seed_run(store)
-        _seed_pending(store, approval_id="a_revoked", user_id=_Values.OTHER_USER_ID)
+        await _seed_pending(
+            store, approval_id="a_revoked", user_id=_Values.OTHER_USER_ID
+        )
         # Resolver knows OTHER_USER_ID was revoked, USER_ID is fine.
         resolver = InMemoryWorkspaceMembershipResolver(
             {
@@ -175,36 +173,36 @@ class TestMembershipCascadePass:
             }
         )
         sweeper = ApprovalExpirySweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=resolver,
             interval_seconds=999,
         )
-        expired, revoked = asyncio.run(sweeper.sweep_once())
+        expired, revoked = await sweeper.sweep_once()
         assert expired == 0
         assert revoked == 1
         cmd = store.approval_commands[0]
         assert cmd.approval_id == "a_revoked"
         assert cmd.reason == Messages.Audit.APPROVAL_REASON_RECIPIENT_REVOKED
 
-    def test_skips_active_recipients(self) -> None:
+    async def test_skips_active_recipients(self) -> None:
         store = InMemoryRuntimeApiStore()
         _seed_run(store)
-        _seed_pending(store, approval_id="a_active", user_id=_Values.USER_ID)
+        await _seed_pending(store, approval_id="a_active", user_id=_Values.USER_ID)
         resolver = InMemoryWorkspaceMembershipResolver(
             {(_Values.ORG_ID, _Values.USER_ID): True}
         )
         sweeper = ApprovalExpirySweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=resolver,
             interval_seconds=999,
         )
-        _, revoked = asyncio.run(sweeper.sweep_once())
+        _, revoked = await sweeper.sweep_once()
         assert revoked == 0
         assert store.approval_commands == []
 
-    def test_resolver_unavailable_skips_row_for_this_tick(self) -> None:
+    async def test_resolver_unavailable_skips_row_for_this_tick(self) -> None:
         """When the identity backend is flapping, we don't reject on
         uncertainty — we wait for the next tick. Tests the operational
         guarantee that a flapping resolver doesn't cause a flood of
@@ -213,19 +211,19 @@ class TestMembershipCascadePass:
 
         store = InMemoryRuntimeApiStore()
         _seed_run(store)
-        _seed_pending(store, approval_id="a_uncertain", user_id=_Values.USER_ID)
+        await _seed_pending(store, approval_id="a_uncertain", user_id=_Values.USER_ID)
 
         class _FlappyResolver:
             async def is_active_member(self, **_):
                 raise MembershipResolverUnavailable("flap")
 
         sweeper = ApprovalExpirySweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=_FlappyResolver(),
             interval_seconds=999,
         )
-        _, revoked = asyncio.run(sweeper.sweep_once())
+        _, revoked = await sweeper.sweep_once()
         assert revoked == 0
         assert store.approval_commands == []
 
@@ -235,8 +233,8 @@ class TestSweeperGate:
         monkeypatch.delenv(ApprovalExpirySweeperEnv.ENABLED, raising=False)
         store = InMemoryRuntimeApiStore()
         result = build_default_sweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=InMemoryWorkspaceMembershipResolver({}),
         )
         assert result is None
@@ -245,8 +243,8 @@ class TestSweeperGate:
         monkeypatch.setenv(ApprovalExpirySweeperEnv.ENABLED, "true")
         store = InMemoryRuntimeApiStore()
         result = build_default_sweeper(
-            persistence=AsyncInMemoryRuntimeApiStore(store),
-            queue=AsyncInMemoryRuntimeApiStore(store),
+            persistence=store,
+            queue=store,
             membership_resolver=InMemoryWorkspaceMembershipResolver({}),
         )
         assert isinstance(result, ApprovalExpirySweeper)

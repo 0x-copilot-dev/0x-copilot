@@ -23,9 +23,6 @@ from runtime_worker.usage_rollup_loop import (
 )
 
 
-_ASYNC_BACKENDS = frozenset({"in_memory_async", "postgres"})
-
-
 class RuntimeWorkerEntrypoint:
     """Entrypoint helpers for the runtime worker process."""
 
@@ -40,120 +37,92 @@ class RuntimeWorkerEntrypoint:
         RuntimeSettings.configure_sdk_environment(settings)
         logger = LoggingConfigurator.get_logger("runtime_worker")
 
-        if settings.store.backend in _ASYNC_BACKENDS:
-            async_ports = RuntimeAdapterFactory.async_from_settings(
-                settings, role="worker"
+        async_ports = RuntimeAdapterFactory.async_from_settings(settings, role="worker")
+        await async_ports.store.open()
+        await async_ports.store.migrate()
+        rollup_loop: UsageRollupLoop | None = None
+        retention_loop: RetentionSweeperLoop | None = None
+        statement_collector: DbStatementMetricsCollector | None = None
+        try:
+            worker = RuntimeWorker(
+                persistence=async_ports.persistence,
+                event_store=async_ports.event_store,
+                queue=async_ports.queue,
+                settings=settings,
+                lock_seconds=settings.execution.worker_lock_seconds,
+                draft_store=async_ports.draft_store,
+                conversation_tool_ordinal_store=(
+                    async_ports.conversation_tool_ordinal_store
+                ),
             )
-            await async_ports.store.open()
-            await async_ports.store.migrate()
-            rollup_loop: UsageRollupLoop | None = None
-            retention_loop: RetentionSweeperLoop | None = None
-            statement_collector: DbStatementMetricsCollector | None = None
-            try:
-                worker = RuntimeWorker(
-                    persistence=async_ports.persistence,
-                    event_store=async_ports.event_store,
-                    queue=async_ports.queue,
-                    settings=settings,
-                    lock_seconds=settings.execution.worker_lock_seconds,
-                    draft_store=async_ports.draft_store,
-                    conversation_tool_ordinal_store=(
-                        async_ports.conversation_tool_ordinal_store
-                    ),
-                )
+            logger.info(
+                "worker_started",
+                metadata={
+                    "backend": async_ports.backend,
+                    "worker_id": worker.worker_id,
+                    "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
+                },
+            )
+            if UsageRollupLoopEnv.env_bool(UsageRollupLoopEnv.ENABLED, default=True):
+                rollup_loop = UsageRollupLoop(persistence=async_ports.persistence)
+                await rollup_loop.start()
                 logger.info(
-                    "worker_started",
+                    "usage_rollup_loop_started",
                     metadata={
-                        "backend": async_ports.backend,
-                        "worker_id": worker.worker_id,
-                        "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
+                        "interval_seconds": rollup_loop._interval,
+                        "late_arrival_minutes": rollup_loop._late_arrival_minutes,
                     },
                 )
-                if UsageRollupLoopEnv.env_bool(
-                    UsageRollupLoopEnv.ENABLED, default=True
-                ):
-                    rollup_loop = UsageRollupLoop(persistence=async_ports.persistence)
-                    await rollup_loop.start()
-                    logger.info(
-                        "usage_rollup_loop_started",
-                        metadata={
-                            "interval_seconds": rollup_loop._interval,
-                            "late_arrival_minutes": rollup_loop._late_arrival_minutes,
-                        },
-                    )
-                # C8: opt-in (default off) so existing deploys don't
-                # start tombstoning rows on upgrade.
-                if RetentionSweeperLoopEnv.env_bool(
-                    RetentionSweeperLoopEnv.ENABLED, default=False
-                ):
-                    retention_loop = RetentionSweeperLoop(
-                        persistence=async_ports.persistence
-                    )
-                    await retention_loop.start()
-                    logger.info(
-                        "retention_sweeper_loop_started",
-                        metadata={
-                            "interval_seconds": retention_loop._interval,
-                            "dry_run": retention_loop._dry_run,
-                        },
-                    )
-                # C11: opt-in (default off). Operator must have
-                # ``pg_stat_statements`` installed; the scraper logs
-                # once and exits if not.
-                if DbStatementMetricsCollectorEnv.env_bool(
-                    DbStatementMetricsCollectorEnv.ENABLED, default=False
-                ):
-
-                    async def _scrape_query(sql: str) -> list[dict]:
-                        store = async_ports.store
-                        async with store._role_connection("worker") as conn:  # type: ignore[attr-defined]
-                            async with conn.cursor() as cur:
-                                await cur.execute(sql)
-                                rows = await cur.fetchall()
-                        return list(rows)
-
-                    statement_collector = DbStatementMetricsCollector(
-                        run_query=_scrape_query
-                    )
-                    await statement_collector.start()
-                    logger.info(
-                        "db_statement_metrics_collector_started",
-                        metadata={"interval_seconds": statement_collector._interval},
-                    )
-                await worker.run_forever(
-                    poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
+            # C8: opt-in (default off) so existing deploys don't
+            # start tombstoning rows on upgrade.
+            if RetentionSweeperLoopEnv.env_bool(
+                RetentionSweeperLoopEnv.ENABLED, default=False
+            ):
+                retention_loop = RetentionSweeperLoop(
+                    persistence=async_ports.persistence
                 )
-            finally:
-                if statement_collector is not None:
-                    await statement_collector.stop()
-                if retention_loop is not None:
-                    await retention_loop.stop()
-                if rollup_loop is not None:
-                    await rollup_loop.stop()
-                await async_ports.store.close()
-            return
+                await retention_loop.start()
+                logger.info(
+                    "retention_sweeper_loop_started",
+                    metadata={
+                        "interval_seconds": retention_loop._interval,
+                        "dry_run": retention_loop._dry_run,
+                    },
+                )
+            # C11: opt-in (default off). Operator must have
+            # ``pg_stat_statements`` installed; the scraper logs
+            # once and exits if not.
+            if DbStatementMetricsCollectorEnv.env_bool(
+                DbStatementMetricsCollectorEnv.ENABLED, default=False
+            ):
 
-        ports = RuntimeAdapterFactory.from_settings(settings)
-        worker = RuntimeWorker(
-            persistence=ports.persistence,
-            event_store=ports.event_store,
-            queue=ports.queue,
-            settings=settings,
-            lock_seconds=settings.execution.worker_lock_seconds,
-            draft_store=ports.draft_store,
-            conversation_tool_ordinal_store=ports.conversation_tool_ordinal_store,
-        )
-        logger.info(
-            "worker_started",
-            metadata={
-                "backend": ports.backend,
-                "worker_id": worker.worker_id,
-                "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
-            },
-        )
-        await worker.run_forever(
-            poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
-        )
+                async def _scrape_query(sql: str) -> list[dict]:
+                    store = async_ports.store
+                    async with store._role_connection("worker") as conn:  # type: ignore[attr-defined]
+                        async with conn.cursor() as cur:
+                            await cur.execute(sql)
+                            rows = await cur.fetchall()
+                    return list(rows)
+
+                statement_collector = DbStatementMetricsCollector(
+                    run_query=_scrape_query
+                )
+                await statement_collector.start()
+                logger.info(
+                    "db_statement_metrics_collector_started",
+                    metadata={"interval_seconds": statement_collector._interval},
+                )
+            await worker.run_forever(
+                poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
+            )
+        finally:
+            if statement_collector is not None:
+                await statement_collector.stop()
+            if retention_loop is not None:
+                await retention_loop.stop()
+            if rollup_loop is not None:
+                await rollup_loop.stop()
+            await async_ports.store.close()
 
     @staticmethod
     def main() -> None:
