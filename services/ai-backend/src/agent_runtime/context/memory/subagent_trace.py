@@ -28,7 +28,7 @@ from deepagents.backends.protocol import (
 )
 
 from agent_runtime.api.constants import Keys
-from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
+from agent_runtime.api.ports import EventStorePort, PersistencePort
 from runtime_api.schemas import (
     MessageRecord,
     RuntimeApiEventType,
@@ -355,8 +355,8 @@ class SubagentArtifactsBackend(BackendProtocol):
     def __init__(
         self,
         *,
-        event_store: AsyncEventStorePort,
-        persistence: AsyncPersistencePort,
+        event_store: EventStorePort,
+        persistence: PersistencePort,
         org_id: str,
         conversation_id: str,
         current_run_id: str,

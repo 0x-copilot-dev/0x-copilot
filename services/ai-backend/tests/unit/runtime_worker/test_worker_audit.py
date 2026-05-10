@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
 )
-from runtime_adapters.async_wrappers import adapt_persistence_to_async
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -32,7 +31,7 @@ class WorkerAuditEmitterMixin:
     @staticmethod
     def make_emitter() -> tuple[WorkerAuditEmitter, InMemoryRuntimeApiStore]:
         store = InMemoryRuntimeApiStore()
-        emitter = WorkerAuditEmitter(persistence=adapt_persistence_to_async(store))
+        emitter = WorkerAuditEmitter(persistence=store)
         return emitter, store
 
     @staticmethod

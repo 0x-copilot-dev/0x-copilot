@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from agent_runtime.api.async_ports import AsyncEventStorePort
+from agent_runtime.api.ports import EventStorePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.execution.contracts import StreamEventSource
@@ -109,7 +109,7 @@ class StreamingExecutor:
         stream: AsyncIterator[object],
         run: RunRecord,
         metrics: AssistantRunMetrics,
-        event_store: AsyncEventStorePort,
+        event_store: EventStorePort,
         event_producer: RuntimeEventProducer,
         stream_event_mapper: StreamOrchestrator,
         attribution: UsageAttributionResolver | None = None,

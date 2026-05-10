@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
-from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.persistence import with_optimistic_retry
-from runtime_adapters.async_wrappers import (
-    adapt_event_store_to_async,
-    adapt_persistence_to_async,
-)
 from runtime_api.schemas import (
     AgentRunStatus,
     RuntimeApiEventType,
@@ -24,12 +19,12 @@ class RuntimeCancelHandler:
     def __init__(
         self,
         *,
-        persistence: PersistencePort | AsyncPersistencePort,
-        event_store: EventStorePort | AsyncEventStorePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
     ) -> None:
         # Always async on the inside (Phase D).
-        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
-        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
+        self.persistence: PersistencePort = persistence
+        self.event_store: EventStorePort = event_store
         self.event_producer = RuntimeEventProducer(
             persistence=self.persistence,
             event_store=self.event_store,

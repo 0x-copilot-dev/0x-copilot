@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -83,7 +83,7 @@ class WorkerAuditEmitter:
 
     _LOGGER_NAME: ClassVar[str] = "runtime_worker.audit"
 
-    def __init__(self, persistence: AsyncPersistencePort) -> None:
+    def __init__(self, persistence: PersistencePort) -> None:
         self._persistence = persistence
         self._logger = LoggingConfigurator.get_logger(self._LOGGER_NAME)
 

@@ -302,7 +302,7 @@ class TestUsageRollupLoopLifecycle:
             loop_with_running_task._stop.set()  # noqa: SLF001 — exercising private branch
 
         with caplog.at_level("WARNING", logger="runtime_worker.usage_rollup_loop"):
-            await asyncio.gather(loop_with_running_task._run(), await _stop_soon())  # noqa: SLF001
+            await asyncio.gather(loop_with_running_task._run(), _stop_soon())  # noqa: SLF001
         assert any(
             "usage_rollup_refresh_failed" in record.getMessage()
             for record in caplog.records
@@ -315,13 +315,13 @@ class TestUsageRollupLoopLifecycle:
 class _SelectiveFailureStore(InMemoryRuntimeApiStore):
     """In-memory store that raises on a chosen UPSERT method.
 
-    Wraps the real async store so the rest of the refresh path runs
-    normally; only the named upsert raises. Lets a single test
-    exercise the per-target ``except Exception: log+continue`` branch.
+    Subclass that overrides one upsert path to raise; the rest of the
+    refresh path still runs through the real async store. Lets a single
+    test exercise the per-target ``except Exception: log+continue`` branch.
     """
 
-    def __init__(self, sync_store: InMemoryRuntimeApiStore, *, raise_on: str) -> None:
-        super().__init__(sync_store)
+    def __init__(self, *, raise_on: str) -> None:
+        super().__init__()
         self._raise_on = raise_on
 
     async def upsert_user_daily_usage(self, row: object) -> None:  # type: ignore[override]
@@ -354,10 +354,9 @@ class TestRefreshUpsertFailures:
     async def test_user_upsert_failure_is_logged_and_other_targets_continue(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        sync_store = InMemoryRuntimeApiStore()
-        store = _SelectiveFailureStore(sync_store, raise_on="user")
+        store = _SelectiveFailureStore(raise_on="user")
         _seed_run(
-            sync_store,
+            store,
             run_id="r1",
             completed_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
@@ -369,16 +368,15 @@ class TestRefreshUpsertFailures:
             for record in caplog.records
         )
         # Org rollup still landed even though the user rollup failed.
-        assert sync_store.org_daily_usage
+        assert store.org_daily_usage
 
     @pytest.mark.asyncio
     async def test_org_upsert_failure_is_logged_and_user_target_continues(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        sync_store = InMemoryRuntimeApiStore()
-        store = _SelectiveFailureStore(sync_store, raise_on="org")
+        store = _SelectiveFailureStore(raise_on="org")
         _seed_run(
-            sync_store,
+            store,
             run_id="r1",
             completed_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
@@ -390,16 +388,15 @@ class TestRefreshUpsertFailures:
             for record in caplog.records
         )
         # User rollup still landed.
-        assert sync_store.user_daily_usage
+        assert store.user_daily_usage
 
     @pytest.mark.asyncio
     async def test_connector_scan_failure_is_logged_and_skips_connector_rollup(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        sync_store = InMemoryRuntimeApiStore()
-        store = _SelectiveFailureStore(sync_store, raise_on="connector_scan")
+        store = _SelectiveFailureStore(raise_on="connector_scan")
         _seed_run(
-            sync_store,
+            store,
             run_id="r1",
             completed_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
@@ -411,5 +408,5 @@ class TestRefreshUpsertFailures:
             for record in caplog.records
         )
         # User and org rollups still landed; connector rollup is empty.
-        assert sync_store.user_daily_usage
-        assert sync_store.connector_daily_usage == {}
+        assert store.user_daily_usage
+        assert store.connector_daily_usage == {}

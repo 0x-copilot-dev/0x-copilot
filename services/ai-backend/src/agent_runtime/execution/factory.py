@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -87,10 +88,15 @@ def create_agent_runtime(
     instructions: str = DEFAULT_INSTRUCTIONS,
     agent_builder: AgentBuilder | None = None,
 ) -> RuntimeHarness:
-    """Create a request-scoped Deep Agents runtime.
+    """Create a request-scoped Deep Agents runtime (synchronous).
 
     The runtime resolves authorized capabilities through injected ports before
     handing anything to the model-facing agent builder.
+
+    Use :func:`acreate_agent_runtime` from async contexts (workers, ``ainvoke``).
+    The async variant unblocks the event loop and parallelises the four sync
+    listing calls; this sync entrypoint exists for the dev / LangChain Runnable
+    ``invoke`` surface in :mod:`agent_runtime.execution.graph`.
     """
 
     runtime_context = _parse_context(context)
@@ -106,6 +112,101 @@ def create_agent_runtime(
     subagents = tuple(
         runtime_dependencies.subagent_catalog.list_available_subagents(runtime_context)
     )
+    skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
+        runtime_dependencies.skill_source_config
+    )
+
+    return _assemble_harness(
+        runtime_context=runtime_context,
+        runtime_dependencies=runtime_dependencies,
+        builder=builder,
+        instructions=instructions,
+        tools=tools,
+        mcp_servers=mcp_servers,
+        subagents=subagents,
+        skill_directories=skill_directories,
+    )
+
+
+async def acreate_agent_runtime(
+    *,
+    context: AgentRuntimeContext | dict[str, Any],
+    dependencies: RuntimeDependencies | dict[str, Any],
+    instructions: str = DEFAULT_INSTRUCTIONS,
+    agent_builder: AgentBuilder | None = None,
+) -> RuntimeHarness:
+    """Async variant of :func:`create_agent_runtime`.
+
+    The four registry-listing calls (tools / mcp / subagents / skill
+    directories) are sync and may do blocking I/O — most notably
+    ``BackendMcpProvider.list_server_cards`` does a sync ``httpx.get`` to
+    backend. Running them via ``asyncio.gather(asyncio.to_thread(...), ...)``
+    accomplishes two things on every run-start:
+
+    1. The worker's asyncio loop is no longer blocked for the duration of
+       backend HTTP calls; other queued runs can interleave.
+    2. The four listings run concurrently rather than sequentially.
+
+    Post-fan-out assembly (prompt build, model kwargs, builder kickoff) stays
+    sequential — it is CPU-bound and depends on the resolved values.
+    """
+
+    runtime_context = _parse_context(context)
+    runtime_dependencies = _parse_dependencies(dependencies, runtime_context.trace_id)
+    builder = agent_builder or build_deep_agent
+
+    tools_raw, mcp_servers_raw, subagents_raw, skill_directories = await asyncio.gather(
+        asyncio.to_thread(
+            runtime_dependencies.tool_registry.list_available_tools, runtime_context
+        ),
+        asyncio.to_thread(
+            runtime_dependencies.mcp_registry.list_available_servers, runtime_context
+        ),
+        asyncio.to_thread(
+            runtime_dependencies.subagent_catalog.list_available_subagents,
+            runtime_context,
+        ),
+        asyncio.to_thread(
+            SkillSourceRegistry.skill_directories_for_deep_agent,
+            runtime_dependencies.skill_source_config,
+        ),
+    )
+
+    return _assemble_harness(
+        runtime_context=runtime_context,
+        runtime_dependencies=runtime_dependencies,
+        builder=builder,
+        instructions=instructions,
+        tools=tuple(tools_raw),
+        mcp_servers=tuple(mcp_servers_raw),
+        subagents=tuple(subagents_raw),
+        skill_directories=skill_directories,
+    )
+
+
+def _assemble_harness(
+    *,
+    runtime_context: AgentRuntimeContext,
+    runtime_dependencies: RuntimeDependencies,
+    builder: AgentBuilder,
+    instructions: str,
+    tools: tuple[object, ...],
+    mcp_servers: tuple[object, ...],
+    subagents: tuple[object, ...],
+    skill_directories: tuple[str, ...],
+) -> RuntimeHarness:
+    """Shared post-listing assembly used by both sync and async factories.
+
+    Everything in here either:
+      * depends on the listed values and is local/cheap (no I/O), or
+      * is the deepagents builder kickoff which is CPU-bound.
+
+    Keeping it in one helper means ``create_agent_runtime`` and
+    ``acreate_agent_runtime`` cannot diverge silently in their handling
+    of the assembly path — they are required by definition to produce the
+    same ``RuntimeHarness`` for a given resolved capability set.
+    """
+
     # PR 1.3.5 — translate SubagentDefinition.fs_permissions to deepagents'
     # FilesystemPermission rules so subagents only get write access to
     # ``/drafts/`` (and other privileged prefixes) when their definition
@@ -115,9 +216,6 @@ def create_agent_runtime(
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
-    )
-    skill_directories = SkillSourceRegistry.skill_directories_for_deep_agent(
-        runtime_dependencies.skill_source_config
     )
     skill_cards = _skill_cards(
         skill_registry=runtime_dependencies.skill_registry,

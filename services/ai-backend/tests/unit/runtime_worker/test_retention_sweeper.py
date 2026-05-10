@@ -1,4 +1,4 @@
-"""C8 sweeper-loop tests with a fake AsyncPersistencePort."""
+"""C8 sweeper-loop tests with a fake PersistencePort."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from runtime_worker.jobs.retention_sweeper import RetentionSweeperLoop
 
 
 class _FakePersistence:
-    """Minimal stub of ``AsyncPersistencePort`` for sweeper tests."""
+    """Minimal stub of ``PersistencePort`` for sweeper tests."""
 
     def __init__(
         self,

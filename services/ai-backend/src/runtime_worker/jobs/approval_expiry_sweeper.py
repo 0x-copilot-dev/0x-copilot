@@ -31,7 +31,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from agent_runtime.api.async_ports import AsyncPersistencePort, AsyncRuntimeQueuePort
+from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
 from agent_runtime.api.constants import Messages, Values
 from agent_runtime.api.membership import (
     MembershipResolverUnavailable,
@@ -93,8 +93,8 @@ class ApprovalExpirySweeper:
     def __init__(
         self,
         *,
-        persistence: AsyncPersistencePort,
-        queue: AsyncRuntimeQueuePort,
+        persistence: PersistencePort,
+        queue: RuntimeQueuePort,
         membership_resolver: WorkspaceMembershipResolver,
         interval_seconds: float | None = None,
         batch_size: int | None = None,
@@ -243,8 +243,8 @@ class ApprovalExpirySweeper:
 
 def build_default_sweeper(
     *,
-    persistence: AsyncPersistencePort,
-    queue: AsyncRuntimeQueuePort,
+    persistence: PersistencePort,
+    queue: RuntimeQueuePort,
     membership_resolver: WorkspaceMembershipResolver,
 ) -> ApprovalExpirySweeper | None:
     """Construct the sweeper iff the env flag is on.

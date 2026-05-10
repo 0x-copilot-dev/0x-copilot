@@ -45,7 +45,7 @@ class ConnectorScopeRouteFixtureMixin:
             "title": "scope test",
         }
 
-    def create_conversation(self, client: TestClient) -> str:
+    async def create_conversation(self, client: TestClient) -> str:
         response = client.post(
             "/v1/agent/conversations", json=self.conversation_payload()
         )

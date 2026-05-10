@@ -18,7 +18,11 @@ from agent_runtime.execution.contracts import (
     RuntimeRunHandle,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.factory import AgentBuilder, create_agent_runtime
+from agent_runtime.execution.factory import (
+    AgentBuilder,
+    acreate_agent_runtime,
+    create_agent_runtime,
+)
 from agent_runtime.execution.runtime import ainvoke_runtime, invoke_runtime
 from agent_runtime.observability.logging import RuntimeLogger
 
@@ -89,7 +93,7 @@ class ConfiguredRuntimeGraph:
 
         runtime_context = self._context_from_input(input_data)
         dependencies = self.dependencies_factory(runtime_context)
-        harness = create_agent_runtime(
+        harness = await acreate_agent_runtime(
             context=runtime_context,
             dependencies=dependencies,
             agent_builder=self.agent_builder,

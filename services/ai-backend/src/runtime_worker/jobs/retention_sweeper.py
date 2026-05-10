@@ -22,7 +22,7 @@ import asyncio
 import logging
 import os
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
     RetentionSweepOutcome,
@@ -77,7 +77,7 @@ class RetentionSweeperLoop:
     def __init__(
         self,
         *,
-        persistence: AsyncPersistencePort,
+        persistence: PersistencePort,
         interval_seconds: float | None = None,
         dry_run: bool | None = None,
     ) -> None:

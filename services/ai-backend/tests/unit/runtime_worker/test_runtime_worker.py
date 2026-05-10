@@ -100,7 +100,7 @@ class _TestHelpers:
         return response.run_id
 
     @staticmethod
-    def append_subagent_observation(
+    async def append_subagent_observation(
         service: RuntimeApiService,
         store: InMemoryRuntimeApiStore,
         *,
@@ -127,13 +127,11 @@ class _TestHelpers:
             started_payload["visibility"] = visibility.value
         if redaction_state is not None:
             started_payload["redaction_state"] = redaction_state.value
-        asyncio.run(
-            service.event_producer.append_api_event(
-                run=store.runs[run_id],
-                source=StreamEventSource.SUBAGENT,
-                event_type=RuntimeApiEventType.SUBAGENT_STARTED,
-                payload=started_payload,
-            )
+        await service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+            payload=started_payload,
         )
         completed_payload: dict[str, object] = {
             "task_id": task_id,
@@ -145,17 +143,15 @@ class _TestHelpers:
             completed_payload["visibility"] = visibility.value
         if redaction_state is not None:
             completed_payload["redaction_state"] = redaction_state.value
-        asyncio.run(
-            service.event_producer.append_api_event(
-                run=store.runs[run_id],
-                source=StreamEventSource.SUBAGENT,
-                event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
-                payload=completed_payload,
-            )
+        await service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.SUBAGENT,
+            event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+            payload=completed_payload,
         )
 
     @staticmethod
-    def append_tool_observation(
+    async def append_tool_observation(
         service: RuntimeApiService,
         store: InMemoryRuntimeApiStore,
         *,
@@ -176,13 +172,11 @@ class _TestHelpers:
             payload["visibility"] = visibility.value
         if redaction_state is not None:
             payload["redaction_state"] = redaction_state.value
-        asyncio.run(
-            service.event_producer.append_api_event(
-                run=store.runs[run_id],
-                source=StreamEventSource.TOOL,
-                event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
-                payload=payload,
-            )
+        await service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.TOOL,
+            event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
+            payload=payload,
         )
         result_payload: dict[str, object] = {
             "tool_name": tool_name,
@@ -199,13 +193,11 @@ class _TestHelpers:
             result_payload["visibility"] = visibility.value
         if redaction_state is not None:
             result_payload["redaction_state"] = redaction_state.value
-        asyncio.run(
-            service.event_producer.append_api_event(
-                run=store.runs[run_id],
-                source=StreamEventSource.TOOL,
-                event_type=RuntimeApiEventType.TOOL_RESULT,
-                payload=result_payload,
-            )
+        await service.event_producer.append_api_event(
+            run=store.runs[run_id],
+            source=StreamEventSource.TOOL,
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload=result_payload,
         )
 
 
@@ -453,7 +445,7 @@ async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
+    await _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
     assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_jira_answer",
@@ -584,7 +576,7 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_subagent_observation(
+    await _TestHelpers.append_subagent_observation(
         service,
         store,
         run_id=first.run_id,
@@ -659,7 +651,7 @@ async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() 
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
+    await _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
     assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_prior_tool",
@@ -734,7 +726,7 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(
+    await _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
@@ -761,7 +753,7 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(
+    await _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=sibling.run_id,
@@ -819,14 +811,14 @@ async def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(
+    await _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
         visibility=RuntimeEventVisibility.INTERNAL,
         output={"secret": "internal-only"},
     )
-    _TestHelpers.append_tool_observation(
+    await _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=first.run_id,
@@ -899,7 +891,7 @@ async def test_runtime_worker_excludes_current_run_tool_results_from_initial_pro
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    _TestHelpers.append_tool_observation(
+    await _TestHelpers.append_tool_observation(
         service,
         store,
         run_id=current.run_id,

@@ -8,22 +8,16 @@ from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
-from agent_runtime.api.async_ports import (
-    AsyncEventStorePort,
-    AsyncPersistencePort,
-    AsyncRuntimeQueuePort,
+from agent_runtime.api.ports import (
+    EventStorePort,
+    PersistencePort,
+    RuntimeQueuePort,
 )
-from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters.async_wrappers import (
-    adapt_event_store_to_async,
-    adapt_persistence_to_async,
-    adapt_queue_to_async,
-)
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
@@ -49,9 +43,9 @@ class RuntimeWorker:
     def __init__(
         self,
         *,
-        persistence: PersistencePort | AsyncPersistencePort,
-        event_store: EventStorePort | AsyncEventStorePort,
-        queue: RuntimeQueuePort | AsyncRuntimeQueuePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
+        queue: RuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         worker_id: str | None = None,
         lock_seconds: int = 60,
@@ -67,9 +61,9 @@ class RuntimeWorker:
     ) -> None:
         # Worker is fully async on the inside. Sync ports get wrapped
         # via to_thread; async ports pass through unchanged.
-        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
-        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
-        self.queue: AsyncRuntimeQueuePort = adapt_queue_to_async(queue)
+        self.persistence: PersistencePort = persistence
+        self.event_store: EventStorePort = event_store
+        self.queue: RuntimeQueuePort = queue
         self.settings = settings or RuntimeSettings.load()
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds

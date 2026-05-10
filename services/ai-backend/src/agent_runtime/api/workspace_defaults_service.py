@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
     RetentionPolicyRecord,
@@ -60,7 +60,7 @@ class WorkspaceDefaultsService:
     def __init__(
         self,
         *,
-        persistence: AsyncPersistencePort,
+        persistence: PersistencePort,
         settings: RuntimeSettings,
     ) -> None:
         self._persistence = persistence

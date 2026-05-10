@@ -33,16 +33,16 @@ def anyio_backend() -> str:
 
 
 class _StubPersistence:
-    """Minimal sync persistence port (the wrapper bridges to async)."""
+    """Minimal async persistence-port stub for the draft-send tests."""
 
     def __init__(self) -> None:
         self.audit_calls: list[tuple[str, dict]] = []
         self.run_status_updates: list[AgentRunStatus] = []
 
-    def write_audit_log(self, *, event_type: str, record: dict) -> None:
+    async def write_audit_log(self, *, event_type: str, record: dict) -> None:
         self.audit_calls.append((event_type, record))
 
-    def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> object:
+    async def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> object:
         self.run_status_updates.append(status)
         return _RUN_RECORD
 

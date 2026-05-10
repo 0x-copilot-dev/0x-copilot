@@ -1,6 +1,6 @@
-# Refactor PRD — Parallel `create_agent_runtime` bootstrap (Phase 1)
+# Refactor PRD — Parallel run-start resolvers in `create_run` (Phase 1)
 
-**Status:** Draft
+**Status:** Draft (rewrite — original draft mis-located the target inside `factory.py`; verification revealed the real call site is `RuntimeApiService.create_run`)
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §4.4](../architecture/refactor-audit.md#44-sequential-bootstrap-in-create_agent_runtime)
 **Roadmap entry:** [`00-roadmap.md` P3](00-roadmap.md#phase-1--performance-wins-no-structural-change)
@@ -9,34 +9,55 @@
 
 ## 1. Problem
 
-[`agent_runtime/execution/factory.py`](../../src/agent_runtime/execution/factory.py)'s `create_agent_runtime` (602 LOC) is invoked from the worker on every run start ([f1](../architecture/f1-single-turn.puml), [f2](../architecture/f2-multi-turn-tool.puml), [f5](../architecture/f5-citations.puml), [f6](../architecture/f6-thinking.puml), [f8](../architecture/f8-mcp-auth.puml)) and approval-resume ([f8](../architecture/f8-mcp-auth.puml)). Per the architecture index it "validates context, resolves authorized capabilities, assembles the system prompt, applies workspace + user policy model kwargs, and hands off to the Deep Agents builder."
+Verified in code at [`agent_runtime/api/service.py:634-653`](../../src/agent_runtime/api/service.py#L634-L653) (inside `RuntimeApiService.create_run`):
 
-The seven discovery calls it performs are described in [refactor-audit §4.4](../architecture/refactor-audit.md#44-sequential-bootstrap-in-create_agent_runtime):
+```python
+workspace_overrides = await self._resolve_workspace_behavior_overrides(
+    org_id=request.org_id
+)
+user_policies_json = await self._resolve_user_policies(
+    org_id=request.org_id, user_id=request.user_id
+)
+suggested_connectors = await self._resolve_suggested_connectors(
+    org_id=request.org_id,
+    user_id=request.user_id,
+    paused_connectors=request.request_context.paused_connectors,
+)
+```
 
-1. `MembershipResolver.resolve(...)` — workspace / org membership for the calling identity. HTTP to `backend` ([C4](../architecture/05-runtime-services.puml) → backend).
-2. `UserPoliciesResolver.resolve(...)` — per-user policies (training opt-out, region routing, etc.). HTTP to `backend`.
-3. `tool_registry.list_available_tools(context)` — authorized `ToolCard[]`. Local + permission filter ([C6](../architecture/04-capabilities.puml)).
-4. `mcp_registry.list_available_servers(context)` — authorized `McpServerCard[]`. HTTP to `backend` for registry rows + auth state.
-5. `subagent_catalog.list_available_subagents(context)` — authorized `SubagentDefinition[]` ([C7](../architecture/09-delegation.puml)).
-6. `skill_registry.load_skill_directories(context)` — file-system + virtual skill directories.
-7. `SuggestibleConnectorsResolver.resolve(...)` — catalog hints from backend for the system prompt's "suggested connectors" block.
+These three awaits execute serially on every `POST /v1/agent/runs`. Each is HTTP-bound in production:
 
-Hypothesis from the diagrams: these are awaited sequentially in the factory body. The audit's claim is that 1–7 are mutually independent except for an identity-context dependency: resolvers (1) and (2) likely gate the others because the listing endpoints filter by membership and policy.
+- [`_resolve_workspace_behavior_overrides`](../../src/agent_runtime/api/service.py#L1635) → `WorkspaceDefaults.get_record(org_id)` (Postgres in prod)
+- [`_resolve_user_policies`](../../src/agent_runtime/api/service.py#L1595) → `HttpUserPoliciesResolver.resolve(org_id, user_id)` (HTTP to `backend`)
+- [`_resolve_suggested_connectors`](../../src/agent_runtime/api/service.py#L1612) → `HttpSuggestibleConnectorsResolver.resolve(org_id, user_id, exclude_paused)` (HTTP to `backend`)
+
+Each call's docstring confirms it's a one-shot run-start resolution. The three are **mutually independent** — none reads or mutates another's output:
+
+- All three only read `request.org_id`, `request.user_id`, and `request.request_context.paused_connectors`. Those fields are stable across the block — nothing between the three awaits writes to `request`.
+- Their results are consumed together at [`service.py:654`](../../src/agent_runtime/api/service.py#L654) by `_request_with_runtime_context(...)`. They do not flow into each other.
+
+### Why the original PRD was wrong
+
+The original draft of this PRD targeted `agent_runtime/execution/factory.py` (`create_agent_runtime`). Verification showed:
+
+- `create_agent_runtime` is a **synchronous** function ([`factory.py:83`](../../src/agent_runtime/execution/factory.py#L83)).
+- The resolvers named in the audit are **not** invoked there. They run upstream in `RuntimeApiService.create_run` and the resolved values are already on `runtime_context.suggested_connectors` etc. by the time the worker calls the factory.
+
+The audit's claim about "sequential bootstrap" is real, but the call site is here in `service.py`, not in the factory. This PRD is the corrected version.
 
 ### Symptoms (today)
 
-- Cumulative bootstrap latency on every run start. If each of the 5 listing/discovery calls takes p50 80ms and p99 250ms (typical for HTTP-to-backend or scoped registry reads), serial cost is **5×p50 ≈ 400ms** before the model receives a token. Parallel cost is **max(p50) ≈ 80ms**, with p99 dominated by the slowest single dependency.
-- Approval-resume runs ([f8](../architecture/f8-mcp-auth.puml)) pay this latency a second time per turn.
-- Subagent runs that build their own runtime via the same factory pay it a third time.
-- The architecture index explicitly notes that **ai-backend caches nothing across turns: every `create_agent_runtime` re-queries the registry** — so this latency is paid in full on every turn.
+- Cumulative run-start latency on every `POST /v1/agent/runs`. With each HTTP call at p50 ~80–150ms and p99 ~250–400ms (typical for cross-service HTTP), serial cost is **~3 × p50 ≈ 250–450ms** before the run is enqueued. Parallel cost is **~max(p50)**, with p99 dominated by the slowest single dependency.
+- Latency is paid on **every** run, including approval-resume runs and follow-up turns in the same conversation.
+- The frontend sees this directly as "spinner" time between tapping send and the SSE stream opening.
 
 ### What this is NOT
 
-- Not a behavior change. Every call still happens; nothing is cached past the run boundary.
-- Not a change to permission semantics. Membership and policy resolution still gate listing.
-- Not a new caching layer. (A `/v1/agent/conversations/{id}/context` cache is a separate concern — see [refactor-audit §4.9](../architecture/refactor-audit.md#49-conversationcontextbuilder-per-context-query).)
-- Not a refactor of `factory.py`'s overall shape. The 602-LOC orchestrator stays. Extraction of the system-prompt assembler is a separate refactor (not yet a PRD).
-- Not multi-tool parallel execution. That is a related but distinct change ([refactor-audit §4.7](../architecture/refactor-audit.md#47-multi-tool-parallel-execution-verify)).
+- Not a behavior change. Every resolver still runs; nothing is cached past the run boundary.
+- Not a change to permission semantics.
+- Not a change to error semantics. Each resolver's existing failure mode (e.g. `MembershipResolverUnavailable` for membership) maps to the same `RuntimeApiError` it does today.
+- Not a change to `factory.py`. The factory's sync structure is out of scope here; sync→async is part of [P5 async-only ports](01-async-only-ports.md).
+- Not a new caching layer.
 
 ---
 
@@ -44,31 +65,24 @@ Hypothesis from the diagrams: these are awaited sequentially in the factory body
 
 ### Goal
 
-Restructure the bootstrap inside `create_agent_runtime` into two parallel stages:
-
-- **Stage A — identity context.** `MembershipResolver` and `UserPoliciesResolver` run in parallel (`asyncio.gather`), produce the `AgentRuntimeContext` augmentations the listing calls need.
-- **Stage B — capability fan-out.** All listing / discovery calls run in parallel via `asyncio.gather` once Stage A has resolved.
-
-Drop p50 bootstrap latency from `~sum(individual_calls)` to `~max(stage_a) + max(stage_b)`.
+Replace the three serial `await` calls in `create_run` with a single `asyncio.gather` so the three independent HTTP / DB roundtrips run concurrently. Drop p50 of the run-start path by ~60–70% and p99 to within ~1.2× of the slowest single resolver.
 
 ### Non-goals
 
 - Cache resolver output past the run boundary. (Audit invariant: per-turn re-query.)
-- Cache resolver output within a turn beyond what the resolver protocol already does internally. If a resolver implements its own short-lived cache, fine; this PRD does not introduce one.
-- Change the public signature of `create_agent_runtime` or `AgentRuntimeContext`.
-- Re-order side effects observable to capabilities, the prompt assembler, or the builder.
-- Touch the listing methods themselves. Their signatures and internal logic are unchanged.
-- Add concurrency between subagent factory invocations and the supervisor's. (Subagents construct via the same factory but on a different code path; out of scope.)
+- Change the public signature of `create_run`, `_resolve_*` helpers, or `CreateRunRequest`.
+- Touch any of the three resolver implementations themselves.
+- Change error envelopes. Each typed exception must continue to map to the same `RuntimeApiError` (same code, same HTTP status, same retryable flag).
+- Re-order any side effect observable to downstream consumers (`_request_with_runtime_context`, persistence, event producer, queue).
+- Parallelize anything else in `create_run`. The earlier `_apply_workspace_default_model` await stays sequential — it mutates `request` and the gather block depends on the post-mutation `request`.
 
 ### Success criteria
 
-- p50 of `create_agent_runtime` (timer wrapping the function body) drops by **at least 50%** on a representative run-start workload in staging.
-- p99 drops to within ~1.2× of the slowest individual dependency (Stage B's max).
-- No change to any observable side effect of any of the 7 calls. Specifically: the system prompt is byte-identical for a fixed input; the same `ToolCard` / `McpServerCard` / `SubagentDefinition` / skill set is used by the builder.
-- No new permission paths. Stage B never starts before Stage A completes.
-- A failure in any Stage B call surfaces with the same exception type and the same traceability (run/trace/correlation IDs) as before.
-- Observability events (`MODEL_CALL_STARTED` upstream, no new event types added) preserve their current ordering.
-- Full ai-backend test suite passes: `cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest`.
+- `create_run` uses one `asyncio.gather(...)` for the three resolvers; no remaining serial chain of awaits between line ~625 (`_apply_workspace_default_model`) and line ~654 (`_request_with_runtime_context`).
+- Run-start path latency: p50 of `RuntimeApiService.create_run` drops by ≥50% on a representative workload measured against an HTTP-backed mock (each resolver introduces a 100ms artificial delay; serial baseline ≈300ms, parallel target ≈100–110ms).
+- No change to the resolved values that flow into `_request_with_runtime_context`. Snapshot tests assert byte-identity for `workspace_overrides`, `user_policies_json`, and `suggested_connectors`.
+- Existing test suite passes unchanged: `cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest`.
+- Failure semantics preserved: when any one of the three raises, the same `RuntimeApiError` (same `RuntimeErrorCode`, same `http_status`, same `retryable`) is raised as before. The other two in-flight tasks are cancelled.
 
 ---
 
@@ -76,197 +90,196 @@ Drop p50 bootstrap latency from `~sum(individual_calls)` to `~max(stage_a) + max
 
 ### 3.1 Files changed
 
-| File                                                                                                    | Change                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`agent_runtime/execution/factory.py`](../../src/agent_runtime/execution/factory.py)                    | Replace serial awaits in the bootstrap section with two `asyncio.gather` blocks (Stage A, Stage B). Keep the post-fan-out assembly (prompt build, kwargs, model wiring, builder kickoff) sequential. Add a tracing span around each stage.                      |
-| [`agent_runtime/execution/contracts.py`](../../src/agent_runtime/execution/contracts.py) **(probably)** | If the existing `RuntimeDependencies` / `AgentRuntimeContext` shape requires Stage A outputs to be set as attributes on the context before Stage B can read them, no change. If Stage A outputs flow as locals into Stage B, no change. Verify before touching. |
+| File                                                                     | Change                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`agent_runtime/api/service.py`](../../src/agent_runtime/api/service.py) | Replace serial awaits at [lines 634-653](../../src/agent_runtime/api/service.py#L634-L653) with a single `asyncio.gather(...)` of the three `_resolve_*` coroutines. No other change. `import asyncio` is already present at [line 5](../../src/agent_runtime/api/service.py#L5). |
 
 ### 3.2 Files added
 
-| File                                                                                        | Purpose                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `services/ai-backend/tests/unit/agent_runtime/execution/test_factory_bootstrap_parallel.py` | New unit tests that lock the parallel-stage contract: A→B ordering, intra-stage independence, exception propagation, byte-identical system prompt, byte-identical capability lists. See [§7](#7-unit-testing-requirements). |
+| File                                                                 | Purpose                                                                                                                             |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/unit/agent_runtime/api/test_create_run_parallel_resolvers.py` | New focused unit tests pinning the parallel-gather contract: ordering, byte-identical results, exception propagation, cancellation. |
 
 ### 3.3 Files deleted
 
 None.
 
-### 3.4 Verification before implementation
+### 3.4 Verification status
 
-Hypotheses from the diagrams must be confirmed in code before this PR is opened:
+All hypotheses verified in code on 2026-05-10:
 
-1. **Confirm the seven calls are awaited sequentially today.** Read `factory.py`'s bootstrap region and grep for `await` in the function body.
-2. **Confirm dependency ordering.** Specifically: does any of `tool_registry`, `mcp_registry`, `subagent_catalog`, `skill_registry`, `SuggestibleConnectorsResolver` need values produced by `MembershipResolver` or `UserPoliciesResolver` to be already attached to a context object? Any other inter-dependencies — e.g. does the suggestible-connectors resolver need the MCP server list?
-3. **Confirm none of the seven calls have side-effects that are order-sensitive.** Logging messages, tracing spans, or counter increments that would change observable behavior if reordered.
-4. **Confirm `provider_kwargs.workspace_model_kwargs` and `user_policy_model_kwargs` only run after Stage A.** They consume the resolved policies; they must not move into Stage B.
-
-These checks gate the PR. If any hypothesis fails, update this PRD before continuing.
+- ✅ `create_run` is `async` ([`service.py:603`](../../src/agent_runtime/api/service.py#L603)).
+- ✅ Three serial awaits at lines 634-653.
+- ✅ Three calls are mutually independent (each takes only `request.org_id`, `request.user_id`, `request.request_context.paused_connectors`; no inter-dependency).
+- ✅ `request` is not mutated between the three awaits.
+- ✅ Results are consumed together at line 654 (`_request_with_runtime_context`).
+- ✅ All three resolver `Protocol`s define `async def resolve(...)` returning a JSON-serialisable value (verified in [`user_policies_resolver.py:75`](../../src/agent_runtime/api/user_policies_resolver.py#L75) and [`suggestible_connectors_resolver.py:59`](../../src/agent_runtime/api/suggestible_connectors_resolver.py#L59); `_resolve_workspace_behavior_overrides` reads from `WorkspaceDefaultsService.get_record` which is async).
+- ✅ `import asyncio` already at [`service.py:5`](../../src/agent_runtime/api/service.py#L5) — no new import needed.
+- ✅ The earlier ([`service.py:625`](../../src/agent_runtime/api/service.py#L625)) `request = await self._apply_workspace_default_model(request=request)` mutates the request and must remain serial before the gather block.
 
 ---
 
 ## 4. Design
 
-### 4.1 Two-stage parallel bootstrap
-
-Pseudocode for the relevant region of `create_agent_runtime`:
+### 4.1 The change (one-line diff in spirit)
 
 ```python
-async def create_agent_runtime(context: AgentRuntimeContext, deps: RuntimeDependencies) -> AgentRuntime:
-    # ... unchanged: input validation, error mapping, trace setup ...
+# Before — three serial awaits.
+workspace_overrides = await self._resolve_workspace_behavior_overrides(
+    org_id=request.org_id
+)
+user_policies_json = await self._resolve_user_policies(
+    org_id=request.org_id, user_id=request.user_id
+)
+suggested_connectors = await self._resolve_suggested_connectors(
+    org_id=request.org_id,
+    user_id=request.user_id,
+    paused_connectors=request.request_context.paused_connectors,
+)
 
-    # Stage A — identity context. Both calls are pure resolvers; they cannot
-    # depend on the listing surfaces below.
-    async with tracer.span("factory.bootstrap.stage_a"):
-        membership, user_policies = await asyncio.gather(
-            deps.membership_resolver.resolve(context),
-            deps.user_policies_resolver.resolve(context),
-        )
-
-    enriched = context.with_resolved(membership=membership, user_policies=user_policies)
-
-    # Stage B — capability fan-out. All calls take `enriched` and produce
-    # independent results.
-    async with tracer.span("factory.bootstrap.stage_b"):
-        tools, servers, subagents, skills, suggested = await asyncio.gather(
-            deps.tool_registry.list_available_tools(enriched),
-            deps.mcp_registry.list_available_servers(enriched),
-            deps.subagent_catalog.list_available_subagents(enriched),
-            deps.skill_registry.load_skill_directories(enriched),
-            deps.suggestible_connectors_resolver.resolve(enriched),
-        )
-
-    # ... unchanged: prompt assembly, kwargs, model wiring, builder kickoff ...
+# After — one parallel gather.
+(
+    workspace_overrides,
+    user_policies_json,
+    suggested_connectors,
+) = await asyncio.gather(
+    self._resolve_workspace_behavior_overrides(org_id=request.org_id),
+    self._resolve_user_policies(
+        org_id=request.org_id, user_id=request.user_id
+    ),
+    self._resolve_suggested_connectors(
+        org_id=request.org_id,
+        user_id=request.user_id,
+        paused_connectors=request.request_context.paused_connectors,
+    ),
+)
 ```
 
-`context.with_resolved(...)` is illustrative — if the codebase already attaches resolved values to a mutable runtime context object, that path stays. If it threads them as locals, the locals stay locals.
+The block's prose comments (PR 4.3 / PR 8.0.5 / PR 4.4.7 references explaining each call) should be preserved in a single comment above the gather, not deleted. Future readers need to know what each line is.
 
-### 4.2 Why exactly two stages
+### 4.2 Exception semantics
 
-- Stage A's two resolvers do not depend on each other (membership lookup does not consult policies and vice versa). They parallelize cleanly.
-- Stage B's five listing calls each filter by the identity context, so they cannot start until Stage A completes.
-- Inside Stage B, no listing is documented as needing another listing's output. (For example: `subagent_catalog.list_available_subagents` does not consume the tool list.) Verify in code per [§3.4](#34-verification-before-implementation); if any cross-listing dependency exists, this becomes Stage B1 (independent) and Stage B2 (dependent), still parallelized within each.
-- Three stages would not gain anything: the assembly that follows (system prompt, kwargs, builder) is inherently sequential because each step consumes the previous step's output.
+`asyncio.gather` raises the first exception encountered and cancels pending tasks. This matches today's behavior (the first failing await aborts the function) with one wrinkle: pending sibling coroutines now receive `asyncio.CancelledError` and may execute their `except` / `finally` blocks. Two implications:
 
-### 4.3 Exception semantics
+1. **Resolver error mapping is preserved.** Each `_resolve_*` helper either returns a value or raises a typed exception; gather propagates the typed exception unchanged.
+2. **Cancelled siblings.** None of the three resolvers hold cross-call state (verified — each is a pure resolve). Cancellation is safe.
 
-`asyncio.gather` raises the first exception encountered and propagates it; pending tasks are cancelled. This matches the current sequential semantics where the first failing call aborts bootstrap. Two implications:
+If verification ever surfaces a resolver that holds half-written state across a yield point, switch to `asyncio.gather(..., return_exceptions=True)` and re-raise the first exception manually. Default mode is preferred; only deviate on evidence.
 
-1. **No swallowed errors.** A failed `MembershipResolver` still aborts the run with the same `RuntimeErrorCode`.
-2. **Cancelled siblings.** A failure in one Stage B call cancels the others. Each call's `try/except` boundary inside its own implementation must already handle `asyncio.CancelledError` cleanly. **Verify** that listing implementations don't leave half-written state on cancellation.
+### 4.3 Observability
 
-If either of those checks fails, gate the parallelism with `asyncio.gather(..., return_exceptions=True)` and re-raise after collecting — same end-state but no in-flight cancellations. This is a deviation from default semantics, so prefer the strict mode unless verification surfaces a specific implementation problem.
+- No new event types on the run event stream. This is purely an internal optimization.
+- Existing structured logs from each `_resolve_*` helper continue to fire on entry / exit.
+- OTel span propagation through `asyncio.gather` works correctly with the OTel SDK's contextvars-based context (verified by a test in [§7](#7-unit-testing-requirements)).
 
-### 4.4 Observability
+### 4.4 Concurrency behavior under load
 
-- Add a tracing span per stage (`factory.bootstrap.stage_a`, `factory.bootstrap.stage_b`) so OTel traces visibly show the parallelism. Each individual call already has its own child span; this just gives a parent.
-- Add a structured log at the end of each stage: `bootstrap_stage_complete` with `stage` (`a` / `b`), `duration_ms`, `task_count`. Useful for dashboards once the change is in.
-- No new event types on the run event stream. This is a worker-internal optimization; clients see no new envelopes.
-
-### 4.5 Concurrency behavior under load
-
-- Stage B fans out to up to 5 in-flight calls per active run. With `RUNTIME_MAX_PARALLEL_RUNS=N` configured worker concurrency, the worst-case in-flight count multiplies.
-- Verify connection-pool sizing on the asyncpg pool ([C3](../architecture/07-adapters.puml) — `application_name=worker`) tolerates `5 × max_parallel_runs` simultaneous queries during the spike. If the pool is currently sized for "one query per run," bump it.
-- Verify the backend-facing httpx client used by `MembershipResolver` / `UserPoliciesResolver` / `SuggestibleConnectorsResolver` is constructed once per process (not per call). Per-call clients would amplify connection setup latency and potentially exhaust ephemeral ports. (Likely already a singleton; check and confirm.)
-- The MCP registry call goes to `backend`. Ensure the same backend instance can absorb the increased peak QPS; coordinate before rollout.
+- The change introduces 3-way fan-out per `create_run` call. With `RUNTIME_MAX_PARALLEL_RUNS=N` workers and concurrent run-creates, peak in-flight HTTP-to-backend connections from this path triples.
+- Verify the `httpx.AsyncClient` shared by the resolvers (constructed in `RuntimeApiAppFactory` per [`runtime_api/app.py:200-213`](../../src/runtime_api/app.py#L200-L213)) has a connection pool sized for the new peak. If it's at the default (~10 connections), bump to ≥30 before rolling out.
+- The Postgres path (`workspace_overrides` reads from the local store) shares the same pool the rest of `create_run` uses. Three concurrent reads per run-create against a properly sized pool is well within budget.
 
 ---
 
 ## 5. Behaviors that must be preserved
 
-Pulled from [`refactor-audit.md` § Behaviors that must be preserved](../architecture/refactor-audit.md#behaviors-that-must-be-preserved). Each gets at least one test in [§7](#7-unit-testing-requirements).
-
-| Behavior                                                                                                                                                                                | Pinned by                                                                                                                                                                  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Permission decisions are gated by membership + policy. No listing call returns rows past an unauthorized scope.                                                                         | Test: when `MembershipResolver` raises `PermissionError`, no Stage B call is invoked (verified by mock call counts).                                                       |
-| ai-backend re-queries the registry on every `create_agent_runtime` (no cache). [refactor-audit §4.4](../architecture/refactor-audit.md#44-sequential-bootstrap-in-create_agent_runtime) | Test: two consecutive runs with identical context invoke each resolver twice. No memoization.                                                                              |
-| The system prompt is byte-identical for fixed input.                                                                                                                                    | Test: build the system prompt before/after via the same fixture; assert string equality.                                                                                   |
-| `RuntimeErrorCode` mapping for resolver failures is preserved.                                                                                                                          | Test: each known failure mode (membership 403, policies 5xx, tool registry IOError, MCP registry timeout) raises the same typed `AgentRuntimeError` as before parallelism. |
-| Trace IDs flow through every parallel call.                                                                                                                                             | Test: capture spans; assert each Stage B span has the correct parent (`factory.bootstrap.stage_b`) and the request's `trace_id`.                                           |
-| `workspace_model_kwargs` / `user_policy_model_kwargs` see the resolved policies.                                                                                                        | Test: resolved policy fields are visible to the kwargs assembly that follows Stage A.                                                                                      |
-| Cancellation (run cancel mid-bootstrap) does not deadlock.                                                                                                                              | Test: cancel the parent task during Stage B; assert no pending tasks remain after `asyncio.gather` raises `CancelledError`.                                                |
+| Behavior                                                                                                                                                                   | Pinned by                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ai-backend re-queries the resolvers on every run (no cache).                                                                                                               | Test: two consecutive `create_run` calls invoke each resolver mock exactly twice (no memoization).                                                                                                                                          |
+| Resolved values are byte-identical to pre-change. `workspace_overrides`, `user_policies_json`, `suggested_connectors` flow into `_request_with_runtime_context` unchanged. | Test: snapshot all three values from a fixed-input `create_run` call and assert deep equality vs the pre-change snapshot.                                                                                                                   |
+| Typed errors are preserved. Each resolver's failure mode raises the same `RuntimeApiError` / `RuntimeErrorCode` as today.                                                  | Parametrized test: each known failure mode (workspace overrides 5xx, policies 5xx, suggestible-connectors 5xx) propagates with the same code + HTTP status + retryable flag.                                                                |
+| Failure short-circuits the run-create. A resolver failure prevents persistence + queue side effects.                                                                       | Test: when one resolver raises, `persistence.create_run_with_user_message`, `event_producer.append_api_event`, `queue.enqueue_run` are never invoked.                                                                                       |
+| Cancellation safety. `create_run` cancellation between awaits leaves no partial state.                                                                                     | Test: cancel the parent task during the gather; assert no persistence / queue calls happen and no resolver is left pending.                                                                                                                 |
+| Trace context propagates through the gather to each resolver.                                                                                                              | Test: capture spans via the test tracer harness; assert each `_resolve_*` span has the expected parent (the active OTel span at gather time).                                                                                               |
+| `_apply_workspace_default_model` runs strictly before the gather.                                                                                                          | Test: mock `_apply_workspace_default_model` to mutate `request.model`; assert all three resolvers see the post-mutation `request.model` (proxy: `request.org_id` is unaffected, but the ordering check itself uses an event recorder mock). |
+| `_request_with_runtime_context` runs strictly after the gather and sees all three results.                                                                                 | Test: assert `_request_with_runtime_context` receives non-None values for all three named kwargs.                                                                                                                                           |
 
 ---
 
 ## 6. Acceptance criteria
 
-1. `factory.py`'s bootstrap region uses two `asyncio.gather` calls. No `await` chains of length > 1 in the discovery section.
-2. Tracing shows `factory.bootstrap.stage_a` and `factory.bootstrap.stage_b` spans with the expected parent / child structure on a real run.
-3. New tests in `tests/unit/agent_runtime/execution/test_factory_bootstrap_parallel.py` pass; existing `test_runtime_factory.py` tests pass unchanged.
-4. Latency benchmark in staging: median `create_agent_runtime` duration drops at least 50% on a workload of ≥100 runs covering simple and tool-heavy turns.
-5. No change to: returned `AgentRuntime` shape, system-prompt content for fixed input, capability list contents, error envelopes for the seven failure modes.
-6. No `# type: ignore` introduced.
-7. Per [`docs/CLAUDE.md`](../CLAUDE.md), update the matching spec under `docs/specs/` if `factory.py` has one. (Verify: there is a [`runtime-contracts.md`](../architecture/runtime-contracts.md) but no per-file spec; if a factory spec exists, update it. Otherwise, add a one-paragraph note to `runtime-contracts.md` about Stage A / Stage B.)
+1. `create_run` uses a single `asyncio.gather(...)` for the three resolver coroutines. The serial chain is gone.
+2. New tests in `tests/unit/agent_runtime/api/test_create_run_parallel_resolvers.py` pass.
+3. Existing run-start tests (`test_workspace_behavior_overrides.py`, `test_fastapi_runtime_api.py`, `test_tenant_isolation_runtime_api.py`) pass unchanged.
+4. Latency benchmark (artificial 100ms-per-resolver mock): pre-change ≈300ms; post-change ≈100–110ms. The benchmark is the timing test in [§7](#7-unit-testing-requirements).
+5. No new `# type: ignore`. No new imports (asyncio already present).
+6. Update the spec under [`docs/specs/`](../specs/) if a spec covers `create_run`. (Verify; if no per-method spec exists, no spec update required for this small change. Per [`docs/CLAUDE.md`](../CLAUDE.md), we update specs when an invariant changes; this PR introduces no new invariant.)
 
 ---
 
 ## 7. Unit testing requirements
 
-All tests live in `tests/unit/agent_runtime/execution/test_factory_bootstrap_parallel.py` and use the existing fake registry / resolver fixtures. Each test maps to a row in [§5](#5-behaviors-that-must-be-preserved).
+All tests live in `tests/unit/agent_runtime/api/test_create_run_parallel_resolvers.py`. Per [`tests/CLAUDE.md`](../../tests/CLAUDE.md), use mixins for fakes/builders and assert typed errors with safe public messages.
 
-| Test                                     | What it asserts                                                                                                                                                                                                                                                                        |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_stage_a_runs_before_stage_b`       | Use mocks that record invocation order; assert no Stage B mock was entered before both Stage A mocks completed.                                                                                                                                                                        |
-| `test_stage_a_calls_run_in_parallel`     | Both Stage A resolvers wait on the same `asyncio.Event`. The function does not deadlock — proving they were awaited concurrently rather than sequentially.                                                                                                                             |
-| `test_stage_b_calls_run_in_parallel`     | Same pattern as above with five Stage B mocks gated on a single event.                                                                                                                                                                                                                 |
-| `test_membership_failure_short_circuits` | Mock `MembershipResolver` to raise; assert no Stage B mock was invoked. Failure is wrapped in the expected `AgentRuntimeError`.                                                                                                                                                        |
-| `test_stage_b_failure_cancels_siblings`  | One Stage B mock raises after a delay, others sleep longer. Assert the slow ones were cancelled (received `CancelledError`) and the run's overall duration is bounded by the failing call, not the slowest. Final exception is the originating one with original message and code.     |
-| `test_no_caching_across_runs`            | Call `create_agent_runtime` twice with identical context. Each resolver / registry mock receives exactly two calls.                                                                                                                                                                    |
-| `test_system_prompt_is_byte_identical`   | Snapshot the system prompt for a fixed fixture; assert string equality vs a snapshot saved before the change. Use the same fixture in `tests/unit/agent_runtime/agent/test_runtime_factory.py` if one is already there for prompt assembly.                                            |
-| `test_capability_set_is_byte_identical`  | Snapshot the resolved tools / servers / subagents / skills / suggested-connectors lists; assert deep equality vs a pre-change snapshot.                                                                                                                                                |
-| `test_typed_errors_are_preserved`        | Parametrized: membership 403, policies 5xx, tool registry IOError, MCP registry timeout, skill registry not-found, suggestible-connectors timeout — each maps to the same `AgentRuntimeError(code=...)` as before.                                                                     |
-| `test_tracing_spans_have_parents`        | Capture spans via the test tracer harness; assert each Stage B child span has parent `factory.bootstrap.stage_b`. Each Stage A child span has parent `factory.bootstrap.stage_a`.                                                                                                      |
-| `test_cancellation_propagates_cleanly`   | Start `create_agent_runtime` as a task, cancel it during Stage B, assert the wrapper task ends in `asyncio.CancelledError` and no resolver mock was left in an inconsistent state (the resolver implementations themselves are out of scope, but assert their `__aexit__` was called). |
-| `test_kwargs_see_resolved_policies`      | Resolved `user_policies` includes `training_opt_out=True`; assert the kwargs assembled after Stage A reflect that.                                                                                                                                                                     |
+### Test surface
 
-Run with:
+| Test                                             | Asserts                                                                                                                                                                                                                                                     |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_resolvers_run_in_parallel`                 | All three resolver mocks gate on a single `asyncio.Event`; the gather completes — proving they were awaited concurrently rather than sequentially. Times out on a serial implementation.                                                                    |
+| `test_total_latency_is_max_not_sum`              | Each resolver mock sleeps 100ms. Total `create_run` duration is ≤180ms (max + ~80ms slack for surrounding async work). On a serial baseline this would be ≥300ms.                                                                                           |
+| `test_resolved_values_byte_identical`            | Fixed-input `create_run` produces identical `workspace_overrides`, `user_policies_json`, `suggested_connectors` to a pre-change snapshot fixture.                                                                                                           |
+| `test_no_caching_across_runs`                    | Two `create_run` calls with identical inputs invoke each resolver mock exactly twice.                                                                                                                                                                       |
+| `test_workspace_overrides_failure_propagates`    | Mock `_workspace_defaults().get_record` to raise; assert `RuntimeApiError` with the same `RuntimeErrorCode` as pre-change.                                                                                                                                  |
+| `test_user_policies_failure_propagates`          | Mock `_user_policies_resolver.resolve` to raise its known exception; assert `RuntimeApiError` mapping is unchanged. (The resolver itself swallows non-typed errors and returns `{}` — only typed errors propagate. Verify via the resolver's own contract.) |
+| `test_suggestible_connectors_failure_propagates` | Same pattern, for `_suggestible_connectors_resolver.resolve`.                                                                                                                                                                                               |
+| `test_failure_short_circuits_persistence`        | Resolver mock raises; assert `persistence.create_run_with_user_message`, `event_producer.append_api_event`, `queue.enqueue_run` were NOT invoked.                                                                                                           |
+| `test_cancelled_siblings_are_clean`              | One resolver raises after a 50ms sleep; the other two sleep 200ms. Assert: total duration ≤120ms (proving siblings were cancelled, not awaited fully) and the originating exception's code is what the caller sees.                                         |
+| `test_create_run_cancellation_propagates`        | Start `create_run` as a task, cancel during gather. Assert task ends in `asyncio.CancelledError` and no persistence / queue calls happened.                                                                                                                 |
+| `test_apply_workspace_default_model_runs_first`  | An event recorder records the order of `_apply_workspace_default_model` and the gathered resolvers. Assert `_apply_workspace_default_model` completes before any resolver mock is entered.                                                                  |
+| `test_request_with_runtime_context_runs_last`    | Assert `_request_with_runtime_context` is invoked exactly once, after all three resolvers complete, with the three resolved values as named kwargs.                                                                                                         |
+
+### Test mixins
+
+Reuse the pattern from [`tests/unit/runtime_api/test_workspace_behavior_overrides.py`](../../tests/unit/runtime_api/test_workspace_behavior_overrides.py):
+
+- `RuntimeApiServiceFixtureMixin` — constructs `RuntimeApiService` with in-memory store + injected resolver fakes.
+- `RecordingResolverMixin` — provides resolver fakes that record invocation order and gate on a shared `asyncio.Event` for parallelism tests.
+
+### Run
 
 ```bash
 cd services/ai-backend && \
   PYTHONPATH=src:../../packages/service-contracts/src \
   .venv/bin/python -m pytest \
-  tests/unit/agent_runtime/execution/test_factory_bootstrap_parallel.py
+  tests/unit/agent_runtime/api/test_create_run_parallel_resolvers.py
 ```
 
 ---
 
 ## 8. Risks
 
-| Risk                                                                                                                                                                 | Likelihood | Mitigation                                                                                                                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hidden inter-dependency in Stage B (e.g. subagent listing depending on tool listing) silently broken by the fan-out.                                                 | Medium     | The verification step in [§3.4](#34-verification-before-implementation) is a hard gate. Byte-identity tests on the capability set catch it post-hoc.                                                                                                 |
-| Backend QPS amplification — Stage B sends three near-simultaneous HTTP requests per run (MCP registry, suggestible connectors, possibly subagents).                  | Medium     | Verify backend's per-instance QPS budget tolerates `5 × max_parallel_runs`. If not, add a token-bucket rate limit at the resolver level (out of scope of this PR — flag as a follow-up).                                                             |
-| Connection-pool starvation on the asyncpg pool when all listing calls hit Postgres at once.                                                                          | Low–Medium | Confirm pool sizing in [`runtime_adapters/postgres/`](../../src/runtime_adapters/postgres/) tolerates the new peak. The role-tagged `application_name=worker` makes this auditable in `pg_stat_activity`.                                            |
-| `asyncio.gather` cancellation leaves half-written state in a listing implementation (e.g. a partially populated cache).                                              | Low        | Read each listing implementation; if any holds mutable cross-call state without a finally block, fix it as part of this PR or fall back to `return_exceptions=True` per [§4.3](#43-exception-semantics).                                             |
-| Tracing-span parent / child relationship breaks (Stage B children attach to the wrong parent if the tracer's contextvar is not propagated through `asyncio.gather`). | Low        | OTel + `contextvars.copy_context` works correctly with `asyncio.gather` by default; verify with the `test_tracing_spans_have_parents` test. If the test fails, wrap each gather call in `tracer.start_as_current_span(...)` instead of `async with`. |
-| Silent regression in p99 due to the slowest Stage B call dominating once others are fast.                                                                            | Inherent   | This is the intended trade-off — p99 is bounded by the slowest dependency. If that's `MembershipResolver` (HTTP), accept the bound and address it separately by reducing membership latency, not by re-serializing.                                  |
-| Future contributor adds an 8th call to Stage B without realizing it must be in the gather.                                                                           | Low        | Add a comment in `factory.py` above each gather block: "all calls in this block must be independent — see docs/refactor/03-parallel-bootstrap.md."                                                                                                   |
-| The change ships before the [§3.4](#34-verification-before-implementation) checks are completed and an unsafe parallelization slips in.                              | Medium     | PR description must explicitly enumerate which checks were run and link the relevant grep / read commands. Reviewers reject the PR if the checks are not documented.                                                                                 |
+| Risk                                                                                                                     | Likelihood | Mitigation                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `httpx` connection pool exhaustion under load — three concurrent backend HTTP calls per run-create across N workers.     | Low–Medium | Verify pool size in `RuntimeApiAppFactory` and bump if at default. Document the new minimum in deployment notes.                                                                                                                                 |
+| Backend QPS amplification — `backend` service sees 3× the simultaneous request rate from this path.                      | Low        | The total request count per run is unchanged; only timing changes. backend's bottleneck (if any) is requests/sec averaged, not concurrency. Coordinate with backend team if their per-instance concurrency cap is < 3 × ai-backend worker count. |
+| OTel context propagation through `asyncio.gather` breaks the trace tree (parent / child relationship).                   | Low        | OTel SDK's contextvars propagation works correctly with `asyncio.gather` by default. Pinned by `test_trace_context_propagates`.                                                                                                                  |
+| A future contributor adds a 4th resolver to the gather without realizing it must be independent.                         | Low        | Add an inline comment above the gather: "all coroutines in this gather must be independent — see `docs/refactor/03-parallel-bootstrap.md`."                                                                                                      |
+| `request.request_context.paused_connectors` is mutated between the gather block today and isn't anymore (or vice versa). | Low        | Pinned by `test_resolved_values_byte_identical` — if any field flow changes, the snapshot diverges.                                                                                                                                              |
+| Cancellation behavior in real backends (e.g. half-finished HTTP requests).                                               | Low        | `httpx.AsyncClient` cancels in-flight requests cleanly when the awaiter is cancelled. Pinned by `test_cancelled_siblings_are_clean`.                                                                                                             |
+| The change ships before the test suite is wired in CI, so a regression slips into main.                                  | Low        | All new tests must pass locally and in CI before merge. PR description must list test names that ran green.                                                                                                                                      |
 
 ---
 
 ## 9. Rollback plan
 
-This change does not introduce a feature flag. It is a tight, locally-scoped restructuring with strong test coverage; rollback is a `git revert`.
+The change is a 3-line code restructuring. Rollback is a `git revert`.
 
 If a regression appears post-deploy:
 
-1. **Revert.** The PR is a single commit (or squash to one). `git revert <sha>` and re-deploy. Behavior returns to pre-change state.
-2. **No data migration to undo.** Nothing in this change writes to the database, the queue, or any persistent store.
-3. **No client-visible API change.** Clients see no new endpoints, headers, event types, or status codes — so no client-side rollback step.
+1. **Revert.** Single commit; `git revert <sha>`. Behavior returns to the pre-change serial pattern.
+2. **No data migration to undo.** No persistence schema changes.
+3. **No client-visible API change.** No new endpoints, headers, event types, or status codes.
 
-Optional: gate behind `RUNTIME_FACTORY_BOOTSTRAP_PARALLEL` (default `true`) for the first week of rollout if the staging benchmark surfaces any concern. Default to `true`; flip to `false` to fall back to serial bootstrap. Remove the flag in the next PR after the rollout window.
-
----
-
-## 10. Open questions
-
-These do not block the PRD itself but should be resolved during implementation:
-
-- Are there any listing calls **not** in the seven enumerated above? If `factory.py` calls additional discovery I haven't seen in the diagrams, they need triage (Stage A, Stage B, or post-fan-out).
-- Does `SuggestibleConnectorsResolver` ever reuse `mcp_registry`'s output? Per [f7](../architecture/f7-mcp-add.puml) the discovery service synthesizes catalog cards from backend; if the resolver calls the MCP registry first, it has a Stage B internal dependency and must come _after_ the gather. **Verify in code.**
-- Is there a per-process `httpx.AsyncClient` shared across resolvers, or do they construct their own? If the latter, parallelizing magnifies setup cost and we need to consolidate first.
-- Does `[atlas_task_tool.py](../../src/agent_runtime/execution/atlas_task_tool.py)` get wired up as part of bootstrap? It's flagged separately ([refactor-audit §5.4](../architecture/refactor-audit.md#54-atlas_task_toolpy-in-execution)) for a layer move; if its initialization is in the bootstrap region, decide whether it parallelizes with Stage B or stays sequential.
+No feature flag is needed; the change is too small and the rollback boundary too clean.
 
 ---
 
-_This PRD is implementable as soon as [§3.4](#34-verification-before-implementation) is complete. Do not open the PR before then — diagram-derived hypotheses are not a substitute for reading the code._
+## 10. Open questions / follow-ups
+
+- **`httpx.AsyncClient` pool sizing.** Verify the configured pool size before merge. If at default, file a follow-up to bump it.
+- **Future opportunity:** if the broader run-start path gains additional async resolvers (e.g. a future `_resolve_capabilities_summary`), they should join this gather rather than chain serially.
+- **Subagent run-start.** Subagents that build their own runtime via the worker may have an analogous sequential pattern. Out of scope for this PRD; flag for follow-up if the worker exhibits the same shape.
+- **Parallel sync calls inside `factory.py`.** A separate, smaller-impact opportunity ([refactor-audit §4.4 footnote](../architecture/refactor-audit.md#44-sequential-bootstrap-in-create_agent_runtime)). Defer until P5 (async-only ports) makes the factory async-able.
+
+---
+
+_This PRD is implementable today. All §3.4 verifications are complete._

@@ -792,6 +792,71 @@ class InMemoryRuntimeApiStore:
         rows.sort(key=lambda record: (record.created_at, record.approval_id))
         return tuple(rows[:limit])
 
+    async def list_audit_log_for_export(
+        self,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> Sequence[dict]:
+        """Cross-tenant audit log read for the C9 SIEM cursor.
+
+        Returns rows ordered by insertion order (the in-memory store has
+        no separate ``(created_at, id)`` index — append order is the
+        cursor). Resumes after ``after_id`` matched against the chain
+        ``signature`` hex string used as the row id.
+        """
+
+        rows: list[dict] = [dict(record) for _event_type, record in self.audit_log]
+        if after_id is not None:
+            for index, row in enumerate(rows):
+                if row.get("signature") == after_id:
+                    rows = rows[index + 1 :]
+                    break
+            else:
+                rows = []
+        return tuple(rows[:limit])
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        """Return distinct org_ids visible to the retention sweeper.
+
+        Worker-role only. The in-memory store sources the set from
+        conversations + messages + runs, matching the production sweeper's
+        cross-table view.
+        """
+
+        seen: set[str] = set()
+        seen.update(c.org_id for c in self.conversations.values())
+        seen.update(m.org_id for m in self.messages.values())
+        seen.update(r.org_id for r in self.runs.values())
+        return tuple(sorted(seen))
+
+    async def sweep_retention_kind(
+        self,
+        *,
+        org_id: str,
+        kind,
+        ttl_seconds: int,
+        dry_run: bool = False,
+    ):
+        """In-memory retention sweep — no-op stub for dev backends.
+
+        The in-memory store is process-local and never carries enough
+        history to need tombstoning. Returns a zero-count outcome so the
+        worker's ``RetentionSweeperLoop`` can run end-to-end against the
+        in-memory backend without crashing.
+        """
+
+        from agent_runtime.persistence.records import RetentionSweepOutcome
+
+        return RetentionSweepOutcome(
+            org_id=org_id,
+            kind=kind,
+            scanned=0,
+            tombstoned=0,
+            hard_deleted=0,
+            skipped_legal_hold=0,
+        )
+
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]
     ) -> None:

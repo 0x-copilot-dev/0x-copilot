@@ -36,7 +36,7 @@ _DEFAULT_TTL_SECONDS = 60
 class _Port:
     """Type-only marker for the persistence subset we need.
 
-    Importing the full :class:`AsyncPersistencePort` here would create
+    Importing the full :class:`PersistencePort` here would create
     an import cycle (records → budgets → ports → records). The reservations
     module declares only what it uses.
     """

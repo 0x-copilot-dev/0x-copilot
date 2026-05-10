@@ -82,20 +82,14 @@ from runtime_api.schemas import (
 )
 from runtime_api.http.errors import RuntimeApiError
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.api.async_ports import (
-    AsyncEventStorePort,
-    AsyncPersistencePort,
-    AsyncRuntimeQueuePort,
+from agent_runtime.api.ports import (
+    EventStorePort,
+    PersistencePort,
+    RuntimeQueuePort,
 )
-from agent_runtime.api.ports import EventStorePort, PersistencePort, RuntimeQueuePort
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters.async_wrappers import (
-    adapt_event_store_to_async,
-    adapt_persistence_to_async,
-    adapt_queue_to_async,
-)
 
 
 class RuntimeApiService:
@@ -113,9 +107,9 @@ class RuntimeApiService:
     def __init__(
         self,
         *,
-        persistence: PersistencePort | AsyncPersistencePort,
-        event_store: EventStorePort | AsyncEventStorePort,
-        queue: RuntimeQueuePort | AsyncRuntimeQueuePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
+        queue: RuntimeQueuePort,
         settings: RuntimeSettings | None = None,
         model_resolver: ModelConfigResolver | None = None,
         on_event_appended: Callable[[str], None] | None = None,
@@ -140,9 +134,9 @@ class RuntimeApiService:
         # wrapped via to_thread; async ports pass through. This way every
         # call site below uses `await self.persistence.*` and we never have
         # to ask which kind of backend is configured.
-        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
-        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
-        self.queue: AsyncRuntimeQueuePort = adapt_queue_to_async(queue)
+        self.persistence: PersistencePort = persistence
+        self.event_store: EventStorePort = event_store
+        self.queue: RuntimeQueuePort = queue
         self.settings = settings or RuntimeSettings.load()
         self.model_resolver = model_resolver or ModelConfigResolver(self.settings)
         self.event_producer = RuntimeEventProducer(
@@ -624,32 +618,39 @@ class RuntimeApiService:
         #                                    → settings.default_model
         request = await self._apply_workspace_default_model(request=request)
 
-        # PR 4.3: resolve workspace-policy knobs (system prompt override,
-        # temperature default, citation density, refusal behavior,
-        # reasoning effort, training opt-out) once before the runtime
-        # context is built. The resolved blob is frozen onto the run's
-        # runtime_context for the lifetime of the run; mid-run admin
-        # toggles do not affect in-flight runs (their context is already
-        # snapshotted in ``agent_runs.runtime_context_json``).
-        workspace_overrides = await self._resolve_workspace_behavior_overrides(
-            org_id=request.org_id
-        )
-        # PR 8.0.5 — single fetch for (tool-use × privacy) per-(org, user)
-        # policy. Same lifecycle as workspace_behavior_overrides: resolve
-        # once, freeze on the runtime context, downstream consumers read
-        # from the snapshot for the lifetime of the run.
-        user_policies_json = await self._resolve_user_policies(
-            org_id=request.org_id, user_id=request.user_id
-        )
-        # PR 4.4.7 Phase 2 (Slice B) — fetch the per-(org, user)
-        # suggestible-catalog snapshot once, after the per-chat fallback
-        # has applied so paused connectors are filtered out before the
-        # backend joins them. Failure modes are swallowed inside the
-        # resolver — empty tuple is the "no suggestions surfaced" no-op.
-        suggested_connectors = await self._resolve_suggested_connectors(
-            org_id=request.org_id,
-            user_id=request.user_id,
-            paused_connectors=request.request_context.paused_connectors,
+        # P3 (refactor 03-parallel-bootstrap.md) — three independent
+        # run-start resolvers run concurrently. All three only read
+        # ``request.org_id`` / ``request.user_id`` /
+        # ``request.request_context.paused_connectors``; none consumes
+        # another's output. ``request`` is not mutated between them.
+        # Adding a 4th resolver here? It must be independent of the
+        # other three — see docs/refactor/03-parallel-bootstrap.md.
+        #
+        # Per-coroutine context:
+        #   PR 4.3 — workspace-policy knobs (system prompt override,
+        #     temperature default, citation density, refusal behavior,
+        #     reasoning effort, training opt-out). Frozen onto the run's
+        #     runtime_context for the lifetime of the run; mid-run admin
+        #     toggles do not affect in-flight runs.
+        #   PR 8.0.5 — single fetch for (tool-use × privacy) per-(org,
+        #     user) policy. Same freeze lifecycle as workspace overrides.
+        #   PR 4.4.7 Phase 2 (Slice B) — per-(org, user) suggestible-
+        #     catalog snapshot, fetched after the per-chat fallback has
+        #     applied so paused connectors are filtered out before the
+        #     backend joins them. Failure modes are swallowed inside the
+        #     resolver — empty tuple is the "no suggestions" no-op.
+        (
+            workspace_overrides,
+            user_policies_json,
+            suggested_connectors,
+        ) = await asyncio.gather(
+            self._resolve_workspace_behavior_overrides(org_id=request.org_id),
+            self._resolve_user_policies(org_id=request.org_id, user_id=request.user_id),
+            self._resolve_suggested_connectors(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                paused_connectors=request.request_context.paused_connectors,
+            ),
         )
         request = self._request_with_runtime_context(
             request,

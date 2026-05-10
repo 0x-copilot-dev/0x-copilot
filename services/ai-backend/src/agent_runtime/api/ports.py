@@ -1,4 +1,12 @@
-"""Port protocols for runtime API persistence, event replay, and queueing."""
+"""Async port protocols for runtime API persistence, event replay, and queueing.
+
+These mirror the sync ports in `agent_runtime.api.ports` exactly, with every
+method declared `async def`. They exist alongside the sync ports during the
+incremental migration to a fully-async I/O chain (see plan
+`hazy-kindling-minsky`). Once all callers are async and the sync postgres
+adapter is retired, the sync ports go away and these are renamed to the
+unprefixed names.
+"""
 
 from __future__ import annotations
 
@@ -6,23 +14,6 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from runtime_api.schemas import (
-    AgentRunStatus,
-    ApprovalDecisionRecord,
-    ApprovalRequestRecord,
-    ConversationRecord,
-    CreateConversationRequest,
-    CreateRunRequest,
-    MessageRecord,
-    HistoryDeletionResponse,
-    RuntimeApprovalResolvedCommand,
-    RuntimeCancelCommand,
-    RuntimeEventDraft,
-    RuntimeEventEnvelope,
-    RuntimeRunCommand,
-    RunRecord,
-    WorkspaceDefaultsRecord,
-)
 from agent_runtime.persistence.records import (
     BudgetRecord,
     BudgetReservationRecord,
@@ -30,7 +21,9 @@ from agent_runtime.persistence.records import (
     ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
+    RetentionKind,
     RetentionPolicyRecord,
+    RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -41,18 +34,35 @@ from agent_runtime.persistence.records import (
     UsageDailyOrgRow,
     UsageDailyUserRow,
 )
+from runtime_api.schemas import (
+    AgentRunStatus,
+    ApprovalDecisionRecord,
+    ApprovalRequestRecord,
+    ConversationRecord,
+    CreateConversationRequest,
+    CreateRunRequest,
+    HistoryDeletionResponse,
+    MessageRecord,
+    RuntimeApprovalResolvedCommand,
+    RuntimeCancelCommand,
+    RuntimeEventDraft,
+    RuntimeEventEnvelope,
+    RuntimeRunCommand,
+    RunRecord,
+    WorkspaceDefaultsRecord,
+)
 
 
 @runtime_checkable
 class PersistencePort(Protocol):
     """Conversation, message, run, approval, and audit persistence boundary."""
 
-    def create_conversation(
+    async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationRecord:
         """Create or idempotently return a conversation."""
 
-    def get_conversation(
+    async def get_conversation(
         self,
         *,
         org_id: str,
@@ -61,7 +71,7 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant/user scope."""
 
-    def get_conversation_for_org(
+    async def get_conversation_for_org(
         self,
         *,
         org_id: str,
@@ -69,13 +79,12 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant scope, ignoring user ownership.
 
-        Used by admin-override paths (PR 1.2.1) where the caller holds an
-        admin scope and acts on a member's data. Authorization layering
-        is the caller's responsibility — this port only enforces tenant
-        isolation. Returns ``None`` for cross-tenant access.
+        Admin-override path (PR 1.2.1). Authorization is enforced by the
+        service layer; this port only enforces tenant isolation. Returns
+        ``None`` for cross-tenant access.
         """
 
-    def list_conversations(
+    async def list_conversations(
         self,
         *,
         org_id: str,
@@ -86,13 +95,11 @@ class PersistencePort(Protocol):
     ) -> Sequence[ConversationRecord]:
         """Return conversations for the tenant/user scope, newest first.
 
-        ``include_deleted`` (PR 1.6) filters by ``deleted_at IS NULL``
-        when False (the default sidebar query). Setting it to True
-        returns soft-deleted rows still inside the retention window
-        (the C8 sweeper reaps them on TTL).
+        ``include_deleted`` (PR 1.6) excludes soft-deleted rows by
+        default; setting it True returns them too.
         """
 
-    def list_messages(
+    async def list_messages(
         self,
         *,
         org_id: str,
@@ -102,21 +109,24 @@ class PersistencePort(Protocol):
     ) -> Sequence[MessageRecord]:
         """Return ordered conversation messages."""
 
-    def append_message(self, message: MessageRecord) -> MessageRecord:
+    async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""
 
-    def insert_forked_conversation(
+    async def insert_forked_conversation(
         self, conversation: ConversationRecord
     ) -> ConversationRecord:
         """Insert a fork-authored conversation row verbatim (PR 6.2).
 
         Bypasses the idempotency check the standard ``create_conversation``
-        path runs and writes every column the caller has populated —
-        including ``parent_conversation_id``, ``forked_from_share_id``,
-        ``folder``, ``enabled_connectors``, and ``deleted_at``.
+        path runs (forks always mint a new row) and writes every column
+        the caller has populated — including ``parent_conversation_id``,
+        ``forked_from_share_id``, ``folder``, ``enabled_connectors``, and
+        ``deleted_at``. The standard path drops these fields because the
+        normal ``CreateConversationRequest`` doesn't carry them; the fork
+        service composes them itself from the share + recipient identity.
         """
 
-    def update_conversation_connectors(
+    async def update_conversation_connectors(
         self,
         *,
         org_id: str,
@@ -128,13 +138,13 @@ class PersistencePort(Protocol):
         """RFC 7396 merge-patch ``enabled_connectors`` for one conversation.
 
         Returns ``None`` when no row matches the (org, user, conversation)
-        scope. The implementation merges ``scopes_patch`` into the stored
-        column: keys present in the patch overwrite the stored value
-        (including ``None`` to pause); keys absent in the patch are left
-        untouched. Caller computes the diff for audit before calling.
+        scope. Implementations merge ``scopes_patch`` into the stored
+        column atomically (keys present overwrite — including ``None`` to
+        pause; keys absent are left untouched). Caller computes diff for
+        audit before invocation.
         """
 
-    def create_run_with_user_message(
+    async def create_run_with_user_message(
         self,
         *,
         request: CreateRunRequest,
@@ -142,47 +152,47 @@ class PersistencePort(Protocol):
     ) -> tuple[RunRecord, MessageRecord, bool]:
         """Create a user message and run, or return an idempotent existing run."""
 
-    def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
-        """Return a run scoped by organization."""
-
-    def get_active_run_for_conversation(
+    async def get_active_run_for_conversation(
         self,
         *,
         org_id: str,
         conversation_id: str,
     ) -> RunRecord | None:
-        """Return the most recent non-terminal run for one conversation.
+        """Return the most recent non-terminal run for one conversation (PR 1.6)."""
 
-        Used by the soft-delete path (PR 1.6) so deleting a chat with a
-        running agent cancels the run via the existing cancel pipeline
-        (no new event family). Implementations filter rows whose
-        ``status`` is one of ``QUEUED / RUNNING / WAITING_FOR_APPROVAL
-        / CANCELLING``; returns ``None`` when nothing is in flight.
-        """
+    async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
+        """Return a run scoped by organization."""
 
-    def update_run_status(self, *, run_id: str, status: AgentRunStatus) -> RunRecord:
+    async def update_run_status(
+        self, *, run_id: str, status: AgentRunStatus
+    ) -> RunRecord:
         """Update mutable run status and return the new record."""
 
-    def set_run_latest_sequence(
+    async def set_run_latest_sequence(
         self, *, run_id: str, latest_sequence_no: int
     ) -> RunRecord:
-        """Persist latest event sequence for run inspection."""
+        """Persist latest event sequence for run inspection.
 
-    def record_approval_decision(
+        Implementations MUST be monotonic: a write with a lower
+        ``latest_sequence_no`` than the currently persisted value is a no-op.
+        Returns the current record either way.
+        """
+
+    async def record_approval_decision(
         self,
         *,
         record: ApprovalDecisionRecord,
     ) -> ApprovalDecisionRecord:
         """Persist an approval decision."""
 
-    def create_approval_request(
+    async def create_approval_request(
         self,
         *,
         record: ApprovalRequestRecord,
     ) -> ApprovalRequestRecord:
-        """Persist a pending approval request."""
+        """Persist a pending approval request, idempotent on ``approval_id``."""
 
-    def forward_approval_request(
+    async def forward_approval_request(
         self,
         *,
         parent_approval_id: str,
@@ -193,16 +203,14 @@ class PersistencePort(Protocol):
         child: ApprovalRequestRecord,
         now: datetime,
     ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
-        """Atomically transition a pending approval to ``FORWARDED`` and
-        insert the child row addressed to the next approver (PR 1.4).
+        """Atomic parent→FORWARDED + child INSERT for two-stage approvals.
 
-        The update + insert run in one transaction so a failure halfway
-        through never leaves a chain orphan. Returns ``(updated_parent,
-        inserted_child)``. The caller is responsible for emitting events
-        and audit rows after the transaction commits.
+        See sync ``PersistencePort.forward_approval_request`` for the
+        contract. Implementations run both writes in a single transaction
+        so partial chains never persist on failure (PR 1.4).
         """
 
-    def get_approval_request(
+    async def get_approval_request(
         self,
         *,
         org_id: str,
@@ -210,7 +218,7 @@ class PersistencePort(Protocol):
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
 
-    def list_assigned_approvals(
+    async def list_assigned_approvals(
         self,
         *,
         org_id: str,
@@ -219,47 +227,40 @@ class PersistencePort(Protocol):
         limit: int,
         cursor: tuple[datetime, str] | None,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Return approvals addressed to ``requested_by_user_id`` (PR 1.4.1).
+        """Recipient inbox query (PR 1.4.1). See sync port for contract."""
 
-        Used by the recipient inbox endpoint
-        ``GET /v1/agent/approvals?assigned_to_me=true``. Filters to a
-        single status (typically ``"pending"``); cursor is ``(created_at,
-        approval_id)`` for stable keyset pagination across replays.
-        Implementations honor RLS — the ``org_id`` filter narrows further
-        within the trusted tenant scope set by the caller.
-        """
-
-    def list_pending_expired_approvals(
+    async def list_pending_expired_approvals(
         self,
         *,
         now: datetime,
         limit: int,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Return pending approvals whose ``expires_at`` is in the past.
+        """Sweeper expiry-pass query (PR 1.4.1)."""
 
-        Used by the expiry sweeper (PR 1.4.1 Phase B). Implementations
-        SHOULD use ``FOR UPDATE SKIP LOCKED`` semantics so multiple
-        sweeper replicas process disjoint batches; the in-memory
-        adapter approximates with a simple atomic snapshot.
-        """
-
-    def list_pending_approvals_for_membership_audit(
+    async def list_pending_approvals_for_membership_audit(
         self,
         *,
         limit: int,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Return pending approvals for the membership-cascade pass.
+        """Sweeper membership-cascade query (PR 1.4.1)."""
 
-        The sweeper calls this after the time-expiry pass to verify each
-        recipient is still an active workspace member. The set is
-        bounded; orgs with large pending backlogs naturally cap at
-        ``limit`` per tick.
-        """
-
-    def write_audit_log(self, *, event_type: str, record: object) -> None:
+    async def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
 
-    def delete_user_history(
+    async def list_audit_log_for_export(
+        self,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> Sequence[dict]:
+        """Cross-tenant audit log read for the C9 SIEM cursor.
+
+        Worker-role only — same trust contract as ``query_run_usage_for_range
+        (org_id=None)``. Returns rows ordered by ``(created_at, id)`` ascending
+        so the SIEM pump's cursor is monotonic.
+        """
+
+    async def delete_user_history(
         self,
         *,
         org_id: str,
@@ -270,31 +271,26 @@ class PersistencePort(Protocol):
 
     # ----- PR 1.6: workspace defaults + conversation lifecycle ----- #
 
-    def get_workspace_defaults(
+    async def get_workspace_defaults(
         self,
         *,
         org_id: str,
     ) -> WorkspaceDefaultsRecord | None:
-        """Return the persisted workspace defaults row, or ``None`` when absent.
+        """Return the persisted workspace defaults row, or ``None``.
 
-        ``retention_days`` on the returned record is **not** read from
-        ``workspace_defaults`` — that's the service's job (it composes
-        from ``retention_policies``). The adapter only fills in the
-        columns it owns: default_model, default_connectors, updated_*.
+        Retention is composed by the service from ``retention_policies``
+        — the adapter only fills the columns it owns (default_model,
+        default_connectors, updated_*).
         """
 
-    def upsert_workspace_defaults(
+    async def upsert_workspace_defaults(
         self,
         *,
         record: WorkspaceDefaultsRecord,
     ) -> WorkspaceDefaultsRecord:
-        """Insert-or-update the workspace defaults row for ``record.org_id``.
+        """Insert-or-update one (org_id) row."""
 
-        Single-row upsert (org_id PK). The service is responsible for
-        any audit row + retention upserts that go alongside.
-        """
-
-    def update_conversation(
+    async def update_conversation(
         self,
         *,
         org_id: str,
@@ -308,16 +304,9 @@ class PersistencePort(Protocol):
         archived_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
-        """Apply a lifecycle PATCH to one conversation row.
+        """Apply a lifecycle PATCH to one conversation row (PR 1.6)."""
 
-        ``*_changed`` flags signal "the caller wants this column
-        rewritten" — distinguishing "field omitted" (leave alone) from
-        "field set to null" (clear). Returns the post-update row, or
-        ``None`` when no row matches the (org, user, conversation)
-        scope. Caller computes the audit diff from before/after.
-        """
-
-    def soft_delete_conversation(
+    async def soft_delete_conversation(
         self,
         *,
         org_id: str,
@@ -327,7 +316,7 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Stamp ``deleted_at`` (idempotent: no-op when already deleted)."""
 
-    def restore_conversation(
+    async def restore_conversation(
         self,
         *,
         org_id: str,
@@ -335,36 +324,28 @@ class PersistencePort(Protocol):
         conversation_id: str,
         now: datetime,
     ) -> ConversationRecord | None:
-        """Clear ``deleted_at``. Returns ``None`` when the row was already
-        reaped by the retention sweeper (vs. simply not deleted).
-        """
-
-    def list_tool_budgets_for_org(self, *, org_id: str) -> Sequence[ToolBudgetRecord]:
-        """Return per-tool budgets visible to ``org_id`` (B8).
-
-        Includes both the org's own rows (``org_id = %s``) and the global
-        seed/default rows (``org_id IS NULL``). The
-        :class:`ToolBudgetMiddleware` performs its own most-specific-wins
-        resolution against this snapshot.
-        """
+        """Clear ``deleted_at``; ``None`` if the row was already reaped."""
 
     # ------------------------------------------------------------------
     # Usage + pricing (B1, B2, B3, B4).
     #
-    # Sync mirror of :class:`AsyncPersistencePort`'s usage surface, kept
-    # in lockstep so the bridge in ``runtime_adapters.async_wrappers``
-    # can wrap each call without ``# type: ignore``. Idempotency rules
-    # match the async port: ``record_run_usage`` on ``run_id``,
-    # ``record_model_call_usage`` on the row's UUID id.
+    # Writes are best-effort: the run-completion event is the source of
+    # truth, the rows below are derived aggregates. ``record_run_usage``
+    # is idempotent on ``run_id``; ``record_model_call_usage`` is
+    # idempotent on the row's own UUID id (caller dedupes at the source
+    # by AIMessage id). Pricing methods underwrite B3's catalog and
+    # B4's rollup loop.
     # ------------------------------------------------------------------
 
-    def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
         """Idempotent write of a per-run usage row (B1)."""
 
-    def record_model_call_usage(self, record: RuntimeModelCallUsageRecord) -> None:
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
         """Append a per-LLM-call usage row (B2)."""
 
-    def update_run_usage_cost(
+    async def update_run_usage_cost(
         self,
         *,
         run_id: str,
@@ -374,7 +355,7 @@ class PersistencePort(Protocol):
     ) -> None:
         """Stamp computed cost onto an existing run-usage row (B3)."""
 
-    def update_model_call_usage_cost(
+    async def update_model_call_usage_cost(
         self,
         *,
         usage_id: str,
@@ -384,7 +365,7 @@ class PersistencePort(Protocol):
     ) -> None:
         """Stamp computed cost onto an existing per-call usage row (B3)."""
 
-    def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
         """Insert or update a pricing row keyed by (provider, model, region) (B3).
 
         Implementations close the previous active row by setting
@@ -393,7 +374,7 @@ class PersistencePort(Protocol):
         NULL`` stays satisfied.
         """
 
-    def lookup_pricing(
+    async def lookup_pricing(
         self,
         *,
         provider: str,
@@ -403,7 +384,7 @@ class PersistencePort(Protocol):
     ) -> ModelPricingRecord | None:
         """Return the pricing row in effect for ``at`` or ``None`` (B3)."""
 
-    def list_runs_missing_cost(
+    async def list_runs_missing_cost(
         self,
         *,
         limit: int,
@@ -411,16 +392,16 @@ class PersistencePort(Protocol):
     ) -> Sequence[RuntimeRunUsageRecord]:
         """Return run-usage rows where ``cost_micro_usd IS NULL`` for backfill (B3)."""
 
-    def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
         """Idempotent UPSERT of one daily per-user rollup row (B4)."""
 
-    def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
         """Idempotent UPSERT of one daily per-org rollup row (B4)."""
 
-    def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
         """Idempotent UPSERT of one daily per-connector rollup row (PR 7.2)."""
 
-    def query_user_daily_usage(
+    async def query_user_daily_usage(
         self,
         *,
         org_id: str,
@@ -430,7 +411,7 @@ class PersistencePort(Protocol):
     ) -> Sequence[UsageDailyUserRow]:
         """Read per-user rollup rows in ``[start_day, end_day]`` (B4)."""
 
-    def query_org_daily_usage(
+    async def query_org_daily_usage(
         self,
         *,
         org_id: str,
@@ -439,7 +420,7 @@ class PersistencePort(Protocol):
     ) -> Sequence[UsageDailyOrgRow]:
         """Read per-org rollup rows in ``[start_day, end_day]`` (B4)."""
 
-    def query_connector_daily_usage(
+    async def query_connector_daily_usage(
         self,
         *,
         org_id: str,
@@ -448,7 +429,7 @@ class PersistencePort(Protocol):
     ) -> Sequence[UsageDailyConnectorRow]:
         """Read per-connector rollup rows in ``[start_day, end_day]`` (PR 7.2)."""
 
-    def query_model_call_usage_for_range(
+    async def query_model_call_usage_for_range(
         self,
         *,
         org_id: str | None,
@@ -458,10 +439,12 @@ class PersistencePort(Protocol):
         """Scan per-LLM-call usage rows for the connector rollup loop +
         cold-start fallback (PR 7.2).
 
-        ``org_id=None`` is the rollup-loop signal to scan across tenants.
+        ``org_id=None`` is the rollup-loop signal to scan across tenants;
+        adapter implementations must use the ``worker`` role for the
+        cross-tenant read, matching ``query_run_usage_for_range``.
         """
 
-    def list_audit_log_events(
+    async def list_audit_log_events(
         self,
         *,
         org_id: str,
@@ -472,9 +455,17 @@ class PersistencePort(Protocol):
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Sequence[dict[str, object]]:
-        """Paginated read across ``runtime_audit_log`` (PR 7.1)."""
+        """PR 7.1 — paginated read across ``runtime_audit_log``.
 
-    def query_last_completed_tool_connector_slug(
+        Returns dicts because the in-memory store stamps chain fields
+        onto an arbitrary record shape (see ``write_audit_log``); the
+        caller projects to a typed view. Each row carries ``audit_id``,
+        ``action``, ``user_id`` (actor), ``resource_type``, ``resource_id``,
+        ``outcome``, ``metadata``, ``created_at``, plus the chain fields
+        ``seq`` / ``prev_hash`` / ``signature`` / ``key_version``.
+        """
+
+    async def query_last_completed_tool_connector_slug(
         self,
         *,
         org_id: str,
@@ -484,9 +475,14 @@ class PersistencePort(Protocol):
         """Return the connector_slug of the most recent completed tool
         invocation on ``run_id`` whose ``completed_at`` is strictly before
         ``before`` (PR 7.2 attribution rule).
+
+        Returns ``None`` when no completed tool invocation matches —
+        i.e. the LLM call is "cold-turn" (planning before any tool fires).
+        Failed invocations are ignored; only ``status='completed'`` rows
+        contribute.
         """
 
-    def query_run_usage(
+    async def query_run_usage(
         self,
         *,
         org_id: str,
@@ -494,7 +490,7 @@ class PersistencePort(Protocol):
     ) -> RuntimeRunUsageRecord | None:
         """Look up a single run-usage row scoped to org (B4)."""
 
-    def query_run_usage_for_range(
+    async def query_run_usage_for_range(
         self,
         *,
         org_id: str | None,
@@ -504,10 +500,13 @@ class PersistencePort(Protocol):
     ) -> Sequence[RuntimeRunUsageRecord]:
         """Read raw run-usage rows for the rollup loop + cold-start fallback.
 
-        ``org_id=None`` is the rollup-loop signal to scan across tenants.
+        ``org_id=None`` is the rollup-loop signal to scan across tenants;
+        adapter implementations must restrict to ``app.role='worker'``
+        equivalent semantics so the scan matches the operator role
+        running the worker.
         """
 
-    def query_top_conversations(
+    async def query_top_conversations(
         self,
         *,
         org_id: str,
@@ -518,7 +517,7 @@ class PersistencePort(Protocol):
     ) -> Sequence[UsageConversationAggregateRecord]:
         """Return top conversation aggregates by total tokens for the range."""
 
-    def query_model_call_usage_for_run(
+    async def query_model_call_usage_for_run(
         self,
         *,
         org_id: str,
@@ -526,7 +525,7 @@ class PersistencePort(Protocol):
     ) -> Sequence[RuntimeModelCallUsageRecord]:
         """Return per-LLM-call rows for a run, scoped by org (B4 / B5)."""
 
-    def query_latest_run_usage_for_conversation(
+    async def query_latest_run_usage_for_conversation(
         self,
         *,
         org_id: str,
@@ -535,11 +534,14 @@ class PersistencePort(Protocol):
     ) -> RuntimeRunUsageRecord | None:
         """Return the most recently-completed run usage row for a conversation (B5).
 
-        Excludes rows where ``pii_purged_at IS NOT NULL``. Returns ``None``
-        when the conversation has no completed runs yet.
+        Used by the ``/v1/agent/conversations/{id}/context`` endpoint to
+        answer "where did the tokens go in this conversation". Excludes
+        rows where ``pii_purged_at IS NOT NULL`` since the user-visible
+        view should not surface purged history. Returns ``None`` when the
+        conversation has no completed runs yet.
         """
 
-    def query_compression_events_for_run(
+    async def query_compression_events_for_run(
         self,
         *,
         org_id: str,
@@ -551,12 +553,16 @@ class PersistencePort(Protocol):
     # Budgets (B7).
     #
     # ``lookup_budgets_for_run`` is the hot path on the worker preflight.
-    # ``charge_budget`` is post-run; CAS on ``row_version`` AND idempotency
-    # on ``last_charged_run_id`` mean the same run cannot double-charge
-    # under retry.
+    # It returns the ``BudgetWithState`` join including any active
+    # reservations rolled into ``current_spend_*`` (so the enforcer can
+    # decide without a second query).
+    #
+    # ``charge_budget`` is the post-run hook. CAS on ``row_version`` AND
+    # idempotency on ``last_charged_run_id`` mean the same run cannot
+    # double-charge under retry.
     # ------------------------------------------------------------------
 
-    def lookup_budgets_for_run(
+    async def lookup_budgets_for_run(
         self,
         *,
         org_id: str,
@@ -566,11 +572,15 @@ class PersistencePort(Protocol):
         """Active budgets matching ``(org_id, user_id)`` plus their state.
 
         When ``now`` is provided, implementations MUST use it for period
-        window computation instead of wall-clock ``datetime.now()`` so
-        the enforcer keeps one consistent clock across preflight + reserve.
+        window computation instead of wall-clock ``datetime.now()`` —
+        this is what lets the enforcer keep one consistent clock across
+        the preflight + reserve sequence and lets unit tests freeze
+        time. Postgres adapters use server-clock SQL and may ignore
+        ``now`` in production deployments where the round-trip latency
+        is negligible.
         """
 
-    def charge_budget(
+    async def charge_budget(
         self,
         *,
         budget_id: str,
@@ -585,11 +595,11 @@ class PersistencePort(Protocol):
 
         Returns :class:`ChargeOutcome.IDEMPOTENT_NOOP` when the same
         ``run_id`` has already been charged, :class:`APPLIED` on a fresh
-        write, and :class:`EXHAUSTED_RETRIES` when row_version drift does
-        not stabilize within the adapter's internal retry budget.
+        write, and :class:`EXHAUSTED_RETRIES` when row_version drift
+        does not stabilize within the adapter's internal retry budget.
         """
 
-    def reserve_budget(
+    async def reserve_budget(
         self,
         *,
         budget_id: str,
@@ -602,64 +612,112 @@ class PersistencePort(Protocol):
         """Create a pre-flight reservation, idempotent on (budget_id, run_id).
 
         Returns ``None`` when the run already holds an unconsumed
-        reservation against this budget.
+        reservation against this budget (idempotent retry path).
         """
 
-    def consume_budget_reservation(self, *, reservation_id: str, now: datetime) -> None:
+    async def consume_budget_reservation(
+        self, *, reservation_id: str, now: datetime
+    ) -> None:
         """Mark a reservation consumed so the reaper skips it."""
 
-    def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+    async def reap_expired_budget_reservations(self, *, now: datetime) -> int:
         """Purge reservations whose ``expires_at < now`` and are unconsumed.
 
         Returns the number purged, for observability.
         """
 
-    def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
         """List configured budgets for an org (admin endpoint)."""
 
-    def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+    async def list_tool_budgets_for_org(
+        self, *, org_id: str
+    ) -> Sequence[ToolBudgetRecord]:
+        """Return per-tool budgets visible to ``org_id`` (B8).
+
+        Includes the org's own rows and the global seed/default rows
+        (``org_id IS NULL``). The :class:`ToolBudgetMiddleware` performs
+        its own most-specific-wins resolution against the snapshot.
+        """
+
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
         """Fetch one budget scoped to an org."""
 
-    def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
         """Insert a new budget."""
 
-    def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
         """Update mutable fields on an existing budget."""
 
-    def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
         """Hard-delete a budget (cascades to state + reservations)."""
 
     # ------------------------------------------------------------------
     # Retention (C8).
     #
-    # The cross-tenant sweep methods (``list_retention_orgs``,
-    # ``sweep_retention_kind``) are async-only — they live on
-    # :class:`AsyncPersistencePort` and are called by the worker's
-    # retention sweeper, which runs only against the async backend.
+    # The sweeper runs in the worker process; the API service uses these
+    # methods only for the admin CRUD endpoints (out of scope for this
+    # PR; operators seed via SQL until A10 RBAC ships).
     # ------------------------------------------------------------------
 
-    def list_retention_policies(
+    async def list_retention_orgs(self) -> Sequence[str]:
+        """Return distinct org_ids that have any rows in retention-affected tables.
+
+        The sweeper iterates one org at a time so cross-tenant scope is
+        impossible. Worker-role only — same trust contract as
+        ``query_run_usage_for_range(org_id=None)``.
+        """
+
+    async def list_retention_policies(
         self, *, org_id: str
     ) -> Sequence[RetentionPolicyRecord]:
         """Return every retention policy for an org (small list, no paging)."""
 
-    def upsert_retention_policy(
+    async def upsert_retention_policy(
         self, record: RetentionPolicyRecord
     ) -> RetentionPolicyRecord:
         """Idempotent insert or update keyed by ``(org_id, scope, resource_id, kind)``."""
 
-    def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
         """Remove one retention policy."""
+
+    async def sweep_retention_kind(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        dry_run: bool = False,
+    ) -> RetentionSweepOutcome:
+        """Apply the per-kind retention strategy for one tenant.
+
+        Per kind:
+
+          - ``messages`` / ``events`` / ``memory_items``: tombstone (status
+            flip / blank content) for rows older than ttl. Hard delete after
+            a 30d grace; today the implementation only tombstones.
+          - ``context_payloads``: hard delete where ``retention_until <
+            now()`` (the column already exists in the schema and is
+            authoritative) — the resolver's ttl is treated as a fallback.
+          - ``checkpoints``: keep the latest N per ``(thread_id, namespace)``
+            (default 10) plus anything inside the ttl window.
+
+        Resources covered by an active ``runtime_legal_holds`` row are
+        skipped and counted in ``skipped_legal_hold``.
+        """
 
 
 @runtime_checkable
 class EventStorePort(Protocol):
     """Append-only event persistence and replay boundary."""
 
-    def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
-        """Append one event with the next per-run sequence number."""
+    async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
+        """Append one event with the next per-run sequence number.
 
-    def list_events_after(
+        Implementations MUST serialize concurrent appends per ``run_id`` so the
+        returned ``sequence_no`` is monotonically increasing without gaps.
+        """
+
+    async def list_events_after(
         self,
         *,
         org_id: str,
@@ -668,7 +726,7 @@ class EventStorePort(Protocol):
     ) -> Sequence[RuntimeEventEnvelope]:
         """Return persisted events after a sequence number."""
 
-    def get_latest_sequence(self, *, run_id: str) -> int:
+    async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
 
@@ -676,18 +734,18 @@ class EventStorePort(Protocol):
 class RuntimeQueuePort(Protocol):
     """Durable command queue boundary for runtime workers."""
 
-    def enqueue_run(self, command: RuntimeRunCommand) -> None:
+    async def enqueue_run(self, command: RuntimeRunCommand) -> None:
         """Enqueue a run command for workers."""
 
-    def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
+    async def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         """Enqueue a cancellation command for workers."""
 
-    def enqueue_approval_resolved(
+    async def enqueue_approval_resolved(
         self, command: RuntimeApprovalResolvedCommand
     ) -> None:
         """Enqueue an approval resolution command for workers."""
 
-    def claim_next(
+    async def claim_next(
         self,
         *,
         worker_id: str,
@@ -695,11 +753,11 @@ class RuntimeQueuePort(Protocol):
     ) -> RuntimeWorkerClaim | None:
         """Claim the next available runtime command for a worker."""
 
-    def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
         """Mark a claimed command complete."""
 
-    def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
         """Release a claimed command for retry after its available time."""
 
-    def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
+    async def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
         """Mark a command permanently failed after retries are exhausted."""

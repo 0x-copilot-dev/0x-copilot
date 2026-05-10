@@ -107,14 +107,16 @@ class FastApiRuntimeApiTestMixin:
             "request_options": {"authorization": self.Values.SECRET},
         }
 
-    def create_conversation(self, client: TestClient) -> dict[str, Any]:
+    async def create_conversation(self, client: TestClient) -> dict[str, Any]:
         response = client.post(
             "/v1/agent/conversations", json=self.conversation_payload()
         )
         assert response.status_code == 200
         return response.json()
 
-    def create_run(self, client: TestClient, conversation_id: str) -> dict[str, Any]:
+    async def create_run(
+        self, client: TestClient, conversation_id: str
+    ) -> dict[str, Any]:
         response = client.post("/v1/agent/runs", json=self.run_payload(conversation_id))
         assert response.status_code == 200
         return response.json()
@@ -195,7 +197,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         client, store = self.create_client()
         conversation = await self.create_conversation(client)
 
-        first = self.create_run(client, conversation["conversation_id"])
+        first = await self.create_run(client, conversation["conversation_id"])
         second_response = client.post(
             "/v1/agent/runs",
             json=self.run_payload(
@@ -310,7 +312,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
     async def test_event_replay_and_sse_stream_use_ordered_event_envelope(self) -> None:
         client, _store = self.create_client()
         conversation = await self.create_conversation(client)
-        run = self.create_run(client, conversation["conversation_id"])
+        run = await self.create_run(client, conversation["conversation_id"])
 
         replay = client.get(
             f"/v1/agent/runs/{run['run_id']}/events",
@@ -332,7 +334,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
     async def test_cancel_run_persists_cancelling_state_event_and_command(self) -> None:
         client, store = self.create_client()
         conversation = await self.create_conversation(client)
-        run = self.create_run(client, conversation["conversation_id"])
+        run = await self.create_run(client, conversation["conversation_id"])
 
         response = client.post(
             f"/v1/agent/runs/{run['run_id']}/cancel",
@@ -358,7 +360,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
     async def test_approval_decision_persists_and_enqueues_resume_command(self) -> None:
         client, store = self.create_client()
         conversation = await self.create_conversation(client)
-        run = self.create_run(client, conversation["conversation_id"])
+        run = await self.create_run(client, conversation["conversation_id"])
         await store.seed_approval_request(
             ApprovalRequestRecord(
                 approval_id=self.Values.APPROVAL_ID,
@@ -383,7 +385,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
     async def test_worker_queue_claim_retry_and_dead_letter_semantics(self) -> None:
         client, store = self.create_client()
         conversation = await self.create_conversation(client)
-        run = self.create_run(client, conversation["conversation_id"])
+        run = await self.create_run(client, conversation["conversation_id"])
 
         first_claim = await store.claim_next(
             worker_id="worker_1",
@@ -436,7 +438,7 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         conversation_id = conversation["conversation_id"]
         producer = RuntimeEventProducer(persistence=store, event_store=store)
 
-        first_run = self.create_run(client, conversation_id)
+        first_run = await self.create_run(client, conversation_id)
         first_claim = await store.claim_next(
             worker_id="worker_1",
             lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+import inspect
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 
-from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
+from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.presentation import ToolDisplayLookupContext
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
@@ -20,10 +20,6 @@ from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
 from agent_runtime.observability.usage_attribution import UsageAttributionResolver
-from runtime_adapters.async_wrappers import (
-    adapt_event_store_to_async,
-    adapt_persistence_to_async,
-)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -31,7 +27,10 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.factory import (
+    RuntimeHarness,
+    acreate_agent_runtime,
+)
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
@@ -55,7 +54,11 @@ from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
-AgentFactory = Callable[..., RuntimeHarness]
+# Sync- or async-returning. Default is the async ``acreate_agent_runtime`` so
+# the worker's event loop is not blocked by the registry-listing HTTP calls
+# inside the factory; tests injecting sync fakes (``lambda **_: _FakeHarness()``)
+# continue to work because the call site awaits via ``inspect.isawaitable``.
+AgentFactory = Callable[..., RuntimeHarness | Awaitable[RuntimeHarness]]
 RuntimeResumer = Callable[[RuntimeHarness, object], AsyncIterator[object]]
 
 # PR 1.3.5 — discriminator written into ``approval.metadata['kind']`` by
@@ -92,11 +95,11 @@ class RuntimeApprovalHandler:
     def __init__(
         self,
         *,
-        persistence: PersistencePort | AsyncPersistencePort,
-        event_store: EventStorePort | AsyncEventStorePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
         dependencies_factory: RuntimeDependenciesFactory | None = None,
         settings: RuntimeSettings | None = None,
-        agent_factory: AgentFactory = create_agent_runtime,
+        agent_factory: AgentFactory = acreate_agent_runtime,
         runtime_resumer: RuntimeResumer = astream_runtime_resume,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: object | None = None,
@@ -104,8 +107,8 @@ class RuntimeApprovalHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
     ) -> None:
-        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
-        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
+        self.persistence: PersistencePort = persistence
+        self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
         self.dependencies_factory = (
             dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
@@ -267,9 +270,14 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
-            harness = self.agent_factory(
+            harness_or_coro = self.agent_factory(
                 context=running.runtime_context,
                 dependencies=dependencies,
+            )
+            harness = (
+                await harness_or_coro
+                if inspect.isawaitable(harness_or_coro)
+                else harness_or_coro
             )
             metrics = AssistantRunMetrics.from_run(running)
             result = await self._stream_resume(

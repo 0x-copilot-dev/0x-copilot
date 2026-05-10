@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 from fastapi import status
 
 from agent_runtime.api.notifications import NotificationDispatcher
-from agent_runtime.api.async_ports import (
-    AsyncEventStorePort,
-    AsyncPersistencePort,
+from agent_runtime.api.ports import (
+    EventStorePort,
+    PersistencePort,
 )
 from agent_runtime.api.share_token import ShareTokenIssuer, ShareTokenSecret
 from agent_runtime.execution.contracts import RuntimeErrorCode
@@ -118,8 +118,8 @@ class ShareService:
         self,
         *,
         store: ShareStorePort,
-        persistence: AsyncPersistencePort,
-        event_store: AsyncEventStorePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
         citations: CitationStorePort | None = None,
         workspace_feed_service: object | None = None,
         draft_service: object | None = None,

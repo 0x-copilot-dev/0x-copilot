@@ -22,7 +22,11 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.factory import (
+    RuntimeHarness,
+    acreate_agent_runtime,
+    create_agent_runtime,
+)
 from agent_runtime.execution.graph import (
     ConfiguredRuntimeGraph,
     UnconfiguredRuntimeGraph,
@@ -52,5 +56,6 @@ __all__ = [
     "StreamEventSource",
     "StreamEventType",
     "UnconfiguredRuntimeGraph",
+    "acreate_agent_runtime",
     "create_agent_runtime",
 ]

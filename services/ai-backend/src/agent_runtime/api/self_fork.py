@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from fastapi import status
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.message_copy import MessageCopyPlanner
 from runtime_api.http.errors import RuntimeApiError
@@ -61,7 +61,7 @@ class SelfForkService:
     def __init__(
         self,
         *,
-        persistence: AsyncPersistencePort,
+        persistence: PersistencePort,
         audit: WorkerAuditEmitter,
         max_messages: int | None = None,
     ) -> None:

@@ -22,7 +22,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 from agent_runtime.api.usage_service import UsageQueryService
 
 
@@ -85,7 +85,7 @@ class UsageRollupLoop:
     def __init__(
         self,
         *,
-        persistence: AsyncPersistencePort,
+        persistence: PersistencePort,
         interval_seconds: float | None = None,
         late_arrival_minutes: int | None = None,
         backfill_days: int | None = None,

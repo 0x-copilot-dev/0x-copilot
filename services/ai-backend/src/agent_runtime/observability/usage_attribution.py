@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from agent_runtime.api.async_ports import AsyncPersistencePort
+from agent_runtime.api.ports import PersistencePort
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 class UsageAttributionResolver:
     """Resolve which connector to attribute an LLM call to."""
 
-    def __init__(self, persistence: AsyncPersistencePort) -> None:
+    def __init__(self, persistence: PersistencePort) -> None:
         self._persistence = persistence
 
     async def resolve(

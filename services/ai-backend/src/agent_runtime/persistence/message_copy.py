@@ -6,7 +6,7 @@ run-/branch-scoped pointers (``run_id``, ``source_message_id``,
 ``branch_id``) to ``None``, stamps a fresh ``created_at`` so the
 retention sweeper sees the fork's age (the original timestamp survives
 in ``metadata.original_created_at``), and emits the records ready for
-:meth:`AsyncPersistencePort.append_message`.
+:meth:`PersistencePort.append_message`.
 
 Encryption is **not** done here. The codec applies at the persistence
 adapter boundary (postgres ``_insert_message`` runs ``encrypt_text`` /
@@ -101,7 +101,7 @@ class MessageCopyPlanner:
         The input must be ordered by ``created_at`` ASC so each message
         sees its parent's new id already in ``id_map`` by the time the
         copy is built. Callers source the rows via
-        :meth:`AsyncPersistencePort.list_messages`, which already orders
+        :meth:`PersistencePort.list_messages`, which already orders
         by ``created_at`` ASC in both adapters.
         """
 

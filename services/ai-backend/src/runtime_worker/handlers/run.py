@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 import asyncio
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -32,9 +33,8 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
-from agent_runtime.api.async_ports import AsyncEventStorePort, AsyncPersistencePort
-from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.presentation import (
     ToolDisplayLookup,
     ToolDisplayLookupContext,
@@ -49,12 +49,11 @@ from agent_runtime.persistence.ports import (
     ConversationToolOrdinalStorePort,
     DraftStorePort,
 )
-from runtime_adapters.async_wrappers import (
-    adapt_event_store_to_async,
-    adapt_persistence_to_async,
-)
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.factory import RuntimeHarness, create_agent_runtime
+from agent_runtime.execution.factory import (
+    RuntimeHarness,
+    acreate_agent_runtime,
+)
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
@@ -83,7 +82,11 @@ from runtime_worker.tool_observations import (
 )
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
-AgentFactory = Callable[..., RuntimeHarness]
+# Sync- or async-returning. Default is the async ``acreate_agent_runtime`` so
+# the worker's event loop is not blocked by the registry-listing HTTP calls
+# inside the factory; tests injecting sync fakes (``lambda **_: _FakeHarness()``)
+# continue to work because the call site awaits via ``inspect.isawaitable``.
+AgentFactory = Callable[..., RuntimeHarness | Awaitable[RuntimeHarness]]
 RuntimeInvoker = Callable[[RuntimeHarness, Sequence[object]], object]
 RuntimeStreamer = Callable[[RuntimeHarness, Sequence[object]], AsyncIterator[object]]
 MAX_STRUCTURED_CONTEXT_CHARS = 4_000
@@ -132,11 +135,11 @@ class RuntimeRunHandler:
     def __init__(
         self,
         *,
-        persistence: PersistencePort | AsyncPersistencePort,
-        event_store: EventStorePort | AsyncEventStorePort,
+        persistence: PersistencePort,
+        event_store: EventStorePort,
         dependencies_factory: RuntimeDependenciesFactory | None = None,
         settings: RuntimeSettings | None = None,
-        agent_factory: AgentFactory = create_agent_runtime,
+        agent_factory: AgentFactory = acreate_agent_runtime,
         runtime_invoker: RuntimeInvoker = ainvoke_runtime,
         runtime_streamer: RuntimeStreamer = astream_runtime,
         on_event_appended: Callable[[str], None] | None = None,
@@ -146,8 +149,8 @@ class RuntimeRunHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
     ) -> None:
-        self.persistence: AsyncPersistencePort = adapt_persistence_to_async(persistence)
-        self.event_store: AsyncEventStorePort = adapt_event_store_to_async(event_store)
+        self.persistence: PersistencePort = persistence
+        self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
         self.dependencies_factory = (
             dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
@@ -335,9 +338,14 @@ class RuntimeRunHandler:
                 if discovery_service is not None
                 else None
             )
-            harness = self.agent_factory(
+            harness_or_coro = self.agent_factory(
                 context=command.runtime_context,
                 dependencies=dependencies,
+            )
+            harness = (
+                await harness_or_coro
+                if inspect.isawaitable(harness_or_coro)
+                else harness_or_coro
             )
             messages = await self._messages_for_run(
                 command,

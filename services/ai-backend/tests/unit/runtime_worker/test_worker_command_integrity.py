@@ -6,7 +6,6 @@ persisted run rows for org/user/conversation.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -42,10 +41,10 @@ async def _fake_invoker(*args: object, **kwargs: object) -> object:
     return {"messages": [{"role": "assistant", "content": "ok"}]}
 
 
-def test_run_handler_rejects_forged_conversation_id_on_command() -> None:
+async def test_run_handler_rejects_forged_conversation_id_on_command() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    _TestHelpers.create_queued_run(store, settings)
+    await _TestHelpers.create_queued_run(store, settings)
     cmd = store.run_commands[-1].model_copy(update={"conversation_id": "wrong_conv"})
     handler = RuntimeRunHandler(
         persistence=store,
@@ -56,13 +55,13 @@ def test_run_handler_rejects_forged_conversation_id_on_command() -> None:
     )
 
     with pytest.raises(AgentRuntimeError, match="conversation_id"):
-        asyncio.run(handler.handle(cmd))
+        await handler.handle(cmd)
 
 
-def test_cancel_handler_noops_when_requesting_user_not_run_owner() -> None:
+async def test_cancel_handler_noops_when_requesting_user_not_run_owner() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    run_id = _TestHelpers.create_queued_run(store, settings)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
     prior_status = store.runs[run_id].status
 
     handler = RuntimeCancelHandler(persistence=store, event_store=store)
@@ -72,6 +71,6 @@ def test_cancel_handler_noops_when_requesting_user_not_run_owner() -> None:
         requested_by_user_id="someone_else",
         reason="forge",
     )
-    asyncio.run(handler.handle(bad))
+    await handler.handle(bad)
 
     assert store.runs[run_id].status == prior_status

@@ -198,8 +198,8 @@ class RuntimeApiAppFactory:
         )
 
         suggestible_resolver = SuggestibleConnectorsResolverFactory.default()
-        async_ports = RuntimeAdapterFactory.async_from_settings(settings)
-        app.state.async_runtime_ports = async_ports
+        async_ports = RuntimeAdapterFactory.from_settings(settings)
+        app.state.runtime_ports = async_ports
         return RuntimeApiService(
             persistence=async_ports.persistence,
             event_store=async_ports.event_store,
@@ -286,7 +286,7 @@ class RuntimeApiAppFactory:
         from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
         from runtime_adapters.postgres.draft_store import PostgresDraftStore
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
+        async_ports = getattr(app.state, "runtime_ports", None)
         ports = getattr(app.state, "runtime_ports", None)
         if async_ports is not None and async_ports.backend == "postgres":
             store = PostgresDraftStore(async_ports.store)
@@ -360,8 +360,8 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.share_service import ShareService
         from runtime_adapters.in_memory.share_store import InMemoryShareStore
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
-        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        async_ports = getattr(app.state, "runtime_ports", None)
+        ports = async_ports
         if ports is None:  # pragma: no cover — only hit when boot has no ports
             return None
         share_store = getattr(ports, "share_store", None) or InMemoryShareStore()
@@ -403,8 +403,8 @@ class RuntimeApiAppFactory:
         from runtime_api.identity import RuntimeIdentity  # noqa: F401 (typing only)
         from runtime_worker.audit import WorkerAuditEmitter
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
-        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        async_ports = getattr(app.state, "runtime_ports", None)
+        ports = async_ports
         if ports is None:  # pragma: no cover — only hit when app boots without ports
             return None
 
@@ -452,14 +452,14 @@ class RuntimeApiAppFactory:
         from runtime_adapters.postgres.source_store import PostgresSourceStore
         from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
+        async_ports = getattr(app.state, "runtime_ports", None)
         if async_ports is not None and async_ports.backend == "postgres":
             parent = async_ports.store
             return WorkspaceFeedService(
                 subagent_store=PostgresSubagentStore(parent),
                 source_store=PostgresSourceStore(parent),
             )
-        ports = getattr(app.state, "runtime_ports", None) or async_ports
+        ports = async_ports
         underlying = (
             ports.store.underlying  # type: ignore[union-attr]
             if hasattr(getattr(ports, "store", None), "underlying")
@@ -474,7 +474,7 @@ class RuntimeApiAppFactory:
     async def open_async_store(cls, app: FastAPI) -> None:
         """Open + migrate the async store on startup if one was configured."""
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
+        async_ports = getattr(app.state, "runtime_ports", None)
         if async_ports is None:
             return
         await async_ports.store.open()
@@ -484,7 +484,7 @@ class RuntimeApiAppFactory:
     async def close_async_store(cls, app: FastAPI) -> None:
         """Close the async store on shutdown."""
 
-        async_ports = getattr(app.state, "async_runtime_ports", None)
+        async_ports = getattr(app.state, "runtime_ports", None)
         if async_ports is None:
             return
         await async_ports.store.close()
@@ -501,7 +501,7 @@ class RuntimeApiAppFactory:
         if not settings.execution.start_in_process_worker:
             return
         ports = getattr(app.state, "runtime_ports", None) or getattr(
-            app.state, "async_runtime_ports", None
+            app.state, "runtime_ports", None
         )
         if ports is None:
             return
