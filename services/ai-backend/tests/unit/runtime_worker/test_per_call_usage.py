@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.observability.token_usage import NormalizedTokenUsage
 from runtime_api.schemas import (
     AssistantSubagentUsageRollup,
     RunRecord,
@@ -21,6 +22,28 @@ from runtime_worker.streaming_executor import (
     StreamingExecutor,
     _MessageIdExtractor,
 )
+
+
+def _usage(
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached_input_tokens: int = 0,
+) -> NormalizedTokenUsage:
+    """Test-helper: build a normalized usage value object inline.
+
+    Sub-PRD 01a replaced the dict-shaped argument on
+    ``PerCallTokenAccumulator.observe`` with a typed value object.
+    Tests construct it directly rather than going through a provider
+    extractor — the extractor path is covered separately in
+    ``tests/unit/agent_runtime/observability/test_token_usage_extractors.py``.
+    """
+
+    return NormalizedTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_tokens=cached_input_tokens,
+    )
 
 
 def _run_record() -> RunRecord:
@@ -55,36 +78,34 @@ def _run_record() -> RunRecord:
 class TestPerCallTokenAccumulator:
     def test_buckets_keyed_by_message_id(self) -> None:
         acc = PerCallTokenAccumulator()
-        acc.observe(
-            {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
-            message_id="msg-a",
-        )
-        acc.observe(
-            {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
-            message_id="msg-b",
-        )
+        acc.observe(_usage(input_tokens=10, output_tokens=20), message_id="msg-a")
+        acc.observe(_usage(input_tokens=5, output_tokens=7), message_id="msg-b")
         slot_a = acc.slot("msg-a")
         slot_b = acc.slot("msg-b")
         assert slot_a is not None and slot_a.input_tokens == 10
         assert slot_b is not None and slot_b.input_tokens == 5
 
-    def test_observe_replaces_with_latest_count(self) -> None:
-        # Providers stream cumulative usage on the message-final chunk.
+    def test_observe_takes_field_wise_max(self) -> None:
+        # Sub-PRD 01a: providers stream cumulative usage; field-wise max
+        # protects against a mid-stream chunk that under-reported the
+        # running total (e.g. a partial-tool-call chunk that the
+        # adapter forgot to populate fully).
         acc = PerCallTokenAccumulator()
-        acc.observe({"input_tokens": 5, "output_tokens": 0}, message_id="msg-a")
+        acc.observe(_usage(input_tokens=5), message_id="msg-a")
         acc.observe(
-            {"input_tokens": 12, "output_tokens": 30, "total_tokens": 42},
+            _usage(input_tokens=12, output_tokens=30),
             message_id="msg-a",
         )
         slot = acc.slot("msg-a")
         assert slot is not None
         assert slot.input_tokens == 12
         assert slot.output_tokens == 30
+        # total_tokens is computed: 12 input + 30 output = 42.
         assert slot.total_tokens == 42
 
     def test_mark_completed_is_idempotent(self) -> None:
         acc = PerCallTokenAccumulator()
-        acc.observe({"input_tokens": 1, "output_tokens": 2}, message_id="msg-a")
+        acc.observe(_usage(input_tokens=1, output_tokens=2), message_id="msg-a")
         completed_at = datetime(2026, 5, 4, 10, 5, tzinfo=timezone.utc)
         assert acc.mark_completed("msg-a", completed_at=completed_at) is True
         assert acc.mark_completed("msg-a", completed_at=completed_at) is False
@@ -99,16 +120,16 @@ class TestPerCallTokenAccumulator:
     def test_subagent_rollup_only_includes_tagged_calls(self) -> None:
         acc = PerCallTokenAccumulator()
         acc.observe(
-            {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300},
+            _usage(input_tokens=100, output_tokens=200),
             message_id="msg-main",
         )
         acc.observe(
-            {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+            _usage(input_tokens=10, output_tokens=20),
             message_id="msg-sub-1",
             task_id="task-x",
         )
         acc.observe(
-            {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+            _usage(input_tokens=5, output_tokens=7),
             message_id="msg-sub-2",
             task_id="task-x",
         )
@@ -116,12 +137,13 @@ class TestPerCallTokenAccumulator:
         assert isinstance(rollup, AssistantSubagentUsageRollup)
         assert rollup.input == 15
         assert rollup.output == 27
+        # total_tokens is computed = input + output = 15 + 27.
         assert rollup.total == 42
         assert rollup.call_count == 2
 
     def test_subagent_rollup_zero_when_no_calls(self) -> None:
         acc = PerCallTokenAccumulator()
-        acc.observe({"input_tokens": 1}, message_id="msg-a")
+        acc.observe(_usage(input_tokens=1), message_id="msg-a")
         rollup = acc.subagent_rollup("task-missing")
         assert rollup.call_count == 0
         assert rollup.input == 0
@@ -129,8 +151,8 @@ class TestPerCallTokenAccumulator:
 
     def test_finalized_calls_excludes_inflight_slots(self) -> None:
         acc = PerCallTokenAccumulator()
-        acc.observe({"input_tokens": 1, "output_tokens": 2}, message_id="msg-a")
-        acc.observe({"input_tokens": 3, "output_tokens": 4}, message_id="msg-b")
+        acc.observe(_usage(input_tokens=1, output_tokens=2), message_id="msg-a")
+        acc.observe(_usage(input_tokens=3, output_tokens=4), message_id="msg-b")
         acc.mark_completed("msg-a", completed_at=datetime.now(timezone.utc))
         finalized = acc.finalized_calls()
         assert {slot.message_id for slot in finalized} == {"msg-a"}

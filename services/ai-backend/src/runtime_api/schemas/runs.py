@@ -21,7 +21,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
 )
 from agent_runtime.api.constants import Keys, Values
-from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import AgentRunStatus
 
@@ -169,7 +169,7 @@ class RuntimeRequestContext(RuntimeContract):
     )
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)
+        return JsonObjectCoercer.coerce(value)
 
     @field_validator("paused_connectors", mode="before")
     @classmethod
@@ -239,7 +239,7 @@ class CreateRunRequest(RuntimeContract):
     @field_validator(_Fields.REQUEST_OPTIONS, mode="before")
     @classmethod
     def _redact_request_options(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)
+        return JsonObjectCoercer.coerce(value)
 
     @model_validator(mode="after")
     def _require_identity_or_context(self) -> "CreateRunRequest":

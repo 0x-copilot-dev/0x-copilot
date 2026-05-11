@@ -44,4 +44,4 @@ class PersistenceApprovalRequestRecord(RuntimeContract):
     @field_validator("request_payload", mode="before")
     @classmethod
     def _redact_request_payload(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
+        return PersistenceValueNormalizer.coerce_json_object(value)

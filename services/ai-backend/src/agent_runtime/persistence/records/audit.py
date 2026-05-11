@@ -35,4 +35,4 @@ class AuditLogRecord(RuntimeContract):
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
+        return PersistenceValueNormalizer.coerce_json_object(value)

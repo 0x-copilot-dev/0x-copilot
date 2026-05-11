@@ -9,7 +9,7 @@ from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_v
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys, Values
-from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     ConversationStatus,
@@ -74,7 +74,7 @@ class CreateConversationRequest(RuntimeContract):
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)
+        return JsonObjectCoercer.coerce(value)
 
 
 class ConversationRecord(RuntimeContract):
@@ -416,7 +416,7 @@ class MessageRecord(RuntimeContract):
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)
+        return JsonObjectCoercer.coerce(value)
 
     @field_validator(_Fields.CONTENT_TEXT, _Fields.CONTENT_FORMAT)
     @classmethod

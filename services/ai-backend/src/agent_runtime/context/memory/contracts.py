@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import TypeAlias
+from typing import Annotated, TypeAlias
 from uuid import uuid4
 
 from pydantic import (
@@ -20,7 +20,11 @@ from agent_runtime.execution.contracts import (
     JsonScalar,
     RuntimeContract,
 )
-from agent_runtime.observability.redactor import DENY_KEYS
+from agent_runtime.observability.redactor import (
+    DENY_KEYS,
+    Sensitive,
+    SensitiveCategory,
+)
 
 from agent_runtime.context.memory.constants import (
     Defaults,
@@ -272,12 +276,20 @@ class ContextSummary(RuntimeContract):
 
 
 class ManagedContextPayload(RuntimeContract):
-    """Tool or connector output after inline, offload, or summary handling."""
+    """Tool or connector output after inline, offload, or summary handling.
+
+    ``content`` and ``preview`` carry verbatim text from external sources
+    (tool results, summarised model output) and frequently echo user
+    PII. They are tagged :class:`Sensitive` so that
+    :class:`~agent_runtime.observability.redactor.SafeLogDumper` elides
+    them from log records. SSE / persistence / context paths read the
+    fields directly and are unaffected.
+    """
 
     strategy: ContextCompressionStrategy
-    content: str | None = None
+    content: Annotated[str | None, Sensitive(SensitiveCategory.MODEL_OUTPUT)] = None
     reference: str | None = None
-    preview: str | None = None
+    preview: Annotated[str | None, Sensitive(SensitiveCategory.MODEL_OUTPUT)] = None
     event: ContextCompressionEvent
 
     @field_validator(Keys.Field.CONTENT, Keys.Field.REFERENCE, mode="before")

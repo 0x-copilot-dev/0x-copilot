@@ -56,7 +56,7 @@ class OutboxEventRecord(RuntimeContract):
     @field_validator(Keys.Field.PAYLOAD, mode="before")
     @classmethod
     def _redact_payload(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
+        return PersistenceValueNormalizer.coerce_json_object(value)
 
 
 class RuntimeWorkerClaim(RuntimeContract):

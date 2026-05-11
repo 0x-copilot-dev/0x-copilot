@@ -1937,7 +1937,11 @@ async def test_runtime_worker_persists_normalized_activity_stream_events() -> No
     tool_event = next(
         event for event in events if event.event_type == "tool_call_started"
     )
-    assert tool_event.payload["args"]["authorization"] == "[redacted]"
+    # P11.5: SSE/persistence paths no longer value-scrub. The
+    # ``authorization`` key on tool args passes through whole;
+    # tool emitters must not bake credentials into args. Logs are
+    # the only filter point (via ``DENY_KEYS``).
+    assert tool_event.payload["args"]["authorization"] == "bearer secret-token"
     assert tool_event.span_id == "call_123"
     subagent_event = next(
         event

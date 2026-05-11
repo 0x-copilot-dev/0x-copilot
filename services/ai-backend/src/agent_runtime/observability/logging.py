@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 import logging
+import traceback
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from agent_runtime.observability.redactor import DENY_KEYS
+from agent_runtime.observability.redactor import MetadataRedactor, SafeLogDumper
 from agent_runtime.validation import ValueNormalizer
-
-_logger = logging.getLogger("agent_runtime")
-
-_ALLOWED_METADATA_VALUE_TYPES = (str, int, float, bool)
 
 
 class _Fields:
@@ -100,36 +97,19 @@ class RuntimeLogEvent(BaseModel):
     @field_validator(_Fields.METADATA, mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> dict[str, object]:
-        return _MetadataRedactor.redact(value)
+        return MetadataRedactor.redact(value)
 
     def to_log_dict(self) -> dict[str, object]:
-        """Return a JSON-serializable record without empty optional fields."""
+        """Return a JSON-serializable record without empty optional fields.
 
-        return self.model_dump(mode="json", exclude_none=True)
+        Routes through :class:`SafeLogDumper` so any field annotated
+        ``Sensitive(...)`` is elided. The current ``RuntimeLogEvent``
+        fields are all log-safe (structural names, IDs, status, safe
+        messages) so this is a no-op today — the integration is in
+        place for future taggings via P11.3.
+        """
 
-
-class _MetadataRedactor:
-    """Denylist-based redaction for structured logging metadata."""
-
-    @classmethod
-    def redact(cls, value: object) -> dict[str, object]:
-        if not isinstance(value, dict):
-            return {}
-        result: dict[str, object] = {}
-        dropped: list[str] = []
-        for key, item in value.items():
-            if not isinstance(key, str):
-                continue
-            if key in DENY_KEYS:
-                dropped.append(key)
-                continue
-            if item is not None and not isinstance(item, _ALLOWED_METADATA_VALUE_TYPES):
-                dropped.append(key)
-                continue
-            result[key] = item
-        if dropped:
-            _logger.debug("Dropped metadata keys from log event: %s", dropped)
-        return result
+        return SafeLogDumper.dump_safe(self, mode="json", exclude_none=True)
 
 
 class RuntimeLogger:
@@ -141,6 +121,66 @@ class RuntimeLogger:
         RuntimeLogLevel.WARNING: logging.WARNING,
         RuntimeLogLevel.ERROR: logging.ERROR,
     }
+
+    class ExceptionMetadata:
+        """Canonical keys for the exception-metadata helper."""
+
+        EXCEPTION_TYPE = "exception_type"
+        EXCEPTION_MESSAGE = "exception_message"
+        TRACEBACK = "traceback"
+        MESSAGE_MAX_CHARS_DEFAULT = 1000
+        FRAMES_DEFAULT = 8
+
+    @classmethod
+    def exception_metadata(
+        cls,
+        exc: BaseException,
+        *,
+        message_max_chars: int | None = None,
+        frames: int | None = None,
+    ) -> dict[str, str]:
+        """Single source of truth for "how we log an exception" in server logs.
+
+        Returns the canonical ``{exception_type, exception_message, traceback}``
+        triple as ``RuntimeLogEvent.metadata``-shaped primitives. Callers
+        should always use this helper instead of building exception metadata
+        ad-hoc, so the message-length truncation and traceback shape are
+        uniform across the codebase.
+
+        The output is server-side metadata only. It is bound into
+        :class:`RuntimeLogEvent.metadata`, which goes through
+        :class:`MetadataRedactor` at log emission — that step drops any
+        deny-keyed entries (it does not value-scan the message text). If an
+        upstream caller bakes a credential into an exception's ``str(exc)``,
+        the credential reaches the log. **Don't bake credentials into
+        exception messages.** P11.5 (parent PRD §8) made this a tool-emission
+        hygiene concern rather than a runtime scrub-on-log behavior.
+        """
+
+        max_chars = (
+            message_max_chars
+            if message_max_chars is not None
+            else cls.ExceptionMetadata.MESSAGE_MAX_CHARS_DEFAULT
+        )
+        max_frames = (
+            frames if frames is not None else cls.ExceptionMetadata.FRAMES_DEFAULT
+        )
+
+        message = str(exc) if str(exc) else repr(exc)
+        if len(message) > max_chars:
+            message = message[: max_chars - 1] + "…"
+
+        tb = traceback.extract_tb(exc.__traceback__)
+        frame_strings = [
+            f"{frame.filename}:{frame.lineno}" for frame in tb[-max_frames:]
+        ]
+        traceback_summary = " -> ".join(frame_strings)
+
+        return {
+            cls.ExceptionMetadata.EXCEPTION_TYPE: type(exc).__name__,
+            cls.ExceptionMetadata.EXCEPTION_MESSAGE: message,
+            cls.ExceptionMetadata.TRACEBACK: traceback_summary,
+        }
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self.logger = logger or logging.getLogger("agent_runtime")

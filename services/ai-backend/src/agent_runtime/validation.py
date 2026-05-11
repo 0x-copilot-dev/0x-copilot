@@ -100,10 +100,16 @@ class ValueNormalizer:
         return tuple(value)
 
     @classmethod
-    def redact_json_object(cls, value: object) -> dict:
-        from agent_runtime.observability.redaction import ObservabilityRedactor
+    def coerce_json_object(cls, value: object) -> dict:
+        """Coerce ``value`` into the ``JsonObject`` dict shape without
+        redaction. Non-log callsites (SSE schemas, persistence records,
+        runtime context) use this for structural coercion only; logs
+        filter via their own deny-key boundary in
+        :class:`MetadataRedactor`."""
 
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+        from agent_runtime.observability.redactor import JsonObjectCoercer
+
+        return JsonObjectCoercer.coerce(value)
 
     @staticmethod
     def first_duplicate_name(names: Iterable[str]) -> str | None:

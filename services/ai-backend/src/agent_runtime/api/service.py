@@ -38,6 +38,7 @@ from agent_runtime.observability.approval_metrics import (
     ApprovalMetrics,
     ForwardInvalidReason,
 )
+from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.pricing import ModelPricingCatalog
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -705,6 +706,7 @@ class RuntimeApiService:
                     user_id=run.user_id,
                     trace_id=run.trace_id,
                     runtime_context=run.runtime_context,
+                    trace_propagation=QueueTracePropagator.inject(),
                 )
             )
         prior_run_ids = await self._prior_run_ids_for_chain(
@@ -836,6 +838,7 @@ class RuntimeApiService:
                     org_id=run.org_id,
                     requested_by_user_id=request.requested_by_user_id,
                     reason=request.reason,
+                    trace_propagation=QueueTracePropagator.inject(),
                 )
             )
             await self.persistence.write_audit_log(
@@ -1056,6 +1059,7 @@ class RuntimeApiService:
                 org_id=record.org_id,
                 decision=request.decision,
                 answer=request.answer,
+                trace_propagation=QueueTracePropagator.inject(),
             )
         )
         await self.persistence.write_audit_log(

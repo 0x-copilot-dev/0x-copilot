@@ -7,6 +7,7 @@ from pydantic import field_validator
 from agent_runtime.execution.contracts import RuntimeContract, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.context.memory.constants import Keys, Messages, Values
+from agent_runtime.context.memory.prompt_injection import PromptInjectionDetector
 from agent_runtime.context.memory.contracts import (
     MemoryAccessOperation,
     MemoryActorRole,
@@ -147,7 +148,7 @@ class MemoryPolicyAuthorizer:
 
         if (
             operation is MemoryAccessOperation.WRITE
-            and MemoryWriteGuard.is_prompt_injection(content)
+            and PromptInjectionDetector.is_prompt_injection(content)
         ):
             return MemoryPolicyDecision.deny(Messages.Errors.PROMPT_INJECTION_REJECTED)
 
@@ -183,27 +184,8 @@ class MemoryPolicyAuthorizer:
         )
 
 
-class MemoryWriteGuard:
-    """Reject memory writes that try to store prompt-injection instructions."""
-
-    PROMPT_INJECTION_PATTERNS = (
-        "ignore previous instructions",
-        "ignore all previous instructions",
-        "reveal the system prompt",
-        "developer message",
-        "system message",
-    )
-
-    @classmethod
-    def is_prompt_injection(cls, content: str | None) -> bool:
-        if content is None:
-            return False
-        normalized = content.lower()
-        # P11.2: the prior implementation also flagged any content whose
-        # SHAPE matched ``SENSITIVE_VALUE`` (e.g. ``api_key = "..."``).
-        # That was an accidental coupling — the regex was a credential
-        # marker, not a prompt-injection marker. Real prompt-injection
-        # content is phrase-based (covered below) and content that
-        # contains a literal credential is a different concern (logged
-        # but not blocked here).
-        return any(pattern in normalized for pattern in cls.PROMPT_INJECTION_PATTERNS)
+# P11.4: ``MemoryWriteGuard`` was removed. Its only purpose was the
+# prompt-injection phrase list + ``is_prompt_injection`` classifier,
+# which now lives in :mod:`agent_runtime.context.memory.prompt_injection`.
+# ``MemoryPolicyAuthorizer`` above calls
+# :class:`PromptInjectionDetector` directly.

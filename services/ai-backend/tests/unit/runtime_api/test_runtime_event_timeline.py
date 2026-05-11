@@ -112,9 +112,12 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         assert envelope.display_title == "Calling doc_search"
         assert envelope.summary == "Searching launch docs"
         assert envelope.status == "started"
+        # P11.5: event payloads pass through whole. Logs would filter
+        # ``authorization`` via ``DENY_KEYS`` at emission time; the
+        # event envelope itself carries the original value.
         assert envelope.payload["args"] == {
             "query": "launch risks",
-            "authorization": "[redacted]",
+            "authorization": "bearer secret-token",
         }
         assert store.runs[run.run_id].latest_sequence_no == 2
 

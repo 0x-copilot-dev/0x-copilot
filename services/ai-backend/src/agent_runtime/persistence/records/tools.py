@@ -57,4 +57,4 @@ class ToolInvocationRecord(RuntimeContract):
     @field_validator("args", "result_summary", mode="before")
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
+        return PersistenceValueNormalizer.coerce_json_object(value)

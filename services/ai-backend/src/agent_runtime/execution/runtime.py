@@ -15,8 +15,8 @@ from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.observability.logging import (
     RuntimeLogger,
     RuntimeLogLevel,
-    _MetadataRedactor,
 )
+from agent_runtime.observability.redactor import MetadataRedactor
 from agent_runtime.observability.tracing import (
     RuntimeTracer,
     TraceContext,
@@ -57,7 +57,7 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
     }
     if context.parent_trace_id is not None:
         metadata["parent_trace_id"] = context.parent_trace_id
-        metadata.update(_MetadataRedactor.redact(context.trace_metadata))
+        metadata.update(MetadataRedactor.redact(context.trace_metadata))
 
     return {
         "configurable": {
@@ -167,7 +167,7 @@ class _TracedRuntimeCall:
                 error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
                 retryable=retryable,
                 safe_message=self._safe_message,
-                metadata={"exception_type": type(exc).__name__},
+                metadata=RuntimeLogger.exception_metadata(exc),
             )
             raise AgentRuntimeError(
                 RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,

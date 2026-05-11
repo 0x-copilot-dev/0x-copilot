@@ -18,7 +18,7 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
 )
 from runtime_worker.delta_coalescer import DeltaCoalescer
-from runtime_worker.run_metrics import AssistantRunMetrics, TokenUsageExtractor
+from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 
 _LOGGER = logging.getLogger(__name__)
@@ -327,8 +327,9 @@ class StreamingExecutor:
         if message_id is None:
             return
         # Only emit when this chunk actually carries usage — otherwise we'd
-        # close the call before the provider has reported tokens.
-        if not TokenUsageExtractor.extract(source):
+        # close the call before the provider has reported tokens. The
+        # metrics object holds the provider-aware extractor.
+        if not metrics.chunk_has_usage(source):
             return
         slot = metrics.per_call.slot(message_id)
         if slot is None:

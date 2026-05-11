@@ -5,11 +5,12 @@ from agent_runtime.observability.logging import (
     RuntimeLogger,
     RuntimeLogLevel,
 )
-from agent_runtime.observability.redaction import ObservabilityRedactor
 from agent_runtime.observability.redactor import (
-    Redactor,
-    RedactorRegistry,
-    RegexRedactor,
+    DENY_KEYS,
+    JsonObjectCoercer,
+    SafeLogDumper,
+    Sensitive,
+    SensitiveCategory,
 )
 from agent_runtime.observability.tracing import (
     RuntimeTracer,
@@ -20,14 +21,15 @@ from agent_runtime.observability.tracing import (
 )
 
 __all__ = [
-    "ObservabilityRedactor",
-    "Redactor",
-    "RedactorRegistry",
-    "RegexRedactor",
+    "DENY_KEYS",
+    "JsonObjectCoercer",
     "RuntimeLogEvent",
     "RuntimeLogLevel",
     "RuntimeLogger",
     "RuntimeTracer",
+    "SafeLogDumper",
+    "Sensitive",
+    "SensitiveCategory",
     "TraceContext",
     "TraceNames",
     "TraceOptions",

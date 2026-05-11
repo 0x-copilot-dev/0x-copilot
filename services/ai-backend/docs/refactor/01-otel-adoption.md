@@ -1,6 +1,6 @@
 # Refactor PRD — OpenTelemetry coverage hardening (Phase 3 / P13)
 
-**Status:** Draft (revised 2026-05-10 after code-level verification)
+**Status:** Shipped 2026-05-11 — see §11 below for what landed vs the original spec.
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §3](../architecture/refactor-audit.md#3-library-replacements), [roadmap P13](00-roadmap.md#phase-3--library-replacements-independent)
 
@@ -317,3 +317,77 @@ These must be answered before the corresponding step ships.
 - `SafeAttributeSpanProcessor` deny-set audit is committed as a pinned test.
 - Observability ops docs updated.
 - This PRD is moved to `Status: Shipped` and the [roadmap](00-roadmap.md) status checkbox flipped.
+
+---
+
+## 11. What landed (2026-05-11)
+
+Implementation followed the three-step phasing in §4.1 with two deviations:
+
+**Step 1 — Cross-process trace propagation.** Landed as
+[`agent_runtime/observability/queue_propagation.py`](../../src/agent_runtime/observability/queue_propagation.py)
+(`QueueTracePropagator.inject` / `.extract`). All three command schemas
+(`RuntimeRunCommand`, `RuntimeCancelCommand`,
+`RuntimeApprovalResolvedCommand`) gained a `trace_propagation:
+dict[str, str]` field defaulting to `{}`; full `model_dump()` already
+flows through the existing in-memory and Postgres queue adapters, so no
+adapter changes were needed. Producer side: three `enqueue_*` call
+sites in `agent_runtime/api/service.py` now pass
+`QueueTracePropagator.inject()`. Consumer side: `RuntimeWorker._dispatch`
+extracts the carrier and wraps the per-command dispatch in
+`runtime_worker.{run,cancel,approval_resolved}` spans rooted at the
+extracted context.
+
+**Deviation from §9 open question.** Flag default landed **on**
+(`RUNTIME_PROPAGATE_QUEUE_TRACE=true` unless explicitly disabled),
+not the "off in prod" suggested in §9. Rationale: the missing parent
+link is a real correctness gap and the consumer side fail-soft
+(malformed / missing carrier → fresh trace, same as pre-P13) makes the
+risk profile lower than expected. Dashboards keyed on "fresh trace
+per worker run" should be rebuilt against the linked trace; operators
+can flip `RUNTIME_PROPAGATE_QUEUE_TRACE=false` to roll back instantly
+on either side without code changes. Tests:
+[`tests/unit/agent_runtime/observability/test_queue_propagation.py`](../../tests/unit/agent_runtime/observability/test_queue_propagation.py)
+(round-trip, malformed-carrier tolerance, flag toggle) and
+[`tests/unit/runtime_worker/test_runtime_worker_trace_propagation.py`](../../tests/unit/runtime_worker/test_runtime_worker_trace_propagation.py)
+(producer span → worker span trace_id equality; flag-off path keeps a
+fresh trace).
+
+**Step 2 — Log redactor consolidation.** The two `_MetadataRedactor`
+classes in `logging.py` and `http_logging.py` were deleted and replaced
+by a single `MetadataRedactor` in
+[`agent_runtime/observability/redactor.py`](../../src/agent_runtime/observability/redactor.py).
+The shared class uses `_ALLOWED_VALUE_TYPES = (str, int, float, bool,
+type(None))` which matches both prior semantics exactly. The debug log
+of dropped keys (previously in `logging.py` only) is now uniformly
+present; production runs at INFO so the line stays silent. Tests:
+[`tests/unit/agent_runtime/observability/test_metadata_redactor_consolidation.py`](../../tests/unit/agent_runtime/observability/test_metadata_redactor_consolidation.py)
+parametrizes both event types through the same sample blobs to prevent
+future divergence.
+
+**Step 3 — LangSmith decision + SafeAttributeSpanProcessor audit.**
+LangSmith decision: **kept, opt-in via `LANGSMITH_TRACING`.** Four
+active `@RuntimeTracer.traced(...)` decorations in
+`agent_runtime/execution/runtime.py` are in production code paths; the
+`langsmith` import is lazy inside `_load_traceable` so deploys without
+the package work fine. Rationale documented in the module docstring of
+[`agent_runtime/observability/tracing.py`](../../src/agent_runtime/observability/tracing.py).
+The retire path remains reversible if a future audit shows
+`LANGSMITH_TRACING` unset in all envs. SafeAttributeSpanProcessor
+audit landed as a pinned membership test in
+[`tests/unit/agent_runtime/observability/test_safe_attribute_processor_audit.py`](../../tests/unit/agent_runtime/observability/test_safe_attribute_processor_audit.py):
+asserts the exact `_DENY_ATTR_KEYS` set, every pattern token, and that
+our own emitted attributes (`db.statement.digest`,
+`db.statement.duration_ms` from `SlowQueryTracer`) survive processing.
+Any future addition to `_DENY_ATTR_KEYS` or `_DENY_ATTR_PATTERN`
+requires a deliberate edit to both sites.
+
+**Items deferred (still open from §9).** `DbStatementMetricsCollector`
+default remains opt-in via `RUNTIME_DB_STATEMENT_SCRAPE_ENABLED`;
+flip-to-on requires per-deploy `pg_stat_statements` confirmation —
+ops sign-off out of P13 scope. `SlowQueryTracer` call sites and the
+`approval_chain_resolution_seconds` bucket layout were not surveyed
+in this phase; both are diagnostic surfaces, no behavior depends on
+them landing in P13. `Patterns.SENSITIVE_KEY` source-of-truth
+consolidation is the natural next step but was kept separate to avoid
+mixing log-record redaction with span-attribute redaction in one PR.

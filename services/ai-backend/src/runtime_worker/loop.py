@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
+from opentelemetry import trace as otel_trace
+
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
@@ -15,6 +17,7 @@ from agent_runtime.api.ports import (
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
@@ -191,25 +194,44 @@ class RuntimeWorker:
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
         )
 
+    # P13 step 1 — re-parent the worker handler under the API's trace
+    # tree so a single ``trace_id`` covers ingress → enqueue → handler.
+    # When the payload carries no ``trace_propagation`` (legacy claim,
+    # background sweeper, propagation disabled by env flag), the
+    # extracted context is the default OTel context and the span below
+    # begins a fresh trace — the pre-P13 behavior.
+    _DISPATCH_SPAN_NAMES: dict[str, str] = {
+        PersistenceValues.EventType.RUN_REQUESTED: "runtime_worker.run",
+        PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
+        PersistenceValues.EventType.APPROVAL_RESOLVED: "runtime_worker.approval_resolved",
+    }
+
     async def _dispatch(self, claim: RuntimeWorkerClaim) -> None:
         command_type = claim.command_type
-        if command_type == PersistenceValues.EventType.RUN_REQUESTED:
-            command = self._runtime_run_command(claim)
-            await self.run_handler.handle(command)
-            return
-        if command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED:
-            command = self._runtime_cancel_command(claim)
-            await self.cancel_handler.handle(command)
-            return
-        if command_type == PersistenceValues.EventType.APPROVAL_RESOLVED:
-            command = self._runtime_approval_command(claim)
-            await self.approval_handler.handle(command)
-            return
-        raise AgentRuntimeError(
-            RuntimeErrorCode.VALIDATION_ERROR,
-            f"Unsupported worker command type '{command_type}'.",
-            retryable=False,
+        carrier = claim.payload.get("trace_propagation")
+        parent_ctx = QueueTracePropagator.extract(carrier)
+        span_name = self._DISPATCH_SPAN_NAMES.get(
+            command_type, f"runtime_worker.{command_type}"
         )
+        tracer = otel_trace.get_tracer("agent_runtime.runtime_worker")
+        with tracer.start_as_current_span(span_name, context=parent_ctx):
+            if command_type == PersistenceValues.EventType.RUN_REQUESTED:
+                command = self._runtime_run_command(claim)
+                await self.run_handler.handle(command)
+                return
+            if command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED:
+                command = self._runtime_cancel_command(claim)
+                await self.cancel_handler.handle(command)
+                return
+            if command_type == PersistenceValues.EventType.APPROVAL_RESOLVED:
+                command = self._runtime_approval_command(claim)
+                await self.approval_handler.handle(command)
+                return
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                f"Unsupported worker command type '{command_type}'.",
+                retryable=False,
+            )
 
     async def _mark_failure(
         self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError

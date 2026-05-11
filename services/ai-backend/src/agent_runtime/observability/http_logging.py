@@ -34,13 +34,12 @@ from enterprise_service_contracts.headers import (
 from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agent_runtime.observability.redactor import DENY_KEYS
+from agent_runtime.observability.redactor import MetadataRedactor, SafeLogDumper
 
 
 _SERVICE_NAME = "ai-backend"
 _LOG_EVENT_EXTRA_KEY = "log_event"
 _RUNTIME_EVENT_EXTRA_KEY = "runtime"
-_ALLOWED_METADATA_VALUE_TYPES = (str, int, float, bool, type(None))
 _LEVEL_BY_NAME = {
     "debug": logging.DEBUG,
     "info": logging.INFO,
@@ -72,25 +71,6 @@ class HttpLogLevel(StrEnum):
     ERROR = "error"
 
 
-class _MetadataRedactor:
-    """Drop sensitive keys; reject non-scalar values."""
-
-    @classmethod
-    def redact(cls, value: object) -> dict[str, object]:
-        if not isinstance(value, dict):
-            return {}
-        result: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                continue
-            if key in DENY_KEYS:
-                continue
-            if not isinstance(item, _ALLOWED_METADATA_VALUE_TYPES):
-                continue
-            result[key] = item
-        return result
-
-
 class HttpLogEvent(BaseModel):
     """Structured log record for HTTP-scope and process-scope events."""
 
@@ -117,10 +97,14 @@ class HttpLogEvent(BaseModel):
     @field_validator("metadata", mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> dict[str, object]:
-        return _MetadataRedactor.redact(value)
+        return MetadataRedactor.redact(value)
 
     def to_log_dict(self) -> dict[str, object]:
-        return self.model_dump(mode="json", exclude_none=True)
+        # P11.3: route through ``SafeLogDumper`` so any field annotated
+        # ``Sensitive(...)`` is elided. No current ``HttpLogEvent``
+        # field is tagged — the integration is in place for future
+        # taggings.
+        return SafeLogDumper.dump_safe(self, mode="json", exclude_none=True)
 
 
 class HttpRequestContext(BaseModel):
@@ -249,7 +233,7 @@ class HttpStructuredLogger:
             error_class=fields.pop("error_class", None),
             error_code=fields.pop("error_code", None),
             safe_message=fields.pop("safe_message", None),
-            metadata=_MetadataRedactor.redact(fields.pop("metadata", None) or {}),
+            metadata=MetadataRedactor.redact(fields.pop("metadata", None) or {}),
         )
         self._logger.log(
             _LEVEL_BY_NAME[level.value],

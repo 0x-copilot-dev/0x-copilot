@@ -2003,14 +2003,18 @@ class PostgresRuntimeApiStore:
                 INSERT INTO runtime_run_usage (
                     id, org_id, user_id, conversation_id, run_id, assistant_id,
                     model_provider, model_name, input_tokens, output_tokens,
-                    cached_input_tokens, total_tokens, chunk_count,
+                    cached_input_tokens, cache_creation_input_tokens,
+                    reasoning_tokens, audio_input_tokens, audio_output_tokens,
+                    total_tokens, chunk_count,
                     first_token_ms, duration_ms, started_at, completed_at,
                     status, schema_version, retention_until, pii_purged_at,
                     cost_micro_usd, pricing_id, pricing_version, created_at
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s
@@ -2029,6 +2033,10 @@ class PostgresRuntimeApiStore:
                     record.input_tokens,
                     record.output_tokens,
                     record.cached_input_tokens,
+                    record.cache_creation_input_tokens,
+                    record.reasoning_tokens,
+                    record.audio_input_tokens,
+                    record.audio_output_tokens,
                     record.total_tokens,
                     record.chunk_count,
                     record.first_token_ms,
@@ -2063,6 +2071,8 @@ class PostgresRuntimeApiStore:
                     trace_id, task_id, subagent_id, model_provider, model_name,
                     connector_slug,
                     input_tokens, output_tokens, cached_input_tokens,
+                    cache_creation_input_tokens, reasoning_tokens,
+                    audio_input_tokens, audio_output_tokens,
                     total_tokens, duration_ms, schema_version, cost_micro_usd,
                     pricing_id, pricing_version, created_at
                 ) VALUES (
@@ -2070,6 +2080,8 @@ class PostgresRuntimeApiStore:
                     %s, %s, %s, %s, %s,
                     %s,
                     %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s
                 )
@@ -2089,6 +2101,10 @@ class PostgresRuntimeApiStore:
                     record.input_tokens,
                     record.output_tokens,
                     record.cached_input_tokens,
+                    record.cache_creation_input_tokens,
+                    record.reasoning_tokens,
+                    record.audio_input_tokens,
+                    record.audio_output_tokens,
                     record.total_tokens,
                     record.duration_ms,
                     record.schema_version,

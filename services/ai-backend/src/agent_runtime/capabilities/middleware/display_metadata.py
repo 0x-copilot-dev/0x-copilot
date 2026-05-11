@@ -42,6 +42,12 @@ from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
 DISPLAY_TITLE_KEY = "_display_title"
 DISPLAY_SUMMARY_KEY = "_display_summary"
+# Reserved kwarg key for the LangChain-injected tool_call_id. Captured by
+# both wrap branches and used by ``_DispatchEnvelope`` to forward to inner
+# tools that declare ``InjectedToolCallId``. Never visible to the model
+# (LangChain hides ``Annotated[str, InjectedToolCallId]`` fields from the
+# tool block), so it does not collide with any user-emitted arg name.
+TOOL_CALL_ID_KEY = "tool_call_id"
 # Wire keys (alias form) — what the model emits in tool_call args and what
 # the projector reads off ``payload.args``. Pydantic's
 # ``populate_by_name=True`` lets the model emit either form, but the JSON
@@ -442,6 +448,19 @@ class _DisplayFields(BaseModel):
             "Leave null if the tool's deterministic title is already clear."
         ),
     )
+    # NB on ``tool_call_id``: PRD §3 Part A. We intentionally do NOT declare
+    # ``tool_call_id: Annotated[str, InjectedToolCallId]`` on this base
+    # class. Doing so would force every wrap caller — including tests that
+    # bypass LangGraph and call ``ainvoke({...plain args...})`` — to use a
+    # full ``ToolCall`` envelope, since LangChain enforces envelope shape
+    # whenever a schema declares ``InjectedToolCallId``. Instead, we rely
+    # on Pydantic's model inheritance in :func:`wrap_args_schema`: when
+    # the inner tool's own ``args_schema`` already declares
+    # ``Annotated[str, InjectedToolCallId]`` (citation-capturing wrapper,
+    # every MCP tool), the wrapped schema inherits it automatically. The
+    # wrap coroutine signature ``*, tool_call_id: str = ""`` captures the
+    # injected id when present and defaults to ``""`` otherwise — both
+    # branches forward through :class:`_DispatchEnvelope` regardless.
 
 
 def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:
@@ -617,6 +636,43 @@ def wrap_tools_with_display(tools: Any) -> list[object]:
     return [wrap_tool_with_display(tool) for tool in tools]
 
 
+class _DispatchEnvelope:
+    """Canonical LangChain ``ToolCall`` envelope shape used by wrap dispatch.
+
+    Centralised so a future LangChain bump that changes the envelope keys
+    is a one-file edit, and so the two wrap branches share one source of
+    truth for "how the wrapper hands off to its inner."
+
+    A plain ``args`` dict is rejected by ``BaseTool.ainvoke`` when the
+    inner's schema declares ``InjectedToolCallId`` (citation-capturing
+    wrapper, MCP tools). The envelope shape below is what LangChain
+    requires in that case and is harmless for tools that don't declare
+    the annotation — the ``id`` field is treated as metadata and the
+    args are extracted exactly the same way.
+    """
+
+    TYPE_TOOL_CALL = "tool_call"
+    KEY_ARGS = "args"
+    KEY_NAME = "name"
+    KEY_ID = "id"
+    KEY_TYPE = "type"
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        args: dict[str, Any],
+        name: str,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
+        return {
+            cls.KEY_ARGS: args,
+            cls.KEY_NAME: name,
+            cls.KEY_ID: tool_call_id,
+            cls.KEY_TYPE: cls.TYPE_TOOL_CALL,
+        }
+
+
 def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
     """Produce a copy of ``tool`` with wrapped schema + stripping invokers.
 
@@ -624,6 +680,13 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
     present. ``StructuredTool.from_function`` inside ``factory.py`` only
     sets ``coroutine`` for our adapters, but a third-party tool may set
     ``func`` instead — handling both keeps the wrap general.
+
+    The wrapper's schema declares ``tool_call_id`` via
+    :class:`InjectedToolCallId`, so LangChain injects it as a kwarg.
+    Captured here but **not** forwarded to the inner callable — the
+    inner is a ``StructuredTool`` whose own coroutine signature does
+    not include ``tool_call_id``; passing it would raise
+    ``TypeError: unexpected keyword argument``. PRD §3 Part A.
     """
 
     original_schema = tool.args_schema
@@ -635,7 +698,8 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
 
     if callable(original_func):
 
-        def _wrapped_func(**kwargs: Any) -> Any:
+        def _wrapped_func(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+            del tool_call_id  # captured for LangChain, not forwarded — see docstring
             real, _ = strip_display(kwargs)
             return original_func(**real)
 
@@ -643,7 +707,8 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
 
     if callable(original_coroutine):
 
-        async def _wrapped_coroutine(**kwargs: Any) -> Any:
+        async def _wrapped_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+            del tool_call_id  # captured for LangChain, not forwarded — see docstring
             real, _ = strip_display(kwargs)
             return await original_coroutine(**real)
 
@@ -655,22 +720,36 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
 def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
     """Build a new ``StructuredTool`` that delegates to ``tool.ainvoke``.
 
-    Used for non-``StructuredTool`` ``BaseTool`` subclasses where we can't
-    safely mutate the args_schema + invoke methods in place. The delegate
-    invokes the original via ``BaseTool.ainvoke(stripped_dict)`` which is
-    LangChain's stable interface for any tool shape.
+    Used for non-``StructuredTool`` ``BaseTool`` subclasses where we
+    can't safely mutate the args_schema + invoke methods in place. The
+    delegate invokes the original via ``BaseTool.ainvoke(envelope)``
+    where ``envelope`` is a full LangChain ``ToolCall`` dict
+    (:class:`_DispatchEnvelope`).
+
+    The full envelope is required when the inner tool's schema declares
+    :class:`InjectedToolCallId` (citation-capturing wrapper, every MCP
+    tool); passing a plain args dict raises ``ValueError`` from
+    LangChain's tool dispatch. The envelope is benign for inner tools
+    that do not declare the annotation — ``id`` is metadata, args are
+    extracted unchanged. PRD §3 Part A.
     """
 
     original_schema = getattr(tool, "args_schema", None)
     wrapped_schema = wrap_args_schema(original_schema)
+    inner_name = getattr(tool, "name", "tool")
 
-    async def _delegating_coroutine(**kwargs: Any) -> Any:
+    async def _delegating_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
         real, _ = strip_display(kwargs)
-        return await tool.ainvoke(real)
+        envelope = _DispatchEnvelope.build(
+            args=real,
+            name=inner_name,
+            tool_call_id=tool_call_id,
+        )
+        return await tool.ainvoke(envelope)
 
     return structured_tool_cls.from_function(
         coroutine=_delegating_coroutine,
-        name=getattr(tool, "name", "tool"),
+        name=inner_name,
         description=getattr(tool, "description", ""),
         args_schema=wrapped_schema,
     )

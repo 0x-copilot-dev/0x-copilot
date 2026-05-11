@@ -18,6 +18,14 @@ class RuntimeRunUsageRecord(RuntimeContract):
     ``ON CONFLICT (run_id) DO NOTHING`` write path. ``cost_micro_usd``,
     ``pricing_id``, and ``pricing_version`` are populated by B3's pricing
     hook; left ``None`` when the catalog has no entry for the model.
+
+    Sub-PRD 01a — token-kind columns mirror
+    :class:`agent_runtime.observability.token_usage.NormalizedTokenUsage`.
+    ``input_tokens`` is the GROSS input figure (includes cached +
+    cache_creation); ``cached_input_tokens`` and
+    ``cache_creation_input_tokens`` are subsets billed at their own
+    rates. ``reasoning_tokens`` / ``audio_*`` are independent kinds
+    summed into ``total_tokens``.
     """
 
     id: str
@@ -31,6 +39,10 @@ class RuntimeRunUsageRecord(RuntimeContract):
     input_tokens: NonNegativeInt = 0
     output_tokens: NonNegativeInt = 0
     cached_input_tokens: NonNegativeInt = 0
+    cache_creation_input_tokens: NonNegativeInt = 0
+    reasoning_tokens: NonNegativeInt = 0
+    audio_input_tokens: NonNegativeInt = 0
+    audio_output_tokens: NonNegativeInt = 0
     total_tokens: NonNegativeInt = 0
     chunk_count: NonNegativeInt = 0
     first_token_ms: NonNegativeInt | None = None
@@ -58,6 +70,10 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     ``completed_at`` strictly before this call's ``created_at``. ``None``
     for cold-turn calls (planning before any tool fires). Cost columns
     mirror the run-level row and are populated by B3.
+
+    Sub-PRD 01a — token-kind columns mirror
+    :class:`agent_runtime.observability.token_usage.NormalizedTokenUsage`.
+    See :class:`RuntimeRunUsageRecord` for the field semantics.
     """
 
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -74,6 +90,10 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     input_tokens: NonNegativeInt = 0
     output_tokens: NonNegativeInt = 0
     cached_input_tokens: NonNegativeInt = 0
+    cache_creation_input_tokens: NonNegativeInt = 0
+    reasoning_tokens: NonNegativeInt = 0
+    audio_input_tokens: NonNegativeInt = 0
+    audio_output_tokens: NonNegativeInt = 0
     total_tokens: NonNegativeInt = 0
     duration_ms: NonNegativeInt = 0
     schema_version: int = 1

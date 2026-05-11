@@ -1,6 +1,6 @@
 # Refactor 01 — Redaction Subsystem
 
-**Status:** Active. Pivoted direction 2026-05-11.
+**Status:** Shipped 2026-05-11. All six sub-PRDs (P11.1 – P11.6) landed.
 **Audit reference:** [refactor-audit.md §1.4](../architecture/refactor-audit.md#14-custom-redactor)
 **Owner:** Agent runtime team
 **Target:** `agent_runtime/observability/redaction.py` and the 19 dependent locations described in [§5](#5-systems-it-touches)
@@ -489,14 +489,14 @@ The refactor is done when **all** of the following hold:
 
 Each phase ships independently, with its own PR, test coverage, and rollback path. Phases are tracked as separate sub-PRDs so each can be assigned to its own agent / contributor:
 
-| Sub-PRD                                                                            | Phase                                                                               | Status      |
-| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------- |
-| [`01a-redaction-protocol.md`](01a-redaction-protocol.md)                           | P11.1 — Introduce `Redactor` Protocol, current code as default                      | **Shipped** |
-| [`01b-redaction-exact-match-deny-keys.md`](01b-redaction-exact-match-deny-keys.md) | P11.2 — Exact-match key deny set; delete `SENSITIVE_VALUE` regex                    | **Shipped** |
-| `01c-redaction-field-tagging.md`                                                   | P11.3 — `Sensitive[]` annotation system; log emitters introspect it                 | TBD         |
-| `01d-redaction-pattern-consolidation.md`                                           | P11.4 — Single source of truth for the deny set (memory uses the same one)          | TBD         |
-| `01e-redaction-remove-from-non-log-paths.md`                                       | P11.5 — Remove `redact_json_object` from SSE / persistence / runtime context        | TBD         |
-| `01f-redaction-cleanup.md`                                                         | P11.6 — Delete `ObservabilityRedactor` shim; rename `RegexRedactor` → `LogRedactor` | TBD         |
+| Sub-PRD                                                                                    | Phase                                                                            | Status      |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- | ----------- |
+| [`01a-redaction-protocol.md`](01a-redaction-protocol.md)                                   | P11.1 — Introduce `Redactor` Protocol, current code as default                   | **Shipped** |
+| [`01b-redaction-exact-match-deny-keys.md`](01b-redaction-exact-match-deny-keys.md)         | P11.2 — Exact-match key deny set; delete `SENSITIVE_VALUE` regex                 | **Shipped** |
+| [`01c-redaction-field-tagging.md`](01c-redaction-field-tagging.md)                         | P11.3 — `Sensitive[]` annotation system; log emitters introspect it              | **Shipped** |
+| [`01d-redaction-pattern-consolidation.md`](01d-redaction-pattern-consolidation.md)         | P11.4 — Single source of truth for the deny set (memory uses the same one)       | **Shipped** |
+| [`01e-redaction-remove-from-non-log-paths.md`](01e-redaction-remove-from-non-log-paths.md) | P11.5 — Remove `redact_json_object` from SSE / persistence / runtime context     | **Shipped** |
+| [`01f-redaction-cleanup.md`](01f-redaction-cleanup.md)                                     | P11.6 — Delete `ObservabilityRedactor` shim, `RegexRedactor`, `RedactorRegistry` | **Shipped** |
 
 The phase descriptions below describe each sub-PRD's scope. Detailed acceptance criteria and test plans live in each sub-PRD file.
 

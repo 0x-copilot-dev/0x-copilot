@@ -39,7 +39,7 @@ class MemoryScopeRecord(RuntimeContract):
     @field_validator("namespace", mode="before")
     @classmethod
     def _redact_namespace(cls, value: object) -> JsonObject:
-        return PersistenceValueNormalizer.redact_json_object(value)
+        return PersistenceValueNormalizer.coerce_json_object(value)
 
 
 class MemoryItemRecord(RuntimeContract):

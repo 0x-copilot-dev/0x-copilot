@@ -44,7 +44,7 @@ class PersistenceContractsTestMixin:
 
 
 class TestPersistenceContracts(PersistenceContractsTestMixin):
-    def test_runtime_persistence_records_validate_and_redact_json_payloads(
+    def test_runtime_persistence_records_validate_and_coerce_json_payloads(
         self,
     ) -> None:
         outbox = OutboxEventRecord(
@@ -97,12 +97,15 @@ class TestPersistenceContracts(PersistenceContractsTestMixin):
             checkpoint_blob_ref="object://checkpoints/thread_123/1",
         )
 
-        assert outbox.payload["token"] == "[redacted]"
-        assert scope.namespace["token"] == "[redacted]"
+        # P11.5: persistence records no longer scrub credential-shaped
+        # keys at the validation boundary. Values flow through whole;
+        # logs filter via their own deny-key boundary at emission time.
+        assert outbox.payload["token"] == self.Values.TOKEN
+        assert scope.namespace["token"] == self.Values.TOKEN
         assert memory_item.version == 1
         assert payload.redaction_state == "offloaded"
-        assert tool.args["authorization"] == "[redacted]"
-        assert audit.metadata["token"] == "[redacted]"
+        assert tool.args["authorization"] == self.Values.TOKEN
+        assert audit.metadata["token"] == self.Values.TOKEN
         assert checkpoint.checkpoint_namespace == "supervisor"
 
     def test_hash_validation_and_extra_fields_are_rejected(self) -> None:

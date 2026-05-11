@@ -155,10 +155,20 @@ async def test_invoke_runtime_logs_safe_error_without_raw_exception(
     error_payload = payloads[-1]
     assert error_payload["event"] == "runtime.invoke.failed"
     assert error_payload["level"] == "error"
+    # ``safe_message`` is the user-facing boundary — must never leak
+    # raw exception detail. This contract holds post-P11.6.
     assert error_payload["safe_message"] == "Runtime invocation failed safely."
     assert error_payload["metadata"]["exception_type"] == "RuntimeError"  # type: ignore[index]
-    assert "super-secret" not in str(payloads)
-    assert "secret" not in str(payloads)
+    # P11.6: ``metadata.exception_message`` is server-side debug info.
+    # The structural redaction model (parent PRD §8) does NOT scan
+    # value contents — only dict KEYS in ``DENY_KEYS`` are filtered.
+    # If a tool bakes a credential into an exception's str(), the
+    # credential reaches the operator-side log. Fix the tool; the
+    # platform won't silently scrub it. See
+    # ``RuntimeLogger.exception_metadata`` docstring for the contract.
+    assert (
+        "provider token=super-secret" in error_payload["metadata"]["exception_message"]  # type: ignore[index]
+    )
 
 
 async def test_configured_runtime_graph_returns_handle_and_invokes_with_dependencies(

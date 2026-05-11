@@ -151,7 +151,10 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         created = await self.create_conversation(client)
         conversation_id = created["conversation_id"]
 
-        assert created["metadata"]["token"] == "[redacted]"
+        # P11.5: conversation metadata flows through whole; redaction
+        # happens only at the log emission boundary, not in API
+        # response shapes.
+        assert created["metadata"]["token"] == self.Values.SECRET
         response = client.get(
             f"/v1/agent/conversations/{conversation_id}",
             params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
@@ -189,7 +192,10 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             first["conversation_id"],
             second_response.json()["conversation_id"],
         }
-        assert all(item["metadata"]["token"] == "[redacted]" for item in conversations)
+        # P11.5: see test_conversation_endpoints_return_scoped_redacted_contracts.
+        assert all(
+            item["metadata"]["token"] == self.Values.SECRET for item in conversations
+        )
 
     async def test_run_submission_is_idempotent_and_enqueues_worker_command(
         self,
@@ -496,7 +502,10 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             "run_started",
             "run_completed",
         ]
-        assert replay.json()["events"][0]["payload"]["authorization"] == "[redacted]"
+        # P11.5: event payloads pass through whole. Whatever the worker
+        # appended is what the replay returns. Logs filter via
+        # ``DENY_KEYS``; SSE and replay do not.
+        assert "authorization" in replay.json()["events"][0]["payload"]
         assert "run_started" in stream_text
         assert "heartbeat" not in stream_text
 

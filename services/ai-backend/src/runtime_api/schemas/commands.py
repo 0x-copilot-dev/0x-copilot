@@ -11,6 +11,13 @@ from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContra
 from runtime_api.schemas.common import ApprovalDecision
 
 
+# P13 step 1 — every command carries a W3C trace-propagation carrier
+# (``traceparent`` / ``tracestate``) so the worker can continue the
+# API's trace tree across the queue boundary. The dict is populated by
+# ``QueueTracePropagator.inject`` on enqueue and consumed by
+# ``QueueTracePropagator.extract`` on claim. An empty dict (the default)
+# means "no propagation": the worker starts a fresh trace, which is the
+# same behavior the system had before P13.
 class RuntimeRunCommand(RuntimeContract):
     """Durable command enqueued after run creation."""
 
@@ -21,6 +28,7 @@ class RuntimeRunCommand(RuntimeContract):
     user_id: str
     trace_id: str
     runtime_context: AgentRuntimeContext
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -32,6 +40,7 @@ class RuntimeCancelCommand(RuntimeContract):
     org_id: str
     requested_by_user_id: str
     reason: str | None = None
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -53,4 +62,5 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     # operational dashboards distinguish "expired" from
     # "recipient_membership_revoked" without parsing free text.
     reason: str | None = None
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -1,11 +1,26 @@
-"""Assistant response metrics collected during runtime execution."""
+"""Assistant response metrics collected during runtime execution.
+
+Sub-PRD 01a — token extraction is now centralized in
+:mod:`agent_runtime.observability.token_usage`. This module is the
+worker-side accumulator: it observes a normalized usage value object
+per chunk, dedupes per-AIMessage, and materializes per-call /
+per-run / per-subagent records.
+
+The provider-coupled walker that used to live here as
+``TokenUsageExtractor`` is gone. Use
+:class:`agent_runtime.observability.token_usage.TokenUsageExtractorRegistry`
+to obtain an extractor for a given provider slug.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import JsonObject
+from agent_runtime.observability.token_usage import (
+    NormalizedTokenUsage,
+    TokenUsageExtractorRegistry,
+)
 from agent_runtime.persistence.records import (
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
@@ -18,144 +33,21 @@ from runtime_api.schemas import (
 )
 
 
-class TokenUsageExtractor:
-    """Extract token usage from LangChain AIMessage objects and raw mappings.
-
-    Prefers the native ``usage_metadata`` attribute on AIMessage (LangChain >=0.2)
-    before falling back to ``response_metadata`` and common mapping shapes.
-    """
-
-    class _Fields:
-        USAGE_METADATA = "usage_metadata"
-        RESPONSE_METADATA = "response_metadata"
-        USAGE = "usage"
-        TOKEN_USAGE = "token_usage"
-        INPUT_TOKENS = "input_tokens"
-        OUTPUT_TOKENS = "output_tokens"
-        TOTAL_TOKENS = "total_tokens"
-        PROMPT_TOKENS = "prompt_tokens"
-        COMPLETION_TOKENS = "completion_tokens"
-        PROMPT_TOKEN_COUNT = "prompt_token_count"
-        COMPLETION_TOKEN_COUNT = "completion_token_count"
-        TOTAL_TOKEN_COUNT = "total_token_count"
-        INPUT_TOKEN_DETAILS = "input_token_details"
-        PROMPT_TOKENS_DETAILS = "prompt_tokens_details"
-        CACHE_READ = "cache_read"
-        CACHED_TOKENS = "cached_tokens"
-
-    _USAGE_KEYS = frozenset(
-        {
-            _Fields.INPUT_TOKENS,
-            _Fields.OUTPUT_TOKENS,
-            _Fields.TOTAL_TOKENS,
-            _Fields.PROMPT_TOKENS,
-            _Fields.COMPLETION_TOKENS,
-            _Fields.PROMPT_TOKEN_COUNT,
-            _Fields.COMPLETION_TOKEN_COUNT,
-            _Fields.TOTAL_TOKEN_COUNT,
-        }
-    )
-
-    @classmethod
-    def extract(cls, value: object) -> tuple[Mapping[str, object], ...]:
-        """Return token-usage mappings found on *value*.
-
-        Uses ``usage_metadata`` directly when available (the LangChain-native
-        path), then falls back to ``response_metadata`` and common dict shapes.
-        Walks one level into mapping values and sequence items to find usage on
-        nested objects (e.g. stream chunk envelopes wrapping AIMessages).
-        """
-        candidates: list[Mapping[str, object]] = []
-        cls._extract_from_object(value, candidates)
-        if candidates:
-            return tuple(candidates)
-
-        if isinstance(value, Mapping):
-            for item in value.values():
-                cls._extract_from_object(item, candidates)
-                if isinstance(item, Sequence) and not isinstance(
-                    item, (str, bytes, bytearray)
-                ):
-                    for sub in item:
-                        cls._extract_from_object(sub, candidates)
-        elif isinstance(value, Sequence) and not isinstance(
-            value, (str, bytes, bytearray)
-        ):
-            for item in value:
-                cls._extract_from_object(item, candidates)
-
-        return tuple(candidates)
-
-    @classmethod
-    def _extract_from_object(
-        cls,
-        value: object,
-        candidates: list[Mapping[str, object]],
-    ) -> None:
-        usage_meta = getattr(value, cls._Fields.USAGE_METADATA, None)
-        if usage_meta is None and isinstance(value, Mapping):
-            usage_meta = value.get(cls._Fields.USAGE_METADATA)
-        if isinstance(usage_meta, Mapping) and cls._looks_like_usage(usage_meta):
-            candidates.append({str(k): v for k, v in usage_meta.items()})
-            return
-
-        response_meta = getattr(value, cls._Fields.RESPONSE_METADATA, None)
-        if response_meta is None and isinstance(value, Mapping):
-            response_meta = value.get(cls._Fields.RESPONSE_METADATA)
-        if isinstance(response_meta, Mapping):
-            normalized = {str(k): v for k, v in response_meta.items()}
-            cls._append_if_usage(normalized.get(cls._Fields.TOKEN_USAGE), candidates)
-            cls._append_if_usage(normalized.get(cls._Fields.USAGE), candidates)
-            cls._append_if_usage(normalized, candidates)
-
-        for attr in (cls._Fields.USAGE, cls._Fields.TOKEN_USAGE):
-            sub = getattr(value, attr, None)
-            if sub is None and isinstance(value, Mapping):
-                sub = value.get(attr)
-            cls._append_if_usage(sub, candidates)
-
-        if isinstance(value, Mapping):
-            normalized = {str(k): v for k, v in value.items()}
-            if cls._looks_like_usage(normalized):
-                candidates.append(normalized)
-
-    @classmethod
-    def _append_if_usage(
-        cls,
-        value: object,
-        candidates: list[Mapping[str, object]],
-    ) -> None:
-        if not isinstance(value, Mapping):
-            return
-        normalized = {str(k): v for k, v in value.items()}
-        if cls._looks_like_usage(normalized):
-            candidates.append(normalized)
-
-    @classmethod
-    def _looks_like_usage(cls, value: Mapping[str, object]) -> bool:
-        return any(key in value for key in cls._USAGE_KEYS)
-
-
 class _PerCallSlot:
     """One per-AIMessage usage bucket inside ``PerCallTokenAccumulator``.
 
-    Holds the latest provider-reported counts for a single LLM call. Counts
-    are *replaced* (not summed) on each merge because providers stream
-    cumulative usage across chunks of the same AIMessage and the final
-    chunk carries the authoritative total. ``connector_slug`` (PR 7.2) is
-    stamped at ``mark_completed`` time by the streaming executor — it is
-    the most recent completed tool invocation's connector before this
-    call's emit time, ``None`` for cold-turn (planning) calls.
+    Holds the latest provider-reported counts for a single LLM call.
+    Counts are *merged* on each ``observe`` (field-wise max) because
+    providers stream cumulative usage across chunks of the same
+    AIMessage. ``connector_slug`` (PR 7.2) is stamped at
+    ``mark_completed`` time by the streaming executor.
     """
 
     __slots__ = (
         "message_id",
         "task_id",
         "connector_slug",
-        "input_tokens",
-        "output_tokens",
-        "cached_input_tokens",
-        "total_tokens",
+        "usage",
         "started_at",
         "completed_at",
     )
@@ -170,27 +62,60 @@ class _PerCallSlot:
         self.message_id = message_id
         self.task_id = task_id
         self.connector_slug: str | None = None
-        self.input_tokens: int = 0
-        self.output_tokens: int = 0
-        self.cached_input_tokens: int = 0
-        self.total_tokens: int = 0
+        self.usage: NormalizedTokenUsage = NormalizedTokenUsage()
         self.started_at = started_at
         self.completed_at: datetime | None = None
+
+    # Convenience accessors so callers and tests can read individual
+    # kinds without unpacking ``usage`` every time. Keeps prior call
+    # sites working after the slot's internal storage moved to a
+    # single value object.
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.input_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.output_tokens
+
+    @property
+    def cached_input_tokens(self) -> int:
+        return self.usage.cached_input_tokens
+
+    @property
+    def cache_creation_input_tokens(self) -> int:
+        return self.usage.cache_creation_input_tokens
+
+    @property
+    def reasoning_tokens(self) -> int:
+        return self.usage.reasoning_tokens
+
+    @property
+    def audio_input_tokens(self) -> int:
+        return self.usage.audio_input_tokens
+
+    @property
+    def audio_output_tokens(self) -> int:
+        return self.usage.audio_output_tokens
+
+    @property
+    def total_tokens(self) -> int:
+        return self.usage.total_tokens
 
 
 class PerCallTokenAccumulator:
     """Per-AIMessage token bucket keyed by ``message.id`` (B2).
 
-    The streaming loop calls ``observe(value, message_id=...)`` once per
-    chunk that carries usage. The accumulator dedupes by ``message_id``
-    so the per-call row is emitted exactly once per LLM call regardless
-    of how many stream chunks the provider sent for that message.
+    The streaming loop calls ``observe(usage, message_id=...)`` once
+    per chunk that carries usage. The accumulator dedupes by
+    ``message_id`` so the per-call row is emitted exactly once per
+    LLM call regardless of how many stream chunks the provider sent.
 
-    ``finalized_calls()`` yields the closed slots — calls whose AIMessage
-    has been seen with usage at least once and is now ready to be written
-    to ``runtime_model_call_usage``. ``mark_completed`` flips a slot from
-    in-flight to closed; the streaming executor calls it when it emits
-    the ``MODEL_CALL_COMPLETED`` event.
+    ``finalized_calls()`` yields the closed slots — calls whose
+    AIMessage has been seen with usage at least once and is now ready
+    to be written to ``runtime_model_call_usage``. ``mark_completed``
+    flips a slot from in-flight to closed; the streaming executor
+    calls it when it emits the ``MODEL_CALL_COMPLETED`` event.
     """
 
     def __init__(self) -> None:
@@ -199,7 +124,7 @@ class PerCallTokenAccumulator:
 
     def observe(
         self,
-        usage: Mapping[str, object],
+        usage: NormalizedTokenUsage,
         *,
         message_id: str,
         task_id: str | None = None,
@@ -211,11 +136,13 @@ class PerCallTokenAccumulator:
                 message_id=message_id, task_id=task_id, started_at=started_at
             )
             self._slots[message_id] = slot
-        # Last write wins — providers report cumulative usage on the
-        # message-final chunk, so the most recent value is authoritative.
         if task_id is not None:
             slot.task_id = task_id
-        AssistantRunMetrics._merge_into_slot(slot, usage)
+        # Field-wise max preserves the prior "last write wins for
+        # cumulative providers" semantic while protecting against a
+        # mid-stream chunk that reported a smaller running total than
+        # a later one.
+        slot.usage = slot.usage.merge(usage)
         return slot
 
     def mark_completed(self, message_id: str, *, completed_at: datetime) -> bool:
@@ -246,10 +173,11 @@ class PerCallTokenAccumulator:
     def subagent_rollup(self, task_id: str) -> AssistantSubagentUsageRollup:
         """Sum per-call usage attributed to ``task_id`` (B2 spec §2.3).
 
-        Only includes calls whose slot was tagged with this ``task_id``.
-        Returns a zero-rollup when no calls were attributed — callers
-        should leave the SUBAGENT_COMPLETED ``usage`` field unset in
-        that case rather than emitting an empty rollup.
+        The wire schema (``AssistantSubagentUsageRollup``) carries
+        input / output / cached_input / total only — the four new
+        kinds aren't surfaced to the FE until 01d. The captured rows
+        (``runtime_model_call_usage``) DO carry them, so per-subagent
+        SQL queries can already access them.
         """
 
         input_tokens = 0
@@ -279,35 +207,62 @@ class AssistantRunMetrics:
 
     PERFORMANCE_KEY = "performance_metrics"
 
-    class _Fields:
-        INPUT_TOKENS = "input_tokens"
-        OUTPUT_TOKENS = "output_tokens"
-        TOTAL_TOKENS = "total_tokens"
-        PROMPT_TOKENS = "prompt_tokens"
-        COMPLETION_TOKENS = "completion_tokens"
-        PROMPT_TOKEN_COUNT = "prompt_token_count"
-        COMPLETION_TOKEN_COUNT = "completion_token_count"
-        TOTAL_TOKEN_COUNT = "total_token_count"
-        INPUT_TOKEN_DETAILS = "input_token_details"
-        PROMPT_TOKENS_DETAILS = "prompt_tokens_details"
-        CACHE_READ = "cache_read"
-        CACHED_TOKENS = "cached_tokens"
-
-    def __init__(self, *, started_at: datetime) -> None:
+    def __init__(
+        self,
+        *,
+        started_at: datetime,
+        provider: str = "",
+    ) -> None:
         self.started_at = started_at
+        self.provider = provider
+        self._extractor = TokenUsageExtractorRegistry.for_provider(provider)
         self.first_token_at: datetime | None = None
         self.chunk_count = 0
-        self.input_tokens: int | None = None
-        self.output_tokens: int | None = None
-        self.total_tokens: int | None = None
-        self.cached_input_tokens: int | None = None
+        self.usage: NormalizedTokenUsage = NormalizedTokenUsage()
         self.per_call = PerCallTokenAccumulator()
 
     @classmethod
     def from_run(cls, run: RunRecord) -> "AssistantRunMetrics":
-        """Create metrics from the persisted run start timestamp."""
+        """Create metrics from the persisted run start timestamp + provider."""
 
-        return cls(started_at=run.started_at or datetime.now(timezone.utc))
+        return cls(
+            started_at=run.started_at or datetime.now(timezone.utc),
+            provider=run.model_provider,
+        )
+
+    # Convenience accessors so existing call sites that read individual
+    # kinds off ``metrics.input_tokens`` keep working.
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.input_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.output_tokens
+
+    @property
+    def cached_input_tokens(self) -> int:
+        return self.usage.cached_input_tokens
+
+    @property
+    def cache_creation_input_tokens(self) -> int:
+        return self.usage.cache_creation_input_tokens
+
+    @property
+    def reasoning_tokens(self) -> int:
+        return self.usage.reasoning_tokens
+
+    @property
+    def audio_input_tokens(self) -> int:
+        return self.usage.audio_input_tokens
+
+    @property
+    def audio_output_tokens(self) -> int:
+        return self.usage.audio_output_tokens
+
+    @property
+    def total_tokens(self) -> int:
+        return self.usage.total_tokens
 
     def record_model_delta(self, delta: str) -> None:
         """Record a non-empty top-level model text chunk."""
@@ -326,25 +281,39 @@ class AssistantRunMetrics:
         message_id: str | None = None,
         task_id: str | None = None,
     ) -> None:
-        """Capture exact provider token usage when present in stream objects.
+        """Capture provider token usage when present on a stream object.
 
-        When a ``message_id`` is provided (the LangChain AIMessage id) the
-        usage is *also* stamped to the per-call accumulator so B2's
-        ``MODEL_CALL_COMPLETED`` event and ``runtime_model_call_usage``
-        row carry the same numbers as the run-level total. ``task_id``
-        is the subagent task this call ran inside, if any — see
-        ``MessageIdExtractor`` for the source.
+        The provider-specific extractor returns a
+        :class:`NormalizedTokenUsage` or ``None``. ``None`` means "no
+        usage block on this chunk" — the run/slot are unchanged.
+
+        Run-level semantic preserved from pre-01a: last-write-wins
+        replace. Providers stream cumulative usage within an AIMessage,
+        so the final chunk's value is authoritative. When a run has
+        multiple LLM calls (multiple AIMessages), the run-level total
+        tracks the latest call — for the per-call breakdown, callers
+        consult ``per_call``. Sub-PRD 01c (UsageRecorder) re-owns
+        aggregation across calls; until then this matches existing
+        wire-visible behavior.
+
+        Per-call semantic improved: field-wise max via ``.merge`` so a
+        mid-stream cumulative report that under-reported a kind cannot
+        regress the slot's running total. Within one message_id this
+        is equivalent to "last write wins" for monotonically-increasing
+        cumulative reports.
         """
 
-        for usage in TokenUsageExtractor.extract(value):
-            self._merge_usage(usage)
-            if message_id is not None:
-                self.per_call.observe(
-                    usage,
-                    message_id=message_id,
-                    task_id=task_id,
-                    started_at=datetime.now(timezone.utc),
-                )
+        usage = self._extractor.extract(value)
+        if usage is None:
+            return
+        self.usage = usage  # last-write-wins replace at run level.
+        if message_id is not None:
+            self.per_call.observe(
+                usage,
+                message_id=message_id,
+                task_id=task_id,
+                started_at=datetime.now(timezone.utc),
+            )
 
     def model_call_usage_records(
         self,
@@ -377,6 +346,10 @@ class AssistantRunMetrics:
                     input_tokens=slot.input_tokens,
                     output_tokens=slot.output_tokens,
                     cached_input_tokens=slot.cached_input_tokens,
+                    cache_creation_input_tokens=slot.cache_creation_input_tokens,
+                    reasoning_tokens=slot.reasoning_tokens,
+                    audio_input_tokens=slot.audio_input_tokens,
+                    audio_output_tokens=slot.audio_output_tokens,
                     total_tokens=slot.total_tokens,
                     duration_ms=duration_ms,
                     created_at=completed_at,
@@ -395,10 +368,10 @@ class AssistantRunMetrics:
             else None
         )
         output_per_second = self._tokens_per_second(
-            output_tokens=self.output_tokens,
+            output_tokens=self.usage.output_tokens,
             duration_ms=duration_ms,
         )
-        usage = self._usage_payload(output_per_second=output_per_second)
+        usage_payload = self._usage_payload(output_per_second=output_per_second)
         return AssistantPerformanceMetrics(
             started_at=self.started_at,
             completed_at=end,
@@ -406,7 +379,7 @@ class AssistantRunMetrics:
             chunk_count=self.chunk_count,
             first_chunk_at=self.first_token_at,
             first_chunk_ms=first_token_ms,
-            usage=usage,
+            usage=usage_payload,
         ).model_dump(mode="json", exclude_none=True)
 
     @classmethod
@@ -430,10 +403,11 @@ class AssistantRunMetrics:
     ) -> RuntimeRunUsageRecord:
         """Build the per-run usage row at ``RUN_COMPLETED`` time (B1).
 
-        Reads from the same accumulator that backs ``to_payload`` so the
-        denormalized row and the event payload always agree. Token fields
-        fall back to 0 when the provider didn't report usage (the row is
-        still useful for ``runs_count`` / latency aggregates).
+        Reads from the same accumulator that backs ``to_payload`` so
+        the denormalized row and the event payload always agree.
+        Token fields default to 0 when the provider didn't report
+        usage (the row is still useful for ``runs_count`` / latency
+        aggregates).
         """
 
         duration_ms = self._duration_ms(self.started_at, completed_at)
@@ -451,11 +425,14 @@ class AssistantRunMetrics:
             assistant_id=getattr(run.runtime_context, "assistant_id", None),
             model_provider=run.model_provider,
             model_name=run.model_name,
-            input_tokens=self.input_tokens or 0,
-            output_tokens=self.output_tokens or 0,
-            cached_input_tokens=self.cached_input_tokens or 0,
-            total_tokens=self.total_tokens
-            or (self.input_tokens or 0) + (self.output_tokens or 0),
+            input_tokens=self.usage.input_tokens,
+            output_tokens=self.usage.output_tokens,
+            cached_input_tokens=self.usage.cached_input_tokens,
+            cache_creation_input_tokens=self.usage.cache_creation_input_tokens,
+            reasoning_tokens=self.usage.reasoning_tokens,
+            audio_input_tokens=self.usage.audio_input_tokens,
+            audio_output_tokens=self.usage.audio_output_tokens,
+            total_tokens=self.usage.total_tokens,
             chunk_count=self.chunk_count,
             first_token_ms=first_token_ms,
             duration_ms=duration_ms,
@@ -465,136 +442,40 @@ class AssistantRunMetrics:
             created_at=completed_at,
         )
 
+    def chunk_has_usage(self, value: object) -> bool:
+        """Return True iff this chunk carries a usage block.
+
+        Used by the streaming executor to gate
+        ``MODEL_CALL_COMPLETED`` emission — only emit on a chunk that
+        actually closed the call. Sub-PRD 01a moved this from a
+        free-standing class method on ``TokenUsageExtractor`` to an
+        instance method on the metrics object, so the provider-aware
+        extractor is the one making the decision.
+        """
+
+        return self._extractor.extract(value) is not None
+
     def _usage_payload(
         self,
         *,
         output_per_second: float | None,
     ) -> AssistantUsageMetrics | None:
+        u = self.usage
         if (
-            self.input_tokens is None
-            and self.output_tokens is None
-            and self.total_tokens is None
-            and self.cached_input_tokens is None
+            u.input_tokens == 0
+            and u.output_tokens == 0
+            and u.cached_input_tokens == 0
             and output_per_second is None
         ):
             return None
+        # Wire shape unchanged in 01a — 01d adds reasoning/cache_creation/audio.
         return AssistantUsageMetrics(
-            input=self.input_tokens,
-            output=self.output_tokens,
-            total=self.total_tokens,
-            cached_input=self.cached_input_tokens,
+            input=u.input_tokens or None,
+            output=u.output_tokens or None,
+            total=u.total_tokens or None,
+            cached_input=u.cached_input_tokens or None,
             output_per_second=output_per_second,
         )
-
-    def _merge_usage(self, usage: Mapping[str, object]) -> None:
-        input_tokens = self._token_value(
-            usage,
-            self._Fields.INPUT_TOKENS,
-            self._Fields.PROMPT_TOKENS,
-            self._Fields.PROMPT_TOKEN_COUNT,
-        )
-        output_tokens = self._token_value(
-            usage,
-            self._Fields.OUTPUT_TOKENS,
-            self._Fields.COMPLETION_TOKENS,
-            self._Fields.COMPLETION_TOKEN_COUNT,
-        )
-        total_tokens = self._token_value(
-            usage,
-            self._Fields.TOTAL_TOKENS,
-            self._Fields.TOTAL_TOKEN_COUNT,
-        )
-        cached_input_tokens = self._cached_input_tokens(usage)
-
-        if input_tokens is not None:
-            self.input_tokens = input_tokens
-        if output_tokens is not None:
-            self.output_tokens = output_tokens
-        if total_tokens is not None:
-            self.total_tokens = total_tokens
-        elif input_tokens is not None and output_tokens is not None:
-            self.total_tokens = input_tokens + output_tokens
-        if cached_input_tokens is not None:
-            self.cached_input_tokens = cached_input_tokens
-
-    @classmethod
-    def _merge_into_slot(cls, slot: _PerCallSlot, usage: Mapping[str, object]) -> None:
-        """Apply provider-reported usage to a per-call accumulator slot.
-
-        Used by ``PerCallTokenAccumulator.observe``. Reuses the same
-        token-name aliases that the run-level merge accepts so a slot's
-        numbers always match the corresponding run-level totals.
-        """
-
-        input_tokens = cls._token_value(
-            usage,
-            cls._Fields.INPUT_TOKENS,
-            cls._Fields.PROMPT_TOKENS,
-            cls._Fields.PROMPT_TOKEN_COUNT,
-        )
-        output_tokens = cls._token_value(
-            usage,
-            cls._Fields.OUTPUT_TOKENS,
-            cls._Fields.COMPLETION_TOKENS,
-            cls._Fields.COMPLETION_TOKEN_COUNT,
-        )
-        total_tokens = cls._token_value(
-            usage,
-            cls._Fields.TOTAL_TOKENS,
-            cls._Fields.TOTAL_TOKEN_COUNT,
-        )
-        cached_input_tokens = cls._cached_input_tokens(usage)
-        if input_tokens is not None:
-            slot.input_tokens = input_tokens
-        if output_tokens is not None:
-            slot.output_tokens = output_tokens
-        if total_tokens is not None:
-            slot.total_tokens = total_tokens
-        elif input_tokens is not None and output_tokens is not None:
-            slot.total_tokens = input_tokens + output_tokens
-        if cached_input_tokens is not None:
-            slot.cached_input_tokens = cached_input_tokens
-
-    @classmethod
-    def _token_value(
-        cls,
-        value: Mapping[str, object],
-        *keys: str,
-    ) -> int | None:
-        for key in keys:
-            token_count = cls._non_negative_int(value.get(key))
-            if token_count is not None:
-                return token_count
-        return None
-
-    @classmethod
-    def _cached_input_tokens(cls, value: Mapping[str, object]) -> int | None:
-        for key in (
-            cls._Fields.INPUT_TOKEN_DETAILS,
-            cls._Fields.PROMPT_TOKENS_DETAILS,
-        ):
-            details = value.get(key)
-            if not isinstance(details, Mapping):
-                continue
-            normalized = {str(item_key): item for item_key, item in details.items()}
-            cached = cls._token_value(
-                normalized,
-                cls._Fields.CACHE_READ,
-                cls._Fields.CACHED_TOKENS,
-            )
-            if cached is not None:
-                return cached
-        return None
-
-    @staticmethod
-    def _non_negative_int(value: object) -> int | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int) and value >= 0:
-            return value
-        if isinstance(value, float) and value >= 0 and value.is_integer():
-            return int(value)
-        return None
 
     @staticmethod
     def _duration_ms(started_at: datetime, completed_at: datetime | None) -> int:
@@ -605,9 +486,9 @@ class AssistantRunMetrics:
     @staticmethod
     def _tokens_per_second(
         *,
-        output_tokens: int | None,
+        output_tokens: int,
         duration_ms: int,
     ) -> float | None:
-        if output_tokens is None or duration_ms <= 0:
+        if output_tokens <= 0 or duration_ms <= 0:
             return None
         return round(output_tokens / (duration_ms / 1000), 2)

@@ -23,7 +23,7 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
-from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -974,7 +974,7 @@ class _RuntimeEventBase(RuntimeContract):
     @field_validator(Keys.Field.PAYLOAD, Keys.Field.METADATA, mode="before")
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)
+        return JsonObjectCoercer.coerce(value)
 
     @classmethod
     def _build_from_stream_event(

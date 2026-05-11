@@ -778,10 +778,15 @@ def test_wrap_tool_with_display_wraps_base_tool_via_delegation() -> None:
     """Generic ``BaseTool`` subclasses (e.g. ``DuckDuckGoSearchResults``)
     don't expose ``func`` / ``coroutine`` for ``model_copy`` to rewrite.
     The wrap creates a NEW ``StructuredTool`` whose coroutine delegates
-    to the original via ``ainvoke(stripped_dict)``."""
+    to the original via ``ainvoke`` with a full LangChain ``ToolCall``
+    envelope (:class:`_DispatchEnvelope`) — required when the inner
+    tool's args_schema declares ``InjectedToolCallId`` (citation-capturing
+    wrapper, every MCP tool). PRD §3 Part A.
+    """
 
     import asyncio
 
+    from langchain_core.messages import ToolMessage
     from langchain_core.tools import BaseTool
     from pydantic import BaseModel
 
@@ -817,10 +822,23 @@ def test_wrap_tool_with_display_wraps_base_tool_via_delegation() -> None:
     schema = wrapped.args_schema.model_json_schema()
     assert DISPLAY_TITLE_KEY in schema["properties"]
 
+    # Production contract: LangGraph dispatches the wrapped tool via a
+    # ``ToolCall`` envelope. Because the wrap's delegating coroutine calls
+    # ``inner.ainvoke(envelope)``, ``BaseTool.ainvoke`` returns a
+    # ``ToolMessage`` carrying the raw return as ``content``. Tests must
+    # match this contract (we never bypass it in production).
     result = asyncio.run(
-        wrapped.ainvoke({"query": "x", DISPLAY_TITLE_KEY: "Custom Title"})
+        wrapped.ainvoke(
+            {
+                "args": {"query": "x", DISPLAY_TITLE_KEY: "Custom Title"},
+                "name": "fake",
+                "id": "call_test_1",
+                "type": "tool_call",
+            }
+        )
     )
-    assert result == "got query='x'"
+    assert isinstance(result, ToolMessage)
+    assert result.content == "got query='x'"
     assert received == [{"query": "x"}]
 
 
@@ -929,3 +947,184 @@ def test_wrap_tool_does_not_break_invocation_when_agent_omits_display() -> None:
     asyncio.run(wrapped.ainvoke({"query": "x"}))
     # Underlying adapter received only ``query`` — no display keys.
     assert received == [{"query": "x"}]
+
+
+# --- PRD §3 Part A — InjectedToolCallId regression guards -----------------
+
+
+def test_delegation_wrap_forwards_tool_call_id_through_envelope() -> None:
+    """When the inner ``BaseTool`` declares ``InjectedToolCallId`` on its
+    args_schema (citation-capturing wrapper, every MCP tool), the
+    delegating wrap must:
+
+    1. Inherit the annotation via :func:`wrap_args_schema` so LangChain
+       injects the calling ``tool_call_id`` into the wrapper's coroutine.
+    2. Re-emit a full ``ToolCall`` envelope on ``inner.ainvoke(...)`` so
+       LangChain's injection plumbing supplies the id to the inner.
+
+    Before PRD §3 Part A, the delegating coroutine called
+    ``inner.ainvoke(plain_args_dict)`` which LangChain refuses with
+    ``ValueError("When tool includes an InjectedToolCallId argument,
+    tool must always be invoked with a full model ToolCall ...")``.
+    This regression bricked every ``web_search`` and every post-auth
+    MCP tool call. Pin the fix.
+    """
+
+    import asyncio
+    from typing import Annotated
+
+    from langchain_core.messages import ToolMessage
+    from langchain_core.tools import BaseTool, InjectedToolCallId
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class ArgsWithInjectedId(BaseModel):
+        query: str
+        # Mirrors ``CitationCapturingTool`` and ``McpToolCallRequest`` —
+        # both declare ``Annotated[str, InjectedToolCallId]`` on their
+        # ``args_schema`` so LangChain feeds the calling tool_call_id
+        # into their dispatch.
+        tool_call_id: Annotated[str, InjectedToolCallId] = ""
+
+    observed: list[dict[str, object]] = []
+
+    class InnerToolThatNeedsToolCallId(BaseTool):
+        name: str = "inner_with_injected_id"
+        description: str = "Fake inner that records the injected id."
+        args_schema: type[BaseModel] = ArgsWithInjectedId
+
+        def _run(  # type: ignore[override]
+            self,
+            query: str,
+            tool_call_id: str = "",
+        ) -> str:
+            return f"sync {query=!r} {tool_call_id=!r}"
+
+        async def _arun(  # type: ignore[override]
+            self,
+            query: str,
+            tool_call_id: str = "",
+        ) -> str:
+            observed.append({"query": query, "tool_call_id": tool_call_id})
+            return f"got {query=!r} {tool_call_id=!r}"
+
+    wrapped = wrap_tool_with_display(InnerToolThatNeedsToolCallId())
+
+    # Production contract: LangGraph dispatches via ``ToolCall`` envelope.
+    # Because the inner schema declares ``InjectedToolCallId`` and
+    # ``wrap_args_schema`` inherits the annotation, the wrapper schema is
+    # also envelope-only — that contract is exactly what we want to lock in.
+    result = asyncio.run(
+        wrapped.ainvoke(
+            {
+                "args": {"query": "x"},
+                "name": "inner_with_injected_id",
+                "id": "call_test_envelope",
+                "type": "tool_call",
+            }
+        )
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.content == "got query='x' tool_call_id='call_test_envelope'"
+    # The injected id reached the inner — proves the wrap forwards through
+    # ``_DispatchEnvelope`` instead of calling ``ainvoke`` with a plain dict.
+    assert observed == [{"query": "x", "tool_call_id": "call_test_envelope"}]
+
+
+def test_delegation_wrap_forwards_envelope_to_inner_without_injected_id() -> None:
+    """When the inner ``BaseTool`` does NOT declare ``InjectedToolCallId``
+    on its args_schema (e.g. ``DuckDuckGoSearchResults``), the wrap still
+    uses :class:`_DispatchEnvelope`. LangChain's tool dispatch treats the
+    envelope's ``id`` as metadata and extracts ``args`` normally — the
+    inner is invoked exactly as it would be with a plain args dict.
+
+    This is what guarantees the envelope path is safe for ALL inner
+    shapes, not just those with the annotation. PRD §3 Part A.
+    """
+
+    import asyncio
+
+    from langchain_core.messages import ToolMessage
+    from langchain_core.tools import BaseTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class PlainArgs(BaseModel):
+        query: str
+
+    observed: list[dict[str, object]] = []
+
+    class PlainInnerTool(BaseTool):
+        name: str = "plain"
+        description: str = "Fake inner with no InjectedToolCallId."
+        args_schema: type[BaseModel] = PlainArgs
+
+        def _run(self, query: str) -> str:  # type: ignore[override]
+            return f"sync {query=!r}"
+
+        async def _arun(self, query: str) -> str:  # type: ignore[override]
+            observed.append({"query": query})
+            return f"got {query=!r}"
+
+    wrapped = wrap_tool_with_display(PlainInnerTool())
+
+    # The wrap ALWAYS forwards via envelope internally, so the value
+    # returned by ``inner.ainvoke(envelope)`` is a ``ToolMessage`` — the
+    # outer ``BaseTool.ainvoke`` passes it through. This holds whether
+    # the outer is invoked with a plain dict (tests) or an envelope
+    # (production / LangGraph). The contract is: the wrap surfaces a
+    # ``ToolMessage`` whose ``.content`` is the inner's raw return.
+    plain_result = asyncio.run(wrapped.ainvoke({"query": "x"}))
+    assert isinstance(plain_result, ToolMessage)
+    assert plain_result.content == "got query='x'"
+
+    envelope_result = asyncio.run(
+        wrapped.ainvoke(
+            {
+                "args": {"query": "y"},
+                "name": "plain",
+                "id": "call_xyz",
+                "type": "tool_call",
+            }
+        )
+    )
+    assert isinstance(envelope_result, ToolMessage)
+    assert envelope_result.content == "got query='y'"
+    # Inner observed both invocations exactly once each, in order.
+    assert observed == [{"query": "x"}, {"query": "y"}]
+
+
+def test_dispatch_envelope_keys_are_canonical() -> None:
+    """Single source of truth for the LangChain ``ToolCall`` envelope shape
+    used by the wrap. If a future LangChain bump changes any of these
+    keys, this test fails first and the constants update is one place."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        _DispatchEnvelope,
+    )
+
+    envelope = _DispatchEnvelope.build(
+        args={"k": "v"},
+        name="some_tool",
+        tool_call_id="call_abc",
+    )
+
+    assert envelope == {
+        "args": {"k": "v"},
+        "name": "some_tool",
+        "id": "call_abc",
+        "type": "tool_call",
+    }
+    # Constants exposed for fixtures + downstream tooling.
+    assert _DispatchEnvelope.KEY_ARGS == "args"
+    assert _DispatchEnvelope.KEY_NAME == "name"
+    assert _DispatchEnvelope.KEY_ID == "id"
+    assert _DispatchEnvelope.KEY_TYPE == "type"
+    assert _DispatchEnvelope.TYPE_TOOL_CALL == "tool_call"

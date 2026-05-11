@@ -26,7 +26,7 @@ from agent_runtime.execution.ports import (
     ToolRegistry,
 )
 from agent_runtime.observability.constants import Keys as ObservabilityKeys
-from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 
@@ -215,7 +215,7 @@ class RuntimeRunContext(RuntimeContract):
     @field_validator("metadata", mode="before")
     @classmethod
     def _redact_metadata(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+        return JsonObjectCoercer.coerce(value)  # type: ignore[return-value]
 
 
 class RuntimeRunHandle(RuntimeContract):
@@ -465,7 +465,7 @@ class AgentRuntimeContext(RuntimeContract):
     @field_validator("trace_metadata", mode="before")
     @classmethod
     def _redact_trace_metadata(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+        return JsonObjectCoercer.coerce(value)  # type: ignore[return-value]
 
     @property
     def run_context(self) -> RuntimeRunContext:
@@ -620,7 +620,7 @@ class StreamEvent(RuntimeContract):
     )
     @classmethod
     def _redact_json_fields(cls, value: object) -> JsonObject:
-        return ObservabilityRedactor.redact_json_object(value)  # type: ignore[return-value]
+        return JsonObjectCoercer.coerce(value)  # type: ignore[return-value]
 
 
 class StreamValueNormalizer:
