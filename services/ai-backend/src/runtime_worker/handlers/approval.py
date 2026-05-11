@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_termination import (
+    RunTerminationCoordinator,
+    TerminationReason,
+)
 from agent_runtime.api.presentation import ToolDisplayLookupContext
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
@@ -119,6 +123,9 @@ class RuntimeApprovalHandler:
             persistence=self.persistence,
             event_store=self.event_store,
             on_event_appended=on_event_appended,
+        )
+        self.run_termination = RunTerminationCoordinator(
+            event_producer=self.event_producer,
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
@@ -296,19 +303,19 @@ class RuntimeApprovalHandler:
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
             await self._complete_run_with_result(running, final_text, metrics)
-        except Exception:
+        except Exception as exc:
             failed = await with_optimistic_retry(
                 lambda: self.persistence.update_run_status(
                     run_id=run.run_id,
                     status=AgentRunStatus.FAILED,
                 )
             )
-            await self.event_producer.append_api_event(
+            await self.run_termination.terminate(
                 run=failed,
-                source=StreamEventSource.SYSTEM,
-                event_type=RuntimeApiEventType.RUN_FAILED,
-                payload={self._Fields.STATUS: RuntimeApiEventType.RUN_FAILED.value},
+                terminal_status=AgentRunStatus.FAILED,
+                reason=TerminationReason.EXECUTION_ERROR,
                 summary="Run failed",
+                cause=exc,
             )
             raise
         finally:
@@ -468,16 +475,13 @@ class RuntimeApprovalHandler:
                 status=AgentRunStatus.COMPLETED,
             )
         )
-        await self.event_producer.append_api_event(
+        await self.run_termination.terminate(
             run=completed,
-            source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.RUN_COMPLETED,
-            payload=AssistantRunMetrics.with_payload(
-                {self._Fields.STATUS: RuntimeApiEventType.RUN_COMPLETED.value},
-                metrics_payload,
-            ),
-            metadata=AssistantRunMetrics.metadata(metrics_payload),
+            terminal_status=AgentRunStatus.COMPLETED,
+            reason=TerminationReason.NORMAL_COMPLETION,
             summary="Run completed",
+            extra_payload=AssistantRunMetrics.with_payload({}, metrics_payload),
+            extra_metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
 
     @classmethod
@@ -588,11 +592,10 @@ class RuntimeApprovalHandler:
                 status=AgentRunStatus.COMPLETED,
             )
         )
-        await self.event_producer.append_api_event(
+        await self.run_termination.terminate(
             run=completed,
-            source=StreamEventSource.RUNTIME,
-            event_type=RuntimeApiEventType.RUN_COMPLETED,
-            payload={"status": RuntimeApiEventType.RUN_COMPLETED.value},
+            terminal_status=AgentRunStatus.COMPLETED,
+            reason=TerminationReason.NORMAL_COMPLETION,
             summary="Run completed",
         )
 

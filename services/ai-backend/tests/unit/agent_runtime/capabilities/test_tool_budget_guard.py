@@ -16,6 +16,7 @@ The middleware itself is exercised in
 from __future__ import annotations
 
 
+import pytest
 from langchain_core.tools import BaseTool
 
 from agent_runtime.capabilities.tool_budget_guard import (
@@ -147,7 +148,18 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         # One admitted call landed on the ledger.
         assert ledger.charged_calls("echo") == 1
 
-    async def test_returns_safe_message_on_hard_reject(self) -> None:
+    async def test_raises_budget_exceeded_on_hard_reject(self) -> None:
+        """HARD-cap rejection raises ``BudgetExceeded``.
+
+        The run handler catches the typed exception and routes it through
+        :class:`RunTerminationCoordinator` so the run terminates with
+        ``reason=BUDGET_EXCEEDED``. The LLM never sees a "talk your way
+        past the cap" tool result — the cap exists exactly to bound
+        spend regardless of the model's reasoning.
+        """
+
+        from agent_runtime.execution.tool_errors import BudgetExceeded
+
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
             name=inner.name,
@@ -166,13 +178,12 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            with pytest.raises(BudgetExceeded) as caught:
+                await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
-        # The safe message is what the model will see — it doesn't carry
-        # the inner tool's output because the inner was never invoked.
-        assert "echo" in result
-        assert "budget" in result.lower()
+        assert "echo" in caught.value.safe_summary
+        assert "budget" in caught.value.safe_summary.lower()
         assert inner.calls == []  # inner tool short-circuited.
 
     async def test_soft_warn_emits_budget_warning_and_admits(self) -> None:

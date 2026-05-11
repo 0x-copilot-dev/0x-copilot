@@ -44,6 +44,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.execution.tool_errors import BudgetExceeded
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
 
 if TYPE_CHECKING:  # pragma: no cover — typing-only; runtime import is lazy.
@@ -246,7 +247,10 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
-            return decision.safe_message
+            # HARD-cap rejection. Raise a typed RunFatalToolError so the
+            # run handler terminates the run via RunTerminationCoordinator
+            # instead of letting the model talk its way past the cap.
+            raise BudgetExceeded(decision.safe_message)
         if isinstance(decision, ToolBudgetWarn):
             # Sync path: schedule the warning emission on the running
             # loop if there is one; fall back to a synchronous log.
@@ -268,13 +272,14 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
-            return decision.safe_message
+            raise BudgetExceeded(decision.safe_message)
         if isinstance(decision, ToolBudgetWarn):
             await guard.emit_warning(decision=decision)
         if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
             # Defensive: an unknown decision shape would otherwise
-            # silently admit. Treat as reject with a safe message.
-            return "Tool call was not admitted by the budget middleware."
+            # silently admit. Treat as a hard reject so unknown variants
+            # can never bypass the gate.
+            raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
         call_id = guard.record_started(
             tool_name=self.name, estimated_input_tokens=estimated
         )

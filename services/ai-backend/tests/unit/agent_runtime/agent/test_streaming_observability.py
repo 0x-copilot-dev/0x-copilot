@@ -68,30 +68,40 @@ class TestObservabilityRedactorUserContent:
     def test_sensitive_value_pattern_inside_user_content_key_is_preserved(
         self,
     ) -> None:
-        # Regression for the "[redacted]" assistant message bug: the
-        # SENSITIVE_VALUE regex is heuristic and over-fires on any user
-        # content (prose, code) containing `key = value` patterns where
-        # the key looks credential-shaped. The whole streamed model
-        # response was being destroyed when the model wrote even one
-        # illustrative `api_key = "..."` line. User-content keys
-        # (message/delta/output/etc) now bypass the value-regex entirely;
-        # the structural SENSITIVE_KEY scan still protects nested dicts.
+        # Original regression context: the SENSITIVE_VALUE regex used
+        # to destroy assistant messages whenever the model wrote even
+        # one illustrative `api_key = "..."` line. The user-content
+        # carve-out was added to skip the value regex on string leaves
+        # under message/delta/output/etc.
+        #
+        # P11.2 removed value-pattern scanning entirely (parent PRD
+        # §8). This test still passes — the assistant text is preserved
+        # — but now it passes for a stronger reason: nothing scans
+        # string values for credential shapes anywhere in the system.
         result = ObservabilityRedactor.redact_json_object(
             {"message": "Here is a snippet: api_key = 'placeholder'"}
         )
 
         assert result["message"] == "Here is a snippet: api_key = 'placeholder'"
 
-    def test_sensitive_value_outside_user_content_key_still_redacted(self) -> None:
-        # The fix narrows scope to user-visible content only; structural
-        # diagnostic / metadata fields keep the existing redaction
-        # behaviour so a misbehaving tool can't leak via, say, a
-        # `diagnostic_blob` field.
+    def test_sensitive_value_in_non_user_content_now_passes_through(self) -> None:
+        # P11.2: value-pattern scrubbing is gone. A string literally
+        # containing `api_key=sk-...` outside a user-content key used
+        # to be replaced with `[redacted]`. The new direction (parent
+        # PRD §8) treats sensitivity as a field-level property, not a
+        # value-shape one — so the value passes through unchanged.
+        #
+        # The structural deny set still scrubs literal `{"api_key": "..."}`
+        # dict keys; this test only documents that free-text values
+        # containing credential-shaped substrings are no longer
+        # auto-redacted. Logs (which DO need to drop such content) get
+        # there via P11.3 field tagging on the Pydantic model that
+        # carries the field, not via value scanning here.
         result = ObservabilityRedactor.redact_json_object(
             {"diagnostic_blob": "api_key=sk-leaked-1234"}
         )
 
-        assert result["diagnostic_blob"] == Defaults.REDACTED
+        assert result["diagnostic_blob"] == "api_key=sk-leaked-1234"
 
     def test_sensitive_key_nested_inside_user_content_key_still_redacted(self) -> None:
         # Structural SENSITIVE_KEY scrub still applies inside user
@@ -108,10 +118,11 @@ class TestObservabilityRedactorUserContent:
     def test_sensitive_value_pattern_inside_nested_user_content_is_preserved(
         self,
     ) -> None:
-        # User-content territory propagates through nested structures
-        # so model output framed as Anthropic content blocks
-        # (`output.content[*].text` etc.) is not destroyed by the
-        # heuristic regex on inner string leaves.
+        # User-content territory still propagates through nested
+        # structures for length-cap purposes. P11.2 removed value
+        # scanning entirely, so this test now passes structurally
+        # rather than via the user-content carve-out — the inner
+        # ``text`` value would be preserved even at top level.
         result = ObservabilityRedactor.redact_json_object(
             {
                 "output": {

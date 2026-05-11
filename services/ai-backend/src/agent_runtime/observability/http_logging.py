@@ -34,7 +34,7 @@ from enterprise_service_contracts.headers import (
 from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agent_runtime.observability.constants import Patterns
+from agent_runtime.observability.redactor import DENY_KEYS
 
 
 _SERVICE_NAME = "ai-backend"
@@ -83,7 +83,7 @@ class _MetadataRedactor:
         for key, item in value.items():
             if not isinstance(key, str):
                 continue
-            if Patterns.SENSITIVE_KEY.search(key):
+            if key in DENY_KEYS:
                 continue
             if not isinstance(item, _ALLOWED_METADATA_VALUE_TYPES):
                 continue

@@ -34,16 +34,30 @@ class HttpLogEventMixin:
 
 class TestHttpLogEvent(HttpLogEventMixin):
     def test_drops_sensitive_metadata_keys(self) -> None:
+        # P11.2 changed key matching from regex substring (case-insensitive)
+        # to exact ``frozenset`` membership (case-sensitive). The test
+        # exercise reflects the new semantics:
+        #
+        # - ``api_key`` / ``authorization`` / ``password`` — exact match, dropped.
+        # - ``API_KEY`` / ``Authorization`` — case-mismatch, pass through.
+        # - ``session_token`` — not in the deny set (substring on ``token``
+        #   no longer fires); pass through. Add to ``DENY_KEYS`` if real
+        #   production payloads ship credentials under this name.
         event = self.make_event(
             metadata={
-                "API_KEY": "leak",
-                "Authorization": "Bearer x",
-                "session_token": "s",
+                "api_key": "leak",
+                "authorization": "Bearer x",
                 "password": "p",
+                "API_KEY": "case_mismatch",
+                "session_token": "substring_no_longer_fires",
                 "ok_field": "value",
             }
         )
-        assert event.metadata == {"ok_field": "value"}
+        assert event.metadata == {
+            "API_KEY": "case_mismatch",
+            "session_token": "substring_no_longer_fires",
+            "ok_field": "value",
+        }
 
     def test_drops_non_scalar_values(self) -> None:
         event = self.make_event(

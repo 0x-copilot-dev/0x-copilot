@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 
 class Keys:
     """Stable field names used by stream and observation contracts."""
@@ -61,14 +59,9 @@ class UserContentKeys:
     )
 
 
-class Patterns:
-    """Compiled validators for sensitive fields."""
-
-    SENSITIVE_KEY = re.compile(
-        r"(api[_-]?key|authorization|credential|password|secret|token)",
-        re.I,
-    )
-    SENSITIVE_VALUE = re.compile(
-        r"(api[_-]?key|authorization|credential|password|secret|token)\s*[:=]\s*\S+",
-        re.I,
-    )
+# ``Patterns.SENSITIVE_KEY`` and ``Patterns.SENSITIVE_VALUE`` were
+# removed in P11.2 (see docs/refactor/01b-redaction-exact-match-deny-keys.md).
+# Key matching now uses an exact-match deny set in
+# ``agent_runtime.observability.redactor.DENY_KEYS``. Value pattern
+# scrubbing is gone entirely — sensitivity is tagged per-field via the
+# ``Sensitive[]`` annotation (P11.3), not detected by content shape.

@@ -1,9 +1,20 @@
 # Refactor 01 — Redaction Subsystem
 
-**Status:** Draft for review (verified against code 2026-05-11)
+**Status:** Active. Pivoted direction 2026-05-11.
 **Audit reference:** [refactor-audit.md §1.4](../architecture/refactor-audit.md#14-custom-redactor)
-**Owner:** TBD
+**Owner:** Agent runtime team
 **Target:** `agent_runtime/observability/redaction.py` and the 19 dependent locations described in [§5](#5-systems-it-touches)
+
+> **Strategy pivot (2026-05-11).** The original direction (Presidio + detect-secrets + spaCy NER + UAE regex recognizers) is **abandoned**. Pattern-matching against values is fundamentally fragile: regex over-fires on prose; ML detection requires models and shifts the fragility into training data; both ship dependencies we don't need.
+>
+> The new direction is **structural, not pattern-based**:
+>
+> 1. **Logs are the only redaction surface.** Everything else (SSE events, persistence records, runtime context, runs/conversations schemas) carries data through unmodified. LLM replies are sensitive _because they may contain echoed user PII_ — they still flow whole through context (the model needs them), through persistence (replay needs them), and through SSE (the user needs to see them). They just don't appear in logs.
+> 2. **Sensitivity is a property of the _field_, not the _value_.** Pydantic models annotate sensitive fields with `Annotated[T, Sensitive(category)]`. The log emitter introspects annotations and elides tagged fields. No value scanning anywhere.
+> 3. **Free-form `metadata: dict` in logs** uses an **exact-match** deny set of literal key names (`password`, `api_key`, `authorization`, `secret`, `token`, etc.). Not substring search. Not regex. A closed set of ~15 keys, updated when a new credential field type appears.
+> 4. **No libraries.** No detect-secrets, no Presidio, no spaCy, no LLM-based classifiers. The redactor is ~50 lines of Pydantic-introspection + dict-key filtering.
+>
+> Sections §8 (library evaluation), §9 (library decision), §9.1 (UAE regex recognizers) are removed below. §11 (phase plan) and §13 (tests) are rewritten. §1–§7 still describe accurate context.
 
 > **Verification note (2026-05-11).** Every behavioral and structural claim in this PRD was cross-checked against `src/` on 2026-05-11. All §2 problem statements, §4 current-functionality items, §5 blast-radius enumerations, and the §9.1 UAE recognizer patterns are accurate. Three small corrections applied to this PRD:
 >
@@ -12,6 +23,14 @@
 > - **Line numbers in §5.1 / §5.4 have drifted.** Files and methods are correct; line references are stale (e.g. `events.py:938-941` → now line 977). Treat the file/method references as load-bearing and re-grep line numbers at implementation time.
 >
 > No structural revisions to the PRD's scope, phasing, library decision, or compliance constraints — those remain accurate.
+
+> **DRY investigation (2026-05-11).** Three suspected duplications resolved against git history + consumer analysis:
+>
+> - **Memory's `Patterns.SENSITIVE_KEY` drops `credential` accidentally**, not on purpose. Both pattern blocks (`observability/constants.py` and `context/memory/constants.py`) were introduced during the runtime restructure (commit `6e0c311 Restructure AI backend runtime packages`); no commit message documents memory's choice to drop `credential`. Same domain (metadata redaction). **Action: consolidate to a single source in Phase 4 (P11.4).**
+> - **`MemoryRedactor` has exactly one consumer** — `ContextCompressionEvent.metadata` validator in [`context/memory/contracts.py:236`](../../src/agent_runtime/context/memory/contracts.py). Same job as `ObservabilityRedactor`, but flat-dict scope (no recursion). **Action: keep `MemoryRedactor` as a thin wrapper; have it point at the consolidated patterns. Do not collapse the class itself — the flat-vs-recursive shape is a real semantic difference, not duplication.**
+> - **`RuntimeLogEvent` and `HttpLogEvent` are genuinely different contracts.** Runtime requires `run_id`; HTTP doesn't. Schemas stay split. **The duplicated `_MetadataRedactor` helpers inside both modules are the actual DRY violation — consolidate the helper, not the models.** Tracked under [`01-otel-adoption.md`](01-otel-adoption.md) §3.3, not under P11.
+>
+> The §11.4 phase below is now justified by evidence, not assumption.
 
 ---
 
@@ -310,117 +329,109 @@ In addition to credentials (which the current redactor partially covers):
 
 The categories the model must _never_ leak even inside a user-content carve-out (because they are PDPL Sensitive Personal Data) are: government IDs, financial account numbers, biometric, health. These categories override the user-content bypass — same way `SENSITIVE_KEY` does today.
 
-### 7.4 Implications for this refactor
+### 7.4 Implications for this refactor (revised 2026-05-11)
 
-- The library choice is constrained to **on-prem, open-source, free, deterministic-or-deterministic-plus-optional-ML** options. See [§8](#8-library-evaluation).
-- The user-content carve-out from the current redactor cannot be a blanket "don't check anything in here." It must become "don't run the heuristic key-equals-value regex, but **do** run sensitive-category recognizers" — Emirates ID inside an assistant's message is still a leak. Tests need a new case for this.
-- Logs must redact too, with the same rules. The denylist in [`logging.py`](../../src/agent_runtime/observability/logging.py) and [`http_logging.py`](../../src/agent_runtime/observability/http_logging.py) needs to be unified with the main redactor for category coverage, even if the log path remains "drop the whole key" rather than "redact the value".
-- Audit log of redaction decisions is required. We need a `RedactionDecision` record (rule, category, key path, length of original) that can be exported to a SIEM. The decision record must not contain the original value.
+The original implications section (libraries, ML opt-in, audit log of redaction decisions, regex for PII categories) is **superseded** by the structural direction in §8.
 
----
+What stays from §7's compliance position:
 
-## 8. Library evaluation
+- **No data egress.** Redaction runs in-process. (Trivially satisfied — nothing to egress.)
+- **Source-auditable.** Every redaction rule must be inspectable as code. The new redactor is ~50 lines plus an explicit deny-key list; a regulator reads two files and is done.
+- **Deterministic and explainable.** Field-tagging is the most explainable possible model: "this field is annotated `Sensitive(SECRET)`, therefore the log emitter elides it." A regulator gets a one-line rule citation.
+- **Logs are the only redaction surface.** Sensitive data flows whole through SSE / context / persistence; it is excluded only from log records.
 
-Options considered. Eligibility filter in [§7.4](#74-implications-for-this-refactor) — must be on-prem, open-source, free, no SaaS calls, source-auditable.
+What's gone:
 
-### 8.1 Microsoft Presidio (Analyzer + Anonymizer)
-
-- License: Apache 2.0.
-- Run mode: in-process Python library. Deploy on-prem.
-- Coverage: ~30 PII recognizers OOTB (email, phone, credit card, IBAN, IP, person, location, date, etc.). Custom recognizers via `PatternRecognizer` and `EntityRecognizer` interfaces.
-- ML: optional spaCy / transformers integration for NER. Rule-based recognizers work fine without it.
-- Network: zero outbound by default. Optional ML models load from local disk.
-- UAE coverage: no Emirates ID / UAE IBAN / TRN OOTB — must add as `PatternRecognizer` instances.
-- Maintenance: Microsoft-maintained, active. Apache 2.0 means we can fork if needed.
-- Auditability: each detection result includes `entity_type`, `start`, `end`, `score`, `analysis_explanation` — directly fits regulator-friendly logging.
-
-**Verdict:** primary candidate for PII detection.
-
-### 8.2 detect-secrets (Yelp)
-
-- License: Apache 2.0.
-- Run mode: in-process Python library.
-- Coverage: ~20 secret types — AWS keys, GitHub tokens, JWTs, private keys, high-entropy strings, base64 blobs, etc.
-- Strength: entropy-based detection plus per-secret-type plugins (verifiers). Catches secrets that don't sit next to a literal `key = …` (which is what our current regex requires).
-- False positives: well-handled via baseline files + plugin filters.
-- UAE coverage: not relevant — secrets are vendor-format, not country-specific.
-- Maintenance: Yelp-maintained, active.
-- Auditability: each finding has plugin name, line, type — clean rule citation.
-
-**Verdict:** primary candidate for credential detection.
-
-### 8.3 scrubadub
-
-- License: Apache 2.0.
-- Coverage: smaller than Presidio (email, phone, credit card, names, URLs). Plugin shape similar to Presidio.
-- Maintenance: less active than Presidio.
-- UAE coverage: would need everything custom.
-
-**Verdict:** rejected as primary in favor of Presidio (broader OOTB coverage, more active project). Could be considered if Presidio's Python footprint becomes a problem.
-
-### 8.4 commonregex
-
-- License: MIT.
-- Coverage: small regex bundle (email, phone, dates, money, addresses, IP, prices, links).
-- Strength: tiny, no dependencies.
-- Weakness: no recognizer interface; not extensible the way Presidio is.
-
-**Verdict:** rejected; too narrow and not architecturally extensible.
-
-### 8.5 pii-codex
-
-- License: Apache 2.0.
-- Coverage: wraps Presidio + Microsoft Common Data Types; opinionated category mapping.
-- Adds PHI / GDPR category labels on top of Presidio.
-
-**Verdict:** considered as an additional taxonomy layer if the buyer requires PDPL-mapped category labels rather than raw entity types. Defer until a buyer asks.
-
-### 8.6 Hybrid: keep current code with improvements
-
-- Add UAE recognizers to current regex pair.
-- Improve the SENSITIVE_VALUE regex to be category-aware (one regex per PII category, not one regex for all credentials).
-- Drop the `_TOKEN_COUNT_KEYS` allowlist by tightening the credential regex to require word boundaries.
-
-**Verdict:** strictly worse than the hybrid library approach. We would still own pattern maintenance forever, and we would still ship a regex for every PII category — exactly what mature libraries already provide. Rejected.
-
-### 8.7 Cloud SaaS (AWS Comprehend, GCP DLP, Azure Cognitive Services)
-
-**Rejected by [§7.2](#72-operational-requirements).**
+- The PII-category recognizer list (Emirates ID, UAE IBAN, TRN, passport, etc.). These were premised on output-time value scanning. The new direction does no value scanning. **If a buyer specifically requires output-time PII detection, that becomes a separate Tier-2 PRD that wraps the structural redactor; this PRD does not attempt it.**
+- The `RedactionDecision` SIEM record. Without per-value findings, there are no decisions to record beyond "this field was annotated sensitive."
 
 ---
 
-## 9. Decision
+## 8. Decision: structural redaction (no libraries, no value scanning)
 
-Adopt a **hybrid**:
+The redactor is two things and only two things:
 
-1. **detect-secrets** for credential / token detection. Replaces the credential side of `SENSITIVE_KEY` and `SENSITIVE_VALUE`. Covers JWTs, AWS keys, private keys, generic high-entropy strings.
-2. **Microsoft Presidio Analyzer** for PII detection. Adds the categories listed in [§7.3](#73-categories-the-system-must-redact). UAE-specific recognizers ([§9.1](#91-uae-recognizers-to-implement)) are registered at startup.
-3. **In-house structural layer** preserved: user-content carve-out, sticky propagation, length clip, token-count allowlist, `[redacted]` / `[truncated]` placeholders, JSON-shape walking. This is _our_ domain logic; libraries don't ship it.
-4. **Single `Redactor` Protocol** in [`observability/`](../../src/agent_runtime/observability/) that the 16 callsites depend on. The current `ObservabilityRedactor` becomes the default implementation. Future engine swaps don't touch any callsite.
-5. **One canonical `Patterns` module** — eliminate the duplicate in [`context/memory/constants.py`](../../src/agent_runtime/context/memory/constants.py). Memory's [`MemoryRedactor`](../../src/agent_runtime/context/memory/contracts.py#L382) uses the consolidated module. Prompt-injection patterns move to a separate, dedicated module to break the accidental coupling in [`policy.py`](../../src/agent_runtime/context/memory/policy.py:202).
-6. **No ML on the default path.** Presidio runs with rule-based recognizers only. Optional spaCy NER for person/location is gated by a setting (`REDACTION_USE_NER=true`) and ships disabled. ML models are downloaded as part of the Docker image build, never at runtime.
-7. **Audit trail.** A `RedactionDecisionLogger` writes a SIEM-exportable record per redaction event (rule, category, key path, length of original — never the original value).
+### 8.1 Pydantic field-tagging for typed log records
 
-### 9.1 UAE recognizers to implement
+```python
+from typing import Annotated
+from agent_runtime.observability.redactor import Sensitive, SensitiveCategory
 
-Custom Presidio `PatternRecognizer` instances:
+class RuntimeLogEvent(BaseModel):
+    # ... existing required fields ...
+    # Tagging applied incrementally per model. Untagged fields pass through.
+```
 
-| Entity name       | Pattern                                | Notes                                                                                |
-| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------ | -------------------- |
-| `UAE_EMIRATES_ID` | `\b784-\d{4}-\d{7}-\d\b`               | 15-digit format with checksum digit.                                                 |
-| `UAE_IBAN`        | `\bAE\d{21}\b`                         | 23 chars total.                                                                      |
-| `UAE_PHONE`       | `(\+                                   | 00)971\s?[1-9]\d{1,2}[-\s]?\d{3}[-\s]?\d{4}`                                         | Mobile and landline. |
-| `UAE_TRN`         | `\b\d{15}\b` (with context filter)     | 15-digit Tax Registration Number; needs context word to suppress false positives.    |
-| `UAE_PASSPORT`    | `\b[A-Z]\d{8}\b` (with context filter) | One letter + 8 digits; very FP-prone, must require nearby context word ("passport"). |
+`Sensitive(category)` is a metadata marker (Pydantic's `Annotated[T, marker]` pattern). The log emitter walks the model's annotations and elides any field with a `Sensitive` marker before serializing the record.
 
-These ship as a single registry module ([`observability/recognizers/uae.py`](../../src/agent_runtime/observability/recognizers/uae.py) — _to be created_) and are registered with the Presidio Analyzer at module init.
+Categories are an enum:
 
-### 9.2 What the new dependency footprint looks like
+```python
+class SensitiveCategory(StrEnum):
+    SECRET = "secret"             # API tokens, passwords, keys, OAuth state
+    PII = "pii"                   # user emails, names, addresses, phone numbers
+    FINANCIAL = "financial"       # account numbers, card numbers, IBAN
+    GOVERNMENT_ID = "government_id"  # Emirates ID, passport, TRN
+    MODEL_OUTPUT = "model_output"    # assistant prose — sensitive because it can echo user PII
+    USER_INPUT = "user_input"        # raw user prompts
+```
+
+Categories let buyers configure log policy ("redact `MODEL_OUTPUT` in audit logs but not debug logs") without code changes. The category is metadata; the rule is "field is annotated → elide in logs."
+
+### 8.2 Exact-match deny set for free-form `metadata: dict`
+
+Log records carry a `metadata: dict[str, JsonScalar]` for ad-hoc context. We can't type-annotate values inside an open dict, so the rule is **exact key-name membership**:
+
+```python
+DENY_KEYS: frozenset[str] = frozenset({
+    "password", "passwd", "secret",
+    "api_key", "apikey", "api-key",
+    "authorization", "auth_token",
+    "access_token", "refresh_token",
+    "private_key", "client_secret",
+    "credential",
+})
+```
+
+If a dict literally contains a key named `password`, the value is dropped. No substring search, no regex. `input_tokens` does not match because `input_tokens != token`. The `_TOKEN_COUNT_KEYS` allowlist disappears.
+
+### 8.3 What the new redactor does NOT do
+
+- **No value scanning.** No regex against string values. No `SENSITIVE_VALUE`.
+- **No content detection.** No PII recognizers, no entropy detectors, no Presidio, no detect-secrets, no spaCy.
+- **No carve-out for user-content.** Without value scanning, there's no over-fire to carve around. Length clipping (if kept at all — see §8.5) is the only thing that needed the carve-out.
+- **No redaction in SSE / persistence / runtime context paths.** Those layers carry data whole. The `redact_json_object` calls on `RuntimeEventEnvelope.payload`, persistence records, runs context, etc. are removed — see [P11.5](01e-redaction-remove-from-non-log-paths.md).
+
+### 8.4 What flows where
+
+| Data                             | SSE to browser | LLM context | Persistence | Logs                  |
+| -------------------------------- | -------------- | ----------- | ----------- | --------------------- |
+| Assistant reply (`MODEL_OUTPUT`) | ✓ whole        | ✓ whole     | ✓ whole     | Elided (field-tagged) |
+| User prompt (`USER_INPUT`)       | ✓ whole        | ✓ whole     | ✓ whole     | Elided (field-tagged) |
+| Tool result                      | ✓ whole        | ✓ whole     | ✓ whole     | Elided (field-tagged) |
+| Reasoning summary                | ✓ whole        | ✓ whole     | ✓ whole     | Elided (field-tagged) |
+| Citation list                    | ✓              | ✓           | ✓           | ✓ (not sensitive)     |
+| Run lifecycle metadata           | ✓              | ✓           | ✓           | ✓ except deny keys    |
+| Approval payload                 | ✓              | ✓           | ✓           | Elided (field-tagged) |
+| MCP auth URL                     | ✓              | ✓           | ✓           | Elided (field-tagged) |
+
+The "Logs" column is the only one where redaction happens.
+
+### 8.5 Length clipping — kept for now, separated later
+
+The current code does length clipping (>2000 chars → truncated). The user-content carve-out exempted user-visible strings from the clip. After this refactor:
+
+- Logs already cap individual fields short. No data is being lost.
+- SSE / persistence carry full data — no clipping there.
+- The 2000-char clip on non-user-content metadata fields stays in this PRD to avoid scope creep, but **it's a payload-shrink concern, not a redaction concern**. A future PRD can move it to a dedicated `PayloadSizeLimiter` if anyone wants.
+
+### 8.6 What the new dependency footprint looks like
 
 ```
-presidio-analyzer  (Apache 2.0, ~5 MB, no network)
-detect-secrets     (Apache 2.0, ~1 MB, no network)
+(none)
 ```
+
+No `presidio-analyzer`, no `detect-secrets`, no `spacy`. The redactor is Pydantic-introspection plus a `frozenset`.
 
 No spaCy / transformers in the default path. Both are pinned via `pyproject.toml` and reviewed for license / supply-chain concerns before adoption.
 
@@ -476,75 +487,83 @@ The refactor is done when **all** of the following hold:
 
 ## 11. Refactor plan (phased)
 
-Each phase ships independently, with its own PR, test coverage, and rollback path.
+Each phase ships independently, with its own PR, test coverage, and rollback path. Phases are tracked as separate sub-PRDs so each can be assigned to its own agent / contributor:
 
-### 11.1 Phase 1 — introduce the Protocol; current code becomes the default impl
+| Sub-PRD                                                                            | Phase                                                                               | Status      |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------- |
+| [`01a-redaction-protocol.md`](01a-redaction-protocol.md)                           | P11.1 — Introduce `Redactor` Protocol, current code as default                      | **Shipped** |
+| [`01b-redaction-exact-match-deny-keys.md`](01b-redaction-exact-match-deny-keys.md) | P11.2 — Exact-match key deny set; delete `SENSITIVE_VALUE` regex                    | **Shipped** |
+| `01c-redaction-field-tagging.md`                                                   | P11.3 — `Sensitive[]` annotation system; log emitters introspect it                 | TBD         |
+| `01d-redaction-pattern-consolidation.md`                                           | P11.4 — Single source of truth for the deny set (memory uses the same one)          | TBD         |
+| `01e-redaction-remove-from-non-log-paths.md`                                       | P11.5 — Remove `redact_json_object` from SSE / persistence / runtime context        | TBD         |
+| `01f-redaction-cleanup.md`                                                         | P11.6 — Delete `ObservabilityRedactor` shim; rename `RegexRedactor` → `LogRedactor` | TBD         |
 
-- Add [`observability/redactor.py`](../../src/agent_runtime/observability/redactor.py) with `Redactor` Protocol (matches the public surface of `ObservabilityRedactor`).
-- `RegexRedactor` = the existing `ObservabilityRedactor`, renamed and moved behind the Protocol.
-- Add a module-level `_default_redactor()` that returns a singleton `RegexRedactor`.
-- Change all 16 callsites to call `_default_redactor().redact_json_object(...)` — one mechanical substitution.
-- All existing tests pass; behavior is byte-identical.
-- Add tests for the Protocol shape (Protocol satisfaction, swap behavior).
+The phase descriptions below describe each sub-PRD's scope. Detailed acceptance criteria and test plans live in each sub-PRD file.
 
-**Risk:** Low. Pure refactor.
-**Rollback:** Revert single PR.
+### 11.1 P11.1 — Introduce `Redactor` Protocol (Shipped 2026-05-11)
 
-### 11.2 Phase 2 — thin credential detector (detect-secrets)
+See [`01a-redaction-protocol.md`](01a-redaction-protocol.md). `Redactor` Protocol + `RegexRedactor` default + `RedactorRegistry` shipped. 19 callsites unchanged; the legacy `ObservabilityRedactor` is a backwards-compat facade over the registry.
 
-- Add `detect-secrets` to `requirements.txt`.
-- Add [`observability/redaction_detectors/credentials.py`](../../src/agent_runtime/observability/redaction_detectors/credentials.py) with a `CredentialDetector` class that wraps detect-secrets and exposes a single `find(text: str) -> list[RedactionFinding]` method.
-- New `LibraryBackedRedactor` (also implements the `Redactor` Protocol) composes: structural in-house layer + `CredentialDetector` for the value-pattern step (replaces `SENSITIVE_VALUE`).
-- Behavioral test: every string that the old `SENSITIVE_VALUE` regex matched is still detected by detect-secrets. (Recall ≥ current.)
-- `_TOKEN_COUNT_KEYS` allowlist deleted; detect-secrets does not match `input_tokens` etc.
-- Default redactor still `RegexRedactor`. New impl gated by setting `REDACTION_BACKEND=library` (defaults to `regex`).
-- Tests for the new impl run with `REDACTION_BACKEND=library` via env or fixture.
+### 11.2 P11.2 — Exact-match key deny set; delete `SENSITIVE_VALUE` regex
 
-**Risk:** Medium. New library dependency; need to confirm recall against current regex before flipping default.
-**Rollback:** Setting flip; library code stays for future.
+See [`01b-redaction-exact-match-deny-keys.md`](01b-redaction-exact-match-deny-keys.md).
 
-### 11.3 Phase 3 — PII detection (Presidio + UAE recognizers)
+- Switch `Patterns.SENSITIVE_KEY` from regex substring search to an exact-match `frozenset` of literal key names.
+- Delete `Patterns.SENSITIVE_VALUE` regex entirely. No value scanning anywhere.
+- Delete `_TOKEN_COUNT_KEYS` allowlist — it was a workaround for the substring match.
+- Simplify the user-content carve-out to length-only (no value-regex skip to carve around).
+- Update existing tests: cases that asserted `"my password = foo"` got value-scrubbed inside metadata no longer apply; the value passes through. Cases that asserted `{"password": "foo"}` get its value dropped continue to pass.
 
-- Add `presidio-analyzer` to `requirements.txt`.
-- Add [`observability/recognizers/uae.py`](../../src/agent_runtime/observability/recognizers/uae.py) with the five UAE `PatternRecognizer` instances from [§9.1](#91-uae-recognizers-to-implement).
-- Add [`observability/redaction_detectors/pii.py`](../../src/agent_runtime/observability/redaction_detectors/pii.py) with a `PIIDetector` class that wraps Presidio Analyzer + Anonymizer, registers UAE + standard recognizers.
-- `LibraryBackedRedactor` composes `PIIDetector` _after_ `CredentialDetector` (credentials are detected first; PII finds whatever is left).
-- New tests for every category in [§7.3](#73-categories-the-system-must-redact).
-- New test: structural sensitive categories (Emirates ID, IBAN) override user-content bypass.
-- Recognizers documented in `observability/recognizers/README.md`.
-
-**Risk:** Medium. Presidio cold-start time matters for local dev; verify ≤ 1 s.
-**Rollback:** Setting flip.
-
-### 11.4 Phase 4 — consolidate patterns
-
-- Move `Patterns.SENSITIVE_KEY` to a single source under [`observability/`](../../src/agent_runtime/observability/) (or delete entirely if the new engine subsumes it — verify by running tests with the regex disabled).
-- Delete the duplicate `Patterns` block from [`context/memory/constants.py`](../../src/agent_runtime/context/memory/constants.py).
-- Update [`MemoryRedactor`](../../src/agent_runtime/context/memory/contracts.py#L382) to use the consolidated source.
-- Move prompt-injection heuristic into a dedicated [`context/memory/prompt_injection.py`](../../src/agent_runtime/context/memory/prompt_injection.py); update [`policy.py`](../../src/agent_runtime/context/memory/policy.py:202) to call it.
-- Update [`logging.py`](../../src/agent_runtime/observability/logging.py:123) and [`http_logging.py`](../../src/agent_runtime/observability/http_logging.py:86) to point at the consolidated source.
-
-**Risk:** Low–Medium. File moves + import updates.
+**Risk:** Low. Behavior change is well-scoped: dict values containing credential-shaped substrings are no longer auto-redacted. Existing dict-key scrubbing continues unchanged.
 **Rollback:** Revert.
 
-### 11.5 Phase 5 — audit trail
+### 11.3 P11.3 — `Sensitive[]` annotation system; log emitters introspect it
 
-- Add `RedactionDecisionLogger` in [`observability/`](../../src/agent_runtime/observability/) that emits per-decision records via the existing structured logger.
-- Wire `LibraryBackedRedactor` to call the logger on every finding.
-- New tests verify: log record contains rule name, category, JSON path, original length; never contains the original value.
-- Documentation in [`observability/recognizers/README.md`](../../src/agent_runtime/observability/recognizers/) with regulator-readable description of every active rule.
+- Add `Sensitive(category)` Pydantic `Annotated[]` marker + `SensitiveCategory` enum to [`observability/redactor.py`](../../src/agent_runtime/observability/redactor.py).
+- Add a model-walking helper that returns the set of sensitive field paths for a Pydantic model.
+- Update [`RuntimeLogEvent`](../../src/agent_runtime/observability/logging.py) and [`HttpLogEvent`](../../src/agent_runtime/observability/http_logging.py) emitters: before serializing the record, elide any field flagged `Sensitive(...)`.
+- Tag the first wave of obviously-sensitive Pydantic models — fields carrying `MODEL_OUTPUT`, `USER_INPUT`, `SECRET`. Incremental rollout: any untagged field continues to pass through (no regression).
 
-**Risk:** Low. Additive.
+**Risk:** Low–Medium. Additive feature; behavior diverges only where a field gets newly tagged.
 **Rollback:** Revert.
 
-### 11.6 Phase 6 — flip the default
+### 11.4 P11.4 — Single source of truth for the deny set
 
-- After phases 2-5 have run on staging for at least one week with `REDACTION_BACKEND=library` and no incidents, change the default to `library`.
-- Keep `RegexRedactor` and the setting as a one-release rollback escape valve.
-- Next release after that: delete `RegexRedactor`, delete the setting, delete `_TOKEN_COUNT_KEYS` (already removed in phase 2), delete the duplicated patterns.
+- Move the `DENY_KEYS` `frozenset` to one canonical location under [`observability/redactor.py`](../../src/agent_runtime/observability/redactor.py).
+- Delete the duplicate `Patterns` block from [`context/memory/constants.py`](../../src/agent_runtime/context/memory/constants.py). Re-export from the canonical source.
+- Update [`MemoryRedactor`](../../src/agent_runtime/context/memory/contracts.py#L382) to use the consolidated deny set. (DRY finding from the master PRD's verification note: memory's missing `credential` was accidental drift.)
+- Move the prompt-injection heuristic out of `Patterns.SENSITIVE_VALUE` into a dedicated `context/memory/prompt_injection.py`. Update [`policy.py`](../../src/agent_runtime/context/memory/policy.py:202) to call it.
 
-**Risk:** Medium at flip moment.
-**Rollback:** Setting flip. After deletion: revert.
+**Risk:** Low. File moves + import updates. Tests pin the merged behavior.
+**Rollback:** Revert.
+
+### 11.5 P11.5 — Remove `redact_json_object` from non-log paths
+
+- Strip the `redact_json_object` field validators from:
+  - [`runtime_api/schemas/events.py`](../../src/runtime_api/schemas/events.py) (`RuntimeEventEnvelope.payload`, `.metadata`)
+  - [`runtime_api/schemas/runs.py`](../../src/runtime_api/schemas/runs.py) (`connector_scopes`, `context`, `trace_metadata`, `request_options`)
+  - [`runtime_api/schemas/conversations.py`](../../src/runtime_api/schemas/conversations.py) (conversation / message metadata)
+  - [`agent_runtime/execution/contracts.py`](../../src/agent_runtime/execution/contracts.py) (3 metadata fields)
+  - All 6 persistence records that use `PersistenceValueNormalizer.redact_json_object`.
+- Keep them only on `RuntimeLogEvent.metadata` and `HttpLogEvent.metadata`.
+- Length clipping decision: keep the 2000-char clip on non-user-content via a new `PayloadSizeLimiter` validator OR remove it entirely. Decision deferred to the sub-PRD with input from the storage team.
+- Update tests that asserted on `[redacted]` placeholders in SSE / persistence to assert on the original value passing through.
+
+**Risk:** Medium. Behavior change visible in DB row contents (less aggressive scrubbing) and in SSE frames (full values, no `[redacted]` markers from this layer). Sensitive data is excluded at the log boundary, not at the data-construction boundary — that's the architecturally correct layer, but the diff is wide. **Must land after P11.3 so the log boundary is tagging-aware.**
+**Rollback:** Revert.
+
+### 11.6 P11.6 — Delete `ObservabilityRedactor` shim; rename `RegexRedactor` → `LogRedactor`
+
+- After P11.5 has run on staging for at least one week with no regressions, remove the backwards-compat facade.
+- Rename `RegexRedactor` → `LogRedactor` (the only consumer is now the log emitter).
+- Delete the `Redactor` Protocol's `redact_json_value` method if no consumer remains (likely yes, since logs work on whole records, not individual scalars).
+- Update the few remaining callsites (logging.py, http_logging.py) to import from `redactor.py` directly.
+- Delete `ObservabilityRedactor` class.
+- Delete `_TOKEN_COUNT_KEYS` import (already gone since P11.2).
+- Delete `Patterns.SENSITIVE_VALUE` constants (already gone since P11.2).
+
+**Risk:** Low. Cleanup of code already unused after the prior phases.
+**Rollback:** Revert.
 
 ---
 

@@ -48,13 +48,13 @@ Curated cross-service smoke tests (`make test`) run a small subset. To run a ser
 
 ```bash
 # Full suite for one service
-cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest
+cd services/ai-backend && .venv/bin/python -m pytest
 
 # Single test file
-cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py
+cd services/ai-backend && .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py
 
 # Single test
-cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py::TestName::test_method
+cd services/ai-backend && .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py::TestName::test_method
 ```
 
 Frontend / TS:

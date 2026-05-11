@@ -6,7 +6,7 @@ from pydantic import field_validator
 
 from agent_runtime.execution.contracts import RuntimeContract, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.context.memory.constants import Keys, Messages, Patterns, Values
+from agent_runtime.context.memory.constants import Keys, Messages, Values
 from agent_runtime.context.memory.contracts import (
     MemoryAccessOperation,
     MemoryActorRole,
@@ -199,6 +199,11 @@ class MemoryWriteGuard:
         if content is None:
             return False
         normalized = content.lower()
-        if Patterns.SENSITIVE_VALUE.search(normalized):
-            return True
+        # P11.2: the prior implementation also flagged any content whose
+        # SHAPE matched ``SENSITIVE_VALUE`` (e.g. ``api_key = "..."``).
+        # That was an accidental coupling — the regex was a credential
+        # marker, not a prompt-injection marker. Real prompt-injection
+        # content is phrase-based (covered below) and content that
+        # contains a literal credential is a different concern (logged
+        # but not blocked here).
         return any(pattern in normalized for pattern in cls.PROMPT_INJECTION_PATTERNS)

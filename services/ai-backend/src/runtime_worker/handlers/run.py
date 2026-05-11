@@ -35,6 +35,10 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_termination import (
+    RunTerminationCoordinator,
+    TerminationReason,
+)
 from agent_runtime.api.presentation import (
     ToolDisplayLookup,
     ToolDisplayLookupContext,
@@ -50,6 +54,12 @@ from agent_runtime.persistence.ports import (
     DraftStorePort,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.tool_errors import (
+    AuthDenied,
+    BudgetExceeded,
+    RunFatalToolError,
+    TenantIsolationViolation,
+)
 from agent_runtime.execution.factory import (
     RuntimeHarness,
     acreate_agent_runtime,
@@ -180,6 +190,9 @@ class RuntimeRunHandler:
             persistence=self.persistence,
             event_store=self.event_store,
             on_event_appended=on_event_appended,
+        )
+        self.run_termination = RunTerminationCoordinator(
+            event_producer=self.event_producer,
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
@@ -452,8 +465,11 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
                 )
             )
-            await self._append_lifecycle(
-                failed, RuntimeApiEventType.RUN_FAILED, "Run timed out"
+            await self.run_termination.terminate(
+                run=failed,
+                terminal_status=AgentRunStatus.TIMED_OUT,
+                reason=TerminationReason.RUN_TIMEOUT,
+                summary="Run timed out",
             )
             await self.audit_emitter.emit_run_failed(
                 failed,
@@ -483,8 +499,16 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.FAILED
                 )
             )
-            await self._append_lifecycle(
-                failed, RuntimeApiEventType.RUN_FAILED, "Run failed"
+            # Route typed fatal tool errors to their semantic termination
+            # reason so the FE and audit log can distinguish budget /
+            # auth / policy failures from generic execution errors.
+            termination_reason = _termination_reason_for(exc)
+            await self.run_termination.terminate(
+                run=failed,
+                terminal_status=AgentRunStatus.FAILED,
+                reason=termination_reason,
+                summary="Run failed",
+                cause=exc,
             )
             await self.audit_emitter.emit_run_failed(
                 failed,
@@ -528,15 +552,13 @@ class RuntimeRunHandler:
         self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
         completed_at = completed.completed_at or datetime.now(timezone.utc)
         metrics_payload = metrics.to_payload(completed_at=completed_at)
-        await self._append_lifecycle(
-            completed,
-            RuntimeApiEventType.RUN_COMPLETED,
-            "Run completed",
-            payload=AssistantRunMetrics.with_payload(
-                {self._Fields.STATUS: RuntimeApiEventType.RUN_COMPLETED.value},
-                metrics_payload,
-            ),
-            metadata=AssistantRunMetrics.metadata(metrics_payload),
+        await self.run_termination.terminate(
+            run=completed,
+            terminal_status=AgentRunStatus.COMPLETED,
+            reason=TerminationReason.NORMAL_COMPLETION,
+            summary="Run completed",
+            extra_payload=AssistantRunMetrics.with_payload({}, metrics_payload),
+            extra_metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
         await self.audit_emitter.emit_run_completed(
             completed,
@@ -1625,3 +1647,20 @@ class RuntimeRunHandler:
     def _trace_text(cls, context: AgentRuntimeContext, key: str) -> str | None:
         value = context.trace_metadata.get(key)
         return value if isinstance(value, str) and value.strip() else None
+
+
+def _termination_reason_for(exc: BaseException) -> TerminationReason:
+    """Map a caught run-fatal exception to its TerminationReason.
+
+    Keeps the run handler's exception block free of branching: every
+    typed :class:`RunFatalToolError` subclass picks the matching reason;
+    everything else falls back to the generic ``EXECUTION_ERROR``.
+    """
+
+    if isinstance(exc, BudgetExceeded):
+        return TerminationReason.BUDGET_EXCEEDED
+    if isinstance(exc, (AuthDenied, TenantIsolationViolation)):
+        return TerminationReason.TOOL_FATAL_ERROR
+    if isinstance(exc, RunFatalToolError):
+        return TerminationReason.TOOL_FATAL_ERROR
+    return TerminationReason.EXECUTION_ERROR

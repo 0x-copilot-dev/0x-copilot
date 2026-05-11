@@ -6,6 +6,11 @@ from agent_runtime.observability.logging import (
     RuntimeLogLevel,
 )
 from agent_runtime.observability.redaction import ObservabilityRedactor
+from agent_runtime.observability.redactor import (
+    Redactor,
+    RedactorRegistry,
+    RegexRedactor,
+)
 from agent_runtime.observability.tracing import (
     RuntimeTracer,
     TraceContext,
@@ -16,6 +21,9 @@ from agent_runtime.observability.tracing import (
 
 __all__ = [
     "ObservabilityRedactor",
+    "Redactor",
+    "RedactorRegistry",
+    "RegexRedactor",
     "RuntimeLogEvent",
     "RuntimeLogLevel",
     "RuntimeLogger",

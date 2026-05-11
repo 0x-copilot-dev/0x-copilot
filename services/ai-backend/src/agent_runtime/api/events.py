@@ -21,6 +21,10 @@ from collections.abc import Callable, Mapping, Sequence
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.presentation import PresentationGenerator
 from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
+from agent_runtime.observability.lifecycle_ledger import (
+    LifecycleEventInspector,
+    LifecycleLedger,
+)
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -44,11 +48,20 @@ class RuntimeEventProducer:
         event_store: EventStorePort,
         presentation_generator: PresentationGenerator | None = None,
         on_event_appended: Callable[[str], None] | None = None,
+        lifecycle_ledger: LifecycleLedger | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.presentation_generator = presentation_generator or PresentationGenerator()
         self._on_event_appended = on_event_appended
+        # Single source of truth for "what is currently in flight on this run."
+        # The producer owns the ledger; the run handler reads it via
+        # :attr:`lifecycle_ledger` to drive RunTerminationCoordinator
+        # reconciliation. Default-constructed so callers that don't care
+        # (tests of the producer in isolation) get the invariant for free.
+        self.lifecycle_ledger: LifecycleLedger = (
+            lifecycle_ledger if lifecycle_ledger is not None else LifecycleLedger()
+        )
         # P4 — auto-detect whether the event store advances the run cursor
         # inside its own transaction. Adapters opt in via a public
         # ``consolidates_cursor_writes`` attribute set from
@@ -120,6 +133,12 @@ class RuntimeEventProducer:
             **timeline_fields,
         )
         envelope = await self.event_store.append_event(draft)
+        await self._track_lifecycle(
+            event_type_value=event_type.value,
+            payload=safe_payload,
+            parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
+        )
         if not self._consolidated_writes:
             await self.persistence.set_run_latest_sequence(
                 run_id=run.run_id,
@@ -128,6 +147,38 @@ class RuntimeEventProducer:
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)
         return envelope
+
+    async def _track_lifecycle(
+        self,
+        *,
+        event_type_value: str,
+        payload: JsonObject,
+        parent_task_id: str | None,
+        subagent_id: str | None,
+    ) -> None:
+        """Update the lifecycle ledger if the event opens or closes a pair.
+
+        Centralized so individual emission sites can never forget to keep
+        the ledger consistent — the producer's single ``append_api_event``
+        chokepoint inspects the event type and routes to the ledger.
+        """
+
+        open_entry = LifecycleEventInspector.open_op(
+            event_type_value=event_type_value,
+            payload=payload,
+            parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
+        )
+        if open_entry is not None:
+            await self.lifecycle_ledger.open(open_entry)
+            return
+        close_op = LifecycleEventInspector.close_op(
+            event_type_value=event_type_value,
+            payload=payload,
+        )
+        if close_op is not None:
+            kind, entity_id = close_op
+            await self.lifecycle_ledger.close(kind=kind, entity_id=entity_id)
 
     async def append_stream_event(
         self,
@@ -169,6 +220,12 @@ class RuntimeEventProducer:
                 }
             )
         envelope = await self.event_store.append_event(draft)
+        await self._track_lifecycle(
+            event_type_value=draft.event_type.value,
+            payload=draft.payload,
+            parent_task_id=draft.parent_task_id,
+            subagent_id=getattr(draft, "subagent_id", None),
+        )
         if not self._consolidated_writes:
             await self.persistence.set_run_latest_sequence(
                 run_id=run.run_id,
@@ -332,6 +389,13 @@ class RuntimeEventProducer:
                 )
             )
         envelopes = await self.event_store.append_events_batch(drafts)
+        for draft in drafts:
+            await self._track_lifecycle(
+                event_type_value=draft.event_type.value,
+                payload=draft.payload,
+                parent_task_id=draft.parent_task_id,
+                subagent_id=getattr(draft, "subagent_id", None),
+            )
         if not self._consolidated_writes and envelopes:
             await self.persistence.set_run_latest_sequence(
                 run_id=run.run_id,

@@ -177,9 +177,9 @@ Tick as PRDs are written and PRs ship. Update in the same PR that adds the PRD.
 - [x] P4 — PRD drafted + shipped (both stages): [`04-event-write-consolidation.md`](04-event-write-consolidation.md). Stage 1 folds `INSERT runtime_events` + `UPDATE agent_runs.latest_sequence_no` into one transaction (default-on); Stage 2 adds `EventStorePort.append_events_batch` + `RuntimeEventProducer.append_api_events_batch` + `DeltaCoalescer` in the streaming executor (default `RUNTIME_DELTA_COALESCE_WINDOW_MS=0` — ships dark).
 - [x] P5 — PRD drafted: [`01-async-only-ports.md`](01-async-only-ports.md)
 - [x] P6 — PRD drafted: [`05-cleanup-wave.md`](05-cleanup-wave.md). All 6 legacy directories already deleted in prior work; the 3 other sub-items (`dev_auth_bypass_allowed`, `migrate.py`, `EncryptExistingColumns`) were withdrawn after pre-flight verification — see PRD §1.5.
-- [ ] P7 — PRD pending
-- [ ] P8 — PRD pending
-- [ ] P9 — PRD pending
+- [x] P7 — PRD drafted + shipped (both PRs): [`06-citation-batching.md`](06-citation-batching.md). PR1 = infra (async `insert_many_or_get` port + adapters, `SOURCES_INGESTED` event type wired through schemas / api-types / FE reducers, `CitationLedger.register_many` + shared `_register_internal`, FE `citationReducer` + `sourcesReducer` branches, dual-store invariant test parametrized across both event shapes). PR2 = projector switch via `RUNTIME_BATCH_SOURCE_INGESTION` flag (default off; ships dark). 1031 BE tests + 762 FE tests pass; latent sync/async bug fixed as side effect. See PRD §11 for the divergences from the original plan.
+- [x] P8 — PRD drafted: [`07-cluster-boundary-moves.md`](07-cluster-boundary-moves.md)
+- [x] P9 — PRD drafted: [`08-service-consolidation.md`](08-service-consolidation.md)
 - [x] P10 — PRD drafted: [`01-audit-chain.md`](01-audit-chain.md)
 - [x] P11 — PRD drafted: [`01-redaction-subsystem.md`](01-redaction-subsystem.md)
 - [ ] P12 — PRD pending
@@ -187,11 +187,11 @@ Tick as PRDs are written and PRs ship. Update in the same PR that adds the PRD.
 - [ ] P14 — PRD pending
 - [ ] P15 — PRD pending
 - [ ] P16 — PRD pending
-- [ ] P17 — PRD pending
-- [ ] P18 — PRD pending
-- [ ] P19 — PRD pending
-- [ ] P20 — PRD pending
-- [ ] P21 — PRD pending
+- [x] P17 — PRD drafted: [`14-langgraph-checkpointer.md`](14-langgraph-checkpointer.md). Pre-investigation; verification spike required (§2) before implementation. Hard blocker for P21.
+- [x] P18 — PRD drafted: [`15-pg-partman-retention.md`](15-pg-partman-retention.md). Pre-investigation; multi-phase per-table conversion. Touches compliance — buyer sign-off may be required.
+- [x] P19 — PRD drafted: [`16-repository-collapse.md`](16-repository-collapse.md). Pre-investigation; largest single restructure in the audit. Hard depends on P5.
+- [x] P20 — PRD drafted: [`17-litellm-providers.md`](17-litellm-providers.md). Pre-investigation; blocking spike required (§2). Hybrid path likely — keep custom adapters where LiteLLM doesn't cover reasoning streaming.
+- [x] P21 — PRD drafted: [`18-langgraph-interrupts.md`](18-langgraph-interrupts.md). Pre-investigation; verification spike required (§2). Hard depends on P17.
 - [ ] P22 — PRD pending
 
 ---

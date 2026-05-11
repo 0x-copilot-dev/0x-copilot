@@ -41,6 +41,13 @@ RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
 # delivery latency from ~1s to ~50ms in multi-process deploys; needs
 # DATABASE_URL configured).
 RUNTIME_EVENT_BUS_BACKEND=in_memory
+# P7 PR2 — switch the citation projector to one batched
+# `sources_ingested` event per tool result (vs. N `source_ingested`
+# events under the legacy per-source loop). Default false (PR2 ships
+# dark); flip to true on workers after staging validation. Behavior is
+# wire-equivalent for the FE — both event types are handled by the
+# citation reducers.
+RUNTIME_BATCH_SOURCE_INGESTION=false
 MCP_BACKEND_REGISTRY_URL=
 MCP_AUTH_REDIRECT_URI=http://127.0.0.1:5173/mcp/oauth/callback
 SKILLS_BACKEND_REGISTRY_URL=

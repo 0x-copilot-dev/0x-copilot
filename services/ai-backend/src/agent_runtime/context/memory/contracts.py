@@ -20,6 +20,8 @@ from agent_runtime.execution.contracts import (
     JsonScalar,
     RuntimeContract,
 )
+from agent_runtime.observability.redactor import DENY_KEYS
+
 from agent_runtime.context.memory.constants import (
     Defaults,
     Keys,
@@ -397,12 +399,13 @@ class MemoryRedactor:
                 key,
                 Keys.Field.METADATA,
             )
-            if Patterns.SENSITIVE_KEY.search(normalized_key):
+            if normalized_key in DENY_KEYS:
                 redacted[normalized_key] = cls.REDACTED
                 continue
-            if isinstance(item, str) and Patterns.SENSITIVE_VALUE.search(item):
-                redacted[normalized_key] = cls.REDACTED
-                continue
+            # P11.2: no more value-pattern scrubbing. Memory metadata
+            # values pass through unchanged; sensitivity is decided at
+            # the key boundary (above) or — once P11.3 lands — at the
+            # field-annotation level on the enclosing Pydantic model.
             if isinstance(item, str | int | float | bool) or item is None:
                 redacted[normalized_key] = item
                 continue

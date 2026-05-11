@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from agent_runtime.observability.constants import Patterns
+from agent_runtime.observability.redactor import DENY_KEYS
 from agent_runtime.validation import ValueNormalizer
 
 _logger = logging.getLogger("agent_runtime")
@@ -120,7 +120,7 @@ class _MetadataRedactor:
         for key, item in value.items():
             if not isinstance(key, str):
                 continue
-            if Patterns.SENSITIVE_KEY.search(key):
+            if key in DENY_KEYS:
                 dropped.append(key)
                 continue
             if item is not None and not isinstance(item, _ALLOWED_METADATA_VALUE_TYPES):

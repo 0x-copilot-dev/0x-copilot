@@ -33,13 +33,13 @@ class TestSubagentDelegation(FakeMCPClientMixin, RuntimeBuilderMixin):
 
 ```bash
 cd services/ai-backend
-PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest
+.venv/bin/python -m pytest
 
 # single file
-PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py
+.venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py
 
 # single test
-PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py::TestName::test_method
+.venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py::TestName::test_method
 ```
 
 Use **this service's** `.venv`. Never reuse a sibling service's `.venv` or add another service to `PYTHONPATH`.

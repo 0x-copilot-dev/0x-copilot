@@ -46,10 +46,18 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "../../packages/service-contracts/src"]
+pythonpath = [
+    "src",
+    "../../packages/service-contracts/src",
+    "../../packages/audit-chain/src",
+]
 asyncio_mode = "auto"
 
 [tool.basedpyright]
 include = ["src", "tests"]
-extraPaths = ["src", "../../packages/service-contracts/src"]
+extraPaths = [
+    "src",
+    "../../packages/service-contracts/src",
+    "../../packages/audit-chain/src",
+]
 pythonVersion = "3.11"

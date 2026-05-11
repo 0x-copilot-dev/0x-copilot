@@ -16,6 +16,9 @@ from agent_runtime.capabilities.skills.virtual import (
     VirtualSkillRegistry,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedRegistry
+from agent_runtime.capabilities.tool_error_policy_tool import (
+    ToolErrorPolicyRegistry,
+)
 from agent_runtime.context.memory.backends import ScopedMemoryBackendFactory
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -99,15 +102,27 @@ class DefaultRuntimeDependenciesFactory:
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
         self._validate_capability_mode(_context)
         mcp_registry = self._mcp_registry(_context)
-        # B8 — wrap the tool registry so every model-visible LangChain
-        # ``BaseTool`` goes through the per-run :class:`ToolBudgetGuard`.
-        # The wrapper is a no-op when no guard is bound (unit tests of
-        # tools in isolation), so this is safe to apply unconditionally.
-        # Inner :class:`CitationCapturingRegistry` lifts URLs out of each
-        # tool result into the per-run :class:`CitationLedger`, so the
-        # frontend Sources tab populates without per-tool wiring.
-        tool_registry = ToolBudgetGuardedRegistry(
-            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
+        # Tool registry composition (outer → inner):
+        #
+        #   ToolErrorPolicyRegistry — outermost. Catches every exception
+        #     from inner layers, routes through DefaultToolErrorPolicy:
+        #     RunFatalToolError → re-raise (run terminates), otherwise
+        #     return a sanitized ``ToolMessage`` content so the LLM sees
+        #     the failure and can decide what to do next.
+        #
+        #   ToolBudgetGuardedRegistry — per-tool / per-run budget gate
+        #     (B8). HARD rejections raise ``BudgetExceeded`` which
+        #     propagates up as RunFatalToolError via the policy.
+        #
+        #   CitationCapturingRegistry — lifts URLs out of tool results
+        #     into the per-run ``CitationLedger`` so the frontend
+        #     Sources tab populates without per-tool wiring.
+        #
+        #   WebSearchToolRegistry — the underlying tool layer.
+        tool_registry = ToolErrorPolicyRegistry(
+            inner=ToolBudgetGuardedRegistry(
+                inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
+            )
         )
         return RuntimeDependencies(
             tool_registry=tool_registry,

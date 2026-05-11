@@ -174,6 +174,11 @@ def test_invalid_token_budget_ratios_are_rejected() -> None:
 
 
 def test_compression_event_redacts_sensitive_metadata() -> None:
+    # P11.2: MemoryRedactor now uses the structural deny set (exact
+    # key-name match). Value-pattern scrubbing was removed — the
+    # ``note`` field's free-text content passes through, since
+    # sensitivity is decided at the key boundary, not by scanning
+    # string contents. See docs/refactor/01b-redaction-exact-match-deny-keys.md §6.
     event = ContextCompressionEvent(
         before_tokens=100,
         after_tokens=20,
@@ -188,7 +193,7 @@ def test_compression_event_redacts_sensitive_metadata() -> None:
     )
 
     assert event.metadata["api_key"] == "[redacted]"
-    assert event.metadata["note"] == "[redacted]"
+    assert event.metadata["note"] == "authorization: bearer secret"
     assert event.metadata["safe"] == "visible"
 
 

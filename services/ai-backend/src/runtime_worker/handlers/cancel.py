@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.api.run_termination import (
+    RunTerminationCoordinator,
+    TerminationReason,
+)
 from agent_runtime.persistence import with_optimistic_retry
 from runtime_api.schemas import (
     AgentRunStatus,
-    RuntimeApiEventType,
     RuntimeCancelCommand,
 )
 
@@ -29,6 +31,9 @@ class RuntimeCancelHandler:
             persistence=self.persistence,
             event_store=self.event_store,
         )
+        self.run_termination = RunTerminationCoordinator(
+            event_producer=self.event_producer,
+        )
 
     async def handle(self, command: RuntimeCancelCommand) -> None:
         run = await self.persistence.get_run(
@@ -44,10 +49,10 @@ class RuntimeCancelHandler:
                 status=AgentRunStatus.CANCELLED,
             )
         )
-        await self.event_producer.append_api_event(
+        await self.run_termination.terminate(
             run=run,
-            source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.RUN_CANCELLED,
+            terminal_status=AgentRunStatus.CANCELLED,
+            reason=TerminationReason.CANCELLED,
             summary="Run cancelled",
-            payload={"reason": command.reason},
+            extra_payload={"cancel_reason": command.reason},
         )
