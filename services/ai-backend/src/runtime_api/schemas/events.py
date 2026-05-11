@@ -1065,7 +1065,21 @@ class RuntimeEventReplayResponse(RuntimeContract):
 
 
 class RuntimeEventDraft(_RuntimeEventBase):
-    """Event data before the event store assigns per-run sequence number."""
+    """Event data before the event store assigns per-run sequence number.
+
+    Carries ``org_id`` so the persistence adapter can scope its tenant
+    connection BEFORE the canonical ``agent_runs`` row is read. The field
+    lives on the draft only — :class:`RuntimeEventEnvelope` (the wire shape
+    SSE/replay returns to clients) deliberately omits ``org_id`` so tenant
+    identifiers are not exposed in user-visible payloads.
+    """
+
+    org_id: str
+
+    @field_validator(Keys.Field.ORG_ID, mode="before")
+    @classmethod
+    def _normalize_org_id(cls, value: object, info: ValidationInfo) -> str:
+        return ValueNormalizer.normalize_id(value, info.field_name)
 
     @classmethod
     def from_stream_event(
@@ -1073,6 +1087,7 @@ class RuntimeEventDraft(_RuntimeEventBase):
         *,
         run_id: str,
         conversation_id: str,
+        org_id: str,
         stream_event: StreamEvent,
     ) -> "RuntimeEventDraft":
         """Create an appendable API event draft from a normalized runtime event."""
@@ -1082,4 +1097,4 @@ class RuntimeEventDraft(_RuntimeEventBase):
             conversation_id=conversation_id,
             stream_event=stream_event,
         )
-        return cls(**kwargs)
+        return cls(org_id=org_id, **kwargs)

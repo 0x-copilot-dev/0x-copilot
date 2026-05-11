@@ -8,6 +8,10 @@ from typing import Any
 import pytest
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.observability.attribution import (
+    Purpose,
+    UsageAttributionContext,
+)
 from agent_runtime.observability.token_usage import NormalizedTokenUsage
 from runtime_api.schemas import (
     AssistantSubagentUsageRollup,
@@ -43,6 +47,31 @@ def _usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cached_input_tokens=cached_input_tokens,
+    )
+
+
+def _subagent_context(
+    *,
+    task_id: str,
+    subagent_slug: str = "researcher",
+) -> UsageAttributionContext:
+    """Test-helper: build a SUBAGENT_WORK attribution context.
+
+    Sub-PRD 01b: ``PerCallTokenAccumulator.observe`` now takes a
+    :class:`UsageAttributionContext` instead of bare ``task_id=``.
+    The context's invariants require ``subagent_slug`` and ``task_id``
+    when purpose is SUBAGENT_WORK.
+    """
+
+    return UsageAttributionContext(
+        org_id="org_a",
+        user_id="user_1",
+        run_id="run-1",
+        conversation_id="conv-1",
+        trace_id="trace-1",
+        purpose=Purpose.SUBAGENT_WORK,
+        task_id=task_id,
+        subagent_slug=subagent_slug,
     )
 
 
@@ -119,19 +148,21 @@ class TestPerCallTokenAccumulator:
 
     def test_subagent_rollup_only_includes_tagged_calls(self) -> None:
         acc = PerCallTokenAccumulator()
+        # Orchestrator-scope: no context → slot.task_id is None.
         acc.observe(
             _usage(input_tokens=100, output_tokens=200),
             message_id="msg-main",
         )
+        # Subagent-scope: context carries task_id="task-x".
         acc.observe(
             _usage(input_tokens=10, output_tokens=20),
             message_id="msg-sub-1",
-            task_id="task-x",
+            context=_subagent_context(task_id="task-x"),
         )
         acc.observe(
             _usage(input_tokens=5, output_tokens=7),
             message_id="msg-sub-2",
-            task_id="task-x",
+            context=_subagent_context(task_id="task-x"),
         )
         rollup = acc.subagent_rollup("task-x")
         assert isinstance(rollup, AssistantSubagentUsageRollup)
@@ -187,7 +218,7 @@ class TestAssistantRunMetricsPerCall:
         metrics.record_usage_from(
             {"usage_metadata": {"input_tokens": 5, "output_tokens": 7}},
             message_id="msg-b",
-            task_id="task-x",
+            context=_subagent_context(task_id="task-x"),
         )
         # Provider streams cumulative; the run-level total tracks the
         # latest call's numbers (not the sum across calls).

@@ -88,6 +88,7 @@ class _FixturesMixin:
         return RuntimeEventDraft(
             run_id=run_id or self.RUN_ID,
             conversation_id=conversation_id or self.CONVERSATION_ID,
+            org_id=self.ORG_ID,
             source=StreamEventSource.MODEL,
             event_type=event_type,
             trace_id=self.TRACE_ID,

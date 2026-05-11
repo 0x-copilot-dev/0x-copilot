@@ -100,6 +100,10 @@ class RuntimeAdapterFactory:
         # API process's listener wakes the SSE adapter cross-process.
         # In-memory bus doesn't need this — that path uses asyncio.Condition.
         notify_after_append = settings.execution.event_bus_backend.lower() == "postgres"
+        # P16 — drops the per-run ``agent_runs`` row lock from
+        # ``append_event``. In-memory adapter ignores it; its per-run
+        # counter is already a single in-process writer.
+        lock_free_appends = settings.execution.lock_free_appends
         # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
@@ -130,6 +134,7 @@ class RuntimeAdapterFactory:
                 role=role,
                 consolidated_writes=consolidated_writes,
                 notify_after_append=notify_after_append,
+                lock_free_appends=lock_free_appends,
             )
             return RuntimePorts(
                 persistence=postgres_store,

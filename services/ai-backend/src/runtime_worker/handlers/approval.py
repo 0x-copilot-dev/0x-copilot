@@ -23,7 +23,6 @@ from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
-from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -420,7 +419,6 @@ class RuntimeApprovalHandler:
             event_store=self.event_store,
             event_producer=self.event_producer,
             stream_event_mapper=self.stream_event_mapper,
-            attribution=UsageAttributionResolver(self.persistence),
             track_subagents=False,
             citation_pipeline=CitationStreamPipeline.for_provider(
                 run.runtime_context.model_profile.provider

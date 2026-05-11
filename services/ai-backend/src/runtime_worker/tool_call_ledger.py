@@ -29,6 +29,9 @@ class ToolCallEntry:
     subagent_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     settled: bool = False
+    # Settled-at timestamp drives the "latest settled" ordering for
+    # ``pop_pending_attribution`` (sub-PRD 01b).
+    settled_at: datetime | None = None
     # B8 — observed input-token cost for the call. Populated post-execute
     # by the tool-budget middleware so subsequent calls can enforce a
     # per-run input-token cap.
@@ -38,6 +41,20 @@ class ToolCallEntry:
     # ``budget_charged=True`` so REJECTED calls don't burn through the
     # cap.
     budget_charged: bool = True
+    # Sub-PRD 01b: connector that owned this tool. Populating side is a
+    # follow-up — currently always ``None``. The carry mechanism exists
+    # so the next LLM call's row can pick up the connector slug once a
+    # tool-name → connector lookup is plumbed in.
+    connector_slug: str | None = None
+    # Sub-PRD 01b: ``True`` once this entry has been popped as the
+    # "originating tool" for an LLM call's attribution. Prevents
+    # double-attribution if multiple LLM emits land in the same scope
+    # after a tool settles.
+    consumed_for_attribution: bool = False
+    # Sub-PRD 01b: monotonic settle order. Used as the primary sort
+    # key in ``pop_pending_attribution`` so two settles that land in
+    # the same wall-clock microsecond still order deterministically.
+    settle_order: int = 0
 
 
 class ToolCallLedger:
@@ -52,6 +69,11 @@ class ToolCallLedger:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self._entries: dict[str, ToolCallEntry] = {}
+        # Sub-PRD 01b: monotonic settle counter for stable "latest"
+        # ordering even when two ``observed_settled`` calls land in
+        # the same microsecond (Python's ``datetime.now`` resolution
+        # is platform-dependent).
+        self._settle_counter: int = 0
 
     def started(
         self,
@@ -78,11 +100,70 @@ class ToolCallLedger:
         No-op if the call_id is unknown — this can happen for tool_results
         emitted before a corresponding tool_call_started (e.g. event-store
         replays into a cold ledger).
+
+        Sub-PRD 01b: also stamps ``settled_at`` and primes the entry for
+        :meth:`pop_pending_attribution`. The entry stays in the ledger
+        with ``consumed_for_attribution=False`` until the next LLM emit
+        in matching scope reads it.
         """
 
         entry = self._entries.get(call_id)
         if entry is not None:
             entry.settled = True
+            if entry.settled_at is None:
+                entry.settled_at = datetime.now(timezone.utc)
+                self._settle_counter += 1
+                entry.settle_order = self._settle_counter
+
+    def pop_pending_attribution(
+        self,
+        scope_key: str | None,
+    ) -> ToolCallEntry | None:
+        """Return the most recently settled tool entry for ``scope_key``.
+
+        Sub-PRD 01b: at LLM emit time, the streaming executor asks the
+        ledger "what tool's result did this call interpret?" The answer
+        is the most-recent settled entry whose ``subagent_id`` matches
+        the LLM call's scope (the LLM's own subagent slug, or ``None``
+        for orchestrator-scope calls).
+
+        Pop semantics:
+
+        - Filter by ``subagent_id == scope_key`` so a parallel
+          subagent's tool result doesn't stamp an orchestrator-scope
+          LLM call (and vice versa).
+        - Filter by ``settled and not consumed_for_attribution`` —
+          don't return entries that haven't fired their ``tool_result``
+          yet, and don't double-attribute.
+        - Return the entry with the latest ``settled_at``. Multiple
+          parallel tools settling before a single LLM emit (e.g. a
+          ReAct step that fans out): we pick one representative for
+          attribution rather than splitting cost proportionally. The
+          rest get marked consumed too so they don't leak to a later
+          emit.
+
+        Returns ``None`` if no eligible entry exists.
+        """
+
+        eligible = [
+            entry
+            for entry in self._entries.values()
+            if entry.settled
+            and not entry.consumed_for_attribution
+            and entry.subagent_id == scope_key
+        ]
+        if not eligible:
+            return None
+        # Latest by ``settle_order`` (monotonic per ledger, set when
+        # ``observed_settled`` fires). Wall-clock ``settled_at`` is
+        # retained for reporting but is platform-resolution-sensitive
+        # — two settles in the same microsecond would compare equal
+        # under wall-clock alone and the choice would depend on
+        # iteration order. ``settle_order`` is deterministic.
+        latest = max(eligible, key=lambda e: e.settle_order)
+        for entry in eligible:
+            entry.consumed_for_attribution = True
+        return latest
 
     def unsettled(self) -> list[ToolCallEntry]:
         """Return entries that have not yet been settled, oldest first.

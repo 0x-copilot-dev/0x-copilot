@@ -489,23 +489,6 @@ class PersistencePort(Protocol):
         ``seq`` / ``prev_hash`` / ``signature`` / ``key_version``.
         """
 
-    async def query_last_completed_tool_connector_slug(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        before: datetime,
-    ) -> str | None:
-        """Return the connector_slug of the most recent completed tool
-        invocation on ``run_id`` whose ``completed_at`` is strictly before
-        ``before`` (PR 7.2 attribution rule).
-
-        Returns ``None`` when no completed tool invocation matches —
-        i.e. the LLM call is "cold-turn" (planning before any tool fires).
-        Failed invocations are ignored; only ``status='completed'`` rows
-        contribute.
-        """
-
     async def query_run_usage(
         self,
         *,

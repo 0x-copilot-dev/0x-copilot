@@ -1,28 +1,46 @@
 """Async Postgres-backed runtime API, event store, and durable queue adapter.
 
 Built on ``psycopg.AsyncConnection`` and ``psycopg_pool.AsyncConnectionPool``.
-Hazard-fix highlights:
+Hazard-fix + serialization invariants:
 
 - ``async with self._pool.connection() as conn:`` + ``async with
   conn.transaction():`` for transactional cancellation safety.
-- ``append_event`` takes ``SELECT … FROM agent_runs … FOR UPDATE`` first
-  (H1) so concurrent appends per run serialize on the ``agent_runs`` row
-  lock; the UNIQUE on ``runtime_events(run_id, sequence_no)`` is the
-  load-bearing safety net.
+- ``append_event`` has two paths governed by ``self._lock_free_appends``:
+
+  * Legacy (H1 row lock): ``SELECT … FROM agent_runs … FOR UPDATE`` is
+    taken first so concurrent appends per run serialize on the
+    ``agent_runs`` row lock. ``UNIQUE(run_id, sequence_no)`` is the
+    backstop — if it fires under this path, the lock pattern is broken.
+
+  * P16 lock-free: the ``FOR UPDATE`` is dropped; the UNIQUE index
+    (``idx_runtime_events_run_sequence`` from migration 0001) is the
+    primary guard. Concurrent appenders that race to the same
+    ``sequence_no`` lose with ``UniqueViolation`` and retry up to
+    :data:`_AppendEventRetry.MAX_ATTEMPTS` times; sustained contention
+    past the retry budget surfaces :class:`RuntimeEventSequenceConflict`.
+
+- ``append_events_batch`` keeps the H1 row lock independent of P16: its
+  purpose (atomic contiguous-range allocation of N sequence_nos) is not
+  served by the per-event retry shape and is out of scope for P16.
 - ``create_approval_request`` uses ``INSERT … ON CONFLICT (id) DO NOTHING``
   followed by a fallback ``SELECT`` (H2). No check-then-insert race.
 - ``set_run_latest_sequence`` is monotonic: ``UPDATE … WHERE id = $1 AND
   latest_sequence_no < $2``. Out-of-order writes never rewind the cursor (H3).
+  The consolidated UPDATE inside ``append_event`` carries the same guard so
+  P16 retries can never rewind the cursor either.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import random
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import psycopg
+from psycopg import errors as psycopg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -36,6 +54,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.ports import RuntimeEventSequenceConflict
 from agent_runtime.persistence.encryption import (
     FieldCodec,
     FieldEncryption,
@@ -110,6 +129,19 @@ class _Tables:
     RUNTIME_AUDIT_LOG = "runtime_audit_log"
     RUNTIME_EVENTS = "runtime_events"
     RUNTIME_CITATIONS = "runtime_citations"
+
+
+class _AppendEventRetry:
+    """Tuning constants for the P16 lock-free ``append_event`` retry loop.
+
+    Match against the UNIQUE INDEX name from migration 0001:
+    ``CREATE UNIQUE INDEX idx_runtime_events_run_sequence ON runtime_events (run_id, sequence_no)``.
+    """
+
+    SEQUENCE_INDEX = "idx_runtime_events_run_sequence"
+    MAX_ATTEMPTS = 3
+    BASE_DELAY_SECONDS = 0.005
+    MAX_DELAY_SECONDS = 0.050
 
 
 class _Columns:
@@ -348,6 +380,7 @@ class PostgresRuntimeApiStore:
         consolidated_writes: bool = False,
         notify_after_append: bool = False,
         notify_channel: str = "runtime_events_v1",
+        lock_free_appends: bool = False,
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
@@ -375,6 +408,19 @@ class PostgresRuntimeApiStore:
         # in-memory event-bus path is unaffected.
         self._notify_after_append = notify_after_append
         self._notify_channel = notify_channel
+        # P16 — when True, ``append_event`` drops the per-run
+        # ``SELECT ... FOR UPDATE`` on ``agent_runs`` and instead relies on
+        # the ``UNIQUE(run_id, sequence_no)`` index (migration 0001:
+        # ``idx_runtime_events_run_sequence``) as the source of truth for
+        # monotonicity. The rare cancel-mid-stream race surfaces as a
+        # ``UniqueViolation`` on this index; the adapter retries up to
+        # ``_AppendEventRetry.MAX_ATTEMPTS`` times before raising
+        # :class:`RuntimeEventSequenceConflict`. The H3 monotonic guard on
+        # ``set_run_latest_sequence`` (and on the consolidated UPDATE) is
+        # unaffected. ``append_events_batch`` is out of scope and keeps
+        # its row lock — its purpose (atomic contiguous-range allocation)
+        # is different.
+        self._lock_free_appends = lock_free_appends
         # C7 phase 1: ``field_encryption`` defaults to ``NullFieldEncryption``
         # so writes stay v0 (plaintext) until an operator flips
         # ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``. The injection point is
@@ -2070,6 +2116,7 @@ class PostgresRuntimeApiStore:
                     id, org_id, run_id, conversation_id, parent_event_id,
                     trace_id, task_id, subagent_id, model_provider, model_name,
                     connector_slug,
+                    purpose, originating_tool_call_id, originating_tool_name,
                     input_tokens, output_tokens, cached_input_tokens,
                     cache_creation_input_tokens, reasoning_tokens,
                     audio_input_tokens, audio_output_tokens,
@@ -2079,6 +2126,7 @@ class PostgresRuntimeApiStore:
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s,
+                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
                     %s, %s,
@@ -2098,6 +2146,9 @@ class PostgresRuntimeApiStore:
                     record.model_provider,
                     record.model_name,
                     record.connector_slug,
+                    record.purpose,
+                    record.originating_tool_call_id,
+                    record.originating_tool_name,
                     record.input_tokens,
                     record.output_tokens,
                     record.cached_input_tokens,
@@ -2536,36 +2587,6 @@ class PostgresRuntimeApiStore:
                     mapped[key] = bytes(value).hex()
             result.append(mapped)
         return tuple(result)
-
-    @reader
-    async def query_last_completed_tool_connector_slug(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        before: datetime,
-    ) -> str | None:
-        async with self._read_only_connection(org_id=org_id) as conn:
-            cur = await conn.execute(
-                """
-                SELECT connector_slug
-                  FROM runtime_tool_invocations
-                 WHERE org_id = %s
-                   AND run_id = %s
-                   AND status = 'completed'
-                   AND completed_at IS NOT NULL
-                   AND completed_at < %s
-                   AND connector_slug IS NOT NULL
-                 ORDER BY completed_at DESC
-                 LIMIT 1
-                """,
-                (org_id, run_id, before),
-            )
-            row = await cur.fetchone()
-        if row is None:
-            return None
-        slug = row.get("connector_slug") if isinstance(row, dict) else row[0]
-        return str(slug) if slug is not None else None
 
     async def query_run_usage(
         self,
@@ -3698,30 +3719,78 @@ class PostgresRuntimeApiStore:
         return datetime.fromisoformat(str(value))
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
-        """Append one event with the next per-run sequence number (H1).
+        """Append one event with the next per-run sequence number.
 
-        Concurrent appenders for the same run serialize on the
-        ``agent_runs(run_id)`` row lock acquired via ``SELECT … FOR UPDATE``.
-        Inside that lock we read ``MAX(sequence_no)+1`` from
-        ``runtime_events`` and INSERT, so the next appender (which blocks on
-        the lock) sees the freshly committed row. The
-        ``runtime_events(run_id, sequence_no)`` UNIQUE constraint is a backstop
-        — if it ever fires, the lock pattern is broken.
+        Two write paths share one body (:meth:`_append_event_once`):
 
-        P4 (consolidated writes): when ``self._consolidated_writes`` is True
-        the same transaction also advances ``agent_runs.latest_sequence_no``
-        with the H3 monotonic guard. ``RuntimeEventProducer`` therefore skips
-        its separate ``set_run_latest_sequence`` call — saving one connection
-        acquire + one BEGIN/COMMIT pair per event. Behavior is identical to
-        the two-step path even if the producer's redundant call still fires.
+        * **Legacy (H1 row lock).** Concurrent appenders serialize on
+          ``SELECT … FOR UPDATE`` on ``agent_runs(run_id)``. Inside the
+          lock we read ``MAX(sequence_no)+1`` from ``runtime_events`` and
+          INSERT, so the next appender sees the freshly committed row.
+          The ``UNIQUE(run_id, sequence_no)`` index is the backstop.
+
+        * **P16 lock-free.** When ``self._lock_free_appends`` is True the
+          ``FOR UPDATE`` is dropped. The UNIQUE index is the only guard;
+          a concurrent appender that races to the same ``sequence_no``
+          loses with ``UniqueViolation`` and we retry up to
+          :data:`_AppendEventRetry.MAX_ATTEMPTS` times. The common case
+          is one INSERT with no lock acquire/release per event; the rare
+          cancel-mid-stream race costs one retry on the loser.
+
+        P4 (consolidated writes): both paths advance
+        ``agent_runs.latest_sequence_no`` inside the same transaction
+        when ``self._consolidated_writes`` is True. The H3 monotonic
+        guard prevents rewinds even under retry. ``RuntimeEventProducer``
+        therefore skips its separate ``set_run_latest_sequence`` call.
+
+        P2 (NOTIFY): both paths fire ``NOTIFY <channel>, '<run_id>:<seq>'``
+        when ``self._notify_after_append`` is True. The NOTIFY rides
+        inside the same transaction as the INSERT, so a rolled-back
+        attempt produces no NOTIFY.
+        """
+
+        if not self._lock_free_appends:
+            return await self._append_event_once(event, take_row_lock=True)
+
+        last_exc: psycopg_errors.UniqueViolation | None = None
+        for attempt in range(_AppendEventRetry.MAX_ATTEMPTS):
+            try:
+                return await self._append_event_once(event, take_row_lock=False)
+            except psycopg_errors.UniqueViolation as exc:
+                if not self._is_event_sequence_conflict(exc):
+                    raise
+                last_exc = exc
+                # Don't sleep after the final attempt — caller is about
+                # to see :class:`RuntimeEventSequenceConflict` anyway.
+                if attempt + 1 < _AppendEventRetry.MAX_ATTEMPTS:
+                    await asyncio.sleep(self._retry_backoff(attempt))
+        assert last_exc is not None  # loop only exits via return or exception
+        raise RuntimeEventSequenceConflict(
+            run_id=event.run_id,
+            attempts=_AppendEventRetry.MAX_ATTEMPTS,
+        ) from last_exc
+
+    async def _append_event_once(
+        self,
+        event: RuntimeEventDraft,
+        *,
+        take_row_lock: bool,
+    ) -> RuntimeEventEnvelope:
+        """One attempt at appending an event. See :meth:`append_event`.
+
+        ``take_row_lock=True`` acquires the legacy H1 ``FOR UPDATE`` lock
+        on ``agent_runs(run_id)``. ``False`` skips the lock and relies on
+        the UNIQUE index + retry path in the caller.
         """
 
         async with self._tenant_connection(org_id=event.org_id) as conn:
             async with conn.transaction():
-                cur = await conn.execute(
-                    "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE",
-                    (event.run_id,),
+                run_lookup_sql = (
+                    "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE"
+                    if take_row_lock
+                    else "SELECT org_id FROM agent_runs WHERE id = %s"
                 )
+                cur = await conn.execute(run_lookup_sql, (event.run_id,))
                 run = await cur.fetchone()
                 cur = await conn.execute(
                     """
@@ -3830,7 +3899,10 @@ class PostgresRuntimeApiStore:
                     # P4 — fold the cursor advance into the same transaction.
                     # Monotonic guard mirrors set_run_latest_sequence (H3) so
                     # the producer's redundant call (if it still fires under
-                    # rollback) is a no-op and never rewinds.
+                    # rollback) is a no-op and never rewinds. Under the P16
+                    # lock-free path the guard also protects against a peer
+                    # that has already advanced the cursor between our
+                    # MAX(sequence_no) read and our INSERT.
                     await conn.execute(
                         """
                         UPDATE agent_runs
@@ -3857,6 +3929,36 @@ class PostgresRuntimeApiStore:
                         (f"{envelope.run_id}:{envelope.sequence_no}",),
                     )
         return envelope
+
+    @staticmethod
+    def _is_event_sequence_conflict(exc: psycopg_errors.UniqueViolation) -> bool:
+        """Return True when ``exc`` came from the runtime_events sequence index.
+
+        Discriminates the P16 retry-on-race path from any other unique
+        violation that might surface through the same transaction (no
+        other writes happen in :meth:`_append_event_once`, but we match
+        on the index name explicitly so a future addition can't silently
+        widen the retry net).
+        """
+
+        constraint = getattr(exc.diag, "constraint_name", None)
+        return constraint == _AppendEventRetry.SEQUENCE_INDEX
+
+    @staticmethod
+    def _retry_backoff(attempt: int) -> float:
+        """Jittered exponential backoff for the lock-free append retry loop.
+
+        The race window is microseconds; the sleep is mostly to let the
+        peer commit before we re-read ``MAX(sequence_no)``. Capped at
+        :data:`_AppendEventRetry.MAX_DELAY_SECONDS` so a brief contention
+        spike can't stretch a single append into a long tail.
+        """
+
+        base = _AppendEventRetry.BASE_DELAY_SECONDS * (2**attempt)
+        delay = min(base, _AppendEventRetry.MAX_DELAY_SECONDS)
+        # Full jitter: U(0, delay). Keeps simultaneous losers from
+        # re-colliding on the next attempt.
+        return random.random() * delay
 
     async def append_events_batch(
         self, events: Sequence[RuntimeEventDraft]

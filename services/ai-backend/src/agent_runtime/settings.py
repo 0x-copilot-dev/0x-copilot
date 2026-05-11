@@ -68,6 +68,12 @@ class _EnvFields:
     # both); this flag defaults ``false`` so the rollout can be flipped
     # in staging first. Off → legacy per-source path.
     BATCH_SOURCE_INGESTION = "RUNTIME_BATCH_SOURCE_INGESTION"
+    # P16 — drop the per-run ``agent_runs`` row lock from
+    # ``PostgresRuntimeApiStore.append_event``. When on, the adapter
+    # relies on the ``UNIQUE(run_id, sequence_no)`` index and retries on
+    # ``UniqueViolation``. Default ``false`` so P16 ships dark; flip on
+    # per environment after staging validation. No effect on in-memory.
+    LOCK_FREE_APPENDS = "RUNTIME_LOCK_FREE_APPENDS"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
@@ -152,6 +158,14 @@ class RuntimeExecutionSettings(RuntimeContract):
     # ``source_ingested`` events). Default ``False`` so PR2 ships dark;
     # flip to ``True`` per environment after staging validation.
     batch_source_ingestion: bool = False
+    # P16 — drop the ``agent_runs`` row lock from
+    # ``PostgresRuntimeApiStore.append_event``. With this flag the adapter
+    # relies on ``UNIQUE(run_id, sequence_no)`` as the source of truth and
+    # retries on ``UniqueViolation`` instead of serializing on
+    # ``SELECT ... FOR UPDATE``. Default ``False`` (ships dark); flip per
+    # environment after staging validation against the H1 concurrency
+    # property test. Has no effect on the in-memory adapter.
+    lock_free_appends: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -337,6 +351,8 @@ class RuntimeSettings(BaseSettings):
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "in_memory").lower(),
                 batch_source_ingestion=_s(v, E.BATCH_SOURCE_INGESTION, "false").lower()
+                in _truthy,
+                lock_free_appends=_s(v, E.LOCK_FREE_APPENDS, "false").lower()
                 in _truthy,
             ),
             store=RuntimeStoreSettings(

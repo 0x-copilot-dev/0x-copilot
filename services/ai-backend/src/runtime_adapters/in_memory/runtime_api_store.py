@@ -1278,26 +1278,6 @@ class InMemoryRuntimeApiStore:
         )
         return tuple(rows[:limit])
 
-    async def query_last_completed_tool_connector_slug(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        before: datetime,
-    ) -> str | None:
-        candidates = [
-            (slug, completed_at)
-            for inv_org, inv_run, slug, completed_at in self.tool_invocation_completions
-            if inv_org == org_id
-            and inv_run == run_id
-            and completed_at < before
-            and slug
-        ]
-        if not candidates:
-            return None
-        candidates.sort(key=lambda pair: pair[1], reverse=True)
-        return candidates[0][0]
-
     async def query_run_usage(
         self,
         *,

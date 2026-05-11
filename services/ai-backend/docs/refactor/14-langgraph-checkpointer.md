@@ -1,11 +1,27 @@
 # Refactor PRD — LangGraph Checkpointer adoption (P17 / Phase 5)
 
-**Status:** Draft — pre-investigation
+**Status:** Draft — pre-investigation. **High retraction risk** — see disclaimer below.
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §3](../architecture/refactor-audit.md#3-library-replacements) (CheckpointStorePort row)
 **Roadmap slot:** [P17](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
 **Pre-requisite:** none in this folder; LangGraph version pinned by Deep Agents dependency
 **Blocks:** [P21 LangGraph interrupts](18-langgraph-interrupts.md) — durable interrupts require Checkpointer
+
+---
+
+## Retraction-risk disclaimer
+
+This PRD was drafted from architecture diagrams without reading the source. The pattern in this codebase is that diagram-derived PRDs frequently get retracted after code review because the documented design hides genuine separation of concerns that look like duplication on a diagram:
+
+- [`11-citations-consolidation.md`](11-citations-consolidation.md) (originally P14) — **retracted**: 8 citation files turned out to be 3 distinct subsystems with clear boundaries.
+- [`12-worker-stream-cleanup.md`](12-worker-stream-cleanup.md) (originally P15) — **retracted**: all 3 hypothesized smells (`ApprovalRecognisers`, `ToolCallLedger`, over-split `stream_*` files) turned out to be well-designed components with distinct responsibilities.
+- [`15-pg-partman-retention.md`](15-pg-partman-retention.md) (originally P18) — **superseded** by a different approach after code review.
+
+**Before committing to this PRD's design**, complete the §2 verification spike. If `CheckpointStorePort` turns out to be: (a) genuinely vestigial / unused (delete-only refactor), or (b) load-bearing for some specific in-memory test-only behavior that doesn't need LangGraph at all, then this PRD changes shape entirely.
+
+The verification questions in §2 are the gate, not the formalities.
+
+---
 
 ---
 
@@ -21,8 +37,8 @@ LangGraph ships its own `Checkpointer` subsystem ([`langgraph.checkpoint.postgre
 
 ### Symptoms (today)
 
-- Two parallel persistence stories for "what is the durable state of a graph run."
-- Adding a column to `CheckpointRecord` requires touching record + port + sync fake + async fake + Postgres adapter (the same drift surface that motivated [P5](01-async-only-ports.md)).
+- Two parallel persistence stories for "what is the durable state of a graph run." (Hypothesized — verify in code.)
+- Adding a column to `CheckpointRecord` historically required touching record + port + adapter. Since [P5 async-only ports](01-async-only-ports.md) shipped, the sync-mirror surface is gone, but the rest of the drift surface remains.
 - It is unclear from the architecture diagrams whether `CheckpointStorePort` is actively read by the graph builder, or whether LangGraph already runs without a checkpointer in production (i.e. the port may be **vestigial**, not load-bearing). This investigation is the first step before any code change.
 
 ### What this is NOT

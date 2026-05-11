@@ -172,50 +172,74 @@ class _ChunkInspector:
 class _UsageBlocks:
     """Locate usage / response_metadata mappings on a chunk.
 
-    Walks the well-known paths the LangChain adapters expose:
+    LangGraph wraps the actual AIMessage in a stream envelope like
+    ``{"type": "messages", "ns": (...), "data": (AIMessageChunk, {})}``;
+    the LangChain-native adapter also exposes the message directly. This
+    walker handles both shapes plus a couple of common alternatives:
 
-    1. ``chunk.usage_metadata`` — the LangChain-native shape (preferred).
-    2. ``chunk.response_metadata.token_usage`` — raw OpenAI dict.
-    3. ``chunk.response_metadata.usage`` — raw Anthropic dict.
-    4. ``chunk.message.usage_metadata`` — when the chunk is an envelope.
+    1. Direct attribute / mapping key access for ``usage_metadata`` and
+       ``response_metadata`` on the chunk.
+    2. One level of envelope unwrap into ``message``, ``data``,
+       ``output``, ``chunk`` (each may be the AIMessage itself, OR a
+       tuple/sequence whose first element is the AIMessage).
+    3. Provider-raw dicts under ``response_metadata.token_usage`` and
+       ``response_metadata.usage``.
 
     Returns each block found (in order) so provider extractors can pick
     the first one with the field they need.
     """
 
+    _ENVELOPE_KEYS = ("message", "data", "output", "chunk")
+    _MAX_DEPTH = 2
+
     @classmethod
     def find(cls, chunk: object) -> tuple[Mapping[str, object], ...]:
         blocks: list[Mapping[str, object]] = []
+        cls._walk(chunk, blocks, depth=0)
+        return tuple(blocks)
 
-        # Primary: LangChain-native ``usage_metadata`` (every provider's adapter).
-        cls._collect(chunk, "usage_metadata", blocks)
+    @classmethod
+    def _walk(
+        cls,
+        value: object,
+        sink: list[Mapping[str, object]],
+        *,
+        depth: int,
+    ) -> None:
+        if value is None or depth > cls._MAX_DEPTH:
+            return
+
+        # Direct extraction at this level.
+        cls._collect_at(value, sink)
+
+        # Descend into envelope keys (one or two layers deep covers every
+        # LangGraph / LangChain stream envelope we currently observe).
+        for key in cls._ENVELOPE_KEYS:
+            inner = _ChunkInspector.get_attr_or_item(value, key)
+            if inner is None:
+                continue
+            if isinstance(inner, tuple) and inner:
+                # LangGraph stream chunks pack ``(AIMessageChunk, metadata)``
+                # under ``data`` — descend into the first element.
+                cls._walk(inner[0], sink, depth=depth + 1)
+            else:
+                cls._walk(inner, sink, depth=depth + 1)
+
+    @classmethod
+    def _collect_at(cls, value: object, sink: list[Mapping[str, object]]) -> None:
+        # Primary: LangChain-native ``usage_metadata``.
+        candidate = _ChunkInspector.get_attr_or_item(value, "usage_metadata")
+        if isinstance(candidate, Mapping):
+            sink.append({str(k): v for k, v in candidate.items()})
 
         # Secondary: provider-raw dicts under ``response_metadata``.
-        resp_meta = _ChunkInspector.get_attr_or_item(chunk, "response_metadata")
+        resp_meta = _ChunkInspector.get_attr_or_item(value, "response_metadata")
         if isinstance(resp_meta, Mapping):
             normalized = {str(k): v for k, v in resp_meta.items()}
             for key in ("token_usage", "usage"):
                 inner = normalized.get(key)
                 if isinstance(inner, Mapping):
-                    blocks.append({str(k): v for k, v in inner.items()})
-
-        # Envelope: ``chunk.message.usage_metadata`` (event-stream wrappers).
-        inner_message = _ChunkInspector.get_attr_or_item(chunk, "message")
-        if inner_message is not None:
-            cls._collect(inner_message, "usage_metadata", blocks)
-
-        return tuple(blocks)
-
-    @classmethod
-    def _collect(
-        cls,
-        value: object,
-        key: str,
-        sink: list[Mapping[str, object]],
-    ) -> None:
-        candidate = _ChunkInspector.get_attr_or_item(value, key)
-        if isinstance(candidate, Mapping):
-            sink.append({str(k): v for k, v in candidate.items()})
+                    sink.append({str(k): v for k, v in inner.items()})
 
 
 class _LcdFallbackExtractor:
@@ -298,13 +322,32 @@ class OpenAIProviderTokenUsageExtractor:
         OUTPUT = "output_tokens"
         PROMPT = "prompt_tokens"
         COMPLETION = "completion_tokens"
+        # OpenAI exposes details under three sibling key names depending
+        # on the API path: ``prompt_tokens_details`` (Chat Completions),
+        # ``input_tokens_details`` (Responses), and
+        # ``input_token_details`` (LangChain's normalized usage_metadata
+        # shape — singular ``token``).
         PROMPT_DETAILS = "prompt_tokens_details"
-        INPUT_DETAILS = "input_tokens_details"
+        INPUT_TOKENS_DETAILS = "input_tokens_details"
+        INPUT_TOKEN_DETAILS = "input_token_details"
         COMPLETION_DETAILS = "completion_tokens_details"
-        OUTPUT_DETAILS = "output_tokens_details"
+        OUTPUT_TOKENS_DETAILS = "output_tokens_details"
+        OUTPUT_TOKEN_DETAILS = "output_token_details"
         CACHED_TOKENS = "cached_tokens"
+        CACHE_READ = "cache_read"
         REASONING_TOKENS = "reasoning_tokens"
         AUDIO_TOKENS = "audio_tokens"
+
+    _INPUT_DETAIL_KEYS = (
+        _F.PROMPT_DETAILS,
+        _F.INPUT_TOKENS_DETAILS,
+        _F.INPUT_TOKEN_DETAILS,
+    )
+    _OUTPUT_DETAIL_KEYS = (
+        _F.COMPLETION_DETAILS,
+        _F.OUTPUT_TOKENS_DETAILS,
+        _F.OUTPUT_TOKEN_DETAILS,
+    )
 
     def extract(self, chunk: object) -> NormalizedTokenUsage | None:
         blocks = _UsageBlocks.find(chunk)
@@ -322,24 +365,10 @@ class OpenAIProviderTokenUsageExtractor:
         output_tokens = _first_int(block, cls._F.OUTPUT, cls._F.COMPLETION)
         if input_tokens == 0 and output_tokens == 0:
             return None
-        cached = _cached_input_from_details(
-            block, cls._F.PROMPT_DETAILS, cls._F.INPUT_DETAILS
-        )
-        reasoning = _detail_int(
-            block,
-            (cls._F.COMPLETION_DETAILS, cls._F.OUTPUT_DETAILS),
-            cls._F.REASONING_TOKENS,
-        )
-        audio_input = _detail_int(
-            block,
-            (cls._F.PROMPT_DETAILS, cls._F.INPUT_DETAILS),
-            cls._F.AUDIO_TOKENS,
-        )
-        audio_output = _detail_int(
-            block,
-            (cls._F.COMPLETION_DETAILS, cls._F.OUTPUT_DETAILS),
-            cls._F.AUDIO_TOKENS,
-        )
+        cached = _cached_input_from_details(block, *cls._INPUT_DETAIL_KEYS)
+        reasoning = _detail_int(block, cls._OUTPUT_DETAIL_KEYS, cls._F.REASONING_TOKENS)
+        audio_input = _detail_int(block, cls._INPUT_DETAIL_KEYS, cls._F.AUDIO_TOKENS)
+        audio_output = _detail_int(block, cls._OUTPUT_DETAIL_KEYS, cls._F.AUDIO_TOKENS)
         return NormalizedTokenUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,

@@ -12,7 +12,10 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
-from agent_runtime.observability.usage_attribution import UsageAttributionResolver
+from agent_runtime.observability.attribution import (
+    Purpose,
+    UsageAttributionContext,
+)
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -20,6 +23,7 @@ from runtime_api.schemas import (
 from runtime_worker.delta_coalescer import DeltaCoalescer
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
+from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +94,154 @@ class _MessageIdExtractor:
         return None
 
 
+class _AttributionBuilder:
+    """Build :class:`UsageAttributionContext` from per-chunk signals.
+
+    Sub-PRD 01b: this replaces the time-based DB heuristic that used
+    to live in ``UsageAttributionResolver``. Every dimension is read
+    from data already present on the chunk + the streaming orchestrator
+    state:
+
+    - ``task_id`` / ``subagent_slug`` from
+      :class:`StreamUpdateProcessor` keyed on the chunk's namespace
+      ``subagent_task_id``. Deterministic per-chunk; safe under
+      parallel subagents (each subagent's chunks carry their own
+      subgraph UUID).
+    - ``originating_tool_*`` from :class:`ToolCallLedger` pop. The
+      ledger's pending-attribution queue is scope-aware (subagent_id
+      filters cross-attribution).
+    - ``purpose`` via :meth:`Purpose.derive` from input/output signals.
+
+    The builder owns no state of its own — every method takes the run
+    + orchestrator + ledger as arguments. Stateless instances make
+    testing trivial.
+    """
+
+    def __init__(self, *, run: RunRecord, orchestrator: StreamOrchestrator) -> None:
+        self._run = run
+        self._orchestrator = orchestrator
+
+    def build_for_chunk(self, chunk: object) -> UsageAttributionContext:
+        """Build a context for an LLM call emit landing on this chunk.
+
+        Reads subagent identity from the chunk's namespace + the
+        orchestrator's subagent linkage; reads tool attribution from
+        the per-run ledger. Returns a constructed
+        :class:`UsageAttributionContext` whose ``purpose`` was derived
+        from the same signals.
+        """
+
+        part = chunk if isinstance(chunk, Mapping) else None
+        namespace = (
+            StreamPartParser.namespace_for(part)
+            if part is not None
+            else StreamNamespace(())
+        )
+        # task_id resolves via the supervisor_task_call_id metadata
+        # ``atlas_task_tool`` injects, falling back to the orchestrator's
+        # subgraph-to-call_id mapping when the metadata isn't on this
+        # specific chunk (e.g. updates-mode chunks).
+        task_id: str | None = None
+        subagent_slug: str | None = None
+        if namespace.is_subagent:
+            task_id = (
+                StreamPartParser.supervisor_task_call_id_for(part)
+                if part is not None
+                else None
+            )
+            if task_id is None:
+                task_id = (
+                    self._orchestrator.update_processor.subagent_call_id_for_subgraph(
+                        run_id=self._run.run_id,
+                        subgraph_task_id=namespace.subagent_task_id,
+                    )
+                )
+            subagent_slug = (
+                self._orchestrator.update_processor.subagent_id_for_subgraph(
+                    run_id=self._run.run_id,
+                    subgraph_task_id=namespace.subagent_task_id,
+                )
+            )
+
+        # Originating-tool attribution: pop the most-recent settled
+        # tool for this scope. Scope key is the subagent slug so a
+        # parallel subagent's TOOL_RESULT doesn't stamp a sibling's
+        # LLM call.
+        ledger = self._orchestrator.message_processor.ledger_for_run(self._run.run_id)
+        scope_key = subagent_slug
+        pending = ledger.pop_pending_attribution(scope_key)
+        originating_tool_call_id: str | None = None
+        originating_tool_name: str | None = None
+        connector_slug: str | None = None
+        if pending is not None:
+            originating_tool_call_id = pending.call_id
+            originating_tool_name = pending.tool_name
+            connector_slug = pending.connector_slug
+
+        is_subagent = subagent_slug is not None and task_id is not None
+        input_has_tool_message = pending is not None
+        output_has_tool_calls = self._chunk_has_tool_calls(chunk)
+        purpose = Purpose.derive(
+            input_has_tool_message=input_has_tool_message,
+            output_has_tool_calls=output_has_tool_calls,
+            is_subagent=is_subagent,
+            is_compression=False,  # wired in 01c when summarization joins
+        )
+
+        # Pydantic invariant: TOOL_INTERPRETATION requires
+        # originating_tool_call_id. If we computed it from
+        # ``pending is not None``, the invariant holds. Defensive: if
+        # purpose ended up as TOOL_INTERPRETATION without an
+        # originating tool (shouldn't happen given derive precedence),
+        # downgrade to MAIN so construction never raises.
+        if purpose == Purpose.TOOL_INTERPRETATION and originating_tool_call_id is None:
+            purpose = Purpose.MAIN
+        # Defensive: SUBAGENT_WORK requires subagent_slug; if the
+        # orchestrator didn't link the subgraph yet (early chunk),
+        # downgrade.
+        if purpose == Purpose.SUBAGENT_WORK and subagent_slug is None:
+            purpose = Purpose.MAIN
+            task_id = None
+
+        return UsageAttributionContext(
+            org_id=self._run.org_id,
+            user_id=self._run.user_id,
+            run_id=self._run.run_id,
+            conversation_id=self._run.conversation_id,
+            trace_id=self._run.trace_id,
+            purpose=purpose,
+            task_id=task_id if subagent_slug is not None else None,
+            subagent_slug=subagent_slug,
+            originating_tool_call_id=originating_tool_call_id,
+            originating_tool_name=originating_tool_name,
+            connector_slug=connector_slug,
+        )
+
+    @staticmethod
+    def _chunk_has_tool_calls(chunk: object) -> bool:
+        """Inspect the AIMessage on the chunk for non-empty tool_calls.
+
+        LangChain AIMessage carries ``.tool_calls`` (list[dict]) when
+        the model output included tool selections. The chunk may wrap
+        the message in a ``data: (AIMessageChunk, metadata)`` tuple,
+        or expose the message at the chunk root.
+        """
+
+        candidates: list[object] = [chunk]
+        if isinstance(chunk, Mapping):
+            data = chunk.get("data")
+            if isinstance(data, tuple) and data:
+                candidates.append(data[0])
+            message = chunk.get("message")
+            if message is not None:
+                candidates.append(message)
+        for candidate in candidates:
+            tool_calls = getattr(candidate, "tool_calls", None)
+            if isinstance(tool_calls, list) and tool_calls:
+                return True
+        return False
+
+
 class StreamingExecutor:
     """Execute a streaming runtime loop, collecting events and metrics.
 
@@ -113,7 +265,6 @@ class StreamingExecutor:
         event_store: EventStorePort,
         event_producer: RuntimeEventProducer,
         stream_event_mapper: StreamOrchestrator,
-        attribution: UsageAttributionResolver | None = None,
         track_subagents: bool = False,
         citation_pipeline: CitationStreamPipeline | None = None,
         citation_resolver: CitationResolver | None = None,
@@ -130,8 +281,17 @@ class StreamingExecutor:
         if citation_resolver is None:
             citation_resolver = CitationResolver.active()
         result = StreamingResult()
+        # ``active_subagent_tasks`` survives as a boolean signal: "is
+        # any subagent currently the active speaker?" That gates the
+        # final-result / response-delta / citation-skip branches below.
+        # It is NOT used for attribution any more — attribution comes
+        # from the deterministic ``_AttributionBuilder`` keyed on
+        # chunk namespace.
         active_subagent_tasks: set[str] = set()
         completed_subagent_tasks: set[str] = set()
+        attribution_builder = _AttributionBuilder(
+            run=run, orchestrator=stream_event_mapper
+        )
 
         # P4 Stage 2 — coalesce ``MODEL_DELTA`` chunk writes within a
         # configurable window. Default ``window_ms=0`` means passthrough
@@ -148,12 +308,16 @@ class StreamingExecutor:
         async with delta_coalescer:
             async for chunk in stream:
                 result.last_chunk = chunk
-                current_task_id = (
-                    next(iter(active_subagent_tasks)) if active_subagent_tasks else None
-                )
                 chunk_message_id = _MessageIdExtractor.extract(chunk)
+                # Build the attribution context *only* when the chunk
+                # closes an AIMessage (otherwise nothing to attribute);
+                # ``record_usage_from`` is the boundary that stamps it
+                # onto the per-call slot.
+                chunk_context: UsageAttributionContext | None = None
+                if chunk_message_id is not None and metrics.chunk_has_usage(chunk):
+                    chunk_context = attribution_builder.build_for_chunk(chunk)
                 metrics.record_usage_from(
-                    chunk, message_id=chunk_message_id, task_id=current_task_id
+                    chunk, message_id=chunk_message_id, context=chunk_context
                 )
                 # P4 Stage 2 — flush any buffered deltas before emitting a
                 # non-DELTA event so envelope ordering is preserved on the
@@ -166,15 +330,19 @@ class StreamingExecutor:
                     event_producer=event_producer,
                     message_id=chunk_message_id,
                     source=chunk,
-                    attribution=attribution,
                 )
                 latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
                 candidate = stream_event_mapper.stream_result_candidate(chunk)
                 if candidate is not None and not active_subagent_tasks:
                     result.final_result = candidate
                     candidate_id = _MessageIdExtractor.extract(candidate)
+                    candidate_context: UsageAttributionContext | None = None
+                    if candidate_id is not None and metrics.chunk_has_usage(candidate):
+                        candidate_context = attribution_builder.build_for_chunk(
+                            candidate
+                        )
                     metrics.record_usage_from(
-                        candidate, message_id=candidate_id, task_id=current_task_id
+                        candidate, message_id=candidate_id, context=candidate_context
                     )
                     await cls._maybe_emit_model_call_completed(
                         run=run,
@@ -182,7 +350,6 @@ class StreamingExecutor:
                         event_producer=event_producer,
                         message_id=candidate_id,
                         source=candidate,
-                        attribution=attribution,
                     )
                 delta = stream_event_mapper.stream_delta(chunk)
                 if citation_pipeline is not None:
@@ -310,18 +477,20 @@ class StreamingExecutor:
         event_producer: RuntimeEventProducer,
         message_id: str | None,
         source: object,
-        attribution: UsageAttributionResolver | None = None,
     ) -> None:
         """Emit ``MODEL_CALL_COMPLETED`` once per AIMessage with usage (B2).
 
-        Idempotent on ``message_id``: subsequent chunks for the same call
-        are ignored. The payload carries the slot's accumulated counts —
-        which match what the per-call row will store — wrapped in the
-        existing ``AssistantPerformanceMetrics`` shape so SSE consumers
-        share the same schema as ``RUN_COMPLETED``. PR 7.2 stamps the
-        connector that prompted this call onto the slot (so the eventual
-        ``runtime_model_call_usage`` row carries it) and includes it in
-        the wire payload as an additive optional field.
+        Idempotent on ``message_id``: subsequent chunks for the same
+        call are ignored. The payload carries the slot's accumulated
+        counts wrapped in the existing ``AssistantPerformanceMetrics``
+        shape so SSE consumers share the same schema as
+        ``RUN_COMPLETED``.
+
+        Sub-PRD 01b: the slot was attributed via
+        :class:`UsageAttributionContext` at ``record_usage_from`` time.
+        Reading ``slot.connector_slug`` here goes through the
+        context — no DB lookup needed. The dead
+        :class:`UsageAttributionResolver` is gone.
         """
 
         if message_id is None:
@@ -337,19 +506,13 @@ class StreamingExecutor:
         completed_at = datetime.now(timezone.utc)
         if not metrics.per_call.mark_completed(message_id, completed_at=completed_at):
             return
-        if attribution is not None and slot.connector_slug is None:
-            slot.connector_slug = await attribution.resolve(
-                org_id=run.org_id,
-                run_id=run.run_id,
-                before=completed_at,
-            )
         started_at = slot.started_at or completed_at
         duration_ms = AssistantRunMetrics._duration_ms(started_at, completed_at)
         usage_payload = {
-            "input": slot.input_tokens,
-            "output": slot.output_tokens,
-            "cached_input": slot.cached_input_tokens,
-            "total": slot.total_tokens,
+            "input": slot.usage.input_tokens,
+            "output": slot.usage.output_tokens,
+            "cached_input": slot.usage.cached_input_tokens,
+            "total": slot.usage.total_tokens,
         }
         performance_metrics: dict[str, object] = {
             "started_at": started_at.isoformat(),

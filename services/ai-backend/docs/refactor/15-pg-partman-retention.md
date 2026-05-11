@@ -1,11 +1,46 @@
-# Refactor PRD — pg_partman partitioning for retention (P18 / Phase 5)
+# Refactor PRD — pg_partman partitioning for retention (P18 / Phase 5) — **SUPERSEDED**
 
-**Status:** Draft — pre-investigation
+**Status:** SUPERSEDED 2026-05-11 by [`01-retention-sweep-replacement.md`](01-retention-sweep-replacement.md).
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §1.5](../architecture/refactor-audit.md#15-custom-retention-sweep--5-level-policy-resolver)
 **Roadmap slot:** [P18](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Pre-requisite:** none (orthogonal to other Phase 5 work)
-**Touches compliance:** retention policy is a regulated control — buyer sign-off may be required before merging.
+
+---
+
+## Why superseded
+
+This PRD proposed **time-partitioning by `created_at` via `pg_partman`** as the replacement for the app-layer retention sweep. After code-level investigation, the team chose a different — and better-fitting — approach:
+
+- **Stamp `retention_until` at write time** on the high-volume tables. Resolver runs once per write, not once per sweep tick.
+- **Bounded sweep SQL** that selects rows past `retention_until` and applies the existing kind-specific tombstone / hard-delete semantics in batches.
+- **Write `runtime_deletion_evidence` rows** on every sweep for compliance traceability.
+- **Implement the documented 30-day-grace-then-hard-delete** path that was specified but unimplemented.
+
+This is strictly better than pg_partman partitioning for this codebase because:
+
+1. **Per-row TTL is real here.** A user-level `privacy_settings.retention_days` override can pin individual rows to a different TTL than their siblings (see [resolver.py:97-111](../../src/agent_runtime/retention/policy_resolver.py#L97)). Time-partitioning by `created_at` cannot express this; `retention_until` per row can.
+2. **Tombstone vs hard-delete semantics differ per kind.** Messages and events tombstone (privacy-preserving, queryable for legal hold); checkpoints and payloads hard-delete. Partitioning forces one strategy per table.
+3. **`runtime_deletion_evidence` table already exists** ([migration 0001](../../migrations/0001_initial_runtime_persistence.sql)) and was never written by the sweeper. The replacement PRD wires it up — cheap compliance win that partitioning would not deliver.
+4. **No schema-level partitioning change required**, so no maintenance window, no replication-lag risk, no FK redesign. The replacement migration adds one nullable column on three tables.
+
+The original PRD's framing — "Postgres has TTL via partitioning, application code should not reinvent it" — was directionally right but wrong about which Postgres mechanism fit this domain. Partitioning is the right answer when retention is **uniform per partition window**. Here retention is per-row and per-kind. The right Postgres mechanism is an indexed `retention_until` column with a bounded sweep.
+
+## What to read instead
+
+[`01-retention-sweep-replacement.md`](01-retention-sweep-replacement.md) is the live PRD. It tracks the same [refactor-audit §1.5](../architecture/refactor-audit.md#15-custom-retention-sweep--5-level-policy-resolver) finding and is the canonical replacement plan.
+
+## What stays valid from this PRD
+
+Nothing prescriptive. Two notes worth carrying over:
+
+- The general staff-engineer lesson — "let the code tell you which DB mechanism fits, not the diagram" — applies to every other Phase 5 PRD. See the [retraction-risk disclaimer pattern](14-langgraph-checkpointer.md) on those.
+- The "5-level retention resolution hierarchy is load-bearing and must survive any refactor" constraint is preserved by the replacement PRD.
+
+---
+
+\*The original content of this PRD follows below for archival reference only. **Do not implement against it.\***
+
+---
 
 ---
 

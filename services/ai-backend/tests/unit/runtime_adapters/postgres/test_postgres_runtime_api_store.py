@@ -201,6 +201,7 @@ class TestAsyncAdapterParity:
             RuntimeEventDraft(
                 run_id=run_id,
                 conversation_id=conv_id,
+                org_id=org_id,
                 trace_id="trace",
                 source=StreamEventSource.RUNTIME,
                 event_type=RuntimeApiEventType.RUN_STARTED,
@@ -211,6 +212,7 @@ class TestAsyncAdapterParity:
             RuntimeEventDraft(
                 run_id=run_id,
                 conversation_id=conv_id,
+                org_id=org_id,
                 trace_id="trace",
                 source=StreamEventSource.RUNTIME,
                 event_type=RuntimeApiEventType.PROGRESS,
@@ -229,6 +231,7 @@ class TestAsyncAdapterParity:
                 RuntimeEventDraft(
                     run_id=run_id,
                     conversation_id=conv_id,
+                    org_id=org_id,
                     trace_id="trace",
                     source=StreamEventSource.RUNTIME,
                     event_type=RuntimeApiEventType.PROGRESS,
@@ -351,6 +354,7 @@ class TestAsyncAdapterConcurrency:
                 RuntimeEventDraft(
                     run_id=run_id,
                     conversation_id=conv_id,
+                    org_id=org_id,
                     trace_id="trace",
                     source=StreamEventSource.RUNTIME,
                     event_type=RuntimeApiEventType.PROGRESS,

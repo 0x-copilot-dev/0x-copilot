@@ -1,6 +1,6 @@
 # Sub-PRD 01a — Normalized Token Shape
 
-**Status:** Draft (2026-05-11)
+**Status:** Shipped 2026-05-11
 **Parent:** [01-usage-capture-and-attribution.md](01-usage-capture-and-attribution.md)
 **Position in plan:** P11.7.a (first of four sub-PRDs)
 **Risk:** Low. Direct cutover; additive schema; provider extractors covered by snapshot fixtures.

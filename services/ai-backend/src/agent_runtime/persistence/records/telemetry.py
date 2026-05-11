@@ -87,6 +87,14 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     model_provider: str
     model_name: str
     connector_slug: str | None = None
+    # Sub-PRD 01b — attribution columns. ``purpose`` defaults to
+    # ``'main'`` so pre-migration rows + any code path that doesn't
+    # build a ``UsageAttributionContext`` get the safe bucket.
+    # ``originating_tool_*`` are only populated for tool_interpretation
+    # / tool_planning calls.
+    purpose: str = "main"
+    originating_tool_call_id: str | None = None
+    originating_tool_name: str | None = None
     input_tokens: NonNegativeInt = 0
     output_tokens: NonNegativeInt = 0
     cached_input_tokens: NonNegativeInt = 0

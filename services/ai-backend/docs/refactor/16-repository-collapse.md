@@ -1,22 +1,41 @@
 # Refactor PRD — Repository pattern collapse (P19 / Phase 5)
 
-**Status:** Draft — pre-investigation
+**Status:** Draft — pre-investigation. **High retraction risk** — see disclaimer below.
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §2.1](../architecture/refactor-audit.md#21-9-persistence-ports--17-record-types)
 **Roadmap slot:** [P19](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Pre-requisite:** [P5 async-only ports](01-async-only-ports.md) **must land first**
-**Risk:** High — this is the largest single restructure in the audit.
+**Pre-requisite:** [P5 async-only ports](01-async-only-ports.md) — **shipped**. `agent_runtime/api/ports.py` is now async-native single-Protocol; `async_ports.py` + `async_wrappers.py` + `AsyncInMemoryRuntimeApiStore` are deleted. Anything in this PRD that referenced sync/async pair plumbing is past-tense.
+**Risk:** High — this is the largest single restructure in the audit. The retraction-risk disclaimer below is doubly relevant.
 
 ---
 
-## 1. Problem
+## Retraction-risk disclaimer
 
-The persistence layer carries far more port surface area than the production split (in-memory + Postgres) justifies:
+This PRD was drafted from architecture diagrams without reading the source. The pattern in this codebase is that diagram-derived PRDs about "N files / N ports — collapse to M" frequently get retracted after code review because what looks like duplication on a diagram is often genuine separation of concerns:
+
+- [`11-citations-consolidation.md`](11-citations-consolidation.md) (originally P14) — **retracted**. Diagram said "8 citation files duplicate one another, collapse to 3." Code review found three distinct subsystems with clear boundaries and a single source of truth (`CitationLedger._register_internal`). Nothing to collapse.
+- [`12-worker-stream-cleanup.md`](12-worker-stream-cleanup.md) (originally P15) — **retracted**. Diagram said `ApprovalRecognisers` was a stream pattern-matcher; code said it's a tool-args projector for approval cards. Diagram said `ToolCallLedger` duplicated persistence; code said it's 139 LOC of in-flight tracking that emits synthetic terminal events on crash. All three smells were wrong.
+
+**This PRD's central claim — "9 ports + 17 records → 4 repositories" — is structurally the same kind of claim.** It is highly likely that several of the 9 ports represent legitimately separate domain surfaces (Drafts vs Citations vs Shares are not the same concern), and that several of the 17 records are boundary types whose Pydantic shape is non-negotiable per [`docs/CLAUDE.md`](../CLAUDE.md).
+
+**The 4-repository split in §3 is a hypothesis, not a prescription.** The verification spike in §2 is the gate.
+
+If verification shows the current decomposition is already correct, this PRD becomes **withdrawn** (like P14/P15), not "implement smaller scope."
+
+---
+
+---
+
+## 1. Problem (hypothesis — verify in §2 before acting)
+
+The persistence layer **may** carry more port surface area than the production split (in-memory + Postgres) justifies:
 
 - **9+ persistence Protocols** in [`agent_runtime/persistence/ports.py`](../../src/agent_runtime/persistence/ports.py): `MemoryMetadataPort`, `PayloadStoragePort`, `CheckpointStorePort`, `DraftStorePort`, `SubagentStorePort`, `SourceStorePort`, `CitationStorePort`, `ConversationToolOrdinalStorePort`, `ShareStorePort`.
-- **Plus the trio in [`agent_runtime/api/async_ports.py`](../../src/agent_runtime/api/async_ports.py)**: `AsyncPersistencePort`, `AsyncEventStorePort`, `AsyncRuntimeQueuePort`. (Sync versions die in [P5](01-async-only-ports.md); this PRD assumes async-only.)
-- **17+ record types** in [`agent_runtime/persistence/records/`](../../src/agent_runtime/persistence/records/) across `run/`, `mem/`, `ws/`, `admin/` sub-packages. Each is a Pydantic model wrapping a row.
+- **Plus the trio in [`agent_runtime/api/ports.py`](../../src/agent_runtime/api/ports.py)** (post-[P5](01-async-only-ports.md), now async-native single-Protocol): `PersistencePort`, `EventStorePort`, `RuntimeQueuePort`.
+- **17+ record types** in [`agent_runtime/persistence/records/`](../../src/agent_runtime/persistence/records/). Each is a Pydantic model wrapping a row.
 - **Two adapter trees** ([`runtime_adapters/in_memory/`](../../src/runtime_adapters/in_memory/) + [`runtime_adapters/postgres/`](../../src/runtime_adapters/postgres/)) where every port × every adapter = a file.
+
+**Crucial caveat.** The retracted PRDs P14 and P15 also started with a "many files, must duplicate" framing. Both turned out to be wrong on code review. Treat the count above as raw inventory, not as evidence of duplication.
 
 Adding a column requires:
 

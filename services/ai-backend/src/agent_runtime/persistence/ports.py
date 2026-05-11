@@ -66,6 +66,28 @@ class ConversationOrdinalConflict(RuntimeError):
         self.existing_ordinal = existing_ordinal
 
 
+class RuntimeEventSequenceConflict(RuntimeError):
+    """Raised when the lock-free ``append_event`` path exhausts its retry budget.
+
+    With ``PostgresRuntimeApiStore.lock_free_appends=True`` the per-run row
+    lock on ``agent_runs`` is dropped; concurrent appenders race for the
+    next ``sequence_no`` and the ``UNIQUE(run_id, sequence_no)`` index
+    catches the loser. The adapter retries internally; only sustained
+    contention that exceeds the retry budget surfaces this exception.
+    Like :class:`ConversationOrdinalConflict`, it is not user-facing —
+    callers either retry at a higher layer or let it propagate as a
+    transient persistence failure.
+    """
+
+    def __init__(self, *, run_id: str, attempts: int) -> None:
+        super().__init__(
+            f"runtime_events sequence allocation for run {run_id} failed "
+            f"after {attempts} attempts due to UNIQUE conflicts"
+        )
+        self.run_id = run_id
+        self.attempts = attempts
+
+
 @runtime_checkable
 class MemoryMetadataPort(Protocol):
     """Memory scope and memory item metadata boundary."""

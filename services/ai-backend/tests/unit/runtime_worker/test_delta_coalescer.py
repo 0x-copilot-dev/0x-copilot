@@ -88,6 +88,7 @@ class _FixturesMixin:
         return RuntimeEventDraft(
             run_id=self.RUN_ID,
             conversation_id=self.CONVERSATION_ID,
+            org_id=self.ORG_ID,
             source=StreamEventSource.MODEL,
             event_type=RuntimeApiEventType.MODEL_DELTA,
             trace_id=self.TRACE_ID,
@@ -117,6 +118,7 @@ class TestInMemoryAppendEventsBatch(_FixturesMixin):
             RuntimeEventDraft(
                 run_id=self.RUN_ID,
                 conversation_id=self.CONVERSATION_ID,
+                org_id=self.ORG_ID,
                 source=StreamEventSource.MODEL,
                 event_type=RuntimeApiEventType.MODEL_DELTA,
                 trace_id=self.TRACE_ID,
@@ -148,6 +150,7 @@ class TestInMemoryAppendEventsBatch(_FixturesMixin):
             RuntimeEventDraft(
                 run_id="ghost_run",
                 conversation_id=self.CONVERSATION_ID,
+                org_id=self.ORG_ID,
                 source=StreamEventSource.MODEL,
                 event_type=RuntimeApiEventType.MODEL_DELTA,
                 trace_id=self.TRACE_ID,

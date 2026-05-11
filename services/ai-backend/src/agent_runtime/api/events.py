@@ -123,6 +123,7 @@ class RuntimeEventProducer:
         draft = RuntimeEventDraft(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
+            org_id=run.org_id,
             source=source,
             event_type=event_type,
             trace_id=run.trace_id,
@@ -191,6 +192,7 @@ class RuntimeEventProducer:
         draft = RuntimeEventDraft.from_stream_event(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
+            org_id=run.org_id,
             stream_event=stream_event,
         )
         timeline_fields = draft.model_dump(
@@ -376,6 +378,7 @@ class RuntimeEventProducer:
                 RuntimeEventDraft(
                     run_id=run.run_id,
                     conversation_id=run.conversation_id,
+                    org_id=run.org_id,
                     source=source,
                     event_type=event_type,
                     trace_id=run.trace_id,

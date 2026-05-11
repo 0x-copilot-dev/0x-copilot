@@ -6,6 +6,15 @@ worker-side accumulator: it observes a normalized usage value object
 per chunk, dedupes per-AIMessage, and materializes per-call /
 per-run / per-subagent records.
 
+Sub-PRD 01b — per-call slots also carry a typed
+:class:`UsageAttributionContext` built at emit time by the streaming
+executor. ``model_call_usage_records`` materializes the attribution
+columns (``subagent_id``, ``connector_slug``, ``purpose``,
+``originating_tool_call_id``, ``originating_tool_name``) from the
+stamped context. The slot's own ``task_id`` continues to come from
+LangGraph chunk metadata (no more ``next(iter(active_subagent_tasks))``
+arbitration).
+
 The provider-coupled walker that used to live here as
 ``TokenUsageExtractor`` is gone. Use
 :class:`agent_runtime.observability.token_usage.TokenUsageExtractorRegistry`
@@ -17,6 +26,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from agent_runtime.execution.contracts import JsonObject
+from agent_runtime.observability.attribution import (
+    UsageAttributionContext,
+)
 from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
     TokenUsageExtractorRegistry,
@@ -39,32 +51,67 @@ class _PerCallSlot:
     Holds the latest provider-reported counts for a single LLM call.
     Counts are *merged* on each ``observe`` (field-wise max) because
     providers stream cumulative usage across chunks of the same
-    AIMessage. ``connector_slug`` (PR 7.2) is stamped at
-    ``mark_completed`` time by the streaming executor.
+    AIMessage.
+
+    Sub-PRD 01b: the slot also carries a typed
+    :class:`UsageAttributionContext` stamped by the streaming executor
+    at emit time. The context populates the ``subagent_id``,
+    ``connector_slug``, ``purpose``, and ``originating_tool_*`` columns
+    on the materialized row. ``task_id`` is read from the context too
+    so the row's per-task attribution comes from chunk metadata, not
+    from worker-local set arbitration.
     """
 
     __slots__ = (
         "message_id",
-        "task_id",
-        "connector_slug",
         "usage",
         "started_at",
         "completed_at",
+        "context",
     )
 
     def __init__(
         self,
         *,
         message_id: str,
-        task_id: str | None = None,
         started_at: datetime | None = None,
     ) -> None:
         self.message_id = message_id
-        self.task_id = task_id
-        self.connector_slug: str | None = None
         self.usage: NormalizedTokenUsage = NormalizedTokenUsage()
         self.started_at = started_at
         self.completed_at: datetime | None = None
+        self.context: UsageAttributionContext | None = None
+
+    # Convenience accessors so existing call sites (and tests) can read
+    # the context's fields off the slot directly. ``task_id`` and the
+    # other attribution fields fall through to the stamped context;
+    # callers that consult them before context is stamped see ``None``.
+
+    @property
+    def task_id(self) -> str | None:
+        return self.context.task_id if self.context is not None else None
+
+    @property
+    def subagent_id(self) -> str | None:
+        return self.context.subagent_slug if self.context is not None else None
+
+    @property
+    def connector_slug(self) -> str | None:
+        return self.context.connector_slug if self.context is not None else None
+
+    @property
+    def purpose(self) -> str:
+        return self.context.purpose.value if self.context is not None else "main"
+
+    @property
+    def originating_tool_call_id(self) -> str | None:
+        return (
+            self.context.originating_tool_call_id if self.context is not None else None
+        )
+
+    @property
+    def originating_tool_name(self) -> str | None:
+        return self.context.originating_tool_name if self.context is not None else None
 
     # Convenience accessors so callers and tests can read individual
     # kinds without unpacking ``usage`` every time. Keeps prior call
@@ -127,17 +174,28 @@ class PerCallTokenAccumulator:
         usage: NormalizedTokenUsage,
         *,
         message_id: str,
-        task_id: str | None = None,
+        context: UsageAttributionContext | None = None,
         started_at: datetime | None = None,
     ) -> _PerCallSlot:
+        """Merge ``usage`` into the slot for ``message_id`` and stamp
+        ``context`` (if provided).
+
+        Sub-PRD 01b: ``context`` replaces the prior per-arg
+        ``task_id=...`` stamping. The context carries every attribution
+        dimension; the slot reads via property accessors. A subsequent
+        ``observe`` with a different context overwrites — by design,
+        the LATEST emit's context wins (a stream chunk shouldn't ever
+        change attribution mid-message, but if the streaming executor
+        re-stamps with refined context closer to message close, that's
+        the more accurate stamp).
+        """
+
         slot = self._slots.get(message_id)
         if slot is None:
-            slot = _PerCallSlot(
-                message_id=message_id, task_id=task_id, started_at=started_at
-            )
+            slot = _PerCallSlot(message_id=message_id, started_at=started_at)
             self._slots[message_id] = slot
-        if task_id is not None:
-            slot.task_id = task_id
+        if context is not None:
+            slot.context = context
         # Field-wise max preserves the prior "last write wins for
         # cumulative providers" semantic while protecting against a
         # mid-stream chunk that reported a smaller running total than
@@ -173,6 +231,10 @@ class PerCallTokenAccumulator:
     def subagent_rollup(self, task_id: str) -> AssistantSubagentUsageRollup:
         """Sum per-call usage attributed to ``task_id`` (B2 spec §2.3).
 
+        Sub-PRD 01b: ``slot.task_id`` is read from the slot's stamped
+        :class:`UsageAttributionContext` (chunk-namespace-derived) —
+        no more worker-local set arbitration.
+
         The wire schema (``AssistantSubagentUsageRollup``) carries
         input / output / cached_input / total only — the four new
         kinds aren't surfaced to the FE until 01d. The captured rows
@@ -188,10 +250,10 @@ class PerCallTokenAccumulator:
         for slot in self._slots.values():
             if slot.task_id != task_id:
                 continue
-            input_tokens += slot.input_tokens
-            output_tokens += slot.output_tokens
-            cached_input_tokens += slot.cached_input_tokens
-            total_tokens += slot.total_tokens
+            input_tokens += slot.usage.input_tokens
+            output_tokens += slot.usage.output_tokens
+            cached_input_tokens += slot.usage.cached_input_tokens
+            total_tokens += slot.usage.total_tokens
             call_count += 1
         return AssistantSubagentUsageRollup(
             input=input_tokens,
@@ -279,28 +341,18 @@ class AssistantRunMetrics:
         value: object,
         *,
         message_id: str | None = None,
-        task_id: str | None = None,
+        context: UsageAttributionContext | None = None,
     ) -> None:
         """Capture provider token usage when present on a stream object.
 
-        The provider-specific extractor returns a
-        :class:`NormalizedTokenUsage` or ``None``. ``None`` means "no
-        usage block on this chunk" — the run/slot are unchanged.
+        Sub-PRD 01b: ``context`` replaces the prior ``task_id=`` arg.
+        The streaming executor builds a
+        :class:`UsageAttributionContext` from chunk metadata + ledger
+        state and hands it in. The context stamps onto the slot; the
+        row builder reads attribution columns from it.
 
-        Run-level semantic preserved from pre-01a: last-write-wins
-        replace. Providers stream cumulative usage within an AIMessage,
-        so the final chunk's value is authoritative. When a run has
-        multiple LLM calls (multiple AIMessages), the run-level total
-        tracks the latest call — for the per-call breakdown, callers
-        consult ``per_call``. Sub-PRD 01c (UsageRecorder) re-owns
-        aggregation across calls; until then this matches existing
-        wire-visible behavior.
-
-        Per-call semantic improved: field-wise max via ``.merge`` so a
-        mid-stream cumulative report that under-reported a kind cannot
-        regress the slot's running total. Within one message_id this
-        is equivalent to "last write wins" for monotonically-increasing
-        cumulative reports.
+        The extractor returns a :class:`NormalizedTokenUsage` or
+        ``None`` (no usage block on this chunk — nothing to record).
         """
 
         usage = self._extractor.extract(value)
@@ -311,7 +363,7 @@ class AssistantRunMetrics:
             self.per_call.observe(
                 usage,
                 message_id=message_id,
-                task_id=task_id,
+                context=context,
                 started_at=datetime.now(timezone.utc),
             )
 
@@ -321,7 +373,15 @@ class AssistantRunMetrics:
         *,
         trace_id: str,
     ) -> tuple[RuntimeModelCallUsageRecord, ...]:
-        """Build one ``runtime_model_call_usage`` row per finalized call (B2)."""
+        """Build one ``runtime_model_call_usage`` row per finalized call (B2).
+
+        Sub-PRD 01b: attribution columns (``task_id``, ``subagent_id``,
+        ``connector_slug``, ``purpose``, ``originating_tool_*``) come
+        from the slot's stamped :class:`UsageAttributionContext`. Slots
+        without a context (e.g. recorded before the streaming executor
+        had a chance to build one) fall back to the ``Purpose.MAIN``
+        defaults the column has.
+        """
 
         records: list[RuntimeModelCallUsageRecord] = []
         for slot in self.per_call.finalized_calls():
@@ -339,18 +399,21 @@ class AssistantRunMetrics:
                     conversation_id=run.conversation_id,
                     trace_id=trace_id,
                     task_id=slot.task_id,
-                    subagent_id=None,
+                    subagent_id=slot.subagent_id,
                     model_provider=run.model_provider,
                     model_name=run.model_name,
                     connector_slug=slot.connector_slug,
-                    input_tokens=slot.input_tokens,
-                    output_tokens=slot.output_tokens,
-                    cached_input_tokens=slot.cached_input_tokens,
-                    cache_creation_input_tokens=slot.cache_creation_input_tokens,
-                    reasoning_tokens=slot.reasoning_tokens,
-                    audio_input_tokens=slot.audio_input_tokens,
-                    audio_output_tokens=slot.audio_output_tokens,
-                    total_tokens=slot.total_tokens,
+                    purpose=slot.purpose,
+                    originating_tool_call_id=slot.originating_tool_call_id,
+                    originating_tool_name=slot.originating_tool_name,
+                    input_tokens=slot.usage.input_tokens,
+                    output_tokens=slot.usage.output_tokens,
+                    cached_input_tokens=slot.usage.cached_input_tokens,
+                    cache_creation_input_tokens=slot.usage.cache_creation_input_tokens,
+                    reasoning_tokens=slot.usage.reasoning_tokens,
+                    audio_input_tokens=slot.usage.audio_input_tokens,
+                    audio_output_tokens=slot.usage.audio_output_tokens,
+                    total_tokens=slot.usage.total_tokens,
                     duration_ms=duration_ms,
                     created_at=completed_at,
                 )

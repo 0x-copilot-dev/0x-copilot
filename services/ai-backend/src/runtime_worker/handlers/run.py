@@ -47,7 +47,6 @@ from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
-from agent_runtime.observability.usage_attribution import UsageAttributionResolver
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -1294,7 +1293,6 @@ class RuntimeRunHandler:
                 event_store=self.event_store,
                 event_producer=self.event_producer,
                 stream_event_mapper=self.stream_event_mapper,
-                attribution=UsageAttributionResolver(self.persistence),
                 track_subagents=True,
                 citation_pipeline=CitationStreamPipeline.for_provider(
                     command.runtime_context.model_profile.provider
