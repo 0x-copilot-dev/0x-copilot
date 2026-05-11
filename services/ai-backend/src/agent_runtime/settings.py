@@ -60,6 +60,14 @@ class _EnvFields:
     # switches to ``LISTEN/NOTIFY`` so the worker's append wakes SSE
     # adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
+    # P7 PR2 — switches the citation projector from a per-source
+    # ``ledger.register`` loop to one ``ledger.register_many`` call per
+    # tool result. Behavioral effect: emits a single ``sources_ingested``
+    # event with N citations instead of N ``source_ingested`` events.
+    # Wire shape was validated end-to-end in PR1 (FE reducers handle
+    # both); this flag defaults ``false`` so the rollout can be flipped
+    # in staging first. Off → legacy per-source path.
+    BATCH_SOURCE_INGESTION = "RUNTIME_BATCH_SOURCE_INGESTION"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
@@ -138,6 +146,12 @@ class RuntimeExecutionSettings(RuntimeContract):
     # process default; ``postgres`` enables Postgres ``LISTEN/NOTIFY`` so
     # cross-process worker → API SSE wakeups are delivered in milliseconds.
     event_bus_backend: str = "in_memory"
+    # P7 PR2 — toggle the citation projector to call
+    # ``CitationLedger.register_many`` (one ``sources_ingested`` event
+    # per tool result) instead of looping ``register`` (N
+    # ``source_ingested`` events). Default ``False`` so PR2 ships dark;
+    # flip to ``True`` per environment after staging validation.
+    batch_source_ingestion: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -322,6 +336,8 @@ class RuntimeSettings(BaseSettings):
                 delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "in_memory").lower(),
+                batch_source_ingestion=_s(v, E.BATCH_SOURCE_INGESTION, "false").lower()
+                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

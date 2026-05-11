@@ -249,11 +249,16 @@ class CitationStorePort(Protocol):
     key is enforced in one place.
     """
 
-    def insert_or_get(self, record: CitationRecord) -> CitationRecord:
-        """Insert one row and return it; on idempotency conflict return existing.
+    async def insert_many_or_get(
+        self, records: Sequence[CitationRecord]
+    ) -> Sequence[CitationRecord]:
+        """Insert N rows and return them in input order.
 
-        Conflict key is ``(run_id, source_connector, source_doc_id)`` —
-        matching the unique index installed by migration 0015.
+        Idempotent on ``(run_id, source_connector, source_doc_id)`` per
+        record — matching the unique index installed by migration 0015.
+        For records that already exist, the persisted row is returned in
+        place of the input. Output preserves input order so the caller's
+        ordinal binding map stays consistent.
         """
 
     def list_for_run(self, *, org_id: str, run_id: str) -> Sequence[CitationRecord]:

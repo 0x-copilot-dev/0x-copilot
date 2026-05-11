@@ -8,6 +8,7 @@ from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
     RuntimeQueuePort,
+    RuntimeStoreLifecyclePort,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -15,42 +16,54 @@ from agent_runtime.persistence.ports import (
     ConversationToolOrdinalStorePort,
     DraftStorePort,
     ShareStorePort,
+    SourceStorePort,
+    SubagentStorePort,
 )
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
+from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
 from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.in_memory.share_store import InMemoryShareStore
+from runtime_adapters.in_memory.source_store import InMemorySourceStore
+from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
 from runtime_adapters.postgres import PostgresRuntimeApiStore
 from runtime_adapters.postgres.conversation_tool_ordinal_store import (
     PostgresConversationToolOrdinalStore,
 )
 from runtime_adapters.postgres.draft_store import PostgresDraftStore
 from runtime_adapters.postgres.share_store import PostgresShareStore
+from runtime_adapters.postgres.source_store import PostgresSourceStore
+from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
 
 
 @dataclass(frozen=True)
 class RuntimePorts:
-    """Composed runtime ports (async-native)."""
+    """Composed runtime ports (async-native).
+
+    Every consumer-facing dependency is typed against a Protocol — no
+    concrete class names leak. The lifespan owner drives the store via
+    :attr:`lifecycle`; the satellite stores are pre-built so consumers
+    never need to know which backend is wired in.
+    """
 
     persistence: PersistencePort
     event_store: EventStorePort
     queue: RuntimeQueuePort
     backend: str
-    # Concrete store reference so the lifespan owner can call open()/close()
-    # without re-introspecting the trio of ports.
-    store: PostgresRuntimeApiStore | InMemoryRuntimeApiStore
-    # PR 1.3.5 — Workspace-pane Draft store. Postgres backend wraps the
-    # parent store's pool + FieldCodec; in_memory backends use the
-    # process-local InMemoryDraftStore.
-    draft_store: DraftStorePort | None = None
-    # PR 6.1 — conversation share store. Backs both the recipient view
-    # (ShareService) and PR 6.2's fork service.
-    share_store: ShareStorePort | None = None
-    # PR 04 — persistent (conversation_ordinal ↔ tool_call_id) binding store.
-    conversation_tool_ordinal_store: ConversationToolOrdinalStorePort | None = None
+    lifecycle: RuntimeStoreLifecyclePort
+    draft_store: DraftStorePort
+    share_store: ShareStorePort
+    conversation_tool_ordinal_store: ConversationToolOrdinalStorePort
+    subagent_store: SubagentStorePort
+    source_store: SourceStorePort
+    # Postgres-only escape hatch. Populated only when ``backend == "postgres"``
+    # so the opt-in ``DbStatementMetricsCollector`` can reach the pool via
+    # ``_role_connection``. Every other consumer should use the typed ports
+    # above and stay backend-agnostic.
+    postgres_store: PostgresRuntimeApiStore | None = None
 
 
 class RuntimeAdapterFactory:
@@ -69,12 +82,12 @@ class RuntimeAdapterFactory:
         or worker entrypoint) must:
 
             ports = RuntimeAdapterFactory.from_settings(settings)
-            await ports.store.open()
-            await ports.store.migrate()
+            await ports.lifecycle.open()
+            await ports.lifecycle.migrate()
             try:
                 ...
             finally:
-                await ports.store.close()
+                await ports.lifecycle.close()
         """
 
         backend = settings.store.backend
@@ -90,18 +103,20 @@ class RuntimeAdapterFactory:
         # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
-            store: PostgresRuntimeApiStore | InMemoryRuntimeApiStore = (
-                InMemoryRuntimeApiStore(consolidated_writes=consolidated_writes)
+            in_memory_store = InMemoryRuntimeApiStore(
+                consolidated_writes=consolidated_writes
             )
             return RuntimePorts(
-                persistence=store,
-                event_store=store,
-                queue=store,
+                persistence=in_memory_store,
+                event_store=in_memory_store,
+                queue=in_memory_store,
                 backend=backend,
-                store=store,
+                lifecycle=in_memory_store,
                 draft_store=InMemoryDraftStore(),
                 share_store=InMemoryShareStore(),
                 conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+                subagent_store=InMemorySubagentStore(in_memory_store),
+                source_store=InMemorySourceStore(InMemoryCitationStore()),
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -110,23 +125,26 @@ class RuntimeAdapterFactory:
                     "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres.",
                     retryable=False,
                 )
-            store = PostgresRuntimeApiStore(
+            postgres_store = PostgresRuntimeApiStore(
                 settings.store.database_url,
                 role=role,
                 consolidated_writes=consolidated_writes,
                 notify_after_append=notify_after_append,
             )
             return RuntimePorts(
-                persistence=store,
-                event_store=store,
-                queue=store,
+                persistence=postgres_store,
+                event_store=postgres_store,
+                queue=postgres_store,
                 backend=backend,
-                store=store,
-                draft_store=PostgresDraftStore(store),
-                share_store=PostgresShareStore(store),
+                lifecycle=postgres_store,
+                draft_store=PostgresDraftStore(postgres_store),
+                share_store=PostgresShareStore(postgres_store),
                 conversation_tool_ordinal_store=PostgresConversationToolOrdinalStore(
-                    store
+                    postgres_store
                 ),
+                subagent_store=PostgresSubagentStore(postgres_store),
+                source_store=PostgresSourceStore(postgres_store),
+                postgres_store=postgres_store,
             )
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,

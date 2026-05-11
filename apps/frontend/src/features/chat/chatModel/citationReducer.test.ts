@@ -101,6 +101,86 @@ describe("applyCitationEvent", () => {
     );
     expect(next).toBe(start);
   });
+
+  // P7 — batched ingestion path.
+  describe("sources_ingested (batched variant)", () => {
+    it("appends every citation in the batch", () => {
+      const next = applyCitationEvent(
+        emptyCitationRegistry(),
+        event({
+          event_type: "sources_ingested",
+          payload: {
+            citations: [
+              citation(),
+              citation({
+                citation_id: "c2",
+                ordinal: 2,
+                source_doc_id: "drive_456",
+                title: "FY26 Q1 GTM plan",
+              }),
+            ],
+          },
+        }),
+      );
+      expect(citationsByOrdinal(citationsForRun(next, RUN_ID))).toEqual([
+        citation(),
+        citation({
+          citation_id: "c2",
+          ordinal: 2,
+          source_doc_id: "drive_456",
+          title: "FY26 Q1 GTM plan",
+        }),
+      ]);
+    });
+
+    it("returns same map identity when batch is empty", () => {
+      const start = emptyCitationRegistry();
+      const next = applyCitationEvent(
+        start,
+        event({
+          event_type: "sources_ingested",
+          payload: { citations: [] },
+        }),
+      );
+      // Empty batch is a no-op; reference equality guards re-renders.
+      expect(next).toBe(start);
+    });
+
+    it("ignores malformed payload (no citations array)", () => {
+      const start = emptyCitationRegistry();
+      const next = applyCitationEvent(
+        start,
+        event({
+          event_type: "sources_ingested",
+          payload: { unrelated: true },
+        }),
+      );
+      expect(next).toBe(start);
+    });
+
+    it("is idempotent across replay (singular + batched delivering same docs)", () => {
+      // Singular event arrives first (live), then a replay batch
+      // re-delivers the same source — the registry should not double-add.
+      const live = applyCitationEvent(
+        emptyCitationRegistry(),
+        event({
+          event_type: "source_ingested",
+          payload: { citation: citation() },
+        }),
+      );
+      const replayed = applyCitationEvent(
+        live,
+        event({
+          event_type: "sources_ingested",
+          sequence_no: 2,
+          payload: { citations: [citation()] },
+        }),
+      );
+      expect(
+        citationsByOrdinal(citationsForRun(replayed, RUN_ID)),
+      ).toHaveLength(1);
+    });
+  });
 });
 
 describe("buildCitationRegistry", () => {

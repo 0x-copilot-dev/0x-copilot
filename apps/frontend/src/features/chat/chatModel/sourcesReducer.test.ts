@@ -129,6 +129,101 @@ describe("applySourceEvent", () => {
     const order = sourcesByCitationCount(map).map((row) => row.source_doc_id);
     expect(order).toEqual(["doc_a", "doc_b"]);
   });
+
+  // P7 — batched ingestion path.
+  describe("sources_ingested (batched variant)", () => {
+    function batchedEvent(
+      citations: CitationSourceRef[],
+      overrides: Partial<RuntimeEventEnvelope> = {},
+    ): RuntimeEventEnvelope {
+      return {
+        event_id: "evt_batch_1",
+        run_id: RUN_ID,
+        conversation_id: CONVERSATION_ID,
+        sequence_no: 10,
+        activity_kind: "tool",
+        created_at: "2026-05-04T12:05:00Z",
+        source: "tool",
+        event_type: "sources_ingested",
+        payload: { citations },
+        metadata: {},
+        visibility: "user",
+        redaction_state: "redacted",
+        trace_id: "trace_1",
+        ...overrides,
+      } as RuntimeEventEnvelope;
+    }
+
+    it("creates one entry per unique source", () => {
+      const next = applySourceEvent(
+        emptySourceMap(),
+        batchedEvent([
+          citation({ source_doc_id: "doc_a" }),
+          citation({
+            citation_id: "c002",
+            source_doc_id: "doc_b",
+            ordinal: 2,
+          }),
+        ]),
+      );
+      const docs = sourcesByCitationCount(next).map((row) => row.source_doc_id);
+      expect(docs.sort()).toEqual(["doc_a", "doc_b"]);
+    });
+
+    it("aggregates count when same doc appears multiple times in batch", () => {
+      const next = applySourceEvent(
+        emptySourceMap(),
+        batchedEvent([
+          citation({ source_doc_id: "doc_a" }),
+          citation({
+            citation_id: "c002",
+            source_doc_id: "doc_a",
+            ordinal: 2,
+          }),
+        ]),
+      );
+      const row = sourcesByCitationCount(next)[0];
+      expect(row.source_doc_id).toBe("doc_a");
+      expect(row.citation_count).toBe(2);
+    });
+
+    it("returns same map identity when batch is empty", () => {
+      const seeded = seedSourceMap([entry()]);
+      const noop = applySourceEvent(seeded, batchedEvent([]));
+      expect(noop).toBe(seeded);
+    });
+
+    it("ignores malformed payload (no citations array)", () => {
+      const seeded = seedSourceMap([entry()]);
+      const noop = applySourceEvent(seeded, {
+        ...batchedEvent([]),
+        payload: { unrelated: true },
+      } as RuntimeEventEnvelope);
+      expect(noop).toBe(seeded);
+    });
+
+    it("merges with prior singular source_ingested deliveries", () => {
+      const start = applySourceEvent(
+        emptySourceMap(),
+        ingestedEvent(citation({ source_doc_id: "doc_a" })),
+      );
+      const next = applySourceEvent(
+        start,
+        batchedEvent([
+          citation({
+            citation_id: "c002",
+            source_doc_id: "doc_a",
+            ordinal: 2,
+          }),
+        ]),
+      );
+      // Two cites on doc_a — count merges; latest citation_id wins.
+      const row = sourcesByCitationCount(next)[0];
+      expect(row.source_doc_id).toBe("doc_a");
+      expect(row.citation_count).toBe(2);
+      expect(row.citation_id).toBe("c002");
+    });
+  });
 });
 
 describe("seedSourceMap", () => {

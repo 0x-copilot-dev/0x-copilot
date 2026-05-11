@@ -299,6 +299,253 @@ class TestCitationProjection:
         assert projected == {}
 
 
+# P7 — register_many + sources_ingested batch path.
+
+
+class TestCitationLedgerRegisterMany(CitationLedgerFixtureMixin):
+    """Batch-ingestion path used by CitationProjector after PR2 lands."""
+
+    def test_register_many_returns_tokens_in_input_order(self) -> None:
+        ledger, _, _ = self._build()
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC]))
+        # Allocation order matches input order; tokens are base36 1-indexed.
+        assert tokens == ["[c1]", "[c2]"]
+
+    def test_register_many_emits_one_sources_ingested_event(self) -> None:
+        ledger, events, store = self._build()
+        asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC]))
+
+        # Exactly one event for the whole batch — not one per source.
+        assert len(events.drafts) == 1
+        draft = events.drafts[0]
+        assert draft.event_type is RuntimeApiEventType.SOURCES_INGESTED
+        assert draft.activity_kind is RuntimeActivityKind.TOOL
+        # Citations payload preserves allocation order; ordinals are 1, 2.
+        citations = draft.payload["citations"]
+        assert [c["ordinal"] for c in citations] == [1, 2]
+        assert [c["source_connector"] for c in citations] == ["notion", "drive"]
+        # Both rows persisted.
+        assert len(store.rows) == 2
+
+    def test_register_many_with_single_source_still_emits_sources_ingested(
+        self,
+    ) -> None:
+        # The plural event type is the caller's intent signal — even N=1
+        # batches go through SOURCES_INGESTED so replay can distinguish
+        # batched vs. per-source emitters.
+        ledger, events, _ = self._build()
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC]))
+
+        assert tokens == ["[c1]"]
+        assert len(events.drafts) == 1
+        assert events.drafts[0].event_type is RuntimeApiEventType.SOURCES_INGESTED
+        citations = events.drafts[0].payload["citations"]
+        assert len(citations) == 1
+        assert citations[0]["ordinal"] == 1
+
+    def test_register_many_returns_empty_for_empty_input(self) -> None:
+        ledger, events, store = self._build()
+        tokens = asyncio.run(ledger.register_many([]))
+        assert tokens == []
+        # No event, no DB write.
+        assert events.drafts == []
+        assert store.rows == ()
+
+    def test_register_many_idempotent_on_duplicate_in_batch(self) -> None:
+        """Re-citing the same (connector, doc_id) within one batch reuses the ordinal."""
+
+        ledger, events, store = self._build()
+        # Same _NOTION_DOC appears twice in the input.
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC, _NOTION_DOC]))
+
+        # Both tokens point at ordinal 1 — second occurrence hits cache (filled
+        # by the first iteration before insert) and is NOT re-allocated.
+        assert tokens == ["[c1]", "[c1]"]
+        # One event with one citation; one row in the store.
+        assert len(events.drafts) == 1
+        citations = events.drafts[0].payload["citations"]
+        assert len(citations) == 1
+        assert len(store.rows) == 1
+
+    def test_register_many_mixed_cache_hits_and_misses(self) -> None:
+        """Tokens for cache hits carry over without re-emission."""
+
+        ledger, events, store = self._build()
+        # Pre-seed _NOTION_DOC via an earlier call (separate event).
+        asyncio.run(ledger.register(_NOTION_DOC))
+        assert len(events.drafts) == 1  # one source_ingested
+
+        # Now batch with the cached one + a fresh one. Only the fresh one is
+        # newly inserted, and the event's citations array carries only the
+        # new record.
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC]))
+        assert tokens == ["[c1]", "[c2]"]
+        # One additional event (sources_ingested) carrying just the new one.
+        assert len(events.drafts) == 2
+        new_event = events.drafts[1]
+        assert new_event.event_type is RuntimeApiEventType.SOURCES_INGESTED
+        citations = new_event.payload["citations"]
+        assert [c["ordinal"] for c in citations] == [2]
+        assert citations[0]["source_connector"] == "drive"
+        assert len(store.rows) == 2
+
+    def test_register_many_no_event_when_all_cache_hits(self) -> None:
+        ledger, events, _ = self._build()
+        asyncio.run(ledger.register(_NOTION_DOC))
+        asyncio.run(ledger.register(_DRIVE_DOC))
+        assert len(events.drafts) == 2
+
+        # Re-batch the same two — all hits, no new event.
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC]))
+        assert tokens == ["[c1]", "[c2]"]
+        assert len(events.drafts) == 2  # unchanged
+
+    def test_register_many_respects_per_run_cap_within_batch(self) -> None:
+        ledger, events, store = self._build(per_run_max=2)
+        third = SourceRef(
+            source_connector="slack",
+            source_doc_id="msg_789",
+            title="Marcus on press timing",
+        )
+
+        tokens = asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC, third]))
+        # First two allocate; third drops at cap with empty token.
+        assert tokens == ["[c1]", "[c2]", ""]
+        # Event carries only the two that fit.
+        assert len(events.drafts) == 1
+        citations = events.drafts[0].payload["citations"]
+        assert [c["ordinal"] for c in citations] == [1, 2]
+        assert len(store.rows) == 2
+
+    def test_register_after_register_many_continues_ordinals(self) -> None:
+        """Mixing the two APIs preserves monotonic ordinal allocation."""
+
+        ledger, events, _ = self._build()
+        asyncio.run(ledger.register_many([_NOTION_DOC, _DRIVE_DOC]))
+        token = asyncio.run(
+            ledger.register(
+                SourceRef(
+                    source_connector="slack",
+                    source_doc_id="msg_789",
+                    title="Marcus on press timing",
+                )
+            )
+        )
+        assert token == "[c3]"
+        # 1 sources_ingested + 1 source_ingested.
+        assert [d.event_type for d in events.drafts] == [
+            RuntimeApiEventType.SOURCES_INGESTED,
+            RuntimeApiEventType.SOURCE_INGESTED,
+        ]
+
+
+class TestSourcesIngestedProjection:
+    """Wire-shape projector tests for the new event type."""
+
+    def test_activity_kind_is_tool_for_sources_ingested(self) -> None:
+        kind = RuntimeEventPresentationProjector.activity_kind_for(
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            source=StreamEventSource.TOOL,
+        )
+        assert kind is RuntimeActivityKind.TOOL
+
+    def test_payload_extractor_whitelists_each_citation(self) -> None:
+        projected = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            payload={
+                "citations": [
+                    {
+                        "citation_id": "c1",
+                        "ordinal": 1,
+                        "source_connector": "notion",
+                        "source_doc_id": "page_123",
+                        "source_url": "https://example.com/notion/page_123",
+                        "title": "Title 1",
+                        "snippet": "Snippet 1",
+                        "freshness_at": None,
+                        "source_tool_call_id": None,
+                        # Extra fields a future caller might smuggle in must be dropped.
+                        "secret": "leak",
+                    },
+                    {
+                        "citation_id": "c2",
+                        "ordinal": 2,
+                        "source_connector": "drive",
+                        "source_doc_id": "file_456",
+                        "source_url": None,
+                        "title": "Title 2",
+                        "snippet": None,
+                        "freshness_at": None,
+                        "source_tool_call_id": None,
+                        "another_secret": 42,
+                    },
+                ],
+                # Extra top-level field also dropped.
+                "noise": "ignored",
+            },
+        )
+        assert set(projected.keys()) == {"citations"}
+        citations = projected["citations"]
+        assert len(citations) == 2
+        assert "secret" not in citations[0]
+        assert "another_secret" not in citations[1]
+        assert citations[0]["citation_id"] == "c1"
+        assert citations[1]["citation_id"] == "c2"
+        # Order preserved (FE relies on this for ordinal binding).
+        assert [c["ordinal"] for c in citations] == [1, 2]
+        # None-allowed fields survive as None.
+        assert citations[1]["source_url"] is None
+        assert citations[1]["snippet"] is None
+
+    def test_payload_extractor_returns_empty_list_when_citations_missing(
+        self,
+    ) -> None:
+        projected = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            payload={"unrelated": True},
+        )
+        assert projected == {"citations": []}
+
+    def test_payload_extractor_skips_non_dict_entries(self) -> None:
+        projected = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            payload={
+                "citations": [
+                    "not-a-dict",
+                    {
+                        "citation_id": "c1",
+                        "title": "Real one",
+                        "ordinal": 1,
+                        "source_connector": "notion",
+                        "source_doc_id": "page_123",
+                    },
+                    None,
+                ],
+            },
+        )
+        # Only the valid dict survives.
+        assert len(projected["citations"]) == 1
+        assert projected["citations"][0]["citation_id"] == "c1"
+
+    @pytest.mark.parametrize(
+        "count, expected",
+        [(1, "Cited 1 source"), (2, "Cited 2 sources"), (50, "Cited 50 sources")],
+    )
+    def test_display_title_uses_count(self, count: int, expected: str) -> None:
+        title = RuntimeEventPresentationProjector._display_title_for(  # noqa: SLF001
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            payload={"citations": [{"ordinal": i + 1} for i in range(count)]},
+        )
+        assert title == expected
+
+    def test_display_title_falls_back_when_citations_missing(self) -> None:
+        title = RuntimeEventPresentationProjector._display_title_for(  # noqa: SLF001
+            event_type=RuntimeApiEventType.SOURCES_INGESTED,
+            payload={},
+        )
+        assert title == "Cited sources"
+
+
 class TestBase36Token:
     @pytest.mark.parametrize(
         ("ordinal", "expected"),

@@ -66,6 +66,15 @@ from runtime_api.schemas import (
 class InMemoryRuntimeApiStore:
     """In-memory implementation of persistence, event store, and queue ports."""
 
+    async def open(self) -> None:
+        """Lifecycle parity with the Postgres adapter — no pool to open."""
+
+    async def close(self) -> None:
+        """Lifecycle parity with the Postgres adapter — no pool to close."""
+
+    async def migrate(self) -> None:
+        """Lifecycle parity with the Postgres adapter — no schema to migrate."""
+
     def __init__(self, *, consolidated_writes: bool = False) -> None:
         # P4 — when True, ``append_event`` advances the run's
         # ``latest_sequence_no`` cursor inside the same call. Mirrors the

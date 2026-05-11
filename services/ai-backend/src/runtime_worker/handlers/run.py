@@ -1413,6 +1413,7 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
+            batch_enabled=self.settings.execution.batch_source_ingestion,
         )
 
     async def _bind_conversation_ordinal_allocator(

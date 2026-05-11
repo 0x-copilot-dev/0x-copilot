@@ -29,15 +29,23 @@ class InMemoryCitationStore:
         with self._lock:
             return tuple(self._rows)
 
-    def insert_or_get(self, record: CitationRecord) -> CitationRecord:
+    async def insert_many_or_get(
+        self, records: Sequence[CitationRecord]
+    ) -> Sequence[CitationRecord]:
+        if not records:
+            return ()
         with self._lock:
-            key = (record.run_id, record.source_connector, record.source_doc_id)
-            existing = self._index.get(key)
-            if existing is not None:
-                return existing
-            self._index[key] = record
-            self._rows.append(record)
-            return record
+            persisted: list[CitationRecord] = []
+            for record in records:
+                key = (record.run_id, record.source_connector, record.source_doc_id)
+                existing = self._index.get(key)
+                if existing is not None:
+                    persisted.append(existing)
+                    continue
+                self._index[key] = record
+                self._rows.append(record)
+                persisted.append(record)
+            return tuple(persisted)
 
     def list_for_run(
         self,

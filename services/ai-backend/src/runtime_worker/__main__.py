@@ -38,8 +38,8 @@ class RuntimeWorkerEntrypoint:
         logger = LoggingConfigurator.get_logger("runtime_worker")
 
         async_ports = RuntimeAdapterFactory.from_settings(settings, role="worker")
-        await async_ports.store.open()
-        await async_ports.store.migrate()
+        await async_ports.lifecycle.open()
+        await async_ports.lifecycle.migrate()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         statement_collector: DbStatementMetricsCollector | None = None
@@ -97,8 +97,18 @@ class RuntimeWorkerEntrypoint:
             ):
 
                 async def _scrape_query(sql: str) -> list[dict]:
-                    store = async_ports.store
-                    async with store._role_connection("worker") as conn:  # type: ignore[attr-defined]
+                    # ``DbStatementMetricsCollector`` is a Postgres-only opt-in
+                    # diagnostic; ``postgres_store`` is None on every other
+                    # backend. The enabling env flag is documented as
+                    # Postgres-only, so reaching this branch on in-memory is a
+                    # config error worth surfacing loudly.
+                    pg_store = async_ports.postgres_store
+                    if pg_store is None:
+                        raise RuntimeError(
+                            "DbStatementMetricsCollector requires "
+                            "RUNTIME_STORE_BACKEND=postgres"
+                        )
+                    async with pg_store._role_connection("worker") as conn:
                         async with conn.cursor() as cur:
                             await cur.execute(sql)
                             rows = await cur.fetchall()
@@ -122,7 +132,7 @@ class RuntimeWorkerEntrypoint:
                 await retention_loop.stop()
             if rollup_loop is not None:
                 await rollup_loop.stop()
-            await async_ports.store.close()
+            await async_ports.lifecycle.close()
 
     @staticmethod
     def main() -> None:

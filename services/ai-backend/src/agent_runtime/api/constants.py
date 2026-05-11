@@ -346,6 +346,14 @@ class Messages:
         SOURCE_INGESTED = "Cited a source"
 
         @classmethod
+        def sources_cited_title(cls, count: int) -> str:
+            if count == 1:
+                return "Cited 1 source"
+            return f"Cited {count} sources"
+
+        SOURCES_INGESTED = "Cited sources"
+
+        @classmethod
         def citation_made_title(cls, ordinal: int) -> str:
             # PR 1.1-rev2 — model-declared citation pointer. Display title
             # used by `_display_title_for(CITATION_MADE)`; the chip resolves

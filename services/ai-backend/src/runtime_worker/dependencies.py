@@ -53,10 +53,26 @@ class WebSearchToolRegistry:
     def _web_search_tool(cls) -> object:
         from langchain_community.tools import DuckDuckGoSearchResults
 
-        return DuckDuckGoSearchResults(
+        from agent_runtime.capabilities.retrying_tool import RetryingTool
+
+        # ``ddgs`` (the underlying search library) raises opaque
+        # ``DDGSException`` wrappers on transient connect / rate-limit
+        # failures. Without this wrapper a single hiccup surfaces as a
+        # ``tool_exception`` and ends the subagent run; with it we absorb
+        # the transient case and only propagate after sustained failure.
+        inner = DuckDuckGoSearchResults(
             name=cls.Values.WEB_SEARCH_TOOL_NAME,
             description=cls.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
             output_format="list",
+        )
+        return RetryingTool(
+            name=inner.name,
+            description=inner.description,
+            args_schema=inner.args_schema,
+            inner=inner,
+            max_attempts=3,
+            initial_backoff_seconds=1.0,
+            max_backoff_seconds=8.0,
         )
 
 

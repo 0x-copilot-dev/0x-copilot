@@ -4508,94 +4508,125 @@ class PostgresRuntimeApiStore:
 
     # ----- CitationStorePort (PR 1.1 follow-up B) ---------------------------
 
-    async def insert_or_get(self, record: CitationRecord) -> CitationRecord:
-        """Insert one citation row. Returns the existing row on conflict.
+    async def insert_many_or_get(
+        self, records: Sequence[CitationRecord]
+    ) -> Sequence[CitationRecord]:
+        """Bulk-insert citation rows. Returns canonical rows in input order.
 
-        Idempotency mirrors :class:`InMemoryCitationStore` and the unique
-        index ``runtime_citations_run_source_uk`` from migration 0015. The
-        ``ON CONFLICT … DO NOTHING RETURNING *`` returns zero rows on
-        conflict; the fallback ``SELECT`` then fetches the existing row so
-        the caller's cache stays consistent across racing producers.
+        Two DB round trips total regardless of batch size:
+
+        1. One multi-VALUES ``INSERT … ON CONFLICT DO NOTHING`` against
+           the unique index ``runtime_citations_run_source_uk`` from
+           migration 0015. Conflicts skip silently.
+        2. One ``SELECT … WHERE (run_id, connector, doc_id) IN (…)``
+           covering every input key, so existing rows come back alongside
+           newly-inserted ones.
+
+        Output preserves input order so the caller's ordinal binding map
+        stays consistent.
         """
 
-        title_encrypted = self._codec.encrypt_text(
-            record.title,
-            table=_Tables.RUNTIME_CITATIONS,
-            column=_Columns.TITLE,
-            org_id=record.org_id,
-        )
-        snippet_encrypted = self._codec.encrypt_text(
-            record.snippet,
-            table=_Tables.RUNTIME_CITATIONS,
-            column=_Columns.SNIPPET,
-            org_id=record.org_id,
-        )
+        if not records:
+            return ()
+
         write_version = self._codec.write_version
+        flat_values: list[object] = []
+        for record in records:
+            title_encrypted = self._codec.encrypt_text(
+                record.title,
+                table=_Tables.RUNTIME_CITATIONS,
+                column=_Columns.TITLE,
+                org_id=record.org_id,
+            )
+            snippet_encrypted = self._codec.encrypt_text(
+                record.snippet,
+                table=_Tables.RUNTIME_CITATIONS,
+                column=_Columns.SNIPPET,
+                org_id=record.org_id,
+            )
+            flat_values.extend(
+                (
+                    record.citation_id,
+                    record.run_id,
+                    record.conversation_id,
+                    record.org_id,
+                    record.ordinal,
+                    record.source_connector,
+                    record.source_doc_id,
+                    record.source_url,
+                    title_encrypted,
+                    snippet_encrypted,
+                    record.freshness_at,
+                    record.source_tool_call_id,
+                    write_version,
+                    record.created_at,
+                )
+            )
+
+        row_placeholder = "(" + ", ".join(["%s"] * 14) + ")"
+        values_clause = ", ".join([row_placeholder] * len(records))
+        select_keys_placeholder = ", ".join(["(%s, %s, %s)"] * len(records))
+        select_keys_params: list[object] = []
+        for record in records:
+            select_keys_params.extend(
+                (record.run_id, record.source_connector, record.source_doc_id)
+            )
+
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 async with conn.cursor(row_factory=dict_row) as cursor:
                     await cursor.execute(
-                        """
+                        f"""
                         INSERT INTO runtime_citations (
                             citation_id, run_id, conversation_id, org_id, ordinal,
                             source_connector, source_doc_id, source_url,
                             title, snippet, freshness_at, source_tool_call_id,
                             encryption_version, created_at
                         )
-                        VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        )
+                        VALUES {values_clause}
                         ON CONFLICT (run_id, source_connector, source_doc_id)
                         DO NOTHING
-                        RETURNING *
                         """,
-                        (
-                            record.citation_id,
-                            record.run_id,
-                            record.conversation_id,
-                            record.org_id,
-                            record.ordinal,
-                            record.source_connector,
-                            record.source_doc_id,
-                            record.source_url,
-                            title_encrypted,
-                            snippet_encrypted,
-                            record.freshness_at,
-                            record.source_tool_call_id,
-                            write_version,
-                            record.created_at,
-                        ),
+                        flat_values,
                     )
-                    inserted = await cursor.fetchone()
-                    if inserted is not None:
-                        return self._row_to_citation(inserted)
                     await cursor.execute(
-                        """
+                        f"""
                         SELECT *
                         FROM runtime_citations
-                        WHERE run_id = %s
-                          AND source_connector = %s
-                          AND source_doc_id = %s
+                        WHERE (run_id, source_connector, source_doc_id) IN ({select_keys_placeholder})
                         """,
-                        (
-                            record.run_id,
-                            record.source_connector,
-                            record.source_doc_id,
-                        ),
+                        select_keys_params,
                     )
-                    existing = await cursor.fetchone()
-                    if existing is None:
-                        # Should be unreachable: ON CONFLICT returned zero rows
-                        # so a sibling row exists, but a concurrent transaction
-                        # could in theory hide it. Reraise as a typed error.
-                        raise RuntimeApiError(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            envelope=RuntimeErrorEnvelope(
-                                code=RuntimeErrorCode.PERSISTENCE_ERROR,
-                                safe_message=Messages.Error.SAFE_FALLBACK,
-                            ),
-                        )
-                    return self._row_to_citation(existing)
+                    rows = await cursor.fetchall()
+
+        by_key: dict[tuple[str, str, str], dict[str, object]] = {
+            (
+                str(row["run_id"]),
+                str(row["source_connector"]),
+                str(row["source_doc_id"]),
+            ): row
+            for row in rows
+        }
+
+        output: list[CitationRecord] = []
+        for record in records:
+            key = (record.run_id, record.source_connector, record.source_doc_id)
+            row = by_key.get(key)
+            if row is None:
+                # Unreachable in normal operation: every input key was
+                # either inserted or pre-existed, and the SELECT covers
+                # both. A concurrent DELETE could in theory hide a row
+                # between the INSERT and the SELECT — surface as a typed
+                # persistence error.
+                raise RuntimeApiError(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    envelope=RuntimeErrorEnvelope(
+                        code=RuntimeErrorCode.PERSISTENCE_ERROR,
+                        safe_message=Messages.Error.SAFE_FALLBACK,
+                    ),
+                )
+            output.append(self._row_to_citation(row))
+        return tuple(output)
 
     async def list_for_run(
         self, *, org_id: str, run_id: str

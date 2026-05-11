@@ -3,9 +3,13 @@
 // PR 3.1's spec proposed extending `CitationLookup` with `byRun`/
 // `byConversation` layers. The implementation that landed kept two
 // reducers — `citationsRegistry` for chip resolution + `sourcesReducer`
-// for the SourcesTab — both fed by the same `source_ingested` event.
+// for the SourcesTab — both fed by the same ingestion events.
 // Functionally equivalent, but the two stores must agree on the
-// per-source fields they share. This test asserts that invariant.
+// per-source fields they share. This test asserts that invariant
+// across BOTH event shapes:
+//   * `source_ingested` (singular, per-source emitters)
+//   * `sources_ingested` (P7 batched variant, emitted by
+//     `CitationLedger.register_many`)
 //
 // If a future PR forks these reducers, this test fails immediately and
 // the offending diff is identified by CI before drift can ship.
@@ -110,6 +114,58 @@ describe("citation store invariant (PR 3.5 / G10)", () => {
       // map dedupes on (connector, doc_id) — we look up by walking the
       // values rather than reconstructing the private key (the reducer
       // owns its key shape, the test shouldn't).
+      const chipMap = citationsForRun(chipRegistry, RUN_ID);
+      const sourceByDoc = new Map(
+        [...sourceMap.values()].map((entry) => [
+          `${entry.source_connector}/${entry.source_doc_id}`,
+          entry,
+        ]),
+      );
+      for (const chip of chipMap.values()) {
+        const sourceEntry = sourceByDoc.get(
+          `${chip.source_connector}/${chip.source_doc_id}`,
+        );
+        expect(sourceEntry).toBeDefined();
+        for (const field of SHARED_FIELDS) {
+          expect(sourceEntry?.[field]).toEqual(chip[field]);
+        }
+      }
+    },
+  );
+
+  // P7 — same invariant must hold for the batched event shape.
+  it.each([
+    ["batched single source", [citation()]],
+    [
+      "batched multi-source",
+      [
+        citation(),
+        citation({
+          citation_id: "c2",
+          ordinal: 2,
+          source_connector: "drive",
+          source_doc_id: "drive_a",
+          title: "FY26 Q1 GTM plan",
+          snippet: "Three-phase rollout.",
+        }),
+      ],
+    ],
+  ])(
+    "%s via sources_ingested — both reducers project byte-identical shared fields",
+    (_label, citations) => {
+      const evt = {
+        event_id: "evt_batch_1",
+        run_id: RUN_ID,
+        conversation_id: CONVERSATION_ID,
+        sequence_no: 42,
+        activity_kind: "tool",
+        created_at: "2026-05-04T12:00:00Z",
+        event_type: "sources_ingested",
+        payload: { citations },
+      } as RuntimeEventEnvelope;
+      const chipRegistry = applyCitationEvent(emptyCitationRegistry(), evt);
+      const sourceMap = applySourceEvent(emptySourceMap(), evt);
+
       const chipMap = citationsForRun(chipRegistry, RUN_ID);
       const sourceByDoc = new Map(
         [...sourceMap.values()].map((entry) => [

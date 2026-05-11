@@ -149,6 +149,12 @@ class RuntimeApiEventType(StrEnum):
     # CitationLedger registers; payload carries `CitationSourceRef` under
     # `payload.citation` and projects to RuntimeActivityKind.TOOL.
     SOURCE_INGESTED = "source_ingested"
+    # P7 (refactor) — batched variant of SOURCE_INGESTED. Emitted by
+    # CitationLedger.register_many when N>1 sources are ingested in a
+    # single call; payload carries an ordered list of CitationSourceRef
+    # under `payload.citations`. Same activity_kind / status / display
+    # treatment as the singular variant; FE reducers iterate the list.
+    SOURCES_INGESTED = "sources_ingested"
     # PR 1.1-rev2 — model-declared citation. Emitted by CitationResolver each
     # time a `[[N]]` token in the streamed assistant text resolves to a
     # tool invocation by `conversation_ordinal`. Payload carries `CitationLink`

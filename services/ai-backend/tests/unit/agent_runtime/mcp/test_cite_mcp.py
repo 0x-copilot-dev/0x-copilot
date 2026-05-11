@@ -97,6 +97,8 @@ def _run_record() -> RunRecord:
 class CitationProjectorFixtureMixin:
     def _bind_ledger(
         self,
+        *,
+        batch_enabled: bool = False,
     ) -> tuple[CitationLedger, _RecordingEventStore, InMemoryCitationStore, object]:
         store = InMemoryCitationStore()
         events = _RecordingEventStore()
@@ -109,6 +111,7 @@ class CitationProjectorFixtureMixin:
             store=store,
             producer=producer,
             source=StreamEventSource.TOOL,
+            batch_enabled=batch_enabled,
         )
         token = CitationLedger.bind_for_run(ledger)
         return ledger, events, store, token
@@ -269,3 +272,145 @@ class TestProjectorDegradation(CitationProjectorFixtureMixin):
         finally:
             CitationLedger.unbind(token)
         assert store.rows == ()
+
+
+# P7 PR2 — gated batched ingestion. The projector picks register_many
+# when the active ledger has batch_enabled=True; behavior is otherwise
+# identical to the legacy per-source loop (same ordinals, same store
+# rows, same idempotency).
+
+
+class TestProjectorBatched(CitationProjectorFixtureMixin):
+    """Confirm RUNTIME_BATCH_SOURCE_INGESTION switches to a single event."""
+
+    def test_multi_result_emits_one_sources_ingested_event(self) -> None:
+        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        try:
+            asyncio.run(
+                CitationProjectingMcpMiddleware.project(
+                    connector="web",
+                    tool_call_id="call_batched_1",
+                    result={
+                        "results": [
+                            {
+                                "id": f"r{i}",
+                                "title": f"Result {i}",
+                                "url": f"https://example.com/{i}",
+                                "snippet": f"Snippet {i}.",
+                            }
+                            for i in range(3)
+                        ],
+                    },
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+        # Three rows persisted; ordinals 1..3 in input order.
+        assert len(store.rows) == 3
+        assert [row.ordinal for row in store.rows] == [1, 2, 3]
+        # Exactly ONE event for the whole batch (vs. 3 in the legacy path).
+        assert len(events.drafts) == 1
+        draft = events.drafts[0]
+        assert draft.event_type.value == "sources_ingested"
+        citations = draft.payload["citations"]
+        assert [c["ordinal"] for c in citations] == [1, 2, 3]
+
+    def test_single_source_still_uses_batched_event_under_flag(self) -> None:
+        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        try:
+            asyncio.run(
+                CitationProjectingMcpMiddleware.project(
+                    connector="notion",
+                    tool_call_id="call_batched_2",
+                    result={
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "x",
+                                "url": "https://example.com/page",
+                                "title": "Page title",
+                            },
+                        ],
+                    },
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+        assert len(store.rows) == 1
+        # When the flag is on, even N=1 batches go through the plural
+        # event type so replay can distinguish per-source vs batched
+        # emitters consistently.
+        assert len(events.drafts) == 1
+        assert events.drafts[0].event_type.value == "sources_ingested"
+
+    def test_unrecognized_shape_emits_no_event_under_flag(self) -> None:
+        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        try:
+            asyncio.run(
+                CitationProjectingMcpMiddleware.project(
+                    connector="custom",
+                    tool_call_id="call_batched_3",
+                    result={"unknown": "shape"},
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+        # Same degradation as the legacy path: nothing detected → no event.
+        assert store.rows == ()
+        assert events.drafts == []
+
+    def test_tool_call_id_attached_to_every_batched_source(self) -> None:
+        _, _, store, token = self._bind_ledger(batch_enabled=True)
+        try:
+            asyncio.run(
+                CitationProjectingMcpMiddleware.project(
+                    connector="drive",
+                    tool_call_id="call_batched_4",
+                    result={
+                        "results": [
+                            {
+                                "id": "r1",
+                                "title": "Title 1",
+                                "url": "https://example.com/1",
+                            },
+                            {
+                                "id": "r2",
+                                "title": "Title 2",
+                                "url": "https://example.com/2",
+                            },
+                        ],
+                    },
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+        # Same per-source decoration as the legacy path — the tool_call_id
+        # binding happens before the projector decides which API to call.
+        assert all(row.source_tool_call_id == "call_batched_4" for row in store.rows)
+
+    def test_per_result_cap_still_applies_under_flag(self) -> None:
+        _, _, store, token = self._bind_ledger(batch_enabled=True)
+        try:
+            asyncio.run(
+                CitationProjectingMcpMiddleware.project(
+                    connector="web",
+                    tool_call_id="call_batched_5",
+                    result={
+                        # 30 results — well above PER_RESULT_MAX (25).
+                        "results": [
+                            {
+                                "id": f"r{i}",
+                                "title": f"Result {i}",
+                                "url": f"https://example.com/{i}",
+                            }
+                            for i in range(30)
+                        ],
+                    },
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+        # Per-result cap (25) is applied by the projector before the
+        # ledger sees the sources, so the run-level cap (50) and the
+        # batched event both reflect the truncated count.
+        assert len(store.rows) == 25

@@ -1,10 +1,16 @@
 # Refactor PRD — Batch Citation Ingestion (Phase 2)
 
-**Status:** Draft
+**Status:** PR1 shipped (infrastructure + FE handler); PR2 shipped (projector switch behind `RUNTIME_BATCH_SOURCE_INGESTION` flag, default off)
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §4.5](../architecture/refactor-audit.md#45-sequential-citation-ingestion)
 **Roadmap:** [00-roadmap.md](00-roadmap.md) → P7
 **Related flow:** [f5-citations.puml](../architecture/f5-citations.puml)
+
+> **Implementation note (May 2026).** The original PRD assumed three things
+> that turned out to be wrong under code inspection. See
+> [§11 Implementation post-mortem](#11-implementation-post-mortem) for the
+> full divergence list. The sub-sections below were updated to match what
+> actually shipped in PR1.
 
 ---
 
@@ -234,11 +240,129 @@ If the frontend renders Sources purely from `SourceStorePort.aggregate_for_conve
 
 ## 10. Open questions
 
-- Does `CitationProjectingMcpMiddleware` exist as a single file today, or is the projection logic spread? Confirm before estimating work.
-- What's the current event-stream consumption pattern on the frontend Sources pane — event-driven or aggregate-poll? Determines [§7](#7-frontend-coordination) urgency.
-- Is the `tool_call_id`-based ordinal idempotency safe under the batch path, or does the per-tool-call ordinal cursor live in `CitationLedger` state that needs to flush atomically with the SQL write? If the latter, the batch path needs an explicit transaction.
-- What's the realistic max source count from a single MCP tool call (Linear search, Notion query)? Confirms the 500-row batch cap is sufficient.
-- Does the Postgres pool support multi-row INSERT with placeholder limits? If using asyncpg, the parameter limit is 32767; well above any realistic batch.
+- Does `CitationProjectingMcpMiddleware` exist as a single file today, or is the projection logic spread? **Resolved**: `cite_mcp.py` is a 36-LOC alias for `CitationProjector`; real logic in [`citation_projection.py`](../../src/agent_runtime/capabilities/citation_projection.py).
+- What's the current event-stream consumption pattern on the frontend Sources pane — event-driven or aggregate-poll? **Resolved**: event-driven via [`citationReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/citationReducer.ts) + [`sourcesReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/sourcesReducer.ts). Both got `sources_ingested` branches in PR1.
+- What's the realistic max source count from a single MCP tool call? **Resolved**: bounded by `CitationProjector.Limits.PER_RESULT_MAX = 25` per result, `CitationLedger._Limits.PER_RUN_MAX = 50` per run total. Multi-row INSERT capped at 50 × 14 = 700 placeholders, well under asyncpg's 32767 limit.
+- Does the `tool_call_id`-based ordinal idempotency apply to the citation path? **Resolved (and corrected the PRD)**: NO. That ordinal is allocated by `ConversationOrdinalAllocator` for tool-call ordinals (`[[N]]`), not citation ordinals (`[c1]`). Citation ordinals are allocated in-memory in `CitationLedger`. See [§11](#11-implementation-post-mortem).
+
+---
+
+## 11. Implementation post-mortem
+
+The original PRD was written from the audit + flow diagrams without code reads. Pre-flight verification (May 2026) found three substantive divergences. Documenting here so future readers don't re-walk the same ground.
+
+### Divergence 1: ordinal allocator is NOT in the citation path
+
+**PRD claimed**: every cited source triggers `ConversationOrdinalAllocator.record` → `CitationStorePort.insert_or_get` → `SOURCE_INGESTED` event (3 things per source).
+
+**Reality** ([citations.py:113-164](../../src/agent_runtime/capabilities/citations.py#L113-L164)): the citation path is `_store.insert_or_get` + `producer.append_api_event`. The ordinal is `len(self._cache) + 1` — purely in-memory.
+
+`ConversationOrdinalAllocator` is a different system: it allocates **tool-call ordinals** (`[[N]]`) per tool dispatch, not citation ordinals (`[c1]`) per cited source. It's bound separately in `runtime_worker/handlers/run.py` and `approval.py`, and consumed by `CitationResolver` watching `[[N]]` markers in streamed text.
+
+**Impact on PR scope**: dropped the planned `ConversationToolOrdinalStorePort.record_many` addition. Out of scope.
+
+### Divergence 2: latent sync/async bug in `insert_or_get`
+
+The Port declared `def insert_or_get` (sync). In-memory adapter implemented sync. Postgres adapter implemented `async def insert_or_get`. The CitationLedger called `self._store.insert_or_get(record)` without `await`.
+
+**Effect in production**: the Postgres path was setting `persisted` to a coroutine (never awaited), then dereferencing `.ordinal` would have raised `AttributeError`. Either citations weren't actually firing on Postgres, or some intermediate path was masking it. We didn't dig further — the fix came for free from the port replacement.
+
+**Impact on PR scope**: replacing `insert_or_get` with `insert_many_or_get` (uniformly `async def` on port and both adapters) fixed the latent bug as a side effect. The single-source caller (`register`) now also goes through the async port, eliminating the bug.
+
+### Divergence 3: frontend impact understated
+
+**PRD claimed**: "FE handler additive: needs handler for `SOURCES_INGESTED`."
+
+**Reality**: the FE has a deeper citation pipeline than the PRD acknowledged — [`citationReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/citationReducer.ts), [`sourcesReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/sourcesReducer.ts), [`citationsRegistry.ts`](../../../../apps/frontend/src/features/chat/chatModel/citationsRegistry.ts), [`citationStore.invariant.test.ts`](../../../../apps/frontend/src/features/chat/chatModel/citationStore.invariant.test.ts), [`README.md`](../../../../apps/frontend/src/features/chat/chatModel/README.md), and a cross-store invariant ("dual citation store — deliberate, enforced by test"). Adding `sources_ingested` required updating each of these.
+
+**Impact on PR scope**: PR1 grew to ~14 files instead of the ~6 the PRD anticipated. Test count grew accordingly.
+
+### What shipped in PR1
+
+**Backend:**
+
+- [`agent_runtime/persistence/ports.py`](../../src/agent_runtime/persistence/ports.py) — `CitationStorePort.insert_or_get` (sync) replaced with `insert_many_or_get` (async).
+- [`runtime_adapters/in_memory/citation_store.py`](../../src/runtime_adapters/in_memory/citation_store.py) — async `insert_many_or_get` implementation.
+- [`runtime_adapters/postgres/runtime_api_store.py`](../../src/runtime_adapters/postgres/runtime_api_store.py) — async `insert_many_or_get`: one multi-VALUES `INSERT ... ON CONFLICT DO NOTHING` + one `SELECT ... WHERE ... IN (...)`. **Two DB round trips for any batch size.**
+- [`runtime_api/schemas/common.py`](../../src/runtime_api/schemas/common.py) — `RuntimeApiEventType.SOURCES_INGESTED = "sources_ingested"`.
+- [`runtime_api/schemas/events.py`](../../src/runtime_api/schemas/events.py) — wired SOURCES_INGESTED at 4 sites: payload allow-list, activity_kind tool bucket, display title (`sources_cited_title(N)`), status COMPLETED. Added `_sources_ingested_payload` helper; refactored `_source_ingested_payload` to share a `_safe_citation_ref` static helper (same behavior, no duplication).
+- [`agent_runtime/api/constants.py`](../../src/agent_runtime/api/constants.py) — `Messages.Event.sources_cited_title(count)` + `Messages.Event.SOURCES_INGESTED` constant.
+- [`agent_runtime/capabilities/citations.py`](../../src/agent_runtime/capabilities/citations.py) — added `register_many` (emits one `sources_ingested` per call) + `_register_internal` (cache-check + bulk-persist, used by both APIs); refactored `register` to delegate. **Critical detail**: `_register_internal` dedupes in-batch duplicates via a local `(connector, doc_id) → record` map before allocating an ordinal — a unit test caught this; would have shipped a bug emitting the same record twice in the event payload.
+
+**API-types:**
+
+- [`packages/api-types/src/index.ts`](../../../../packages/api-types/src/index.ts) — `SourcesIngestedPayload` interface, `isSourcesIngestedPayload` type guard, `"sources_ingested"` enum entry, `EventTypeToPayload` map entry.
+
+**Frontend:**
+
+- [`apps/frontend/src/features/chat/chatModel/citationReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/citationReducer.ts) — handles `sources_ingested` branch via `upsertCitations`.
+- [`apps/frontend/src/features/chat/chatModel/sourcesReducer.ts`](../../../../apps/frontend/src/features/chat/chatModel/sourcesReducer.ts) — extracted `mergeOne` helper; handles batch by iterating and merging.
+- [`apps/frontend/src/features/chat/chatModel/README.md`](../../../../apps/frontend/src/features/chat/chatModel/README.md) — documents that the dual-store invariant covers both event shapes.
+
+**Tests:**
+
+- Backend: 17 new tests for `register_many` (idempotency, in-batch dedup, mixed cache hits, cap behavior, mixed singular+batched calls, payload allow-list, display-title parametrization). 3 existing tests in `test_workspace_feed_stores.py` migrated from sync `insert_or_get` to async `insert_many_or_get`.
+- API-types cross-contract test (`test_typescript_runtime_event_constants_match_backend_enums`) caught the BE/FE drift mid-implementation; passes after api-types update.
+- Frontend: extended `citationReducer.test.ts`, `sourcesReducer.test.ts`, `citationStore.invariant.test.ts` with `sources_ingested` cases (parametrized invariant test re-runs across both event shapes).
+
+**Verification:**
+
+- 1027 backend tests pass; 0 regressions in citation/event-related trees.
+- 762 frontend tests pass; 0 regressions.
+- api-types + frontend typechecks clean.
+
+### What did NOT ship in PR1
+
+The projector still calls `register` per-source. **`SOURCES_INGESTED` is wired end-to-end but not yet emitted by anyone in production.** PR1 confirms the wire shape works without changing user-visible behavior.
+
+### PR2 plan (next)
+
+Single change in [`agent_runtime/capabilities/citation_projection.py`](../../src/agent_runtime/capabilities/citation_projection.py): replace the per-source loop at lines 99-102 with one `await ledger.register_many(sources[: cls.Limits.PER_RESULT_MAX])` call. After PR2 lands:
+
+- Each MCP tool result emits **one** `sources_ingested` event instead of N `source_ingested` events.
+- Two DB round trips total for the batch instead of N.
+- The latency win finally materializes.
+
+PR2 is small (one file, ~5 lines) but should ship behind a feature flag (`RUNTIME_BATCH_SOURCE_INGESTION`) so it can be flipped in staging first. Skipped in PR1 because the wire shape needed end-to-end validation first.
+
+### What shipped in PR2
+
+**Backend:**
+
+- [`agent_runtime/settings.py`](../../src/agent_runtime/settings.py) — added `RuntimeExecutionSettings.batch_source_ingestion: bool = False` field + `BATCH_SOURCE_INGESTION = "RUNTIME_BATCH_SOURCE_INGESTION"` env constant + `from_env` parse. Defaults `false` so PR2 ships dark.
+- [`agent_runtime/capabilities/citations.py`](../../src/agent_runtime/capabilities/citations.py) — added `batch_enabled: bool = False` parameter to `CitationLedger.__init__`, exposed as `batch_enabled` property. The flag changes only which method the projector picks; both `register` and `register_many` share `_register_internal`, so ordinals, idempotency, and cap behavior are identical.
+- [`runtime_worker/handlers/run.py`](../../src/runtime_worker/handlers/run.py) — `_bind_citation_ledger` now passes `batch_enabled=self.settings.execution.batch_source_ingestion` into the ledger constructor (one-line change at the composition site).
+- [`agent_runtime/capabilities/citation_projection.py`](../../src/agent_runtime/capabilities/citation_projection.py) — `CitationProjector.project` now hoists the `tool_call_id` decoration out of both branches, then either calls `register_many` once (flag on) or loops `register` per source (flag off). Best-effort degradation paths (no ledger, unknown shape, exception) remain unchanged.
+
+**Tests:**
+
+- New `TestProjectorBatched` class in [`tests/unit/agent_runtime/mcp/test_cite_mcp.py`](../../tests/unit/agent_runtime/mcp/test_cite_mcp.py) — opts into `batch_enabled=True` via the fixture mixin and asserts the new behavior:
+  - Multi-result tool result emits exactly one `sources_ingested` event with N citations in input order.
+  - Single-source under flag still uses `sources_ingested` (consistent batching contract).
+  - Unrecognized shape produces no event (degradation parity with legacy path).
+  - `tool_call_id` is attached to every batched source (parity with legacy `model_copy` decoration).
+  - `PER_RESULT_MAX = 25` cap still applied before the ledger sees the input (a 30-result tool truncates to 25 stored rows, identical to legacy).
+- The existing 7 tests in `test_cite_mcp.py` (which assert N events for the legacy per-source path) remain unchanged and pass — they exercise `batch_enabled=False` (the default fixture).
+- Mixin signature extended with `batch_enabled: bool = False` kw-only, so existing test classes don't change at all.
+
+**Verification:**
+
+- 63 P7-related tests pass: `test_cite_mcp.py` + `test_citations.py` + `test_runtime_settings.py` + `test_workspace_feed_stores.py`.
+- 1031 wider backend tests pass across `tests/unit/agent_runtime` + `tests/unit/runtime_api`; zero regressions.
+- The flag's default `false` means production behavior is unchanged on this PR's merge — operator must explicitly set `RUNTIME_BATCH_SOURCE_INGESTION=true` to take the new path.
+
+### Rollout plan (PR2 → production)
+
+1. **PR2 merges.** Default behavior unchanged. CI green.
+2. **Staging:** set `RUNTIME_BATCH_SOURCE_INGESTION=true` on the worker process. Run a research-heavy conversation with 3+ MCP tool calls; observe via SSE that one `sources_ingested` event arrives per tool result instead of N `source_ingested` events. Confirm Sources tab + chip resolution still render correctly.
+3. **Latency check on staging:** measure end-to-end turn time for a 20-source MCP result; expect ≥300ms improvement vs. baseline (per the PRD's §1 estimate).
+4. **Production:** flip `RUNTIME_BATCH_SOURCE_INGESTION=true` on prod workers.
+5. **Cleanup PR (P7-PR3, eventual):** after 1–2 weeks of clean prod operation, remove the flag and the legacy per-source branch in `citation_projection.py`. Keep the `register` method on the ledger (still used by `citation_capturing_tool` and provider grounding paths). Mark `register_many` as the canonical batched API.
+
+### Known limitations (intentional)
+
+- `citation_capturing_tool.py` still calls `CitationProjector.project` per single source — those paths are unaffected by the flag (a single source goes through the same `_register_internal` either way; the only change is which event type fires). Migrating those callers is out of P7 scope; revisit in P14 (citation infrastructure consolidation).
+- Provider grounding (`CitationStreamPipeline`) still calls `ledger.register` per chunk — same reasoning. Per-chunk delivery is the natural shape of provider streaming and doesn't benefit from batching.
 
 ---
 

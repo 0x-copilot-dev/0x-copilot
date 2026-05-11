@@ -403,24 +403,24 @@ class TestInMemorySourceStore:
             created_at=created_at or _at(ordinal),
         )
 
-    def test_aggregates_by_unique_doc(self) -> None:
+    async def test_aggregates_by_unique_doc(self) -> None:
         citations = InMemoryCitationStore()
-        citations.insert_or_get(self._citation(ordinal=1))
-        citations.insert_or_get(
-            self._citation(
-                ordinal=2,
-                connector="notion",
-                doc_id="doc_brand",
-                title="Brand voice",
-            )
-        )
-        # Re-cite the positioning doc in a second run — same doc, new run.
-        citations.insert_or_get(
-            self._citation(
-                ordinal=3,
-                run_id=_RUN_OTHER,
-                created_at=_at(100),
-            )
+        await citations.insert_many_or_get(
+            [
+                self._citation(ordinal=1),
+                self._citation(
+                    ordinal=2,
+                    connector="notion",
+                    doc_id="doc_brand",
+                    title="Brand voice",
+                ),
+                # Re-cite the positioning doc in a second run — same doc, new run.
+                self._citation(
+                    ordinal=3,
+                    run_id=_RUN_OTHER,
+                    created_at=_at(100),
+                ),
+            ]
         )
         adapter = InMemorySourceStore(citations)
         result = adapter.aggregate_for_conversation(
@@ -435,15 +435,17 @@ class TestInMemorySourceStore:
         assert positioning.citation_count == 2
         assert positioning.last_cited_at == _at(100)
 
-    def test_run_scope_filters(self) -> None:
+    async def test_run_scope_filters(self) -> None:
         citations = InMemoryCitationStore()
-        citations.insert_or_get(self._citation(ordinal=1))
-        citations.insert_or_get(
-            self._citation(
-                ordinal=2,
-                doc_id="doc_other_run",
-                run_id=_RUN_OTHER,
-            )
+        await citations.insert_many_or_get(
+            [
+                self._citation(ordinal=1),
+                self._citation(
+                    ordinal=2,
+                    doc_id="doc_other_run",
+                    run_id=_RUN_OTHER,
+                ),
+            ]
         )
         adapter = InMemorySourceStore(citations)
         result = adapter.aggregate_for_conversation(
@@ -451,9 +453,9 @@ class TestInMemorySourceStore:
         )
         assert {row.source_doc_id for row in result} == {"doc_positioning"}
 
-    def test_does_not_leak_across_orgs(self) -> None:
+    async def test_does_not_leak_across_orgs(self) -> None:
         citations = InMemoryCitationStore()
-        citations.insert_or_get(self._citation(ordinal=1))
+        await citations.insert_many_or_get([self._citation(ordinal=1)])
         adapter = InMemorySourceStore(citations)
         result = adapter.aggregate_for_conversation(
             org_id="org_other", conversation_id=_CONV, run_id=None, limit=10

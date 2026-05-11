@@ -1,12 +1,16 @@
 """Citation ledger — single seam for tool, provider, and replay paths.
 
 PR 1.1 (design at ``docs/new-design/01-citations-live-registry.md``).
+P7 added :meth:`register_many` for batch ingestion paths (the MCP
+projector primarily); see ``docs/refactor/06-citation-batching.md``.
 
 Tools, the Anthropic stream adapter, and the OpenAI Responses adapter all
-funnel through :meth:`CitationLedger.register` so the per-run idempotency
+funnel through :meth:`CitationLedger.register` (single source) or
+:meth:`CitationLedger.register_many` (batch). The per-run idempotency
 key ``(connector, doc_id)`` is enforced in one place, ordinals are
-allocated monotonically, and exactly one ``source_ingested`` event fires
-per unique source.
+allocated monotonically, and one event fires per ingestion call:
+``source_ingested`` for the singular path, ``sources_ingested`` for the
+batch path.
 
 Tools reach the active ledger via :meth:`CitationLedger.cite` (a class
 method that resolves the ContextVar set by the runtime worker before
@@ -23,6 +27,7 @@ provider-agnostic: ``[c<base36(ordinal)>]`` (e.g. ``[c1]``, ``[czh]``).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -54,6 +59,7 @@ class _Fields:
     """Wire payload field names — kept stable for replay compatibility."""
 
     CITATION = "citation"
+    CITATIONS = "citations"
     SOURCE = "source"
 
 
@@ -90,12 +96,22 @@ class CitationLedger:
         producer: "RuntimeEventProducer",
         source: "StreamEventSource",
         per_run_max: int = _Limits.PER_RUN_MAX,
+        batch_enabled: bool = False,
     ) -> None:
         self._run = run
         self._store = store
         self._producer = producer
         self._source = source
         self._per_run_max = per_run_max
+        # P7 PR2 — when True, callers that batch multiple sources per
+        # ingestion (notably :class:`CitationProjector`) should prefer
+        # :meth:`register_many` over a per-source :meth:`register` loop.
+        # The two paths share ``_register_internal`` so the flag only
+        # changes the wire shape (one ``sources_ingested`` event vs N
+        # ``source_ingested`` events) and the DB round-trip count.
+        # Defaults ``False`` so PR2 ships dark; the worker flips it via
+        # ``RUNTIME_BATCH_SOURCE_INGESTION``.
+        self._batch_enabled = batch_enabled
         # (connector, doc_id) -> CitationRecord. Ordinals fall out of insertion
         # order, so the dict's preserved insertion order IS the canonical
         # ordering of the run's citations.
@@ -105,63 +121,155 @@ class CitationLedger:
     def run_id(self) -> str:
         return self._run.run_id
 
+    @property
+    def batch_enabled(self) -> bool:
+        """Whether callers should prefer :meth:`register_many` over a loop."""
+
+        return self._batch_enabled
+
     def sealed_payloads(self) -> list[dict[str, object]]:
         """Snapshot the current registry for ``final_response.citations``."""
 
         return [record.to_wire_payload() for record in self._cache.values()]
 
     async def register(self, source: SourceRef) -> str:
-        """Register a source against the run; return its inline token.
+        """Register a single source against the run; return its inline token.
 
         Idempotent on ``(connector, doc_id)``. Emits exactly one
-        ``source_ingested`` event per unique source. Silently caps at
-        ``per_run_max`` — beyond the cap the source is dropped and the
-        empty string is returned so the assistant text can't accumulate
-        unresolvable tokens.
+        ``source_ingested`` event when the source is newly inserted (no
+        event on cache hit). Silently caps at ``per_run_max`` — beyond
+        the cap the source is dropped and the empty string is returned
+        so the assistant text can't accumulate unresolvable tokens.
         """
 
-        key = (source.source_connector, source.source_doc_id)
-        existing = self._cache.get(key)
-        if existing is not None:
-            return self._token_for(existing.ordinal)
-
-        if len(self._cache) >= self._per_run_max:
-            _LOGGER.warning(
-                "citation registry cap reached for run %s (cap=%d)",
-                self._run.run_id,
-                self._per_run_max,
+        tokens, new_records = await self._register_internal([source])
+        if new_records:
+            await self._producer.append_api_event(
+                run=self._run,
+                source=self._source,
+                event_type=RuntimeApiEventType.SOURCE_INGESTED,
+                payload={_Fields.CITATION: new_records[0].to_wire_payload()},
             )
-            return ""
+        return tokens[0]
 
-        ordinal = len(self._cache) + 1
-        citation_id = self._token_id(ordinal)
-        record = CitationRecord(
-            citation_id=citation_id,
-            run_id=self._run.run_id,
-            conversation_id=self._run.conversation_id,
-            org_id=self._run.org_id,
-            ordinal=ordinal,
-            source_connector=source.source_connector,
-            source_doc_id=source.source_doc_id,
-            source_url=source.source_url,
-            title=source.title,
-            snippet=source.snippet,
-            freshness_at=source.freshness_at,
-            source_tool_call_id=source.source_tool_call_id,
-        )
-        # Persist first so a producer-emit failure doesn't orphan a wire
-        # event without a backing row. The store is idempotent on the
-        # (run_id, connector, doc_id) unique index, so a concurrent caller
-        # racing the same source receives the existing row back.
-        persisted = self._store.insert_or_get(record)
-        self._cache[key] = persisted
-        await self._producer.append_api_event(
-            run=self._run,
-            source=self._source,
-            event_type=RuntimeApiEventType.SOURCE_INGESTED,
-            payload={_Fields.CITATION: persisted.to_wire_payload()},
-        )
-        return self._token_for(persisted.ordinal)
+    async def register_many(self, sources: Sequence[SourceRef]) -> list[str]:
+        """Register N sources in one batch; return N inline tokens in input order.
+
+        P7 — batched ingestion path used by callers that produce many
+        sources at once (notably :class:`CitationProjector`). The new
+        sources go through one bulk ``insert_many_or_get`` call and emit
+        a single ``sources_ingested`` event carrying the ordered list of
+        newly-inserted citations. Cache hits return existing tokens
+        without a DB round trip; cap-dropped sources return ``""``.
+
+        Output ordering is 1:1 with the input ``sources`` sequence so
+        callers can splice tokens back into the same positions in the
+        result text they came from.
+        """
+
+        if not sources:
+            return []
+        tokens, new_records = await self._register_internal(list(sources))
+        if new_records:
+            await self._producer.append_api_event(
+                run=self._run,
+                source=self._source,
+                event_type=RuntimeApiEventType.SOURCES_INGESTED,
+                payload={
+                    _Fields.CITATIONS: [
+                        record.to_wire_payload() for record in new_records
+                    ]
+                },
+            )
+        return tokens
+
+    async def _register_internal(
+        self,
+        sources: Sequence[SourceRef],
+    ) -> tuple[list[str], list[CitationRecord]]:
+        """Cache-check + bulk-persist. Shared by :meth:`register` and
+        :meth:`register_many`.
+
+        Returns ``(tokens, newly_inserted)``:
+
+        * ``tokens`` — one entry per input source, in input order.
+          ``""`` for sources dropped at the per-run cap; the inline
+          ``[c<base36>]`` token otherwise.
+        * ``newly_inserted`` — canonical persisted records for the
+          *new* sources only (cache hits and cap-drops excluded), in
+          allocation order (ascending ordinal). Caller is responsible
+          for emitting the appropriate event.
+        """
+
+        if not sources:
+            return [], []
+
+        tokens: list[str] = [""] * len(sources)
+        new_records: list[CitationRecord] = []
+        new_indices: list[int] = []
+        # In-batch dedup: a single batch can repeat the same (connector,
+        # doc_id) — both occurrences must collapse to the same ordinal
+        # without producing duplicate event entries or duplicate inserts.
+        in_batch: dict[tuple[str, str], CitationRecord] = {}
+
+        for idx, source in enumerate(sources):
+            key = (source.source_connector, source.source_doc_id)
+            existing = self._cache.get(key)
+            if existing is not None:
+                tokens[idx] = self._token_for(existing.ordinal)
+                continue
+            already_in_batch = in_batch.get(key)
+            if already_in_batch is not None:
+                tokens[idx] = self._token_for(already_in_batch.ordinal)
+                continue
+            # Cap counts the cache + the records we're about to insert in
+            # this call — otherwise a single batch could blow past the cap.
+            if len(self._cache) + len(new_records) >= self._per_run_max:
+                _LOGGER.warning(
+                    "citation registry cap reached for run %s (cap=%d)",
+                    self._run.run_id,
+                    self._per_run_max,
+                )
+                # tokens[idx] stays "" → assistant text drops the marker.
+                continue
+            ordinal = len(self._cache) + len(new_records) + 1
+            record = CitationRecord(
+                citation_id=self._token_id(ordinal),
+                run_id=self._run.run_id,
+                conversation_id=self._run.conversation_id,
+                org_id=self._run.org_id,
+                ordinal=ordinal,
+                source_connector=source.source_connector,
+                source_doc_id=source.source_doc_id,
+                source_url=source.source_url,
+                title=source.title,
+                snippet=source.snippet,
+                freshness_at=source.freshness_at,
+                source_tool_call_id=source.source_tool_call_id,
+            )
+            new_records.append(record)
+            new_indices.append(idx)
+            in_batch[key] = record
+
+        if not new_records:
+            return tokens, []
+
+        # Persist before emitting events so a producer failure doesn't
+        # orphan a wire event without a backing row. The store is
+        # idempotent on (run_id, connector, doc_id), so a concurrent
+        # caller racing the same source receives the existing row back —
+        # output preserves input order so per-source token assignment
+        # stays correct.
+        persisted = list(await self._store.insert_many_or_get(new_records))
+        for offset, persisted_record in enumerate(persisted):
+            idx = new_indices[offset]
+            key = (
+                persisted_record.source_connector,
+                persisted_record.source_doc_id,
+            )
+            self._cache[key] = persisted_record
+            tokens[idx] = self._token_for(persisted_record.ordinal)
+        return tokens, persisted
 
     @classmethod
     async def cite(cls, source: SourceRef) -> str:

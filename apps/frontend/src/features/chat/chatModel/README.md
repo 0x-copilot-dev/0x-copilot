@@ -32,13 +32,19 @@ kept **two reducers**:
 | `sourcesReducer` (PR 1.5 / 3.1) | `Map<"connector doc_id", SourceEntry>` (deduped, citation-counted) | Workspace pane → Sources tab                                                                  |
 
 Both are populated **inside the same `applyRuntimeEvent` pass** from the
-same `source_ingested` event in [`eventReducer.ts`](eventReducer.ts). They
-serve different shapes (per-run flat lookup vs. per-doc aggregate) so a
-single Map would force derivation work for every consumer.
+same ingestion events in [`eventReducer.ts`](eventReducer.ts) — either
+`source_ingested` (singular, per-source emitters: provider grounding,
+capturing tool) or `sources_ingested` (P7 batched variant, emitted by
+`CitationLedger.register_many` once the MCP projector switches to batch
+mode). The reducers handle both event types with identical per-citation
+semantics; only the wire shape differs (`payload.citation` vs
+`payload.citations`). They serve different output shapes (per-run flat
+lookup vs. per-doc aggregate) so a single Map would force derivation
+work for every consumer.
 
 The risk of two stores is silent drift. We guard with one invariant test
 ([`citationStore.invariant.test.ts`](citationStore.invariant.test.ts)):
-for every `source_ingested`, the shared fields
+for every ingestion event (singular or batched), the shared fields
 (`citation_id`, `source_connector`, `source_doc_id`, `source_url`,
 `title`, `snippet`, `freshness_at`) must be byte-identical in both
 reducers. Any future PR that forks the reducers fails CI immediately.

@@ -53,6 +53,26 @@ from runtime_api.schemas import (
 
 
 @runtime_checkable
+class RuntimeStoreLifecyclePort(Protocol):
+    """Lifecycle hooks for the runtime store backing the API/worker.
+
+    The API lifespan and the worker entrypoint call ``open`` at startup,
+    ``migrate`` once after open, and ``close`` at shutdown. Adapters that
+    have nothing to set up (in-memory) supply no-op implementations so the
+    contract holds for every backend.
+    """
+
+    async def open(self) -> None:
+        """Acquire any backing resources (connection pool, files, etc.)."""
+
+    async def close(self) -> None:
+        """Release resources acquired in :meth:`open`."""
+
+    async def migrate(self) -> None:
+        """Apply schema migrations or one-shot setup tasks."""
+
+
+@runtime_checkable
 class PersistencePort(Protocol):
     """Conversation, message, run, approval, and audit persistence boundary."""
 

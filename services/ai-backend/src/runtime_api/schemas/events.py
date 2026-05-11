@@ -131,6 +131,8 @@ class RuntimeEventPresentationProjector:
             return cls._approval_forwarded_payload(payload)
         if event_type is RuntimeApiEventType.SOURCE_INGESTED:
             return cls._source_ingested_payload(payload)
+        if event_type is RuntimeApiEventType.SOURCES_INGESTED:
+            return cls._sources_ingested_payload(payload)
         if event_type is RuntimeApiEventType.CITATION_MADE:
             return cls._citation_made_payload(payload)
         return payload
@@ -246,6 +248,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.TOOL_CALL_COMPLETED,
             RuntimeApiEventType.SOURCE_INGESTED,
+            RuntimeApiEventType.SOURCES_INGESTED,
             RuntimeApiEventType.CITATION_MADE,
         }:
             return RuntimeActivityKind.TOOL
@@ -404,6 +407,11 @@ class RuntimeEventPresentationProjector:
                 if title is not None:
                     return Messages.Event.source_cited_title(title)
             return Messages.Event.SOURCE_INGESTED
+        if event_type is RuntimeApiEventType.SOURCES_INGESTED:
+            citations = payload.get("citations")
+            if isinstance(citations, list) and citations:
+                return Messages.Event.sources_cited_title(len(citations))
+            return Messages.Event.SOURCES_INGESTED
         if event_type is RuntimeApiEventType.CITATION_MADE:
             link = payload.get(_Fields.LINK)
             if isinstance(link, dict):
@@ -457,6 +465,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.SUBAGENT_COMPLETED,
             RuntimeApiEventType.FINAL_RESPONSE,
             RuntimeApiEventType.SOURCE_INGESTED,
+            RuntimeApiEventType.SOURCES_INGESTED,
             RuntimeApiEventType.CITATION_MADE,
         }:
             return Values.Status.COMPLETED
@@ -520,9 +529,36 @@ class RuntimeEventPresentationProjector:
         """
 
         citation = payload.get(_Fields.CITATION)
-        if not isinstance(citation, dict):
+        safe_citation = cls._safe_citation_ref(citation)
+        if safe_citation is None:
             return {}
-        safe_citation: JsonObject = {}
+        return {_Fields.CITATION: safe_citation}
+
+    @classmethod
+    def _sources_ingested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``sources_ingested`` payloads through a strict allow-list.
+
+        Plural variant of :meth:`_source_ingested_payload` (P7). Iterates
+        ``payload.citations`` and applies the same per-citation allow-list,
+        preserving order so the FE registry sees ordinals in the order the
+        ledger allocated them.
+        """
+
+        citations = payload.get("citations")
+        if not isinstance(citations, list):
+            return {"citations": []}
+        safe_citations: list[JsonObject] = []
+        for citation in citations:
+            safe = cls._safe_citation_ref(citation)
+            if safe is not None:
+                safe_citations.append(safe)
+        return {"citations": safe_citations}
+
+    @staticmethod
+    def _safe_citation_ref(value: object) -> JsonObject | None:
+        if not isinstance(value, dict):
+            return None
+        safe: JsonObject = {}
         for text_key in (
             "citation_id",
             "source_connector",
@@ -533,20 +569,20 @@ class RuntimeEventPresentationProjector:
             "freshness_at",
             "source_tool_call_id",
         ):
-            value = citation.get(text_key)
-            if isinstance(value, str) and value.strip():
-                safe_citation[text_key] = value
-            elif value is None and text_key in {
+            v = value.get(text_key)
+            if isinstance(v, str) and v.strip():
+                safe[text_key] = v
+            elif v is None and text_key in {
                 "source_url",
                 "snippet",
                 "freshness_at",
                 "source_tool_call_id",
             }:
-                safe_citation[text_key] = None
-        ordinal = citation.get("ordinal")
+                safe[text_key] = None
+        ordinal = value.get("ordinal")
         if isinstance(ordinal, int) and ordinal > 0:
-            safe_citation["ordinal"] = ordinal
-        return {_Fields.CITATION: safe_citation}
+            safe["ordinal"] = ordinal
+        return safe
 
     @classmethod
     def _citation_made_payload(cls, payload: JsonObject) -> JsonObject:

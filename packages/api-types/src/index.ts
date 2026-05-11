@@ -269,6 +269,7 @@ export type RuntimeApiEventType =
   | "budget_warning"
   | "run_rejected"
   | "source_ingested"
+  | "sources_ingested"
   | "citation_made"
   | "draft_updated"
   | "compression_note"
@@ -323,6 +324,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "budget_warning",
   "run_rejected",
   "source_ingested",
+  "sources_ingested",
   "citation_made",
   "draft_updated",
   "compression_note",
@@ -1427,6 +1429,18 @@ export interface SourceIngestedPayload {
   [key: string]: unknown;
 }
 
+// P7 — batched variant of `source_ingested`. Emitted by
+// `CitationLedger.register_many` (the MCP projector after the PR2 switch)
+// when multiple sources are ingested in one ledger call. Payload carries
+// an ordered list of `CitationSourceRef`; FE reducers iterate it as if N
+// `source_ingested` events had arrived. Order matches the ledger's
+// allocation order (ascending ordinal). The singular event type is
+// retained for per-source emitters (provider grounding, capturing tool).
+export interface SourcesIngestedPayload {
+  citations: CitationSourceRef[];
+  [key: string]: unknown;
+}
+
 // PR 1.1-rev2 — model-declared, conversation-scoped citation pointers.
 // The model emits opaque tokens of the form `[[N]]` where N is the
 // `conversation_ordinal` of a tool invocation. The runtime resolves each
@@ -1641,6 +1655,8 @@ export interface RuntimeEventPayloadByType {
   budget_warning: BudgetWarningPayload;
   run_rejected: RunRejectedPayload;
   source_ingested: SourceIngestedPayload;
+  /** P7 — batched variant of `source_ingested`. */
+  sources_ingested: SourcesIngestedPayload;
   citation_made: CitationMadePayload;
   draft_updated: DraftUpdatedPayload;
   /** PR A1 — context-compression note. Server-emitted when the
@@ -2490,6 +2506,26 @@ export function isSourceIngestedPayload(
     return false;
   }
   return isCitationSourceRef((payload as Record<string, unknown>).citation);
+}
+
+// P7 — type guard for the batched variant. The empty-list case is
+// considered well-formed (the projector emits `{ citations: [] }` when
+// the upstream payload is malformed) so reducers can no-op safely.
+export function isSourcesIngestedPayload(
+  payload: unknown,
+): payload is SourcesIngestedPayload {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return false;
+  }
+  const candidate = (payload as Record<string, unknown>).citations;
+  if (!Array.isArray(candidate)) {
+    return false;
+  }
+  return candidate.every(isCitationSourceRef);
 }
 
 export function isCitationLink(value: unknown): value is CitationLink {

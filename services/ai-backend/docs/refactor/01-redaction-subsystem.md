@@ -1,9 +1,17 @@
 # Refactor 01 — Redaction Subsystem
 
-**Status:** Draft for review
+**Status:** Draft for review (verified against code 2026-05-11)
 **Audit reference:** [refactor-audit.md §1.4](../architecture/refactor-audit.md#14-custom-redactor)
 **Owner:** TBD
-**Target:** `agent_runtime/observability/redaction.py` and the 16 callsites that depend on it
+**Target:** `agent_runtime/observability/redaction.py` and the 19 dependent locations described in [§5](#5-systems-it-touches)
+
+> **Verification note (2026-05-11).** Every behavioral and structural claim in this PRD was cross-checked against `src/` on 2026-05-11. All §2 problem statements, §4 current-functionality items, §5 blast-radius enumerations, and the §9.1 UAE recognizer patterns are accurate. Three small corrections applied to this PRD:
+>
+> - **Test count.** §5.5 previously said "7 tests"; the actual count in [`test_streaming_observability.py`](../../tests/unit/agent_runtime/agent/test_streaming_observability.py) is **8**. Two tests are unnamed in the PRD body but cover documented behavior (`test_stream_contracts_validate_and_redact_payloads`, `test_sensitive_value_outside_user_content_key_still_redacted`).
+> - **Callsite total.** §5.6 said "16 callsites." Itemized total is **19** (8 schemas + 6 persistence + 1 validation shim + 4 pattern-only). Plus one test module. Numbers were inconsistent; fixed below.
+> - **Line numbers in §5.1 / §5.4 have drifted.** Files and methods are correct; line references are stale (e.g. `events.py:938-941` → now line 977). Treat the file/method references as load-bearing and re-grep line numbers at implementation time.
+>
+> No structural revisions to the PRD's scope, phasing, library decision, or compliance constraints — those remain accurate.
 
 ---
 
@@ -191,20 +199,21 @@ These import `Patterns.SENSITIVE_KEY` / `SENSITIVE_VALUE` directly. They are _no
 
 ### 5.5 Test surface
 
-| File                                                                                                                                                           | Coverage                                                                                                                                                                          |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`tests/unit/agent_runtime/agent/test_streaming_observability.py`](../../tests/unit/agent_runtime/agent/test_streaming_observability.py)                       | The canonical behavior contract. 7 tests covering structural scrub, user-content carve-out, sticky propagation, length clip, the over-fire fix. **All must pass after refactor.** |
-| [`tests/unit/runtime_adapters/postgres/test_field_encryption_projections.py`](../../tests/unit/runtime_adapters/postgres/test_field_encryption_projections.py) | Imports the redactor surface but doesn't test redaction directly. Still must not regress.                                                                                         |
+| File                                                                                                                                                           | Coverage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`tests/unit/agent_runtime/agent/test_streaming_observability.py`](../../tests/unit/agent_runtime/agent/test_streaming_observability.py)                       | The canonical behavior contract. **8 tests:** `test_stream_contracts_validate_and_redact_payloads`, `test_user_content_key_bypasses_length_cap`, `test_user_content_uncap_is_sticky_through_nested_structures`, `test_non_user_content_key_still_clipped`, `test_sensitive_value_pattern_inside_user_content_key_is_preserved`, `test_sensitive_value_outside_user_content_key_still_redacted`, `test_sensitive_key_nested_inside_user_content_key_still_redacted`, `test_sensitive_value_pattern_inside_nested_user_content_is_preserved`. **All must pass after refactor.** |
+| [`tests/unit/runtime_adapters/postgres/test_field_encryption_projections.py`](../../tests/unit/runtime_adapters/postgres/test_field_encryption_projections.py) | Imports the redactor surface but doesn't test redaction directly. Still must not regress.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ### 5.6 Blast radius summary
 
-- **8 schemas / contracts** invoke `redact_json_object` directly on field validators.
-- **6 persistence records** invoke it via the `PersistenceValueNormalizer` alias.
-- **1 validation shim** delegates to it.
-- **4 pattern-only callers** read `Patterns.SENSITIVE_KEY` / `_VALUE` for adjacent purposes.
-- **1 test module** pins the contract.
+- **8 schemas / contracts** invoke `redact_json_object` directly on field validators ([events.py](../../src/runtime_api/schemas/events.py), [runs.py](../../src/runtime_api/schemas/runs.py) × 2, [conversations.py](../../src/runtime_api/schemas/conversations.py) × 2, [execution/contracts.py](../../src/agent_runtime/execution/contracts.py) × 3).
+- **6 persistence records** invoke it via the `PersistenceValueNormalizer` alias ([approvals](../../src/agent_runtime/persistence/records/approvals.py), [tools](../../src/agent_runtime/persistence/records/tools.py), [memory](../../src/agent_runtime/persistence/records/memory.py), [audit](../../src/agent_runtime/persistence/records/audit.py), [checkpoints](../../src/agent_runtime/persistence/records/checkpoints.py), [outbox](../../src/agent_runtime/persistence/records/outbox.py)).
+- **1 validation shim** delegates to it ([`ValueNormalizer.redact_json_object`](../../src/agent_runtime/validation.py)).
+- **4 pattern-only callers** read `Patterns.SENSITIVE_KEY` / `_VALUE` for adjacent purposes ([logging.py:123](../../src/agent_runtime/observability/logging.py), [http_logging.py:86](../../src/agent_runtime/observability/http_logging.py), [memory/contracts.py:400+403](../../src/agent_runtime/context/memory/contracts.py), [memory/policy.py:202](../../src/agent_runtime/context/memory/policy.py)).
+- **1 public export** in [`observability/__init__.py`](../../src/agent_runtime/observability/__init__.py) re-exports `ObservabilityRedactor` — the new Protocol must preserve this import path or update the re-export.
+- **1 test module** pins the contract ([`test_streaming_observability.py`](../../tests/unit/agent_runtime/agent/test_streaming_observability.py), 8 tests).
 
-Total: **16 callsites** depending on the current behavior.
+Total: **19 dependent code locations** (8 + 6 + 1 + 4) plus 1 export + 1 test module.
 
 ---
 

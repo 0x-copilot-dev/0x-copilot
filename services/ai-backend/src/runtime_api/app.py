@@ -295,42 +295,19 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.draft_service import DraftService
         from agent_runtime.api.events import RuntimeEventProducer
         from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
-        from runtime_adapters.postgres.draft_store import PostgresDraftStore
 
         ports = getattr(app.state, "runtime_ports", None)
-        ports = getattr(app.state, "runtime_ports", None)
-        if ports is not None and ports.backend == "postgres":
-            store = PostgresDraftStore(ports.store)
-            persistence = ports.persistence
-            event_store = ports.event_store
-        elif ports is not None:
-            store = (
-                ports.draft_store
-                if ports.draft_store is not None
-                else InMemoryDraftStore()
-            )
-            persistence = ports.persistence
-            event_store = ports.event_store
-        elif ports is not None:
-            store = (
-                ports.draft_store
-                if ports.draft_store is not None
-                else InMemoryDraftStore()
-            )
-            persistence = ports.persistence
-            event_store = ports.event_store
-        else:  # pragma: no cover — only hit when the app boots without ports
+        if ports is None:  # pragma: no cover — only hit when boot has no ports
             return DraftService(store=InMemoryDraftStore())
 
         event_producer = RuntimeEventProducer(
-            persistence=persistence,
-            event_store=event_store,
+            persistence=ports.persistence,
+            event_store=ports.event_store,
         )
-        auth_gate = cls._draft_auth_gate(app)
         return DraftService(
-            store=store,
-            persistence=persistence,
-            auth_gate=auth_gate,
+            store=ports.draft_store,
+            persistence=ports.persistence,
+            auth_gate=cls._draft_auth_gate(app),
             event_producer=event_producer,
         )
 
@@ -454,31 +431,26 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def default_workspace_feed_service(cls, app: FastAPI):
-        """Wire the Workspace pane data feeds for the configured backend (PR 1.5)."""
+        """Wire the Workspace pane data feeds (PR 1.5).
+
+        The factory pre-builds the satellite stores for whichever backend is
+        configured, so this just hands them off — no backend branching here.
+        """
 
         from agent_runtime.api.workspace_feed_service import WorkspaceFeedService
         from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
         from runtime_adapters.in_memory.source_store import InMemorySourceStore
         from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
-        from runtime_adapters.postgres.source_store import PostgresSourceStore
-        from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
 
         ports = getattr(app.state, "runtime_ports", None)
-        if ports is not None and ports.backend == "postgres":
-            parent = ports.store
+        if ports is None:  # pragma: no cover — only hit when boot has no ports
             return WorkspaceFeedService(
-                subagent_store=PostgresSubagentStore(parent),
-                source_store=PostgresSourceStore(parent),
+                subagent_store=InMemorySubagentStore(None),
+                source_store=InMemorySourceStore(InMemoryCitationStore()),
             )
-        ports = ports
-        underlying = (
-            ports.store.underlying  # type: ignore[union-attr]
-            if hasattr(getattr(ports, "store", None), "underlying")
-            else getattr(ports, "store", None)
-        )
         return WorkspaceFeedService(
-            subagent_store=InMemorySubagentStore(underlying),
-            source_store=InMemorySourceStore(InMemoryCitationStore()),
+            subagent_store=ports.subagent_store,
+            source_store=ports.source_store,
         )
 
     @classmethod
@@ -552,8 +524,8 @@ class RuntimeApiAppFactory:
         ports = getattr(app.state, "runtime_ports", None)
         if ports is None:
             return
-        await ports.store.open()
-        await ports.store.migrate()
+        await ports.lifecycle.open()
+        await ports.lifecycle.migrate()
 
     @classmethod
     async def close_async_store(cls, app: FastAPI) -> None:
@@ -562,7 +534,7 @@ class RuntimeApiAppFactory:
         ports = getattr(app.state, "runtime_ports", None)
         if ports is None:
             return
-        await ports.store.close()
+        await ports.lifecycle.close()
 
     @classmethod
     async def start_in_process_worker(cls, app: FastAPI) -> None:

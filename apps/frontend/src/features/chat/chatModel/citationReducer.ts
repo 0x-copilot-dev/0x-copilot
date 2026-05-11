@@ -5,10 +5,16 @@
 // `ChatItem`. This keeps the existing reducer focused on chat content and
 // lets the registry survive interleaved messages, sub-runs, and replays
 // without entanglement.
+//
+// P7 added the batched `sources_ingested` variant — emitted by
+// `CitationLedger.register_many` after the projector switches to batch
+// mode (PR2 of the citation-batching refactor). Same payload shape as N
+// `source_ingested` events: iterate `payload.citations` and upsert each.
 
 import {
   isCitationSourceRef,
   isSourceIngestedPayload,
+  isSourcesIngestedPayload,
   type CitationSourceRef,
   type RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
@@ -28,6 +34,15 @@ export function applyCitationEvent(
       return registry;
     }
     return upsertCitation(registry, event.run_id, event.payload.citation);
+  }
+  if (event.event_type === "sources_ingested") {
+    if (!isSourcesIngestedPayload(event.payload)) {
+      return registry;
+    }
+    if (event.payload.citations.length === 0) {
+      return registry;
+    }
+    return upsertCitations(registry, event.run_id, event.payload.citations);
   }
   if (event.event_type === "final_response") {
     const citations = sealedCitationsFromPayload(event.payload);
