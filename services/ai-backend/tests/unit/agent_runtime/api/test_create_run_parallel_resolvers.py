@@ -23,7 +23,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_coordinator import RunCoordinator
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -45,35 +48,47 @@ def _reset_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 class CreateRunFixtureMixin:
-    """Construct a ``RuntimeApiService`` over an in-memory store with a
+    """Construct a ``RunCoordinator`` over an in-memory store with a
     seeded conversation. Tests patch the three ``_resolve_*`` methods on
-    the returned service to isolate the gather contract from real I/O.
+    the returned coordinator to isolate the gather contract from real I/O.
     """
 
     async def _build_service_with_conversation(
         self,
-    ) -> tuple[RuntimeApiService, InMemoryRuntimeApiStore, str]:
+    ) -> tuple[RunCoordinator, InMemoryRuntimeApiStore, str]:
         store = InMemoryRuntimeApiStore()
-        service = RuntimeApiService(
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        event_producer = RuntimeEventProducer(
             persistence=store,
             event_store=store,
-            queue=store,
-            settings=RuntimeSettings.load(
-                environ={
-                    "OPENAI_API_KEY": "sk-test",
-                    "RUNTIME_DEFAULT_PROVIDER": "openai",
-                    "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                }
-            ),
+            on_event_appended=None,
         )
-        conversation = await service.create_conversation(
+        run_coordinator = RunCoordinator(
+            persistence=store,
+            queue=store,
+            event_producer=event_producer,
+            settings=settings,
+            model_resolver=ModelConfigResolver(settings=settings),
+        )
+        conv_coordinator = ConversationCoordinator(
+            persistence=store,
+            settings=settings,
+            run_coordinator=run_coordinator,
+        )
+        conversation = await conv_coordinator.create_conversation(
             CreateConversationRequest(
                 org_id=_ORG_ID,
                 user_id=_USER_ID,
                 assistant_id=_ASSISTANT_ID,
             )
         )
-        return service, store, conversation.conversation_id
+        return run_coordinator, store, conversation.conversation_id
 
     @staticmethod
     def _run_request(*, conversation_id: str) -> CreateRunRequest:
@@ -96,7 +111,11 @@ class TestResolversRunInParallel(CreateRunFixtureMixin):
         barrier to fill, but the remaining two never enter.
         """
 
-        service, _store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            _store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
         barrier = asyncio.Barrier(3)
 
         async def _gated_workspace(*, org_id: str) -> dict[str, object]:
@@ -115,13 +134,19 @@ class TestResolversRunInParallel(CreateRunFixtureMixin):
 
         with (
             patch.object(
-                service, "_resolve_workspace_behavior_overrides", _gated_workspace
+                run_coordinator,
+                "_resolve_workspace_behavior_overrides",
+                _gated_workspace,
             ),
-            patch.object(service, "_resolve_user_policies", _gated_policies),
-            patch.object(service, "_resolve_suggested_connectors", _gated_suggested),
+            patch.object(run_coordinator, "_resolve_user_policies", _gated_policies),
+            patch.object(
+                run_coordinator, "_resolve_suggested_connectors", _gated_suggested
+            ),
         ):
             response = await asyncio.wait_for(
-                service.create_run(self._run_request(conversation_id=conversation_id)),
+                run_coordinator.create_run(
+                    self._run_request(conversation_id=conversation_id)
+                ),
                 timeout=2.0,
             )
         assert response.run_id
@@ -130,7 +155,11 @@ class TestResolversRunInParallel(CreateRunFixtureMixin):
         """Each resolver sleeps 100ms. Serial would take ≥300ms; parallel
         ≤180ms (max + slack for surrounding async work)."""
 
-        service, _store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            _store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
         delay_seconds = 0.1
 
         async def _slow_workspace(*, org_id: str) -> dict[str, object]:
@@ -149,13 +178,19 @@ class TestResolversRunInParallel(CreateRunFixtureMixin):
 
         with (
             patch.object(
-                service, "_resolve_workspace_behavior_overrides", _slow_workspace
+                run_coordinator,
+                "_resolve_workspace_behavior_overrides",
+                _slow_workspace,
             ),
-            patch.object(service, "_resolve_user_policies", _slow_policies),
-            patch.object(service, "_resolve_suggested_connectors", _slow_suggested),
+            patch.object(run_coordinator, "_resolve_user_policies", _slow_policies),
+            patch.object(
+                run_coordinator, "_resolve_suggested_connectors", _slow_suggested
+            ),
         ):
             start = time.monotonic()
-            await service.create_run(self._run_request(conversation_id=conversation_id))
+            await run_coordinator.create_run(
+                self._run_request(conversation_id=conversation_id)
+            )
             elapsed = time.monotonic() - start
         # Generous upper bound: max(delay) + 80ms slack for persistence,
         # event append, queue enqueue. Serial would be 3 * delay = 300ms.
@@ -172,35 +207,49 @@ class TestResolvedValuesFlowThrough(CreateRunFixtureMixin):
         """Two ``create_run`` calls invoke each resolver mock exactly
         twice — no memoization past the run boundary."""
 
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
         ws = AsyncMock(return_value={})
         up = AsyncMock(return_value={})
         sc = AsyncMock(return_value=())
 
         with (
-            patch.object(service, "_resolve_workspace_behavior_overrides", ws),
-            patch.object(service, "_resolve_user_policies", up),
-            patch.object(service, "_resolve_suggested_connectors", sc),
+            patch.object(run_coordinator, "_resolve_workspace_behavior_overrides", ws),
+            patch.object(run_coordinator, "_resolve_user_policies", up),
+            patch.object(run_coordinator, "_resolve_suggested_connectors", sc),
         ):
-            await service.create_run(self._run_request(conversation_id=conversation_id))
-            await service.create_run(self._run_request(conversation_id=conversation_id))
+            await run_coordinator.create_run(
+                self._run_request(conversation_id=conversation_id)
+            )
+            await run_coordinator.create_run(
+                self._run_request(conversation_id=conversation_id)
+            )
 
         assert ws.await_count == 2
         assert up.await_count == 2
         assert sc.await_count == 2
 
     async def test_each_resolver_called_once_per_run(self) -> None:
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
         ws = AsyncMock(return_value={})
         up = AsyncMock(return_value={})
         sc = AsyncMock(return_value=())
 
         with (
-            patch.object(service, "_resolve_workspace_behavior_overrides", ws),
-            patch.object(service, "_resolve_user_policies", up),
-            patch.object(service, "_resolve_suggested_connectors", sc),
+            patch.object(run_coordinator, "_resolve_workspace_behavior_overrides", ws),
+            patch.object(run_coordinator, "_resolve_user_policies", up),
+            patch.object(run_coordinator, "_resolve_suggested_connectors", sc),
         ):
-            await service.create_run(self._run_request(conversation_id=conversation_id))
+            await run_coordinator.create_run(
+                self._run_request(conversation_id=conversation_id)
+            )
 
         ws.assert_awaited_once_with(org_id=_ORG_ID)
         up.assert_awaited_once_with(org_id=_ORG_ID, user_id=_USER_ID)
@@ -214,78 +263,94 @@ class TestFailurePropagation(CreateRunFixtureMixin):
     persistence side effects."""
 
     async def test_workspace_overrides_failure_propagates(self) -> None:
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
 
         class _Boom(Exception):
             pass
 
         with (
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_workspace_behavior_overrides",
                 AsyncMock(side_effect=_Boom("workspace down")),
             ),
-            patch.object(service, "_resolve_user_policies", AsyncMock(return_value={})),
             patch.object(
-                service,
+                run_coordinator, "_resolve_user_policies", AsyncMock(return_value={})
+            ),
+            patch.object(
+                run_coordinator,
                 "_resolve_suggested_connectors",
                 AsyncMock(return_value=()),
             ),
         ):
             with pytest.raises(_Boom, match="workspace down"):
-                await service.create_run(
+                await run_coordinator.create_run(
                     self._run_request(conversation_id=conversation_id)
                 )
 
     async def test_user_policies_failure_propagates(self) -> None:
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
 
         class _Boom(Exception):
             pass
 
         with (
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_workspace_behavior_overrides",
                 AsyncMock(return_value={}),
             ),
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_user_policies",
                 AsyncMock(side_effect=_Boom("policies down")),
             ),
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_suggested_connectors",
                 AsyncMock(return_value=()),
             ),
         ):
             with pytest.raises(_Boom, match="policies down"):
-                await service.create_run(
+                await run_coordinator.create_run(
                     self._run_request(conversation_id=conversation_id)
                 )
 
     async def test_suggestible_connectors_failure_propagates(self) -> None:
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
 
         class _Boom(Exception):
             pass
 
         with (
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_workspace_behavior_overrides",
                 AsyncMock(return_value={}),
             ),
-            patch.object(service, "_resolve_user_policies", AsyncMock(return_value={})),
             patch.object(
-                service,
+                run_coordinator, "_resolve_user_policies", AsyncMock(return_value={})
+            ),
+            patch.object(
+                run_coordinator,
                 "_resolve_suggested_connectors",
                 AsyncMock(side_effect=_Boom("catalog down")),
             ),
         ):
             with pytest.raises(_Boom, match="catalog down"):
-                await service.create_run(
+                await run_coordinator.create_run(
                     self._run_request(conversation_id=conversation_id)
                 )
 
@@ -293,7 +358,11 @@ class TestFailurePropagation(CreateRunFixtureMixin):
         """A resolver failure before ``persistence.create_run_with_user_message``
         means no run row, no event append, no queue enqueue."""
 
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
 
         runs_before = len(store.runs)
         events_before = sum(
@@ -306,19 +375,23 @@ class TestFailurePropagation(CreateRunFixtureMixin):
 
         with (
             patch.object(
-                service,
+                run_coordinator,
                 "_resolve_workspace_behavior_overrides",
                 AsyncMock(side_effect=_Boom("workspace down")),
             ),
-            patch.object(service, "_resolve_user_policies", AsyncMock(return_value={})),
             patch.object(
-                service,
+                run_coordinator, "_resolve_user_policies", AsyncMock(return_value={})
+            ),
+            patch.object(
+                run_coordinator,
                 "_resolve_suggested_connectors",
                 AsyncMock(return_value=()),
             ),
             pytest.raises(_Boom),
         ):
-            await service.create_run(self._run_request(conversation_id=conversation_id))
+            await run_coordinator.create_run(
+                self._run_request(conversation_id=conversation_id)
+            )
 
         assert len(store.runs) == runs_before
         assert (
@@ -333,7 +406,11 @@ class TestCancellationOfSiblings(CreateRunFixtureMixin):
     latency should not include their full sleep."""
 
     async def test_failing_resolver_cancels_slow_siblings(self) -> None:
-        service, store, conversation_id = await self._build_service_with_conversation()
+        (
+            run_coordinator,
+            store,
+            conversation_id,
+        ) = await self._build_service_with_conversation()
 
         class _Boom(Exception):
             pass
@@ -354,14 +431,18 @@ class TestCancellationOfSiblings(CreateRunFixtureMixin):
 
         with (
             patch.object(
-                service, "_resolve_workspace_behavior_overrides", _fast_fail_workspace
+                run_coordinator,
+                "_resolve_workspace_behavior_overrides",
+                _fast_fail_workspace,
             ),
-            patch.object(service, "_resolve_user_policies", _slow_policies),
-            patch.object(service, "_resolve_suggested_connectors", _slow_suggested),
+            patch.object(run_coordinator, "_resolve_user_policies", _slow_policies),
+            patch.object(
+                run_coordinator, "_resolve_suggested_connectors", _slow_suggested
+            ),
         ):
             start = time.monotonic()
             with pytest.raises(_Boom, match="fast failure"):
-                await service.create_run(
+                await run_coordinator.create_run(
                     self._run_request(conversation_id=conversation_id)
                 )
             elapsed = time.monotonic() - start

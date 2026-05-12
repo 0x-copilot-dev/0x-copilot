@@ -42,11 +42,7 @@ class ToolCallStreamState:
 
 
 class StreamMessageProcessor:
-    """Process message-type stream events: tool calls, tool results, text deltas.
-
-    Standalone processor — no inheritance. Uses StreamMessageParser as a utility
-    and delegates subagent lifecycle events to a supplied update_processor.
-    """
+    """Process message-type stream events: tool-call start/delta/result and text deltas."""
 
     internal_tool_names = frozenset(
         {
@@ -74,6 +70,7 @@ class StreamMessageProcessor:
         event_producer: RuntimeEventProducer,
         update_processor: StreamUpdateProcessor,
     ) -> None:
+        """Wire the event producer and update sub-processor; initialise per-run state dicts."""
         self.event_producer = event_producer
         self._update_processor = update_processor
         self._tool_call_states: dict[
@@ -116,14 +113,7 @@ class StreamMessageProcessor:
         parent_task_id: str | None,
         subagent_id: str | None,
     ) -> None:
-        """Emit ``reasoning_summary_delta`` (per chunk) and ``reasoning_summary``
-        (cap) events from a parsed message chunk.
-
-        Subagent runs are dropped (matches the text path in
-        ``StreamOrchestrator.stream_delta`` and the v1 design decision: the
-        subagent fleet card carries its own progress affordance; we do not
-        bubble the subagent's thinking up to the parent thread).
-        """
+        """Emit reasoning_summary_delta per chunk and a reasoning_summary cap on span close; skips subagents."""
 
         if namespace.is_subagent:
             return
@@ -168,6 +158,7 @@ class StreamMessageProcessor:
         message: object,
         delta: str | None,
     ) -> None:
+        """Dispatch a message chunk to reasoning, tool-call, and tool-result processors."""
         metadata = namespace.metadata("messages")
         # The LangGraph subgraph task id is an internal UUID; resolve it to the
         # supervisor's `task` tool call_id so child events nest under the
@@ -276,6 +267,7 @@ class StreamMessageProcessor:
         parent_task_id: str | None,
         subagent_id: str | None = None,
     ) -> None:
+        """Emit TOOL_CALL_STARTED or TOOL_CALL_DELTA for a streaming tool-call chunk, routing task calls separately."""
         state = self.tool_call_state(run.run_id, namespace, tool_call)
         if state.tool_name == Values.Tool.TASK:
             await self._append_task_tool_call_event(
@@ -326,6 +318,7 @@ class StreamMessageProcessor:
         state: ToolCallStreamState,
         metadata: JsonObject,
     ) -> None:
+        """Emit a SUBAGENT_STARTED lifecycle event once the task tool call's args are fully buffered."""
         if state.started_emitted or state.call_id is None:
             return
         args = state.args or self.parse_args_text(state.args_text)
@@ -349,6 +342,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def tool_call_payload(cls, tool_call: object) -> JsonObject:
+        """Build a normalised tool-call event payload from a raw tool-call chunk."""
         payload = StreamMessageParser.payload_mapping(tool_call)
         tool_name = (
             StreamTextHelper.extract(payload.get(Keys.Field.NAME))
@@ -384,6 +378,7 @@ class StreamMessageProcessor:
         namespace: StreamNamespace,
         tool_call: object,
     ) -> ToolCallStreamState:
+        """Retrieve or create the incremental state for a streaming tool-call chunk, accumulating args deltas."""
         payload = StreamMessageParser.payload_mapping(tool_call)
         tool_name = StreamTextHelper.extract(
             payload.get(Keys.Field.NAME)
@@ -432,6 +427,7 @@ class StreamMessageProcessor:
         payload: Mapping[str, object],
         call_id: str | None,
     ) -> str:
+        """Derive a stable state-bucket key from chunk index, call_id, or namespace context."""
         index = payload.get(self._Fields.INDEX)
         if isinstance(index, int | str):
             normalized = str(index).strip()
@@ -450,6 +446,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def tool_call_payload_from_state(cls, state: ToolCallStreamState) -> JsonObject:
+        """Materialise a TOOL_CALL_STARTED or TOOL_CALL_DELTA event payload from accumulated state."""
         args = state.args or cls.parse_args_text(state.args_text)
         payload: JsonObject = {
             Keys.Field.TOOL_NAME: state.tool_name or Values.Tool.UNKNOWN_TOOL,
@@ -466,6 +463,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def tool_call_state_ready_to_emit(cls, state: ToolCallStreamState) -> bool:
+        """Return ``True`` when enough state is buffered to emit a started event (path-classified tools require args)."""
         if not cls.is_path_classified_artifact_tool_name(state.tool_name):
             return True
         args = state.args or cls.parse_args_text(state.args_text)
@@ -480,6 +478,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def parse_args_text(cls, value: str) -> JsonObject:
+        """Parse accumulated JSON args text; returns an empty dict on failure or blank input."""
         if not value.strip():
             return {}
         try:
@@ -499,6 +498,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def tool_result_payload(cls, message: object) -> JsonObject:
+        """Build a normalised TOOL_RESULT event payload from a tool-result message."""
         payload = StreamMessageParser.payload_mapping(message)
         tool_name = (
             StreamTextHelper.extract(payload.get(Keys.Field.NAME))
@@ -539,6 +539,7 @@ class StreamMessageProcessor:
     def tool_result_payload_with_state(
         self, run_id: str, payload: JsonObject
     ) -> JsonObject:
+        """Enrich a tool-result payload with tool_name and visibility information from accumulated call state."""
         call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return payload
@@ -560,6 +561,7 @@ class StreamMessageProcessor:
         run_id: str,
         payload: Mapping[str, object],
     ) -> ToolCallStreamState | None:
+        """Return the accumulated call state keyed by the payload's call_id, or ``None``."""
         call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
         if call_id is None:
             return None
@@ -570,6 +572,7 @@ class StreamMessageProcessor:
         run_id: str,
         payload: Mapping[str, object],
     ) -> int | None:
+        """Return elapsed milliseconds since the tool call started, or ``None`` if start time is unknown."""
         state = self.tool_call_state_for_payload(run_id, payload)
         if state is None or state.started_at is None:
             return None
@@ -578,6 +581,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def apply_tool_visibility(cls, payload: JsonObject) -> None:
+        """Stamp ``INTERNAL`` visibility on the payload when the tool name or args path triggers an internal rule."""
         if cls.is_internal_tool_name(
             StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
         ):
@@ -587,14 +591,17 @@ class StreamMessageProcessor:
 
     @classmethod
     def mark_internal_visibility(cls, payload: JsonObject) -> None:
+        """Set the ``visibility`` field to ``INTERNAL`` on ``payload``."""
         payload[Keys.Field.VISIBILITY] = RuntimeEventVisibility.INTERNAL.value
 
     @classmethod
     def is_internal_tool_name(cls, tool_name: str | None) -> bool:
+        """Return ``True`` when ``tool_name`` is in the internal-tools allow-list."""
         return tool_name in cls.internal_tool_names
 
     @classmethod
     def is_large_result_artifact_state(cls, state: ToolCallStreamState) -> bool:
+        """Return ``True`` when the call state represents a large-result artifact tool targeting a virtual path."""
         args = state.args or cls.parse_args_text(state.args_text)
         payload: JsonObject = {
             Keys.Field.TOOL_NAME: state.tool_name,
@@ -604,6 +611,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def is_large_result_artifact_payload(cls, payload: Mapping[str, object]) -> bool:
+        """Return ``True`` when the payload is a large-result artifact tool writing to the virtual path prefix."""
         if not cls.is_large_result_artifact_tool_name(
             StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
         ):
@@ -620,6 +628,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def is_large_result_artifact_tool_name(cls, tool_name: str | None) -> bool:
+        """Return ``True`` when the tool name is in the large-result set or contains ``search``."""
         if tool_name is None:
             return False
         normalized = tool_name.strip().lower()
@@ -629,6 +638,7 @@ class StreamMessageProcessor:
 
     @classmethod
     def is_path_classified_artifact_tool_name(cls, tool_name: str | None) -> bool:
+        """Return ``True`` when the tool name is in the explicit large-result artifact set (no substring match)."""
         if tool_name is None:
             return False
         return tool_name.strip().lower() in cls.large_result_artifact_tool_names

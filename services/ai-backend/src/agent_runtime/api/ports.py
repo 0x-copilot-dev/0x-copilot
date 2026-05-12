@@ -408,7 +408,7 @@ class PersistencePort(Protocol):
         region: str,
         at: datetime,
     ) -> ModelPricingRecord | None:
-        """Return the pricing row in effect for ``at`` or ``None`` (B3)."""
+        """Return the pricing row in effect for ``at``, or ``None`` if absent."""
 
     async def list_runs_missing_cost(
         self,
@@ -416,13 +416,13 @@ class PersistencePort(Protocol):
         limit: int,
         cursor: str | None = None,
     ) -> Sequence[RuntimeRunUsageRecord]:
-        """Return run-usage rows where ``cost_micro_usd IS NULL`` for backfill (B3)."""
+        """Return run-usage rows where ``cost_micro_usd IS NULL`` for cost backfill."""
 
     async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
-        """Idempotent UPSERT of one daily per-user rollup row (B4)."""
+        """Idempotent UPSERT of one daily per-user rollup row."""
 
     async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
-        """Idempotent UPSERT of one daily per-org rollup row (B4)."""
+        """Idempotent UPSERT of one daily per-org rollup row."""
 
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
         """Idempotent UPSERT of one daily per-connector rollup row."""
@@ -529,7 +529,7 @@ class PersistencePort(Protocol):
         org_id: str,
         run_id: str,
     ) -> RuntimeRunUsageRecord | None:
-        """Look up a single run-usage row scoped to org (B4)."""
+        """Look up a single run-usage row scoped to org."""
 
     async def query_run_usage_for_range(
         self,
@@ -564,7 +564,7 @@ class PersistencePort(Protocol):
         org_id: str,
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
-        """Return per-LLM-call rows for a run, scoped by org (B4 / B5)."""
+        """Return per-LLM-call rows for a run, scoped by org."""
 
     async def query_latest_run_usage_for_conversation(
         self,
@@ -573,7 +573,7 @@ class PersistencePort(Protocol):
         user_id: str,
         conversation_id: str,
     ) -> RuntimeRunUsageRecord | None:
-        """Return the most recently-completed run usage row for a conversation (B5).
+        """Return the most recently-completed run usage row for a conversation.
 
         Used by the ``/v1/agent/conversations/{id}/context`` endpoint to
         answer "where did the tokens go in this conversation". Excludes
@@ -588,10 +588,10 @@ class PersistencePort(Protocol):
         org_id: str,
         run_id: str,
     ) -> Sequence[CompressionEventRecord]:
-        """Return compression events for a run, ordered by ``created_at`` (B5)."""
+        """Return compression events for a run, ordered by ``created_at``."""
 
     # ------------------------------------------------------------------
-    # Budgets (B7).
+    # Budgets.
     #
     # ``lookup_budgets_for_run`` is the hot path on the worker preflight.
     # It returns the ``BudgetWithState`` join including any active
@@ -673,7 +673,7 @@ class PersistencePort(Protocol):
     async def list_tool_budgets_for_org(
         self, *, org_id: str
     ) -> Sequence[ToolBudgetRecord]:
-        """Return per-tool budgets visible to ``org_id`` (B8).
+        """Return per-tool budgets visible to ``org_id``.
 
         Includes the org's own rows and the global seed/default rows
         (``org_id IS NULL``). The :class:`ToolBudgetMiddleware` performs
@@ -693,11 +693,10 @@ class PersistencePort(Protocol):
         """Hard-delete a budget (cascades to state + reservations)."""
 
     # ------------------------------------------------------------------
-    # Retention (C8).
+    # Retention.
     #
     # The sweeper runs in the worker process; the API service uses these
-    # methods only for the admin CRUD endpoints (out of scope for this
-    # PR; operators seed via SQL until A10 RBAC ships).
+    # methods only for admin CRUD endpoints.
     # ------------------------------------------------------------------
 
     async def list_retention_orgs(self) -> Sequence[str]:

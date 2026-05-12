@@ -102,7 +102,7 @@ class UsageQueryService:
 
         Excludes rows with ``pii_purged_at IS NOT NULL`` from per-user
         aggregates so a deleted user's history doesn't leak into their
-        own /usage view (B4 spec §3.2 unit-test bullet).
+        own /usage view.
         """
 
         buckets: dict[
@@ -316,7 +316,7 @@ class UsageQueryService:
 
 
 class ConversationContextBuilder:
-    """Pure builder for the ``/context`` slash-command response (B5).
+    """Pure builder for the ``/context`` slash-command response.
 
     Stateless: given the latest run-usage row, the per-call rows, the
     compression events, and the model's pricing snapshot, returns the

@@ -222,11 +222,11 @@ class RetentionSweeperLoop:
         kind: RetentionKind,
         resolver: RetentionPolicyResolver,
     ) -> RetentionSweepOutcome | None:
-        """Phase 4 path: retention_until-driven, loop until 0 rows per chunk.
+        """Sweep by ``retention_until`` column, looping until 0 rows per chunk.
 
-        CHECKPOINTS still resolves ttl_seconds (its keep-N logic is not
-        expressible via retention_until). All other kinds are column-driven
-        and do not touch the resolver.
+        CHECKPOINTS still resolves ``ttl_seconds`` because its keep-N logic is
+        not expressible via ``retention_until``. All other kinds are
+        column-driven and do not touch the resolver.
 
         Dry-run: executes one chunk in a force-rollback transaction and
         returns immediately — looping would re-see the same rows every time.

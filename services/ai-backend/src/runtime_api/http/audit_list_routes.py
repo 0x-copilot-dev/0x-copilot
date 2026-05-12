@@ -197,8 +197,7 @@ def register_audit_list_routes(router: APIRouter) -> None:
                 "since must be before until",
             )
         after_seq = _decode_cursor(cursor)
-        service = request.app.state.runtime_api_service
-        persistence = service.persistence
+        persistence = request.app.state.runtime_persistence
         rows = await persistence.list_audit_log_events(
             org_id=identity.org_id,
             after_seq=after_seq,

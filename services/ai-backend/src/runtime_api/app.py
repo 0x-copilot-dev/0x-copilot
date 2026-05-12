@@ -368,7 +368,7 @@ class RuntimeApiAppFactory:
         ``is_active_member``) but every check returns ``False`` — the
         same conservative-deny behaviour the resolver shipped with
         before this wiring landed. Tests bypass this method by passing
-        their own resolver to :class:`RuntimeApiService`.
+        their own resolver to :class:`RuntimeApiAppFactory.create_app`.
         """
 
         import os

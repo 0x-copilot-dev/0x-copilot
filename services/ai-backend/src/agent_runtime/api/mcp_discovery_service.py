@@ -97,15 +97,14 @@ class _Results:
     UNKNOWN_SERVER = "unknown_server"
     SERVER_DISABLED = "server_disabled"
     DISCOVERY_DISABLED = "discovery_disabled"
-    # PR 4.4.7 Phase 2 — per-turn cap status. The PRD's open question
-    # set the recommended default to one suggestion per turn so the
-    # user never sees a wall of CTAs.
+    # Status returned when the per-turn suggestion cap is reached
+    # (default: one suggestion per turn) to prevent stacking CTAs.
     PER_TURN_CAP_REACHED = "per_turn_cap_reached"
 
 
-# PR 4.4.7 Phase 2 — at most one suggestion per turn. A "turn" maps to
-# one ``McpDiscoveryService`` instance: the worker creates a fresh
-# instance per run, the run is one user → assistant cycle.
+# At most one suggestion per turn. A "turn" maps to one
+# ``McpDiscoveryService`` instance: the worker creates a fresh
+# instance per run, which covers one user → assistant cycle.
 _SUGGESTIONS_PER_TURN = 1
 
 
@@ -183,15 +182,13 @@ class McpDiscoveryService:
                 Keys.Field.APPROVAL_ID: cached_approval,
             }
 
-        # PR 4.4.7 Phase 2 — soft per-turn cap. The system prompt asks
-        # the agent to suggest at most one connector per turn; this is
-        # the runtime backstop for when the model ignores that.
-        # Idempotent re-calls for the same slug (above) are NOT subject
-        # to the cap because they're no-ops, but a *new* slug after the
-        # cap returns ``per_turn_cap_reached`` so the agent reports
-        # back to the user in plain text instead of stacking a wall of
-        # cards. Cap is checked before any side-effect (no event, no
-        # audit) so cap state never pollutes the audit chain.
+        # Soft per-turn cap. The system prompt asks the agent to suggest at
+        # most one connector per turn; this is the runtime backstop for when
+        # the model ignores that. Idempotent re-calls for the same slug (above)
+        # are NOT subject to the cap because they're no-ops, but a new slug
+        # after the cap returns ``per_turn_cap_reached`` so the agent responds
+        # in plain text instead of stacking cards. Cap is checked before any
+        # side effect so cap state never pollutes the audit chain.
         if len(self._suggested) >= _SUGGESTIONS_PER_TURN:
             return {
                 "status": _Results.PER_TURN_CAP_REACHED,
@@ -337,15 +334,14 @@ class McpDiscoveryService:
                 or card_sid == f"seed:{bare}"
             ):
                 return (card, "registry")
-        # PR 4.4.7 Phase 2 (Slice C) — fall back to the catalog
-        # suggestions snapshot. These are uninstalled connectors the
-        # backend pre-filtered (paused / muted excluded), so a synthesized
-        # ``McpServerCard`` is the right "this connector exists in the
-        # workspace catalog but the user hasn't connected it yet" signal.
+        # Fall back to the catalog suggestions snapshot. These are
+        # uninstalled connectors the backend pre-filtered (paused / muted
+        # excluded), so a synthesized ``McpServerCard`` is the right signal
+        # for "exists in the catalog but the user hasn't connected it yet".
         # The card carries ``auth_state=UNAUTHENTICATED`` so the
         # ``ALREADY_AUTHENTICATED`` short-circuit in ``suggest`` doesn't
-        # fire; the FE branches on the catalog_slug payload field to
-        # route Connect through the install flow rather than raw OAuth.
+        # fire; the FE branches on the catalog_slug payload field to route
+        # Connect through the install flow rather than raw OAuth.
         suggestion = self._lookup_suggestion(server_id)
         if suggestion is not None:
             return (_synthesize_catalog_card(suggestion), "catalog")
@@ -384,16 +380,14 @@ class McpDiscoveryService:
         message = Messages.Event.MCP_AUTH_REQUIRED
         auth_url = ""
         expires_at = ""
-        # PR 4.4.7 Phase 2 (Slice C) — only create an auth session for
-        # *installed* servers (lookup_source="registry"). Catalog
-        # suggestions point at uninstalled connectors; the user's
-        # ``mcp_servers`` row doesn't exist yet, so calling
-        # ``create_auth_session`` would 404 against backend's
-        # ``/internal/v1/mcp/servers/<id>/auth/start`` and the entire
-        # tool call would fail. The FE branches Connect on
-        # ``catalog_slug`` to open the install overlay, which creates
-        # the row + starts OAuth in a single flow — the discovery card
-        # itself doesn't need a pre-baked auth_url.
+        # Only create an auth session for *installed* servers
+        # (lookup_source="registry"). Catalog suggestions point at
+        # uninstalled connectors; the user's ``mcp_servers`` row doesn't
+        # exist yet, so calling ``create_auth_session`` would 404 and the
+        # tool call would fail. The FE branches Connect on ``catalog_slug``
+        # to open the install overlay, which creates the row and starts
+        # OAuth in a single flow — the discovery card doesn't need a
+        # pre-baked auth_url.
         if lookup_source == "registry" and self._auth_session_creator is not None:
             session = await self._auth_session_creator.create_auth_session(
                 server_id=server_id,
@@ -417,17 +411,16 @@ class McpDiscoveryService:
             Keys.Field.DISCOVERY_REASON: reason,
             Keys.Field.EXPECTED_VALUE: expected_value,
         }
-        # PR 4.4.7 Phase 2 (Slice C) — flag uninstalled catalog
-        # suggestions so the FE deep-links the Connect button to the
-        # catalog's install flow instead of starting OAuth against a
-        # server row that doesn't exist yet. Stamped *only* when the
-        # lookup hit the catalog fallback; a registry hit (server is
-        # installed) keeps the existing OAuth flow even if the same
-        # slug also appears in ``suggested_connectors``.
+        # Flag uninstalled catalog suggestions so the FE deep-links the
+        # Connect button to the catalog install flow instead of starting
+        # OAuth against a server row that doesn't exist yet. Stamped only
+        # when the lookup hit the catalog fallback; a registry hit keeps
+        # the existing OAuth flow even if the same slug also appears in
+        # ``suggested_connectors``.
         if lookup_source == "catalog":
             payload[_CATALOG_SLUG_FIELD] = card.name
-            # PR 4.4.7 follow-up — also stamp ``requires_pre_registered_client``
-            # so the FE can branch the Connect button:
+            # Also stamp ``requires_pre_registered_client`` so the FE can
+            # branch the Connect button:
             #   False (default): 1-click install + auth + redirect, no
             #     overlay needed.
             #   True: open the credentials form so the user can paste a
@@ -462,9 +455,7 @@ class McpDiscoveryService:
         }
         if approval_id is not None:
             metadata[Keys.Field.APPROVAL_ID] = approval_id
-        # Reuse the worker emitter's underlying writer. The action string
-        # is one of the PR 3.3 audit constants; emit through the same
-        # append-only chain PR 1.4 forwarded events use. ``actor_type``
+        # Reuse the worker emitter's underlying writer. ``actor_type``
         # is ``worker`` because the agent harness — not the user —
         # initiates the suggestion; the SIEM dashboards already split
         # worker vs. user vs. system rows.

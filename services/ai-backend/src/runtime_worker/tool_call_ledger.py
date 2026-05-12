@@ -53,15 +53,10 @@ class ToolCallEntry:
 
 
 class ToolCallLedger:
-    """Per-run tracker of in-flight tool calls.
-
-    Thread-safety: not threadsafe. Each `RuntimeRunHandler` invocation
-    serially streams its own LangGraph events, so a single ledger only ever
-    sees one writer. Concurrent tool calls within a run are fine because
-    each writes to a distinct `call_id` slot.
-    """
+    """Per-run in-memory tracker of in-flight tool calls; not threadsafe (single-run serial writer)."""
 
     def __init__(self, run_id: str) -> None:
+        """Initialise an empty ledger for ``run_id``."""
         self.run_id = run_id
         self._entries: dict[str, ToolCallEntry] = {}
         # Monotonic settle counter for stable ordering even when two
@@ -111,30 +106,7 @@ class ToolCallLedger:
         self,
         scope_key: str | None,
     ) -> ToolCallEntry | None:
-        """Return the most recently settled tool entry for ``scope_key``.
-
-        At LLM emit time, the streaming executor asks the ledger "what
-        tool's result did this call interpret?" The answer is the most-recent
-        settled entry whose ``subagent_id`` matches the LLM call's scope
-        (the LLM's own subagent slug, or ``None`` for orchestrator-scope calls).
-
-        Pop semantics:
-
-        - Filter by ``subagent_id == scope_key`` so a parallel
-          subagent's tool result doesn't stamp an orchestrator-scope
-          LLM call (and vice versa).
-        - Filter by ``settled and not consumed_for_attribution`` —
-          don't return entries that haven't fired their ``tool_result``
-          yet, and don't double-attribute.
-        - Return the entry with the latest ``settled_at``. Multiple
-          parallel tools settling before a single LLM emit (e.g. a
-          ReAct step that fans out): we pick one representative for
-          attribution rather than splitting cost proportionally. The
-          rest get marked consumed too so they don't leak to a later
-          emit.
-
-        Returns ``None`` if no eligible entry exists.
-        """
+        """Return the most-recently settled, unconsumed entry scoped to ``scope_key``, marking all eligible as consumed."""
 
         eligible = [
             entry
@@ -167,9 +139,10 @@ class ToolCallLedger:
         return [entry for entry in self._entries.values() if not entry.settled]
 
     def has_entries(self) -> bool:
+        """Return ``True`` when the ledger has at least one recorded entry."""
         return bool(self._entries)
 
-    # Accessors for the per-tool budget middleware -------------------------
+    # Per-tool budget middleware accessors.
 
     def charged_calls(self, tool_name: str) -> int:
         """Return the number of admitted calls to ``tool_name`` in this run.

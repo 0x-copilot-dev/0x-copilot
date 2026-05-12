@@ -18,10 +18,7 @@ from runtime_worker.stream_parts import StreamNamespace
 
 
 class StreamUpdateProcessor:
-    """Process update-type stream events: subagent lifecycle, progress.
-
-    Standalone processor — no inheritance. Uses StreamMessageParser as a utility.
-    """
+    """Process update-type stream chunks into subagent lifecycle and progress events."""
 
     short_summary_max_chars = 120
 
@@ -38,29 +35,24 @@ class StreamUpdateProcessor:
         SUBAGENT_ID = "subagent_id"
         CALL_ID = "call_id"
         CONTENT = "content"
-        # PR A2 — fleet bookends. When the supervisor dispatches >1 task
-        # tool call in a single update tick we wrap them in a fleet so the
-        # FE can render a single SubagentFleetCard.
+        # When the supervisor dispatches >1 task tool call in a single tick we wrap
+        # them in a fleet so the FE renders a single SubagentFleetCard.
         FLEET_ID = "fleet_id"
         PARENT_FLEET_ID = "parent_fleet_id"
         AGENT_IDS = "agent_ids"
         TITLE = "title"
         ELAPSED = "elapsed"
-        # Children's task_ids are carried on FLEET_STARTED so the FE reducer
-        # can back-stamp `parent_fleet_id` on `run_subagent` parts that were
-        # emitted earlier by the per-tool streaming path before this fleet
-        # bookend fired.
+        # Children's task_ids are carried on FLEET_STARTED so the FE reducer can
+        # back-stamp `parent_fleet_id` on `run_subagent` parts emitted before this bookend fired.
         TASK_IDS = "task_ids"
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
+        """Initialise all per-run bookkeeping dicts and wire the event producer."""
         self.event_producer = event_producer
         self._subagent_lifecycle_keys: set[tuple[str, RuntimeApiEventType, str]] = set()
-        # `(run_id, supervisor_call_id) -> subagent_name`. Populated on SUBAGENT_STARTED.
+        # (run_id, supervisor_call_id) -> subagent_name; populated on SUBAGENT_STARTED.
         self._subagent_name_by_call_id: dict[tuple[str, str], str] = {}
-        # `(run_id, subgraph_task_id) -> supervisor_call_id`. Populated on first child
-        # tool event seen for a subgraph; the LangGraph subgraph task id is a UUID
-        # that differs from the supervisor's `task` tool call_id, so we link them
-        # FIFO from `_unlinked_subagent_call_ids`.
+        # (run_id, subgraph_task_id) -> supervisor_call_id; linked via FIFO from _unlinked_subagent_call_ids.
         self._subagent_call_id_by_subgraph_id: dict[tuple[str, str], str] = {}
         # FIFO of supervisor call_ids whose subagents have started but whose
         # subgraph task ids are not yet linked. Per-run.
@@ -89,6 +81,7 @@ class StreamUpdateProcessor:
         self._metrics_by_run[run_id] = metrics
 
     def discard_metrics(self, run_id: str) -> None:
+        """Remove the metrics handle for ``run_id`` when the run is complete."""
         self._metrics_by_run.pop(run_id, None)
 
     async def process(
@@ -99,6 +92,7 @@ class StreamUpdateProcessor:
         data: object,
         metadata: JsonObject,
     ) -> bool:
+        """Dispatch an update-stream payload to lifecycle processing; returns ``True`` if events were emitted."""
         if await self.append_subagent_lifecycle_events(
             run=run,
             namespace=namespace,
@@ -116,6 +110,7 @@ class StreamUpdateProcessor:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> None:
+        """Persist a deduplicated subagent lifecycle event, enriching COMPLETED with duration and usage."""
         task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
         if task_id is not None:
             key = (run.run_id, event_type, task_id)
@@ -147,6 +142,7 @@ class StreamUpdateProcessor:
         )
 
     def _subagent_duration_ms(self, run_id: str, task_id: str) -> int | None:
+        """Pop the started-at timestamp and return the elapsed milliseconds, or ``None`` if not recorded."""
         started_at = self._subagent_started_at.pop((run_id, task_id), None)
         if started_at is None:
             return None
@@ -188,22 +184,7 @@ class StreamUpdateProcessor:
         run_id: str,
         subgraph_task_id: str | None,
     ) -> str | None:
-        """Cache-only lookup. Returns ``None`` if not yet linked.
-
-        Used by call sites that must NOT mutate the FIFO queue — e.g.
-        the chunk-level resolution in
-        `stream_events.StreamOrchestrator.append_activity_events`,
-        which fires for every subgraph chunk including subagent
-        lifecycle events. A FIFO pop there would drain the queue before
-        downstream `_track_subagent_lifecycle` can register the next
-        subagent's call_id, breaking parent_task_id resolution for
-        siblings dispatched later in the run.
-
-        `subagent_call_id_for_subgraph` keeps the FIFO fallback for
-        callers (currently `stream_tools.StreamMessageProcessor.process`)
-        that fire only on `messages`-mode chunks where the FIFO race
-        the original docstring describes is acceptable.
-        """
+        """Return the cached supervisor call_id for a subgraph task id without mutating the FIFO queue."""
         if subgraph_task_id is None:
             return None
         return self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
@@ -215,19 +196,7 @@ class StreamUpdateProcessor:
         subgraph_task_id: str,
         supervisor_call_id: str,
     ) -> None:
-        """Pin a `(run_id, subgraph_task_id) → supervisor_call_id` mapping.
-
-        Called by the worker the FIRST time it observes a chunk from a
-        subgraph that carries `supervisor_task_call_id` in its metadata
-        (set by `agent_runtime/execution/atlas_task_tool.py`). Subsequent
-        events from the same subgraph hit the cache via
-        `subagent_call_id_for_subgraph`.
-
-        Idempotent. Once-set wins — a stray metadata mismatch later in
-        the run cannot rewrite the binding. Also removes the call_id
-        from `_unlinked_subagent_call_ids` so a later FIFO fallback
-        cannot re-pop it for a different subgraph.
-        """
+        """Idempotently pin the supervisor call_id for ``subgraph_task_id`` and remove it from the FIFO queue."""
         existing = self._subagent_call_id_by_subgraph_id.get((run_id, subgraph_task_id))
         if existing is not None:
             return
@@ -244,22 +213,7 @@ class StreamUpdateProcessor:
         run_id: str,
         subgraph_task_id: str | None,
     ) -> str | None:
-        """Resolve a LangGraph subagent subgraph task id to the supervisor `task` call_id.
-
-        Linking strategy:
-
-        1. **Cache lookup.** Once `register_supervisor_call_id_for_subgraph`
-           has pinned `(run_id, subgraph_task_id) → call_id` (driven by the
-           `supervisor_task_call_id` chunk metadata our `atlas_task_tool`
-           injects), every subsequent event in that subgraph resolves
-           deterministically — no FIFO involved.
-        2. **Single-unlinked FIFO fallback.** If the cache has nothing AND
-           exactly one subagent is unlinked for this run, we link to it.
-           This covers archive replays of pre-PR runs and any third‑party
-           code path that bypasses our injected metadata.
-        3. **Ambiguous case (≥2 unlinked).** Return None — early events
-           orphan rather than mis-attribute.
-        """
+        """Resolve a subgraph task id to the supervisor call_id via cache lookup then single-unlinked FIFO fallback."""
 
         if subgraph_task_id is None:
             return None
@@ -451,6 +405,7 @@ class StreamUpdateProcessor:
 
     @staticmethod
     def _fleet_title(agent_ids: list[str]) -> str:
+        """Generate a human-readable fleet title from the list of subagent names."""
         if not agent_ids:
             return "Subagents working in parallel"
         if len(agent_ids) == 1:
@@ -459,6 +414,7 @@ class StreamUpdateProcessor:
 
     @staticmethod
     def _format_elapsed(seconds: int) -> str:
+        """Format an elapsed duration in seconds as ``M:SS`` or ``H:MM:SS``."""
         if seconds < 60:
             return f"0:{seconds:02d}"
         minutes, secs = divmod(seconds, 60)
@@ -474,6 +430,7 @@ class StreamUpdateProcessor:
         call_id: str,
         args_payload: Mapping[str, object],
     ) -> JsonObject:
+        """Build a ``SUBAGENT_STARTED`` event payload from a task tool-call id and its argument mapping."""
         subagent_name = (
             StreamTextHelper.extract(args_payload.get(cls._Fields.SUBAGENT_TYPE))
             or StreamTextHelper.extract(args_payload.get(cls._Fields.SUBAGENT_NAME))
@@ -503,6 +460,7 @@ class StreamUpdateProcessor:
         subagent_name: str | None = None,
         short_summary: str | None = None,
     ) -> JsonObject:
+        """Build a ``SUBAGENT_COMPLETED`` event payload from a task tool-result message payload."""
         call_id = (
             StreamTextHelper.extract(payload.get(cls._Fields.CALL_ID))
             or TraceContext.event_id()
@@ -533,6 +491,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def short_task_summary(cls, summary: str | None) -> str | None:
+        """Normalise, trim to the first sentence, apply action verb transforms, and truncate a task summary."""
         if summary is None:
             return None
         text = " ".join(summary.strip().split())
@@ -544,6 +503,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def first_task_sentence(cls, text: str) -> str:
+        """Return only the first sentence fragment before trailing instructions or a sentence boundary."""
         text = re.split(
             r"\b(?:Provide|Include|For each claim)\b\s*[:,-]?", text, maxsplit=1
         )[0].strip()
@@ -554,6 +514,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def actionable_task_summary(cls, text: str) -> str:
+        """Rewrite leading imperative verbs to gerund phrases and capitalise the result."""
         replacements = (
             (r"^create\s+(?:a|an|the)?\s*", "Preparing a "),
             (r"^write\s+(?:a|an|the)?\s*", "Writing a "),
@@ -576,6 +537,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def truncate_task_summary(cls, text: str) -> str:
+        """Truncate ``text`` to ``short_summary_max_chars`` on a word boundary, appending ``...``."""
         if len(text) <= cls.short_summary_max_chars:
             return text
         truncated = text[: cls.short_summary_max_chars - 3].rsplit(" ", 1)[0]
@@ -583,6 +545,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def task_tool_call_payloads(cls, value: object) -> tuple[JsonObject, ...]:
+        """Extract SUBAGENT_STARTED payloads from all ``task`` tool calls in an update-stream value."""
         payloads: list[JsonObject] = []
         for message in StreamMessageParser.update_messages(value):
             for tool_call in StreamMessageParser.tool_call_chunks(message):
@@ -609,6 +572,7 @@ class StreamUpdateProcessor:
 
     @classmethod
     def task_tool_result_payloads(cls, value: object) -> tuple[JsonObject, ...]:
+        """Extract SUBAGENT_COMPLETED payloads from all ``task`` tool-result messages in an update-stream value."""
         payloads: list[JsonObject] = []
         for message in StreamMessageParser.update_messages(value):
             if not StreamMessageParser.is_tool_result_message(message):
@@ -633,6 +597,7 @@ class StreamUpdateProcessor:
 
     @staticmethod
     def has_user_visible_progress(payload: Mapping[str, object]) -> bool:
+        """Return ``True`` when the payload contains a non-empty visible text field and is not an internal marker."""
         if StreamUpdateProcessor.is_internal_progress_text(payload):
             return False
         return any(
@@ -648,6 +613,7 @@ class StreamUpdateProcessor:
 
     @staticmethod
     def is_internal_progress_text(payload: Mapping[str, object]) -> bool:
+        """Return ``True`` when the payload's message or summary starts with the internal progress prefix."""
         text = (
             StreamTextHelper.extract(payload.get(Keys.Payload.MESSAGE))
             or StreamTextHelper.extract(payload.get(Keys.Field.SUMMARY))

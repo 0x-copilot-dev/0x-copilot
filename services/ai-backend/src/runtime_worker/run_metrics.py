@@ -1,17 +1,4 @@
-"""Assistant response metrics collected during runtime execution.
-
-Token extraction is centralized in
-:mod:`agent_runtime.observability.token_usage`. This module is the
-worker-side accumulator: it observes a normalized usage value object
-per chunk, dedupes per-AIMessage, and materializes per-call /
-per-run / per-subagent records.
-
-Per-call slots carry a typed :class:`UsageAttributionContext` built at
-emit time by the streaming executor. ``model_call_usage_records``
-materializes the attribution columns (``subagent_id``,
-``connector_slug``, ``purpose``, ``originating_tool_call_id``,
-``originating_tool_name``) from the stamped context.
-"""
+"""Worker-side accumulator for assistant run metrics: token usage, timing, and per-call attribution."""
 
 from __future__ import annotations
 
@@ -69,51 +56,51 @@ class _PerCallSlot:
         self.completed_at: datetime | None = None
         self.context: UsageAttributionContext | None = None
 
-    # Convenience accessors so existing call sites (and tests) can read
-    # the context's fields off the slot directly. ``task_id`` and the
-    # other attribution fields fall through to the stamped context;
-    # callers that consult them before context is stamped see ``None``.
-
     @property
     def task_id(self) -> str | None:
+        """Return the task_id from the attribution context, or ``None`` before context is stamped."""
         return self.context.task_id if self.context is not None else None
 
     @property
     def subagent_id(self) -> str | None:
+        """Return the subagent slug from the attribution context, or ``None``."""
         return self.context.subagent_slug if self.context is not None else None
 
     @property
     def connector_slug(self) -> str | None:
+        """Return the connector slug from the attribution context, or ``None``."""
         return self.context.connector_slug if self.context is not None else None
 
     @property
     def purpose(self) -> str:
+        """Return the call purpose string (e.g. ``"main"``, ``"subagent"``) from the attribution context."""
         return self.context.purpose.value if self.context is not None else "main"
 
     @property
     def originating_tool_call_id(self) -> str | None:
+        """Return the originating tool call id from the attribution context, or ``None``."""
         return (
             self.context.originating_tool_call_id if self.context is not None else None
         )
 
     @property
     def originating_tool_name(self) -> str | None:
+        """Return the originating tool name from the attribution context, or ``None``."""
         return self.context.originating_tool_name if self.context is not None else None
 
-    # Convenience accessors so callers and tests can read individual
-    # kinds without unpacking ``usage`` every time. Keeps prior call
-    # sites working after the slot's internal storage moved to a
-    # single value object.
     @property
     def input_tokens(self) -> int:
+        """Return input token count from the accumulated usage object."""
         return self.usage.input_tokens
 
     @property
     def output_tokens(self) -> int:
+        """Return output token count from the accumulated usage object."""
         return self.usage.output_tokens
 
     @property
     def cached_input_tokens(self) -> int:
+        """Return cached input token count from the accumulated usage object."""
         return self.usage.cached_input_tokens
 
     @property
@@ -197,12 +184,15 @@ class PerCallTokenAccumulator:
         return True
 
     def has_seen(self, message_id: str) -> bool:
+        """Return ``True`` if a slot has been opened for this ``message_id``."""
         return message_id in self._slots
 
     def slot(self, message_id: str) -> _PerCallSlot | None:
+        """Return the slot for ``message_id``, or ``None`` if it hasn't been observed yet."""
         return self._slots.get(message_id)
 
     def finalized_calls(self) -> tuple[_PerCallSlot, ...]:
+        """Return all slots that have been closed by ``mark_completed``."""
         return tuple(
             slot
             for message_id, slot in self._slots.items()
@@ -294,6 +284,7 @@ class AssistantRunMetrics:
 
     @property
     def total_tokens(self) -> int:
+        """Return total token count from the accumulated usage object."""
         return self.usage.total_tokens
 
     def record_model_delta(self, delta: str) -> None:
@@ -313,12 +304,7 @@ class AssistantRunMetrics:
         message_id: str | None = None,
         context: UsageAttributionContext | None = None,
     ) -> None:
-        """Capture provider token usage when present on a stream object.
-
-        The streaming executor passes a :class:`UsageAttributionContext`
-        built from chunk metadata; the context stamps onto the per-call
-        slot. Returns without recording when the chunk carries no usage block.
-        """
+        """Capture provider token usage from a stream chunk, stamping the attribution context onto the per-call slot."""
 
         usage = self._extractor.extract(value)
         if usage is None:
@@ -483,6 +469,7 @@ class AssistantRunMetrics:
         *,
         output_per_second: float | None,
     ) -> AssistantUsageMetrics | None:
+        """Build the ``AssistantUsageMetrics`` payload, returning ``None`` when no tokens were recorded."""
         u = self.usage
         if (
             u.input_tokens == 0
@@ -491,7 +478,6 @@ class AssistantRunMetrics:
             and output_per_second is None
         ):
             return None
-        # Wire shape unchanged in 01a — 01d adds reasoning/cache_creation/audio.
         return AssistantUsageMetrics(
             input=u.input_tokens or None,
             output=u.output_tokens or None,
@@ -502,6 +488,7 @@ class AssistantRunMetrics:
 
     @staticmethod
     def _duration_ms(started_at: datetime, completed_at: datetime | None) -> int:
+        """Return elapsed milliseconds between ``started_at`` and ``completed_at``, or 0 if ``completed_at`` is None."""
         if completed_at is None:
             return 0
         return max(0, round((completed_at - started_at).total_seconds() * 1000))
@@ -512,6 +499,7 @@ class AssistantRunMetrics:
         output_tokens: int,
         duration_ms: int,
     ) -> float | None:
+        """Return output tokens per second rounded to two decimal places, or ``None`` if inputs are zero."""
         if output_tokens <= 0 or duration_ms <= 0:
             return None
         return round(output_tokens / (duration_ms / 1000), 2)

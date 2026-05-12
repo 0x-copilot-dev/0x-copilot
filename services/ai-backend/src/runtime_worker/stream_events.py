@@ -62,9 +62,9 @@ class _Fields:
     GRANT_OPTIONS = "grant_options"
     ACTION_INDEX = "action_index"
     ACTION_COUNT = "action_count"
-    # PR 3.2.5 Phase 3 — persisted on the approval record's metadata so the
-    # resolution handler can detect subagent-scoped pauses without
-    # rescanning the event log. Mirrors the envelope-level field.
+    # Persisted on the approval record's metadata so the resolution handler
+    # can detect subagent-scoped pauses without rescanning the event log.
+    # Mirrors the envelope-level field.
     PARENT_TASK_ID = "parent_task_id"
 
 
@@ -85,6 +85,7 @@ class StreamCustomProcessor:
         metadata: dict[str, object],
         parent_task_id: str | None,
     ) -> None:
+        """Emit a progress or subagent_progress event for any parseable activity payload in ``data``."""
         payload = StreamMessageParser.safe_activity_payload(data)
         if not payload:
             return
@@ -110,6 +111,7 @@ class StreamOrchestrator:
     """
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
+        """Wire the event producer and instantiate the message and update sub-processors."""
         self.event_producer = event_producer
         self.update_processor = StreamUpdateProcessor(event_producer)
         self.message_processor = StreamMessageProcessor(
@@ -123,6 +125,7 @@ class StreamOrchestrator:
         chunk: object,
         delta: str | None,
     ) -> None:
+        """Parse ``chunk`` and dispatch it to the appropriate sub-processor, persisting any events emitted."""
         part = StreamPartParser.stream_part(chunk)
         if part is None:
             return
@@ -132,25 +135,24 @@ class StreamOrchestrator:
         data = part[_Fields.DATA]
         metadata = namespace.metadata(stream_type)
 
-        # PR `subagent-call-id-link` — `atlas_task_tool` writes the
-        # supervisor's `task` call_id into each subagent's RunnableConfig
-        # metadata. LangGraph propagates that metadata onto every chunk
-        # the subgraph emits. Read it here and pin a deterministic
-        # `(run_id, subgraph_task_id) → supervisor_call_id` mapping so
-        # downstream emits resolve to the supervisor call_id (which the
-        # FE matches against the `run_subagent` tool part's toolCallId)
-        # instead of the raw LangGraph subgraph UUID.
+        # ``atlas_task_tool`` writes the supervisor's ``task`` call_id into
+        # each subagent's RunnableConfig metadata. LangGraph propagates that
+        # metadata onto every chunk the subgraph emits. Read it here and pin
+        # a deterministic ``(run_id, subgraph_task_id) → supervisor_call_id``
+        # mapping so downstream emits resolve to the supervisor call_id (which
+        # the client matches against the ``run_subagent`` tool part's
+        # toolCallId) instead of the raw LangGraph subgraph UUID.
         #
         # Resolution rules:
-        # 1. If chunk metadata gave us the linkage (production path with
-        #    our patched task tool), use the cached supervisor call_id.
-        # 2. If no metadata (legacy / synthetic test fixtures), fall
-        #    back to the raw subgraph_task_id so the historical contract
-        #    holds. The FIFO-pop fallback intentionally stays inside
-        #    `stream_tools.StreamMessageProcessor.process` where it was
-        #    the source of truth — pulling it forward here would drain
-        #    the queue before later subagents' lifecycle events can
-        #    register their call_ids.
+        # 1. If chunk metadata supplied the linkage (production path with the
+        #    patched task tool), use the cached supervisor call_id.
+        # 2. If no metadata (legacy / synthetic test fixtures), fall back to
+        #    the raw subgraph_task_id so the historical contract holds. The
+        #    FIFO-pop fallback intentionally stays inside
+        #    ``stream_tools.StreamMessageProcessor.process`` where it was the
+        #    source of truth — pulling it forward here would drain the queue
+        #    before later subagents' lifecycle events can register their
+        #    call_ids.
         subgraph_task_id = namespace.subagent_task_id
         chunk_supervisor_call_id = StreamPartParser.supervisor_task_call_id_for(part)
         if chunk_supervisor_call_id is not None and subgraph_task_id is not None:
@@ -270,6 +272,7 @@ class StreamOrchestrator:
 
     @classmethod
     def stream_delta(cls, chunk: object) -> str | None:
+        """Extract the text delta from a main-agent message chunk; returns ``None`` for tool, result, or subagent chunks."""
         part = StreamPartParser.stream_part(chunk)
         if part is None or StreamPartParser.stream_type(part) != _Fields.MESSAGES:
             return None
@@ -284,6 +287,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _source_tool_call_id_for_payload(cls, payload: object) -> str | None:
+        """Return the tool-call ID from a tool-result message payload, or ``None`` if not applicable."""
         message = StreamMessageParser.message_from_stream_payload(payload)
         if not StreamMessageParser.is_tool_result_message(message):
             return None
@@ -325,6 +329,7 @@ class StreamOrchestrator:
         payload: dict[str, object],
         parent_task_id: str | None = None,
     ) -> None:
+        """Persist an ``ApprovalRequestRecord`` for the given payload if one does not already exist."""
         approval_id = StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_ID))
         if approval_id is None:
             return
@@ -334,12 +339,11 @@ class StreamOrchestrator:
         )
         if existing is not None:
             return
-        # PR 3.2.5 Phase 3 — persist `parent_task_id` on the approval
-        # record so `RuntimeApprovalHandler.handle` can detect when a
-        # resolution targets a subagent-scoped pause and emit
-        # `subagent_resumed` before the LangGraph resume kicks in. We
-        # write it as a sibling key on `metadata` (a copy of the original
-        # event payload) under the same name the chunk metadata uses so
+        # Persist ``parent_task_id`` on the approval record so the
+        # resolution handler can detect when the approval targets a
+        # subagent-scoped pause and emit ``subagent_resumed`` before the
+        # LangGraph resume kicks in. Written as a sibling key on
+        # ``metadata`` under the same name the chunk metadata uses so
         # readers don't have to special-case it.
         metadata: dict[str, object] = dict(payload)
         if parent_task_id is not None:
@@ -361,6 +365,7 @@ class StreamOrchestrator:
         run: RunRecord,
         value: object,
     ) -> bool:
+        """Emit events for each native LangGraph interrupt in ``value``; returns ``True`` if any were emitted."""
         namespace = StreamNamespace(())
         did_append = False
         for payload in self.native_interrupt_payloads(run, value):
@@ -384,6 +389,7 @@ class StreamOrchestrator:
         event_type: RuntimeApiEventType,
         payload: dict[str, object],
     ) -> dict[str, object]:
+        """Normalise ``approval_id`` and ``action_id`` fields on the payload, adding ``mcp_auth`` kind when applicable."""
         approval_id = StreamTextHelper.extract(
             payload.get(Keys.Field.APPROVAL_ID)
         ) or StreamTextHelper.extract(payload.get(_Fields.ACTION_ID))
@@ -399,19 +405,17 @@ class StreamOrchestrator:
             normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
         return normalized
 
-    # PR 3.2.5 Phase 3 — when an interrupt event fires inside a subagent
-    # (i.e. `parent_task_id` resolved to the supervisor's `task`
-    # call_id), emit a sibling `subagent_paused` event so the FE
-    # reducer can flip `SubagentEntry.status` to `paused` without
-    # inferring from "started but never completed". Resume is emitted
-    # separately by the approval handler on resolution.
+    # When an interrupt event fires inside a subagent (i.e. ``parent_task_id``
+    # resolved to the supervisor's task call_id), emit a sibling
+    # ``subagent_paused`` event so the client can flip the subagent's status
+    # to ``paused`` without inferring from "started but never completed".
+    # Resume is emitted separately by the approval handler on resolution.
     #
-    # `reason` discriminates the FE copy / icon. `MCP_AUTH_REQUIRED` maps
-    # to `mcp_auth`. `APPROVAL_REQUESTED` is further refined by inspecting
-    # the payload's `approval_kind`: `ask_a_question` is its own reason so
-    # the FE can render "Waiting for answer" instead of generic "Waiting on
-    # approval"; everything else (action, mcp_tool) collapses to
-    # `approval`.
+    # ``reason`` discriminates the client copy / icon. ``MCP_AUTH_REQUIRED``
+    # maps to ``mcp_auth``. ``APPROVAL_REQUESTED`` is further refined by
+    # inspecting the payload's ``approval_kind``: ``ask_a_question`` is its
+    # own reason so the client can render "Waiting for answer" instead of the
+    # generic "Waiting on approval"; everything else collapses to ``approval``.
     _SUBAGENT_INTERRUPT_REASONS = {
         RuntimeApiEventType.APPROVAL_REQUESTED: "approval",
         RuntimeApiEventType.MCP_AUTH_REQUIRED: "mcp_auth",
@@ -426,6 +430,7 @@ class StreamOrchestrator:
         interrupt_envelope: object,
         parent_task_id: str | None,
     ) -> None:
+        """Emit a ``subagent_paused`` event when an interrupt fires inside a subagent context."""
         if parent_task_id is None:
             return
         reason = self._SUBAGENT_INTERRUPT_REASONS.get(interrupt_event_type)
@@ -455,6 +460,7 @@ class StreamOrchestrator:
 
     @staticmethod
     def _approval_kind_for(interrupt_envelope: object) -> str | None:
+        """Extract the ``approval_kind`` string from an interrupt envelope's payload mapping."""
         payload = getattr(interrupt_envelope, "payload", None)
         if not isinstance(payload, Mapping):
             return None
@@ -466,6 +472,7 @@ class StreamOrchestrator:
         run: RunRecord,
         value: object,
     ) -> tuple[dict[str, object], ...]:
+        """Build approval-event payloads for every native LangGraph interrupt contained in ``value``."""
         payloads: list[dict[str, object]] = []
         for interrupt_index, interrupt in enumerate(cls._native_interrupts(value)):
             interrupt_id = cls._native_interrupt_id(
@@ -493,6 +500,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _native_interrupts(cls, value: object) -> tuple[object, ...]:
+        """Extract the raw interrupt list from a LangGraph stream value, handling both dict and object forms."""
         raw = value.get(_Fields.INTERRUPT) if isinstance(value, Mapping) else None
         if raw is None and isinstance(value, Mapping):
             raw = value.get(_Fields.INTERRUPTS)
@@ -508,12 +516,14 @@ class StreamOrchestrator:
 
     @classmethod
     def _native_interrupt_value(cls, interrupt: object) -> object:
+        """Unwrap the ``value`` field from a native interrupt object or mapping."""
         if isinstance(interrupt, Mapping):
             return interrupt.get(_Fields.VALUE) or interrupt
         return getattr(interrupt, _Fields.VALUE, interrupt)
 
     @classmethod
     def _native_interrupt_id(cls, interrupt: object, *, fallback: str) -> str:
+        """Return the interrupt's ``id`` field, falling back to ``fallback`` when absent."""
         if isinstance(interrupt, Mapping):
             value = interrupt.get(_Fields.ID) or interrupt.get(_Fields.INTERRUPT_ID)
         else:
@@ -526,6 +536,7 @@ class StreamOrchestrator:
         interrupt_id: str,
         interrupt_value: object,
     ) -> dict[str, object] | None:
+        """Return a normalised ``mcp_auth_required`` payload if the interrupt carries an MCP auth event, else ``None``."""
         payload = StreamMessageParser.payload_mapping(interrupt_value)
         if (
             StreamMessageParser.api_event_type(payload)
@@ -553,6 +564,7 @@ class StreamOrchestrator:
         interrupt_id: str,
         interrupt_value: object,
     ) -> dict[str, object] | None:
+        """Return a normalised ``ask_a_question`` approval payload if the interrupt matches, else ``None``."""
         payload = StreamMessageParser.payload_mapping(interrupt_value)
         if (
             StreamMessageParser.api_event_type(payload)
@@ -586,6 +598,7 @@ class StreamOrchestrator:
         interrupt_id: str,
         interrupt_value: object,
     ) -> tuple[dict[str, object], ...]:
+        """Build ``mcp_tool`` approval payloads for each ``call_mcp_tool`` action in a native interrupt value."""
         payload = (
             interrupt_value
             if isinstance(interrupt_value, Mapping)
@@ -653,11 +666,11 @@ class StreamOrchestrator:
                     Keys.Field.STATUS: "pending",
                     _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
                     _Fields.GRANT_OPTIONS: ["allow_once"],
-                    # PR 4.4.6.2 — structured consent-card payload. Spreads
-                    # vendor / category / reason_code / reversible / params
-                    # into the same dict so the FE reads them off the
-                    # event's args bag without a nested unwrap. Validation
-                    # failures fall through with the flat fields only.
+                    # Structured consent-card payload. Spreads vendor /
+                    # category / reason_code / reversible / params into the
+                    # same dict so the client reads them off the event's args
+                    # bag without a nested unwrap. Validation failures fall
+                    # through with the flat fields only.
                     **structured,
                 }
             )
@@ -665,6 +678,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _connector_display_name(cls, value: str) -> str:
+        """Convert a raw MCP server name slug to a human-readable connector display name."""
         normalized = value.strip()
         lowered = normalized.lower()
         if lowered.startswith("mcp_"):
@@ -685,6 +699,7 @@ class StreamOrchestrator:
 
     @staticmethod
     def _connector_brand_word(value: str) -> str:
+        """Return the canonical brand capitalisation for known connector slugs, falling back to ``capitalize``."""
         brands = {
             "clickup": "ClickUp",
             "github": "GitHub",
@@ -696,6 +711,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _connector_action_name(cls, tool_name: str) -> str:
+        """Classify a tool name into a human-readable action label: search, read, modify, or action."""
         normalized = tool_name.lower()
         if any(term in normalized for term in ("search", "filter", "find", "list")):
             return "search"
@@ -710,6 +726,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _connector_action_is_read_only(cls, tool_name: str) -> bool:
+        """Return ``True`` when the tool name contains no write-operation terms."""
         normalized = tool_name.lower()
         if any(
             term in normalized
@@ -718,10 +735,10 @@ class StreamOrchestrator:
             return False
         return True
 
-    # PR 4.4.6.2 — consent-card structured payload. The FE reads the spread
-    # fields off the approval event's args bag; if validation fails we drop
-    # the structured payload, log a warning, and ship the approval with the
-    # flat fields only (the FE has a synthesiser fallback).
+    # Consent-card structured payload. The client reads the spread fields off
+    # the approval event's args bag; if validation fails the structured payload
+    # is dropped, a warning is logged, and the approval ships with the flat
+    # fields only (the client has a synthesiser fallback).
 
     # Allow-list of argument keys whose values are safe to project into
     # the consent card's params frame. Body / text / secrets / freeform
@@ -766,9 +783,10 @@ class StreamOrchestrator:
         risk_level: str,
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
-        # PR 4.4.6.3 — vendor-specific recogniser fronts the generic
-        # allow-list projector. None → no vendor matched, fall through
-        # to the Phase-2 path so unknown vendors stay byte-identical.
+        """Build and validate the structured consent-card fields; returns ``{}`` on validation failure."""
+        # Vendor-specific recogniser fronts the generic allow-list
+        # projector. ``None`` means no vendor matched; fall through to
+        # the generic path so unknown vendors stay byte-identical.
         recognised = ApprovalParamRecogniserRegistry.recognise(
             server_name=server_name, arguments=arguments
         )
@@ -796,17 +814,20 @@ class StreamOrchestrator:
 
     @classmethod
     def _approval_vendor(cls, display_name: str) -> str:
+        """Return an uppercase vendor token truncated to the configured max length."""
         token = display_name.upper()[: cls._APPROVAL_VENDOR_MAX]
         return token or "CONNECTOR"
 
     @classmethod
     def _approval_category(cls, read_only: bool) -> ApprovalCategory:
+        """Map the read-only flag to the corresponding ``ApprovalCategory`` enum value."""
         return ApprovalCategory.READ if read_only else ApprovalCategory.WRITE
 
     @classmethod
     def _approval_reason_code(
         cls, read_only: bool, risk_level: str
     ) -> ApprovalReasonCode:
+        """Derive the approval reason code from the read-only flag and risk level."""
         if risk_level in {"high", "critical"}:
             return ApprovalReasonCode.RISK_HIGH
         if read_only:
@@ -820,11 +841,12 @@ class StreamOrchestrator:
         tool_name: str,
         server_name: str = "",
     ) -> ApprovalReversible:
+        """Return the reversibility opinion: NOT_APPLICABLE for reads; vendor override or NO for writes."""
         if read_only:
             return ApprovalReversible.NOT_APPLICABLE
-        # PR 4.4.6.4 — recognisers can opt their vendor's writes into the
-        # 60s undo window. Default stays NO to avoid promising undo for
-        # tools without a compensator.
+        # Recognisers can opt their vendor's writes into the undo window.
+        # Default stays NO to avoid promising undo for tools without a
+        # compensator.
         opinion = ApprovalParamRecogniserRegistry.reversibility_for(
             server_name=server_name, tool_name=tool_name, read_only=read_only
         )
@@ -836,6 +858,7 @@ class StreamOrchestrator:
     def _approval_params(
         cls, arguments: Mapping[str, object]
     ) -> tuple[ApprovalParam, ...]:
+        """Project allow-listed argument keys from ``arguments`` into ``ApprovalParam`` rows."""
         params: list[ApprovalParam] = []
         for key in cls._APPROVAL_PARAM_KEYS:
             if key not in arguments:
@@ -852,6 +875,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _approval_param_value(cls, raw: object) -> str | None:
+        """Coerce a raw argument value to a displayable string, returning ``None`` for empty or unsupported types."""
         if isinstance(raw, bool):
             return "Yes" if raw else "No"
         if isinstance(raw, (int, float)):
@@ -869,6 +893,7 @@ class StreamOrchestrator:
 
     @staticmethod
     def _approval_param_label(key: str) -> str:
+        """Convert a snake_case argument key to a title-cased label string."""
         words = [word for word in key.replace("-", "_").split("_") if word]
         if not words:
             return key
@@ -876,6 +901,7 @@ class StreamOrchestrator:
 
     @classmethod
     def _review_configs_by_action(cls, value: object) -> dict[str, tuple[str, ...]]:
+        """Parse the ``review_configs`` sequence into an action-name → allowed-decisions mapping."""
         if not isinstance(value, Sequence) or isinstance(
             value, (str, bytes, bytearray)
         ):
@@ -899,6 +925,7 @@ class StreamOrchestrator:
 
     @classmethod
     def stream_result_candidate(cls, chunk: object) -> object | None:
+        """Return the ``values`` stream data from a main-agent chunk, or ``None`` if the chunk is not a values part."""
         part = StreamPartParser.stream_part(chunk)
         if (
             part is not None
@@ -914,6 +941,7 @@ class StreamOrchestrator:
         event_type: RuntimeApiEventType,
         namespace: StreamNamespace,
     ) -> StreamEventSource:
+        """Map an event type and stream namespace to the appropriate ``StreamEventSource`` variant."""
         if event_type is RuntimeApiEventType.MCP_AUTH_REQUIRED:
             return StreamEventSource.MCP
         if event_type is RuntimeApiEventType.APPROVAL_REQUESTED:

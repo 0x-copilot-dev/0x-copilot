@@ -14,20 +14,14 @@ class StreamTextHelper:
 
     @staticmethod
     def extract(value: object) -> str | None:
+        """Return ``value`` stripped of whitespace if it is a non-empty string, else ``None``."""
         if not isinstance(value, str):
             return None
         return value.strip() or None
 
 
 class _ReasoningBlock:
-    """Provider-specific content-block constants for reasoning chunks.
-
-    LangChain surfaces native thinking/reasoning content uniformly through
-    ``AIMessageChunk.content`` as a list of typed blocks; only the block
-    ``type`` discriminator differs per provider. Centralising the strings
-    here keeps the extractor logic provider-agnostic and makes "add a new
-    provider" a one-line edit instead of a grep across the worker.
-    """
+    """Provider-specific content-block type constants that keep reasoning extraction provider-agnostic."""
 
     ANTHROPIC_THINKING = "thinking"
     ANTHROPIC_TEXT_KEY = "thinking"
@@ -69,6 +63,7 @@ class StreamMessageParser:
 
     @classmethod
     def explicit_api_payloads(cls, value: object) -> tuple[JsonObject, ...]:
+        """Collect all nested payloads that carry a recognised ``api_event_type`` field."""
         payloads: list[JsonObject] = []
         cls.collect_explicit_api_payloads(value, payloads)
         return tuple(payloads)
@@ -77,6 +72,7 @@ class StreamMessageParser:
     def collect_explicit_api_payloads(
         cls, value: object, payloads: list[JsonObject]
     ) -> None:
+        """Recursively walk ``value`` and append any explicit API event payloads found into ``payloads``."""
         if isinstance(value, str):
             parsed = cls.parse_json_mapping(value)
             if parsed is not None:
@@ -107,10 +103,12 @@ class StreamMessageParser:
 
     @classmethod
     def contains_explicit_api_event(cls, value: object) -> bool:
+        """Return ``True`` when ``value`` or any nested structure carries an explicit API event payload."""
         return bool(cls.explicit_api_payloads(value))
 
     @classmethod
     def parse_json_mapping(cls, value: str) -> JsonObject | None:
+        """Attempt to JSON-parse ``value`` as a mapping; returns ``None`` on failure or non-object JSON."""
         if not value.strip().startswith("{"):
             return None
         try:
@@ -123,6 +121,7 @@ class StreamMessageParser:
 
     @classmethod
     def safe_activity_payload(cls, value: object) -> JsonObject:
+        """Extract only the allow-listed activity fields from ``value`` as a safe progress payload."""
         payload = cls.payload_mapping(value)
         safe_payload: JsonObject = {}
         for key in (
@@ -143,6 +142,7 @@ class StreamMessageParser:
     def api_event_type(
         cls, payload: Mapping[str, object]
     ) -> RuntimeApiEventType | None:
+        """Parse and return the ``RuntimeApiEventType`` from a payload mapping, or ``None`` if absent or unrecognised."""
         value = (
             payload.get(_Fields.API_EVENT_TYPE)
             or payload.get(_Fields.EVENT_TYPE)
@@ -157,6 +157,7 @@ class StreamMessageParser:
 
     @classmethod
     def tool_call_chunks(cls, message: object) -> tuple[object, ...]:
+        """Return the tool-call chunk list from a message object or mapping, or an empty tuple."""
         if isinstance(message, Mapping):
             value = (
                 message.get(_Fields.TOOL_CALL_CHUNKS)
@@ -175,6 +176,7 @@ class StreamMessageParser:
 
     @classmethod
     def is_tool_result_message(cls, message: object) -> bool:
+        """Return ``True`` when ``message`` represents a tool-result rather than a model output."""
         if isinstance(message, Mapping):
             return message.get(_Fields.TYPE) in {_Fields.TOOL, _Fields.TOOL_RESULT}
         return (
@@ -184,12 +186,14 @@ class StreamMessageParser:
 
     @classmethod
     def update_messages(cls, value: object) -> tuple[object, ...]:
+        """Collect all ``messages`` list entries nested inside an update-stream payload."""
         messages: list[object] = []
         cls.collect_update_messages(value, messages)
         return tuple(messages)
 
     @classmethod
     def collect_update_messages(cls, value: object, messages: list[object]) -> None:
+        """Recursively scan ``value`` for ``messages`` lists and extend ``messages`` with their contents."""
         if isinstance(value, Mapping):
             raw_messages = value.get(_Fields.MESSAGES)
             if isinstance(raw_messages, Sequence) and not isinstance(
@@ -208,6 +212,7 @@ class StreamMessageParser:
 
     @classmethod
     def payload_mapping(cls, value: object) -> JsonObject:
+        """Coerce ``value`` to a flat string-keyed mapping, falling back to an object attribute scan."""
         if isinstance(value, Mapping):
             return {str(key): cls.json_value(item) for key, item in value.items()}
         if value is None:
@@ -219,6 +224,7 @@ class StreamMessageParser:
 
     @classmethod
     def object_payload_mapping(cls, value: object) -> JsonObject:
+        """Build a payload dict from well-known attribute names on an arbitrary object."""
         payload: JsonObject = {}
         for key in (
             _Fields.TYPE,
@@ -242,6 +248,7 @@ class StreamMessageParser:
 
     @classmethod
     def json_value(cls, value: object) -> object:
+        """Recursively coerce ``value`` to a JSON-safe scalar, list, or string representation."""
         if isinstance(value, Mapping):
             return {str(key): cls.json_value(item) for key, item in value.items()}
         if isinstance(value, Sequence) and not isinstance(
@@ -261,6 +268,7 @@ class StreamMessageParser:
 
     @classmethod
     def text_from_content_blocks(cls, values: Sequence[object]) -> str | None:
+        """Concatenate text from a list of content blocks or plain strings; returns ``None`` when empty."""
         parts: list[str] = []
         for item in values:
             if isinstance(item, Mapping):
@@ -274,6 +282,7 @@ class StreamMessageParser:
 
     @classmethod
     def message_from_stream_payload(cls, payload: object) -> object:
+        """Unwrap the first element of a tuple or the ``message`` field from a stream payload dict."""
         if isinstance(payload, tuple) and payload:
             return payload[0]
         if isinstance(payload, Mapping):
@@ -282,6 +291,7 @@ class StreamMessageParser:
 
     @classmethod
     def message_delta(cls, message: object) -> str | None:
+        """Extract the visible text delta from a message object or mapping."""
         if isinstance(message, Mapping):
             return cls.content_delta_to_text(message.get(_Fields.CONTENT))
         return cls.content_delta_to_text(getattr(message, _Fields.CONTENT, None))
@@ -374,6 +384,7 @@ class StreamMessageParser:
 
     @classmethod
     def content_delta_to_text(cls, value: object) -> str | None:
+        """Convert a content field (string or block list) to a plain text delta, skipping reasoning blocks."""
         if isinstance(value, str):
             return value or None
         if isinstance(value, Sequence) and not isinstance(
@@ -404,6 +415,7 @@ class StreamMessageParser:
 
     @classmethod
     def _is_reasoning_block(cls, block: Mapping[str, object]) -> bool:
+        """Return ``True`` when the content block's type identifies it as a provider reasoning block."""
         block_type = block.get(_Fields.TYPE)
         return block_type in {
             _ReasoningBlock.ANTHROPIC_THINKING,
@@ -413,10 +425,12 @@ class StreamMessageParser:
 
     @classmethod
     def text(cls, value: object) -> str | None:
+        """Delegate to ``StreamTextHelper.extract``; strips whitespace and returns ``None`` for empty strings."""
         return StreamTextHelper.extract(value)
 
     @classmethod
     def raw_text(cls, value: object) -> str | None:
+        """Return ``value`` unchanged if it is a non-empty string, else ``None`` (no strip applied)."""
         if not isinstance(value, str) or value == "":
             return None
         return value

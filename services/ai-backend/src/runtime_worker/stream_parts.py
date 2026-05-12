@@ -26,6 +26,7 @@ class StreamNamespace:
 
     @classmethod
     def from_value(cls, value: object) -> "StreamNamespace":
+        """Construct a ``StreamNamespace`` from a string, sequence, or unknown value."""
         if isinstance(value, str):
             return cls((value,))
         if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
@@ -34,6 +35,7 @@ class StreamNamespace:
 
     @property
     def subagent_task_id(self) -> str | None:
+        """Return the task ID encoded in a ``tools:<id>`` namespace part, or ``None``."""
         for part in self.parts:
             if part.startswith("tools:"):
                 return part.split(":", maxsplit=1)[1] or None
@@ -41,9 +43,11 @@ class StreamNamespace:
 
     @property
     def is_subagent(self) -> bool:
+        """Return ``True`` when this namespace belongs to a subagent invocation."""
         return self.subagent_task_id is not None
 
     def metadata(self, stream_type: str) -> JsonObject:
+        """Build the event metadata dict carrying stream_type and the namespace parts."""
         metadata: JsonObject = {"stream_type": stream_type}
         if self.parts:
             metadata["namespace"] = list(self.parts)
@@ -51,10 +55,11 @@ class StreamNamespace:
 
 
 class StreamPartParser:
-    """Parse the documented LangGraph v2 stream part envelope."""
+    """Typed accessors for the LangGraph v2 stream part envelope (type, data, ns, metadata)."""
 
     @classmethod
     def stream_part(cls, chunk: object) -> dict[str, object] | None:
+        """Return ``chunk`` as a plain dict if it is a valid LangGraph stream part, else ``None``."""
         if not isinstance(chunk, Mapping):
             return None
         stream_type = chunk.get("type")
@@ -64,27 +69,17 @@ class StreamPartParser:
 
     @classmethod
     def stream_type(cls, part: Mapping[str, object]) -> str:
+        """Return the ``type`` string from a parsed stream part."""
         return str(part["type"])
 
     @classmethod
     def namespace_for(cls, part: Mapping[str, object]) -> StreamNamespace:
+        """Parse and return the ``StreamNamespace`` for the given stream part."""
         return StreamNamespace.from_value(part.get("ns", ()))
 
     @classmethod
     def supervisor_task_call_id_for(cls, part: Mapping[str, object]) -> str | None:
-        """Extract the supervisor's `task` call_id from a chunk's metadata.
-
-        LangGraph propagates RunnableConfig.metadata onto streamed chunks
-        in two places depending on stream_type:
-        - `messages`: `data` is a tuple `(message, metadata)`; metadata
-          is the second element.
-        - other modes (`updates`, `values`, `custom`): metadata may live
-          as a top-level `metadata` field on the chunk.
-
-        We probe both and return the first non-empty match. Returns None
-        when the chunk wasn't emitted from inside an Atlas-dispatched
-        subagent (e.g. supervisor-owned tool calls).
-        """
+        """Return the supervisor task call_id injected into chunk metadata by the task tool, or ``None``."""
         # messages-mode tuple: data = (message, metadata)
         data = part.get("data")
         if isinstance(data, tuple) and len(data) >= 2:

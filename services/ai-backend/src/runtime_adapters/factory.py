@@ -73,8 +73,8 @@ class RuntimeAdapterFactory:
     def from_store(cls, store: InMemoryRuntimeApiStore) -> RuntimePorts:
         """Build a minimal in-memory :class:`RuntimePorts` from an existing store.
 
-        Tests use this helper to construct ports without importing
-        :class:`RuntimeApiService`.  Every satellite store is freshly
+        Tests use this helper to construct ports without coupling to
+        coordinator internals.  Every satellite store is freshly
         constructed so they share no state with other test instances.
         """
         return RuntimePorts(

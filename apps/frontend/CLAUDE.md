@@ -4,7 +4,8 @@ Vite + React. Calls `backend-facade` only — never `backend` or `ai-backend` di
 
 ## Before changing behavior
 
-Read `apps/frontend/README.md`, `ARCHITECTURE.md`, and `TESTING.md` first.
+Read [docs/README.md](docs/README.md) to find the relevant doc, then read it before implementing.
+Architecture, features, and reference docs are the source of truth.
 
 ## Network layer
 

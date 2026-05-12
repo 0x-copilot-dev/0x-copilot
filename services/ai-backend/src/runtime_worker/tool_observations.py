@@ -32,7 +32,7 @@ class ToolObservation:
     result_preview: str
     payload: JsonObject
     created_at: str
-    # PR 04 — conversation_ordinal sourced from the persistent
+    # ``conversation_ordinal`` is sourced from the persistent
     # ``agent_conversation_tool_ordinals`` binding map, joined by
     # ``call_id``. The same number the in-turn resolver stamps on
     # ``citation_made`` events, so a cross-turn ``[[N]]`` cited by the
@@ -52,27 +52,12 @@ class ToolObservationIndex:
 
     @property
     def has_observations(self) -> bool:
+        """Return ``True`` when at least one prior observation was collected."""
         return bool(self.observations)
 
 
 class ToolObservationIndexBuilder:
-    """Project prior tool result events into compact model context.
-
-    PR 04 — ordinals come from the persistent binding map
-    (:class:`ConversationToolOrdinalStorePort`), not from re-counting
-    ``TOOL_CALL_STARTED`` events at build time. The runtime allocator
-    is the only writer; this builder is one of the readers. Joining on
-    ``tool_call_id`` guarantees the prompt context's ``cite as [[N]]``
-    hint matches the resolver's binding for that same tool call —
-    cross-turn citation and within-turn citation share one source of
-    truth.
-
-    When the store is not bound (replay / eval paths that build the
-    builder without the worker's full DI), observations are returned
-    without ordinals — the model still sees the prior result preview
-    and the ``load_prior_tool_result`` affordance, just no ``[[N]]``
-    cite hint. Citations remain best-effort decoration.
-    """
+    """Project prior tool-result events into a compact prompt context with ordinal cite hints."""
 
     max_observations = 8
     max_prompt_chars = 4_000
@@ -87,6 +72,7 @@ class ToolObservationIndexBuilder:
             ConversationToolOrdinalStorePort | None
         ) = None,
     ) -> None:
+        """Bind the event store and optional ordinal store for building tool observation indexes."""
         self.event_store = event_store
         self._ordinal_store = conversation_tool_ordinal_store
 
@@ -98,6 +84,7 @@ class ToolObservationIndexBuilder:
         current_run_id: str,
         selected_messages: Sequence[MessageRecord],
     ) -> ToolObservationIndex:
+        """Collect and ordinal-join prior tool observations from earlier runs in this conversation."""
         run_ids = self._prior_run_ids(selected_messages, current_run_id)
         observations: list[ToolObservation] = []
         for run_id in run_ids:
@@ -112,11 +99,11 @@ class ToolObservationIndexBuilder:
                     expected_conversation_id=conversation_id,
                 )
             )
-        # PR 04 — join observations to the canonical binding map by
-        # ``call_id``. The map is whatever the runtime allocator has
-        # persisted so far for the conversation; observations whose
-        # call_id isn't bound (subagent summaries, pre-PR04
-        # backfill-pending rows) just lack ``conversation_ordinal``.
+        # Join observations to the canonical binding map by ``call_id``.
+        # The map is whatever the runtime allocator has persisted so far
+        # for the conversation; observations whose call_id isn't bound
+        # (subagent summaries, rows predating the binding layer) just
+        # lack ``conversation_ordinal``.
         ordinal_by_call_id: dict[str, int] = {}
         if self._ordinal_store is not None:
             bindings = await self._ordinal_store.load(
@@ -140,6 +127,7 @@ class ToolObservationIndexBuilder:
     def _with_ordinal(
         observation: ToolObservation, ordinal: int | None
     ) -> ToolObservation:
+        """Return a copy of ``observation`` with ``conversation_ordinal`` updated, or the original if unchanged."""
         if observation.conversation_ordinal == ordinal:
             return observation
         return ToolObservation(
@@ -160,6 +148,7 @@ class ToolObservationIndexBuilder:
         selected_messages: Sequence[MessageRecord],
         current_run_id: str,
     ) -> tuple[str, ...]:
+        """Return distinct prior run IDs from selected messages, excluding the current run."""
         run_ids: list[str] = []
         seen: set[str] = set()
         for message in selected_messages:
@@ -176,6 +165,7 @@ class ToolObservationIndexBuilder:
         events: Sequence[RuntimeEventEnvelope],
         expected_conversation_id: str,
     ) -> tuple[ToolObservation, ...]:
+        """Project tool-call and subagent events from a single run into ``ToolObservation`` records."""
         calls_by_id: dict[str, JsonObject] = {}
         # `task_id -> SUBAGENT_STARTED.payload`. Lets a SUBAGENT_COMPLETED carry
         # the dispatched task description into the next-turn prompt context so
@@ -233,6 +223,7 @@ class ToolObservationIndexBuilder:
         event: RuntimeEventEnvelope,
         started_payload: JsonObject | None,
     ) -> ToolObservation | None:
+        """Build a ``ToolObservation`` from a SUBAGENT_COMPLETED event, or ``None`` if not suitable."""
         if event.visibility is not RuntimeEventVisibility.USER:
             return None
         if event.redaction_state is RuntimeEventRedactionState.OFFLOADED:
@@ -275,6 +266,7 @@ class ToolObservationIndexBuilder:
         event: RuntimeEventEnvelope,
         call_payload: JsonObject | None,
     ) -> ToolObservation | None:
+        """Build a ``ToolObservation`` from a TOOL_RESULT event, or ``None`` if not suitable."""
         if event.visibility is not RuntimeEventVisibility.USER:
             return None
         if event.redaction_state is RuntimeEventRedactionState.OFFLOADED:
@@ -312,6 +304,7 @@ class ToolObservationIndexBuilder:
         )
 
     def _prompt_context(self, observations: Sequence[ToolObservation]) -> str | None:
+        """Compose the bounded prompt-context string from observation records; returns ``None`` if empty."""
         if not observations:
             return None
         lines = [
@@ -323,10 +316,9 @@ class ToolObservationIndexBuilder:
             "the same research unless the user explicitly asks for fresh work.",
             "Use load_prior_tool_result with an observation_id only when you "
             "need the full persisted redacted result.",
-            # PR 1.1-rev2 — cross-turn citation. Each observation that
-            # came from a tool call has a stable ``[[N]]`` pointer
-            # listed below; cite that pointer when grounding any claim
-            # in the corresponding prior result.
+            # Each observation that came from a tool call has a stable
+            # ``[[N]]`` pointer listed below; cite that pointer when
+            # grounding any claim in the corresponding prior result.
             "When grounding a claim in one of these observations, append "
             "the listed `[[N]]` marker (if shown) immediately after the "
             "claim so the source resolves to the right prior tool call.",
@@ -355,6 +347,7 @@ class ToolObservationIndexBuilder:
 
     @classmethod
     def _payload_preview(cls, value: object, *, limit: int | None = None) -> str | None:
+        """Serialize ``value`` to a truncated preview string; returns ``None`` for empty or null values."""
         if value is None:
             return None
         if isinstance(value, str):
@@ -367,6 +360,7 @@ class ToolObservationIndexBuilder:
 
     @staticmethod
     def _truncate(value: str, limit: int) -> str:
+        """Truncate ``value`` to ``limit`` characters, appending ``[truncated]`` when shortened."""
         if len(value) <= limit:
             return value
         return f"{value[:limit].rstrip()} [truncated]"
@@ -376,6 +370,7 @@ class PriorToolResultLoader:
     """Resolve full prior tool observations scoped to one selected branch."""
 
     def __init__(self, index: ToolObservationIndex) -> None:
+        """Build an observation lookup dict keyed by observation_id from the index."""
         self._observations = {
             observation.observation_id: observation
             for observation in index.observations
@@ -387,6 +382,7 @@ class PriorToolResultLoader:
         observation_id: str,
         runtime_context: AgentRuntimeContext,
     ) -> dict[str, object]:
+        """Return the full payload for ``observation_id``, or an error dict when not found."""
         observation = self._observations.get(observation_id)
         if observation is None:
             return {

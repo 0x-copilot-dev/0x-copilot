@@ -142,7 +142,7 @@ class RuntimeApiEventType(StrEnum):
     BUDGET_WARNING = "budget_warning"
     RUN_REJECTED = "run_rejected"
     # PR 1.3 — Workspace pane Draft tab. Emitted by DraftBackend on every
-    # successful awrite/aedit and by RuntimeApiService on user PATCH /
+    # successful awrite/aedit and by ConversationCoordinator on user PATCH /
     # POST send / POST discard.
     DRAFT_UPDATED = "draft_updated"
     # PR 1.1 — citations live registry. One event per (run, source) the

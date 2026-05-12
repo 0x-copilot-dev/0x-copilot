@@ -62,7 +62,6 @@ class RuntimeWorker:
             "ConversationToolOrdinalStorePort | None"
         ) = None,
     ) -> None:
-        # Worker is fully async; ports are async-native end-to-end.
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.queue: RuntimeQueuePort = queue
@@ -70,20 +69,15 @@ class RuntimeWorker:
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds
-        # When the persistence adapter satisfies CitationStorePort (Postgres
-        # path), reuse the same connection-pooled instance. In-memory dev
-        # wires a sibling InMemoryCitationStore so unit tests don't need
-        # Postgres.
+        # Reuse the same pool when the adapter satisfies CitationStorePort (Postgres);
+        # fall back to an in-memory sibling for dev and unit tests.
         citation_store: CitationStorePort = (
             self.persistence
             if isinstance(self.persistence, CitationStorePort)
             else InMemoryCitationStore()
         )
-        # Persistent (conversation_ordinal ↔ tool_call_id) binding store
-        # for the citation ordinal system. Defaults to an in-memory adapter
-        # when not explicitly supplied — sufficient for dev and unit tests;
-        # production wiring injects a Postgres adapter that shares the main
-        # connection pool.
+        # Defaults to an in-memory adapter for dev/tests; production injects a Postgres
+        # adapter that shares the main connection pool.
         self.conversation_tool_ordinal_store: ConversationToolOrdinalStorePort = (
             conversation_tool_ordinal_store or InMemoryConversationToolOrdinalStore()
         )
@@ -135,6 +129,7 @@ class RuntimeWorker:
             processed += len(claims)
 
     async def _claim_next(self) -> RuntimeWorkerClaim | None:
+        """Attempt to claim one command from the queue; returns ``None`` when the queue is empty."""
         return await self.queue.claim_next(
             worker_id=self.worker_id,
             lock_expires_at=datetime.now(timezone.utc)
@@ -142,6 +137,7 @@ class RuntimeWorker:
         )
 
     async def _claim_batch(self) -> tuple[RuntimeWorkerClaim, ...]:
+        """Claim up to ``max_parallel_runs`` commands in one pass."""
         claims: list[RuntimeWorkerClaim] = []
         for _ in range(self.settings.execution.max_parallel_runs):
             claim = await self._claim_next()
@@ -151,6 +147,7 @@ class RuntimeWorker:
         return tuple(claims)
 
     async def _handle_claim_with_limit(self, claim: RuntimeWorkerClaim) -> None:
+        """Acquire the concurrency semaphore then dispatch the claim."""
         async with self._semaphore:
             await self._handle_claim(claim)
 
@@ -163,6 +160,7 @@ class RuntimeWorker:
                 await asyncio.sleep(poll_interval_seconds)
 
     async def _handle_claim(self, claim: RuntimeWorkerClaim) -> None:
+        """Dispatch the claim and mark it complete, retry, or dead-letter on error."""
         try:
             await self._dispatch(claim)
         except AgentRuntimeError as exc:
@@ -192,12 +190,9 @@ class RuntimeWorker:
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
         )
 
-    # P13 step 1 — re-parent the worker handler under the API's trace
-    # tree so a single ``trace_id`` covers ingress → enqueue → handler.
-    # When the payload carries no ``trace_propagation`` (legacy claim,
-    # background sweeper, propagation disabled by env flag), the
-    # extracted context is the default OTel context and the span below
-    # begins a fresh trace — the pre-P13 behavior.
+    # Re-parent handler spans under the API's trace tree so one trace_id covers
+    # ingress → enqueue → handler. When trace_propagation is absent (legacy
+    # claim or sweeper), the span begins a fresh trace.
     _DISPATCH_SPAN_NAMES: dict[str, str] = {
         PersistenceValues.EventType.RUN_REQUESTED: "runtime_worker.run",
         PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
@@ -205,6 +200,7 @@ class RuntimeWorker:
     }
 
     async def _dispatch(self, claim: RuntimeWorkerClaim) -> None:
+        """Route a claimed command to the appropriate handler under the extracted OTel trace context."""
         command_type = claim.command_type
         carrier = claim.payload.get("trace_propagation")
         parent_ctx = QueueTracePropagator.extract(carrier)
@@ -234,6 +230,7 @@ class RuntimeWorker:
     async def _mark_failure(
         self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError
     ) -> None:
+        """Mark the claim as failed; routes to retry or dead-letter based on the error and attempt count."""
         result = RuntimeWorkerResult(
             command_id=claim.command_id,
             succeeded=False,
@@ -247,6 +244,7 @@ class RuntimeWorker:
         await self.queue.mark_dead_letter(result=result)
 
     def _runtime_run_command(self, claim: RuntimeWorkerClaim) -> RuntimeRunCommand:
+        """Deserialise the claim payload into a ``RuntimeRunCommand``."""
         payload = self._command_payload(claim)
         if payload:
             return RuntimeRunCommand.model_validate(payload)
@@ -259,6 +257,7 @@ class RuntimeWorker:
     def _runtime_cancel_command(
         self, claim: RuntimeWorkerClaim
     ) -> RuntimeCancelCommand:
+        """Deserialise the claim payload into a ``RuntimeCancelCommand``."""
         payload = self._command_payload(claim)
         if payload:
             return RuntimeCancelCommand.model_validate(payload)
@@ -272,6 +271,7 @@ class RuntimeWorker:
         self,
         claim: RuntimeWorkerClaim,
     ) -> RuntimeApprovalResolvedCommand:
+        """Deserialise the claim payload into a ``RuntimeApprovalResolvedCommand``."""
         payload = self._command_payload(claim)
         if payload:
             return RuntimeApprovalResolvedCommand.model_validate(payload)
@@ -283,6 +283,7 @@ class RuntimeWorker:
 
     @staticmethod
     def _command_payload(claim: RuntimeWorkerClaim) -> dict[str, object]:
+        """Extract the command payload from the claim, stripping internal metadata keys."""
         payload: dict[str, object] = {}
         for key, value in claim.payload.items():
             if key == "command_type":

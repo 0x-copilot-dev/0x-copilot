@@ -1,19 +1,4 @@
-"""Background loop that recomputes daily usage rollups (B4).
-
-Long-running task launched by the worker entrypoint. Every
-``USAGE_ROLLUP_INTERVAL_SECONDS`` (default 600) it recomputes the last 2
-UTC days into ``runtime_usage_daily_user`` / ``runtime_usage_daily_org``.
-Yesterday continues to update for the late-arrival window
-(``USAGE_LATE_ARRIVAL_WINDOW_MINUTES`` after midnight UTC) so a run that
-completed at 23:59 still rolls up cleanly.
-
-Idempotent by construction: each recompute is a UPSERT keyed by
-``(org_id, user_id, day, model_provider, model_name)`` (or the org PK
-shape) so running the loop twice for the same range yields the same rows.
-
-Best-effort: failures are logged and the loop continues to its next
-tick. The endpoints' cold-start fallback covers the worst case.
-"""
+"""Background loop that periodically upserts daily usage rollups for user, org, connector, subagent, and purpose dimensions."""
 
 from __future__ import annotations
 
@@ -30,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class UsageRollupLoopEnv:
-    """Env-var keys + defaults for the rollup loop."""
+    """Env-var key names and default values for the usage rollup loop."""
 
     INTERVAL_SECONDS = "USAGE_ROLLUP_INTERVAL_SECONDS"
     LATE_ARRIVAL_MINUTES = "USAGE_LATE_ARRIVAL_WINDOW_MINUTES"
@@ -47,6 +32,7 @@ class UsageRollupLoopEnv:
 
     @classmethod
     def env_float(cls, name: str, default: float) -> float:
+        """Read ``name`` from the environment as a float, returning ``default`` on miss or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -57,6 +43,7 @@ class UsageRollupLoopEnv:
 
     @classmethod
     def env_int(cls, name: str, default: int) -> int:
+        """Read ``name`` from the environment as an int, returning ``default`` on miss or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -67,6 +54,7 @@ class UsageRollupLoopEnv:
 
     @classmethod
     def env_bool(cls, name: str, default: bool) -> bool:
+        """Read ``name`` from the environment as a boolean, returning ``default`` on miss."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -74,13 +62,7 @@ class UsageRollupLoopEnv:
 
 
 class UsageRollupLoop:
-    """Schedule and run the rollup refresh.
-
-    Held by the worker process so the lifecycle is driven by the worker
-    shutdown path. The API in-process worker mode (``RUNTIME_START_IN_PROCESS_WORKER``)
-    can opt-out via ``USAGE_ROLLUP_LOOP_ENABLED=false`` to avoid
-    duplicate refresh in dev.
-    """
+    """Periodic loop that runs usage rollup refreshes on a configurable interval; lifecycle managed by the worker process."""
 
     def __init__(
         self,
@@ -90,6 +72,7 @@ class UsageRollupLoop:
         late_arrival_minutes: int | None = None,
         backfill_days: int | None = None,
     ) -> None:
+        """Initialise the loop with configurable interval, late-arrival window, and initial backfill span."""
         self._persistence = persistence
         self._interval = (
             interval_seconds
@@ -140,6 +123,7 @@ class UsageRollupLoop:
             pass
 
     async def _run(self) -> None:
+        """Wait for the next tick or a stop signal, then trigger a refresh; repeat until stopped."""
         while not self._stop.is_set():
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
@@ -152,14 +136,7 @@ class UsageRollupLoop:
                 _LOGGER.warning("usage_rollup_refresh_failed", exc_info=True)
 
     async def refresh(self, *, span_days: int) -> None:
-        """Recompute rollups for the trailing ``span_days`` UTC days.
-
-        Day-N is recomputed when ``now - day_end < late_arrival``; older
-        days are skipped on subsequent ticks once they have been written.
-        Idempotency is provided by ``upsert_user_daily_usage`` /
-        ``upsert_org_daily_usage`` / ``upsert_connector_daily_usage``
-        (UPSERT keyed by the natural compound).
-        """
+        """Upsert daily usage rows for user, org, connector, subagent, and purpose over the trailing ``span_days`` UTC days."""
 
         now = datetime.now(timezone.utc)
         end = now
@@ -207,9 +184,9 @@ class UsageRollupLoop:
                     exc_info=True,
                 )
 
-        # PR 7.2 — third rollup target: per-connector. Reads from
-        # ``runtime_model_call_usage`` (per-LLM-call) since one run
-        # typically spans connectors. Run-level rollup can't be split.
+        # Per-connector rollup reads from ``runtime_model_call_usage``
+        # (per-LLM-call) because one run typically spans multiple connectors
+        # and the run-level rollup cannot be split by connector.
         try:
             call_rows = await self._persistence.query_model_call_usage_for_range(
                 org_id=None, start=start, end=end
@@ -243,9 +220,8 @@ class UsageRollupLoop:
                     exc_info=True,
                 )
 
-        # Sub-PRD 01d — subagent rollup. Reads from the same per-call
-        # scan; aggregates org × day × subagent_slug × model. Reuses
-        # the connector loop's ``call_rows`` so we don't double-scan.
+        # Subagent rollup: aggregates org × day × subagent_slug × model.
+        # Reuses the per-call scan to avoid a second table scan.
         subagent_rows = UsageQueryService.rollup_subagent_rows(
             call_rows,
             refreshed_at=refreshed_at,
@@ -267,7 +243,8 @@ class UsageRollupLoop:
                     exc_info=True,
                 )
 
-        # Sub-PRD 01d — purpose rollup. Same call_rows scan.
+        # Purpose rollup: aggregates org × day × purpose × model.
+        # Reuses the same per-call scan.
         purpose_rows = UsageQueryService.rollup_purpose_rows(
             call_rows,
             refreshed_at=refreshed_at,

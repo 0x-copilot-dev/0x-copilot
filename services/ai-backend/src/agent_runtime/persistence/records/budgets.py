@@ -1,4 +1,4 @@
-"""Persistence records for B7 spend budgets.
+"""Persistence records for spend budgets.
 
 Three records map directly to the three tables created in migration
 0009: ``usage_budgets`` (config), ``usage_budget_state`` (per-period

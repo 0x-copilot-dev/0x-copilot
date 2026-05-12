@@ -54,18 +54,11 @@ class _Fields:
 
 
 class _MessageIdExtractor:
-    """Pull a stable message id from a stream chunk for B2 dedup.
-
-    Different LangChain providers expose the message id in different
-    places: ``chunk.message.id`` (event-stream wrappers), ``chunk.id``
-    (AIMessage chunks), or nested under ``data``/``message`` mappings
-    when the chunk is a dict. We try each in order and return the first
-    non-empty string. Returns ``None`` when no id is available — the
-    caller skips per-call recording in that case.
-    """
+    """Extract a stable message id from a stream chunk for per-call deduplication; returns ``None`` if absent."""
 
     @classmethod
     def extract(cls, value: object) -> str | None:
+        """Return the first non-empty message id found on the chunk object or nested data fields."""
         # Plain AIMessage / chunk objects.
         msg_id = getattr(value, _Fields.ID, None)
         if isinstance(msg_id, str) and msg_id:
@@ -95,41 +88,15 @@ class _MessageIdExtractor:
 
 
 class _AttributionBuilder:
-    """Build :class:`UsageAttributionContext` from per-chunk signals.
-
-    Sub-PRD 01b: this replaces the time-based DB heuristic that used
-    to live in ``UsageAttributionResolver``. Every dimension is read
-    from data already present on the chunk + the streaming orchestrator
-    state:
-
-    - ``task_id`` / ``subagent_slug`` from
-      :class:`StreamUpdateProcessor` keyed on the chunk's namespace
-      ``subagent_task_id``. Deterministic per-chunk; safe under
-      parallel subagents (each subagent's chunks carry their own
-      subgraph UUID).
-    - ``originating_tool_*`` from :class:`ToolCallLedger` pop. The
-      ledger's pending-attribution queue is scope-aware (subagent_id
-      filters cross-attribution).
-    - ``purpose`` via :meth:`Purpose.derive` from input/output signals.
-
-    The builder owns no state of its own — every method takes the run
-    + orchestrator + ledger as arguments. Stateless instances make
-    testing trivial.
-    """
+    """Stateless factory for ``UsageAttributionContext`` derived from chunk namespace, ledger, and orchestrator state."""
 
     def __init__(self, *, run: RunRecord, orchestrator: StreamOrchestrator) -> None:
+        """Bind the run record and stream orchestrator for per-chunk attribution lookups."""
         self._run = run
         self._orchestrator = orchestrator
 
     def build_for_chunk(self, chunk: object) -> UsageAttributionContext:
-        """Build a context for an LLM call emit landing on this chunk.
-
-        Reads subagent identity from the chunk's namespace + the
-        orchestrator's subagent linkage; reads tool attribution from
-        the per-run ledger. Returns a constructed
-        :class:`UsageAttributionContext` whose ``purpose`` was derived
-        from the same signals.
-        """
+        """Build a ``UsageAttributionContext`` for the LLM call represented by this chunk."""
 
         part = chunk if isinstance(chunk, Mapping) else None
         namespace = (
@@ -219,13 +186,7 @@ class _AttributionBuilder:
 
     @staticmethod
     def _chunk_has_tool_calls(chunk: object) -> bool:
-        """Inspect the AIMessage on the chunk for non-empty tool_calls.
-
-        LangChain AIMessage carries ``.tool_calls`` (list[dict]) when
-        the model output included tool selections. The chunk may wrap
-        the message in a ``data: (AIMessageChunk, metadata)`` tuple,
-        or expose the message at the chunk root.
-        """
+        """Return ``True`` when the chunk's AIMessage exposes a non-empty ``tool_calls`` list."""
 
         candidates: list[object] = [chunk]
         if isinstance(chunk, Mapping):
@@ -271,13 +232,13 @@ class StreamingExecutor:
         delta_coalesce_window_ms: int = 0,
         delta_coalesce_max_chunks: int = 64,
     ) -> StreamingResult:
-        # PR 1.1-rev2 — fall back to the active ContextVar-bound resolver
-        # when the caller didn't pass one. This lets the approval-resume
-        # path (``RuntimeApprovalHandler._stream_resume``) and any future
-        # caller pick up the resolver automatically as long as
+        """Drive the streaming loop: record usage, emit events, coalesce deltas, and return accumulated results."""
+        # Fall back to the active ContextVar-bound resolver when the caller
+        # didn't pass one explicitly. This lets the approval-resume path and
+        # any future caller pick up the resolver automatically as long as
         # ``CitationResolver.bind_for_run`` is active in the same async
-        # context. Without this fallback, the resume path streams
-        # ``[[N]]`` markers from the model that get silently dropped.
+        # context. Without this fallback, the resume path streams ``[[N]]``
+        # markers from the model that get silently dropped.
         if citation_resolver is None:
             citation_resolver = CitationResolver.active()
         result = StreamingResult()
@@ -293,11 +254,11 @@ class StreamingExecutor:
             run=run, orchestrator=stream_event_mapper
         )
 
-        # P4 Stage 2 — coalesce ``MODEL_DELTA`` chunk writes within a
-        # configurable window. Default ``window_ms=0`` means passthrough
-        # (one append per chunk, matching pre-Stage-2). The ``async with``
-        # block guarantees a final flush on normal exit, exception, or
-        # cancellation so buffered chunks are never silently dropped.
+        # Coalesce ``MODEL_DELTA`` chunk writes within a configurable window.
+        # Default ``window_ms=0`` means passthrough (one append per chunk).
+        # The ``async with`` block guarantees a final flush on normal exit,
+        # exception, or cancellation so buffered chunks are never silently
+        # dropped.
         delta_coalescer = DeltaCoalescer(
             producer=event_producer,
             run=run,
@@ -319,10 +280,10 @@ class StreamingExecutor:
                 metrics.record_usage_from(
                     chunk, message_id=chunk_message_id, context=chunk_context
                 )
-                # P4 Stage 2 — flush any buffered deltas before emitting a
-                # non-DELTA event so envelope ordering is preserved on the
-                # wire (a MODEL_CALL_COMPLETED never lands ahead of the
-                # deltas that preceded it).
+                # Flush any buffered deltas before emitting a non-DELTA
+                # event so envelope ordering is preserved on the wire (a
+                # MODEL_CALL_COMPLETED never lands ahead of the deltas that
+                # preceded it).
                 await delta_coalescer.flush()
                 await cls._maybe_emit_model_call_completed(
                     run=run,
@@ -353,9 +314,9 @@ class StreamingExecutor:
                     )
                 delta = stream_event_mapper.stream_delta(chunk)
                 if citation_pipeline is not None:
-                    # Hook the provider citation pipeline (PRD 01) between the
-                    # parsed delta and the wire emission. The pipeline returns
-                    # the (possibly rewritten) delta with ``[c<id>]`` chips
+                    # Hook the provider citation pipeline between the parsed
+                    # delta and the wire emission. The pipeline returns the
+                    # (possibly rewritten) delta with ``[c<id>]`` chips
                     # appended for any native citation primitives the chunk
                     # carries; the ledger registers the source as a side
                     # effect, firing one ``source_ingested`` event per unique
@@ -379,20 +340,17 @@ class StreamingExecutor:
                 )
                 for event in new_events:
                     if event.event_type in cls.action_interrupt_events:
-                        # Phase 2 (`subagent-interrupt-isolation`) — flag
-                        # the run as interrupted but DO NOT return early.
-                        # The previous early-return abandoned the
-                        # supervisor's `astream` mid-iteration, which
-                        # cancelled parallel subagent branches that were
-                        # healthy and mid-work. By continuing to drain the
-                        # stream, LangGraph keeps yielding events from
-                        # siblings until each finishes
-                        # (`SUBAGENT_COMPLETED`) or itself interrupts. The
-                        # paused branch stays paused via LangGraph's
-                        # checkpoint; the supervisor's blocked `task` tool
-                        # call(s) are resumed by the existing approval
-                        # handler. `action_interrupted=True` still carries
-                        # back the WAITING_FOR_APPROVAL transition.
+                        # Flag the run as interrupted but DO NOT return
+                        # early. Returning mid-iteration abandons the
+                        # supervisor's ``astream``, cancelling healthy
+                        # parallel subagent branches. By continuing to drain
+                        # the stream, LangGraph keeps yielding events from
+                        # siblings until each finishes (``SUBAGENT_COMPLETED``)
+                        # or itself interrupts. The paused branch stays paused
+                        # via LangGraph's checkpoint; the blocked ``task``
+                        # tool call is resumed by the approval handler.
+                        # ``action_interrupted=True`` still carries back the
+                        # WAITING_FOR_APPROVAL transition.
                         result.action_interrupted = True
                     if track_subagents:
                         if (
@@ -415,31 +373,30 @@ class StreamingExecutor:
                 if not active_subagent_tasks:
                     result.response_deltas.append(delta)
                 metrics.record_model_delta(delta)
-                # P4 Stage 2 — buffered through the coalescer instead of
-                # appending one round-trip per chunk. With ``window_ms=0``
-                # (default) this is a passthrough to ``append_api_event``;
-                # with ``window_ms>0`` chunks accumulate until the window
-                # or ``max_chunks`` triggers a batched flush.
+                # Buffered through the coalescer instead of appending one
+                # round-trip per chunk. With ``window_ms=0`` (default) this
+                # is a passthrough to ``append_api_event``; with
+                # ``window_ms>0`` chunks accumulate until the window or
+                # ``max_chunks`` triggers a batched flush.
                 await delta_coalescer.add_delta(
                     payload={_Fields.DELTA: delta, _Fields.MESSAGE: delta},
                     summary=delta,
                 )
-                # PR 1.1-rev2 — feed the streamed delta to the citation
-                # resolver so any `[[N]]` markers the model emits resolve to
+                # Feed the streamed delta to the citation resolver so any
+                # ``[[N]]`` markers the model emits resolve to
                 # ``citation_made`` events on the same wire (with monotonic
                 # ``sequence_no``). The resolver is best-effort and never
                 # raises into the streaming path; an unbound resolver
                 # (citations disabled, replay path) is a no-op.
                 #
                 # ``chunk_message_id`` may be ``None`` for some providers
-                # (notably OpenAI Responses streaming chunks, where
-                # LangChain's adapter doesn't always surface an id on every
-                # delta). The FE's chip resolution scans by ordinal across
-                # the run via ``anyLinkForOrdinalInRun`` — message_id is
-                # only used for positional offset anchoring, not lookup —
-                # so we synthesize a per-run id here rather than dropping
-                # the delta. This guarantees the resolver always observes
-                # text the model emitted, regardless of provider quirks.
+                # (e.g. OpenAI Responses streaming chunks, where LangChain's
+                # adapter doesn't always surface an id on every delta). The
+                # client's chip resolution scans by ordinal across the run —
+                # message_id is only used for positional offset anchoring —
+                # so we synthesize a per-run id here rather than dropping the
+                # delta. This guarantees the resolver always observes text the
+                # model emitted, regardless of provider quirks.
                 if citation_resolver is None:
                     if "[[" in delta:
                         _LOGGER.warning(
@@ -478,20 +435,7 @@ class StreamingExecutor:
         message_id: str | None,
         source: object,
     ) -> None:
-        """Emit ``MODEL_CALL_COMPLETED`` once per AIMessage with usage (B2).
-
-        Idempotent on ``message_id``: subsequent chunks for the same
-        call are ignored. The payload carries the slot's accumulated
-        counts wrapped in the existing ``AssistantPerformanceMetrics``
-        shape so SSE consumers share the same schema as
-        ``RUN_COMPLETED``.
-
-        Sub-PRD 01b: the slot was attributed via
-        :class:`UsageAttributionContext` at ``record_usage_from`` time.
-        Reading ``slot.connector_slug`` here goes through the
-        context — no DB lookup needed. The dead
-        :class:`UsageAttributionResolver` is gone.
-        """
+        """Emit a deduplicated MODEL_CALL_COMPLETED event with token-usage payload when the chunk carries usage."""
 
         if message_id is None:
             return
@@ -534,6 +478,7 @@ class StreamingExecutor:
 
     @classmethod
     def compose_final(cls, result: StreamingResult) -> object:
+        """Assemble the final result object from the streaming result: interrupted flag, values, deltas, or last chunk."""
         if result.action_interrupted:
             return {_Fields.ACTION_REQUIRED: True}
         if result.final_result is not None:
