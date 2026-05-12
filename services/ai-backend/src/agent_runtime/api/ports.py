@@ -20,6 +20,7 @@ from agent_runtime.persistence.records import (
     ChargeOutcome,
     CompressionEventRecord,
     ModelPricingRecord,
+    RetentionDeletionEvidenceRecord,
     RetentionKind,
     RetentionPolicyRecord,
     RetentionSweepOutcome,
@@ -745,6 +746,16 @@ class PersistencePort(Protocol):
 
         Resources covered by an active ``runtime_legal_holds`` row are
         skipped and counted in ``skipped_legal_hold``.
+        """
+
+    async def insert_retention_deletion_evidence(
+        self, record: RetentionDeletionEvidenceRecord
+    ) -> None:
+        """Persist one evidence row to ``runtime_deletion_evidence``.
+
+        Called by the sweeper after each non-empty outcome so compliance
+        reviewers can answer "what was swept, when" without parsing logs.
+        Dry-run sweeps also write evidence rows (tagged ``dry_run=True``).
         """
 
 

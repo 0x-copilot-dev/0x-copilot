@@ -69,6 +69,7 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
+    RetentionDeletionEvidenceRecord,
     RetentionKind,
     RetentionPolicyRecord,
     RetentionScope,
@@ -3502,6 +3503,54 @@ class PostgresRuntimeApiStore:
         if tally_field == "tombstoned":
             return outcome.model_copy(update={"tombstoned": affected})
         return outcome.model_copy(update={"deleted": affected})
+
+    async def insert_retention_deletion_evidence(
+        self, record: RetentionDeletionEvidenceRecord
+    ) -> None:
+        # Map sweeper fields onto the existing runtime_deletion_evidence
+        # schema (declared in migration 0001). The table was designed for
+        # user-erasure flows; we repurpose it here using:
+        #   user_id           → "__retention_sweeper__" sentinel
+        #   request_type      → "retention_sweep"
+        #   reason            → JSON context (kind, counts, dry_run)
+        #   messages_tombstoned → tombstoned count (all tombstone kinds)
+        #   runs_cancelled    → deleted count (hard-delete kinds)
+        #   events_retained   → skipped_legal_hold count
+        # Phase 2 will add proper per-kind columns via migration.
+        import json
+
+        reason_json = json.dumps(
+            {
+                "kind": record.kind.value,
+                "tombstoned": record.tombstoned,
+                "deleted": record.deleted,
+                "skipped_legal_hold": record.skipped_legal_hold,
+                "dry_run": record.dry_run,
+            }
+        )
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_deletion_evidence (
+                    id, org_id, user_id, request_type, reason,
+                    conversations_archived, messages_tombstoned,
+                    runs_cancelled, events_retained, created_at
+                ) VALUES (
+                    %(id)s, %(org_id)s, '__retention_sweeper__',
+                    'retention_sweep', %(reason)s,
+                    0, %(tombstoned)s, %(deleted)s, %(skipped)s, %(created_at)s
+                )
+                """,
+                {
+                    "id": record.id,
+                    "org_id": record.org_id,
+                    "reason": reason_json,
+                    "tombstoned": record.tombstoned,
+                    "deleted": record.deleted,
+                    "skipped": record.skipped_legal_hold,
+                    "created_at": record.created_at,
+                },
+            )
 
     @classmethod
     def _retention_policy(cls, row: dict[str, object]) -> RetentionPolicyRecord:

@@ -96,29 +96,17 @@ class RuntimeApiAppFactory:
             TelemetryBootstrap.instrument_fastapi(app)
         configured_service = service or cls.default_service(app)
         app.state.runtime_api_service = configured_service
-        # P22 PR 1 — Coordinator shims. Constructed alongside the legacy
-        # service so PR 2 can migrate routes one call site at a time. Each
-        # shim forwards to the legacy class; implementation moves into the
-        # shims in PR 4. See docs/refactor/19-runtime-api-service-split.md.
-        from agent_runtime.api.approval_coordinator import ApprovalCoordinator
-        from agent_runtime.api.conversation_coordinator import ConversationCoordinator
-        from agent_runtime.api.conversation_query_service import (
-            ConversationQueryService,
-        )
-        from agent_runtime.api.run_coordinator import RunCoordinator
-        from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
-
-        app.state.run_coordinator = RunCoordinator(legacy=configured_service)
-        app.state.approval_coordinator = ApprovalCoordinator(legacy=configured_service)
-        app.state.conversation_coordinator = ConversationCoordinator(
-            legacy=configured_service
-        )
-        app.state.conversation_query_service = ConversationQueryService(
-            legacy=configured_service
-        )
-        app.state.workspace_coordinator = WorkspaceCoordinator(
-            legacy=configured_service
-        )
+        # Expose persistence directly so budget/audit routes can reach it
+        # without going through the service wrapper or runtime_ports (which
+        # is only set in the prod path via default_service).
+        app.state.runtime_persistence = configured_service.persistence
+        # P22 PR 4 — Coordinators now own the implementation; assign them
+        # directly from the service instead of constructing shims.
+        app.state.run_coordinator = configured_service._run
+        app.state.approval_coordinator = configured_service._approval
+        app.state.conversation_coordinator = configured_service._conv
+        app.state.conversation_query_service = configured_service._cqs
+        app.state.workspace_coordinator = configured_service._ws
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)

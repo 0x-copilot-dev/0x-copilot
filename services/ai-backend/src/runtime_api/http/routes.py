@@ -21,7 +21,6 @@ from agent_runtime.api.constants import Keys
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.run_coordinator import RunCoordinator
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.api.usage_service import UsageQueryService
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from runtime_api.auth import RuntimeServiceAuthenticator
@@ -447,12 +446,6 @@ class RuntimeApiRoutes:
     @classmethod
     def workspace_coordinator(cls, request: Request) -> WorkspaceCoordinator:
         return request.app.state.workspace_coordinator
-
-    @classmethod
-    def service(cls, request: Request) -> RuntimeApiService:
-        """Return the legacy service (used by usage/budget routes that access .persistence directly)."""
-
-        return request.app.state.runtime_api_service
 
     @classmethod
     def scoped_identity(
@@ -922,7 +915,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _persistence(cls, request: Request):  # type: ignore[no-untyped-def]
-        return RuntimeApiRoutes.service(request).persistence
+        return request.app.state.runtime_persistence
 
     @classmethod
     def _cap_cold_start(cls, start: datetime, end: datetime) -> datetime:
@@ -1409,7 +1402,7 @@ class BudgetApiRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         rows = await persistence.list_budgets(org_id=org_id)
         return BudgetListResponse(
             budgets=tuple(cls._to_view(record) for record in rows)
@@ -1426,7 +1419,7 @@ class BudgetApiRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         record = BudgetRecord(
             org_id=org_id,
             user_id=payload.user_id,
@@ -1456,7 +1449,7 @@ class BudgetApiRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         existing = await persistence.get_budget(org_id=org_id, budget_id=budget_id)
         if existing is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "budget not found")
@@ -1484,7 +1477,7 @@ class BudgetApiRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         await persistence.delete_budget(org_id=org_id, budget_id=budget_id)
         return {"status": "deleted"}
 
@@ -1498,7 +1491,7 @@ class BudgetApiRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         entries = await persistence.lookup_budgets_for_run(
             org_id=org_id, user_id=user_id
         )
@@ -1642,7 +1635,7 @@ class InternalRuntimeApiRoutes:
         """
 
         RuntimeServiceAuthenticator.trusted_identity_from_request(request)
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         rows = await persistence.list_audit_log_for_export(
             after_id=after_id, limit=limit
         )

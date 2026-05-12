@@ -37,6 +37,7 @@ from agent_runtime.persistence.records.outbox import (
     RuntimeWorkerResult,
 )
 from agent_runtime.persistence.records.retention import (
+    RetentionDeletionEvidenceRecord,
     RetentionKind,
     RetentionPolicyRecord,
     RetentionScope,
@@ -138,6 +139,7 @@ __all__ = [
     "ToolBudgetEnforcement",
     "ToolBudgetRecord",
     "ToolOrdinalBindingRecord",
+    "RetentionDeletionEvidenceRecord",
     "RetentionKind",
     "RetentionPolicyRecord",
     "RetentionScope",

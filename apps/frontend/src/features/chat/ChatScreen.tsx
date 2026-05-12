@@ -121,7 +121,6 @@ import {
 } from "./chatModel/citedToolSources";
 import { WorkspacePane } from "./components/workspace/WorkspacePane";
 import { useWorkspacePaneState } from "./components/workspace/useWorkspacePaneState";
-import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
 import { useSubagents } from "./components/workspace/useSubagents";
 import {
   useSubagentActivities,

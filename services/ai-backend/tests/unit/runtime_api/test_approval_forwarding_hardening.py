@@ -28,6 +28,7 @@ from agent_runtime.api.membership import (
 from agent_runtime.api.notifications import (
     InboxAndEmailNotificationDispatcher,
 )
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
@@ -849,7 +850,7 @@ class TestChainDepthColumn:
         # Seed a child row already at depth = MAX so the next forward
         # crosses the cap. The cap value lives on the service constant
         # so changing it forces this test (intentional coupling).
-        cap = RuntimeApiService.APPROVAL_FORWARD_MAX_CHAIN_DEPTH
+        cap = ApprovalCoordinator.APPROVAL_FORWARD_MAX_CHAIN_DEPTH
         parent = await _seed_run_and_pending_approval(store)
         store.approval_requests[parent.approval_id] = parent.model_copy(
             update={"chain_depth": cap}

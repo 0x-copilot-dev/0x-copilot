@@ -49,7 +49,7 @@ class RetentionAdminRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         rows = await persistence.list_retention_policies(org_id=org_id)
         return RetentionPolicyListResponse(
             policies=tuple(cls._to_view(row) for row in rows)
@@ -76,7 +76,7 @@ class RetentionAdminRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         rows = await persistence.list_retention_policies(org_id=org_id)
         resolver = RetentionPolicyResolver(
             org_id=org_id,
@@ -126,7 +126,7 @@ class RetentionAdminRoutes:
             ttl_seconds=payload.ttl_seconds,
             created_by_user_id=user_id,
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         persisted = await persistence.upsert_retention_policy(record)
         return cls._to_view(persisted)
 
@@ -141,7 +141,7 @@ class RetentionAdminRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        persistence = RuntimeApiRoutes.service(request).persistence
+        persistence = request.app.state.runtime_persistence
         await persistence.delete_retention_policy(org_id=org_id, policy_id=policy_id)
         return {"status": "deleted"}
 

@@ -58,3 +58,24 @@ class RetentionSweepOutcome(RuntimeContract):
     tombstoned: int = 0
     deleted: int = 0
     skipped_legal_hold: int = 0
+
+
+class RetentionDeletionEvidenceRecord(RuntimeContract):
+    """One row written to ``runtime_deletion_evidence`` per non-empty sweep outcome.
+
+    The existing table schema (migration 0001) uses generic column names
+    designed for user-initiated erasure flows. Until Phase 2 adds proper
+    sweeper columns, we write via a mapping documented in the adapter.
+    The ``reason`` field carries the full per-kind JSON context so
+    compliance reviewers can answer "what was deleted, when" without
+    parsing worker logs.
+    """
+
+    id: str = Field(default_factory=lambda: f"rde_{uuid4().hex}")
+    org_id: str
+    kind: RetentionKind
+    tombstoned: int = 0
+    deleted: int = 0
+    skipped_legal_hold: int = 0
+    dry_run: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

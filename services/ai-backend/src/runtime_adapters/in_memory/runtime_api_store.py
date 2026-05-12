@@ -142,6 +142,9 @@ class InMemoryRuntimeApiStore:
         # Retention policies (C8). Keyed by org_id; the per-(scope,
         # resource_id, kind) uniqueness is enforced at upsert time.
         self.retention_policies: dict[str, tuple] = {}
+        # Retention deletion evidence (C8 Phase 1). Ordered list so tests
+        # can assert on insertion order and non-empty / empty behaviour.
+        self.deletion_evidence: list = []
         # Workspace defaults (PR 1.6). Keyed by org_id; one row per org.
         self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
         # B8 — per-tool call-count + input-token budgets. Mirrors the
@@ -879,11 +882,15 @@ class InMemoryRuntimeApiStore:
         return RetentionSweepOutcome(
             org_id=org_id,
             kind=kind,
-            scanned=0,
             tombstoned=0,
-            hard_deleted=0,
+            deleted=0,
             skipped_legal_hold=0,
         )
+
+    async def insert_retention_deletion_evidence(self, record) -> None:
+        """Append a deletion evidence record (test-observable via self.deletion_evidence)."""
+
+        self.deletion_evidence.append(record)
 
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]

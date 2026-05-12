@@ -10,7 +10,8 @@ Runs alongside the runtime worker (similar lifecycle as
      conversation/user-scope policies still bite when the per-row
      handler reaches them via the WHERE clauses).
   4. ``sweep_retention_kind(...)`` — adapter-side SQL (per-kind strategy).
-  5. Emit per-tenant tally to OTel + ``runtime_audit_log``.
+  5. Emit per-tenant tally to OTel + write ``runtime_deletion_evidence``
+     row on every non-empty outcome (Phase 1).
 
 Disabled by default (``RETENTION_SWEEP_ENABLED=true`` to opt in) so
 existing deployments don't start tombstoning rows on upgrade.
@@ -21,9 +22,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 from agent_runtime.api.ports import PersistencePort
+from agent_runtime.observability.retention_metrics import RetentionMetrics
 from agent_runtime.persistence.records.retention import (
+    RetentionDeletionEvidenceRecord,
     RetentionKind,
     RetentionSweepOutcome,
 )
@@ -80,6 +84,7 @@ class RetentionSweeperLoop:
         persistence: PersistencePort,
         interval_seconds: float | None = None,
         dry_run: bool | None = None,
+        metrics: RetentionMetrics | None = None,
     ) -> None:
         self._persistence = persistence
         self._interval = (
@@ -97,6 +102,7 @@ class RetentionSweeperLoop:
                 RetentionSweeperLoopEnv.DRY_RUN, False
             )
         )
+        self._metrics = metrics if metrics is not None else RetentionMetrics()
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -151,6 +157,7 @@ class RetentionSweeperLoop:
                     and kind is not RetentionKind.CONTEXT_PAYLOADS
                 ):
                     continue
+                t0 = time.monotonic()
                 try:
                     outcome = await self._persistence.sweep_retention_kind(
                         org_id=org_id,
@@ -165,6 +172,10 @@ class RetentionSweeperLoop:
                         exc_info=True,
                     )
                     continue
+                elapsed = time.monotonic() - t0
+                self._metrics.record_sweep_duration(
+                    kind=kind.value, elapsed_seconds=elapsed
+                )
                 _LOGGER.info(
                     "retention_swept",
                     extra={
@@ -178,5 +189,51 @@ class RetentionSweeperLoop:
                         }
                     },
                 )
+                await self._record_metrics_and_evidence(outcome)
                 outcomes.append(outcome)
         return tuple(outcomes)
+
+    async def _record_metrics_and_evidence(
+        self, outcome: RetentionSweepOutcome
+    ) -> None:
+        """Emit OTel counters and write a deletion evidence row when non-empty.
+
+        Called after every successful sweep call. Evidence rows are written
+        even for dry-run sweeps (tagged ``dry_run=True``) so operators can
+        verify "what would have been swept" without reading logs.
+        """
+
+        kind_str = outcome.kind.value
+        if outcome.tombstoned:
+            self._metrics.record_swept_rows(
+                kind=kind_str,
+                action="tombstone",
+                count=outcome.tombstoned,
+                dry_run=self._dry_run,
+            )
+        if outcome.deleted:
+            self._metrics.record_swept_rows(
+                kind=kind_str,
+                action="delete",
+                count=outcome.deleted,
+                dry_run=self._dry_run,
+            )
+        # Write an evidence row whenever any rows were affected (or skipped
+        # due to legal hold) — even on dry-run so the table is queryable.
+        if outcome.tombstoned or outcome.deleted or outcome.skipped_legal_hold:
+            evidence = RetentionDeletionEvidenceRecord(
+                org_id=outcome.org_id,
+                kind=outcome.kind,
+                tombstoned=outcome.tombstoned,
+                deleted=outcome.deleted,
+                skipped_legal_hold=outcome.skipped_legal_hold,
+                dry_run=self._dry_run,
+            )
+            try:
+                await self._persistence.insert_retention_deletion_evidence(evidence)
+            except Exception:
+                _LOGGER.warning(
+                    "retention_evidence_insert_failed",
+                    extra={"metadata": {"org_id": outcome.org_id, "kind": kind_str}},
+                    exc_info=True,
+                )
