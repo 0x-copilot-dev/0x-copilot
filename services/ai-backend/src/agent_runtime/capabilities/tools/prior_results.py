@@ -35,6 +35,7 @@ class LoadPriorToolResultTool:
     async def ainvoke(
         self, raw_input: LoadPriorToolResultInput | Mapping[str, Any]
     ) -> dict[str, Any]:
+        """Validate input and delegate to the run-scoped loader to retrieve the observation."""
         parsed = self._parse(raw_input)
         if isinstance(parsed, dict):
             return parsed
@@ -63,6 +64,7 @@ class LoadPriorToolResultTool:
     def _parse(
         cls, raw_input: LoadPriorToolResultInput | Mapping[str, Any]
     ) -> LoadPriorToolResultInput | dict[str, Any]:
+        """Return a validated input model or a failure dict on missing/invalid observation_id."""
         if isinstance(raw_input, LoadPriorToolResultInput):
             return raw_input
         try:
@@ -75,6 +77,7 @@ class LoadPriorToolResultTool:
 
     @staticmethod
     def _fail(error_code: str, safe_message: str) -> dict[str, Any]:
+        """Return a normalized failure dict safe to return as the tool's result."""
         return {
             "ok": False,
             "error_code": error_code,
@@ -84,4 +87,5 @@ class LoadPriorToolResultTool:
     async def __call__(
         self, raw_input: LoadPriorToolResultInput | Mapping[str, Any]
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)

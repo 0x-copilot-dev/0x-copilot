@@ -44,12 +44,12 @@ from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi.testclient import TestClient
 
 from agent_runtime.api.constants import Messages
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
     RetentionScope,
 )
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import AgentRunStatus
@@ -84,13 +84,8 @@ class WorkspaceDefaultsFixtureMixin:
                 "RUNTIME_DEFAULT_MODEL": self.Values.DEFAULT_MODEL_NAME,
             }
         )
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         return TestClient(app), store
 
     def _headers(
@@ -595,7 +590,7 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
         )
 
         async def _exercise() -> str:
-            service: RuntimeApiService = client.app.state.runtime_api_service
+            run_coordinator = client.app.state.run_coordinator
             request = CreateRunRequest(
                 conversation_id="conv_x",
                 org_id=self.Values.ORG_ID,
@@ -609,7 +604,9 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
                     connector_scopes={},
                 ),
             )
-            request = await service._apply_workspace_default_model(request=request)
+            request = await run_coordinator._apply_workspace_default_model(
+                request=request
+            )
             assert request.model is not None
             return request.model.model_name or ""
 
@@ -628,7 +625,7 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
         )
 
         async def _exercise() -> bool:
-            service: RuntimeApiService = client.app.state.runtime_api_service
+            run_coordinator = client.app.state.run_coordinator
             request = CreateRunRequest(
                 conversation_id="conv_x",
                 org_id=self.Values.ORG_ID,
@@ -642,7 +639,9 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
                     connector_scopes={},
                 ),
             )
-            after = await service._apply_workspace_default_model(request=request)
+            after = await run_coordinator._apply_workspace_default_model(
+                request=request
+            )
             return after.model is None
 
         # No defaults persisted → no fallback applied; the resolver
@@ -669,7 +668,7 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
         )
 
         async def _exercise() -> str:
-            service: RuntimeApiService = client.app.state.runtime_api_service
+            run_coordinator = client.app.state.run_coordinator
             request = CreateRunRequest(
                 conversation_id="conv_x",
                 org_id=self.Values.ORG_ID,
@@ -685,7 +684,9 @@ class TestCreateRunModelFallbackChain(WorkspaceDefaultsFixtureMixin):
                     connector_scopes={},
                 ),
             )
-            after = await service._apply_workspace_default_model(request=request)
+            after = await run_coordinator._apply_workspace_default_model(
+                request=request
+            )
             assert after.model is not None
             return after.model.model_name or ""
 

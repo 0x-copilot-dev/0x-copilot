@@ -1,26 +1,4 @@
-"""Per-run buffer that coalesces ``MODEL_DELTA`` chunks (P4 Stage 2).
-
-The streaming executor used to call ``RuntimeEventProducer.append_api_event``
-once per provider chunk. A long completion produces 100+ chunks in quick
-succession; each was its own DB round-trip. This buffer accumulates the
-chunks for a configurable window and flushes them as one batched append via
-``RuntimeEventProducer.append_api_events_batch`` (one transaction, one
-multi-row INSERT in Postgres).
-
-Rules:
-  * Coalescing is opt-in per ``RuntimeExecutionSettings.delta_coalesce_window_ms``.
-    Default is 0 (passthrough — every chunk is appended individually,
-    matching pre-Stage-2 behavior). Stage 2 ships dark.
-  * One delta per envelope is preserved on the wire — the buffer batches
-    the *DB write*, not the SSE frame. SSE clients still see one
-    ``MODEL_DELTA`` envelope per chunk and resume / replay semantics are
-    unchanged.
-  * The streaming executor explicitly flushes before any non-``MODEL_DELTA``
-    event so envelope ordering is preserved (a TOOL_CALL never lands ahead
-    of the deltas that preceded it).
-  * The executor must call ``flush()`` from a ``finally`` block so a
-    cancelled or failing stream never strands buffered chunks.
-"""
+"""Per-run buffer that coalesces ``MODEL_DELTA`` chunks into batched DB writes to reduce round-trips."""
 
 from __future__ import annotations
 
@@ -35,7 +13,7 @@ from runtime_api.schemas import RunRecord, RuntimeApiEventType, RuntimeEventEnve
 
 @dataclass
 class DeltaCoalescer:
-    """Buffer ``MODEL_DELTA`` chunks for a coalesce window."""
+    """Buffer ``MODEL_DELTA`` chunks and flush them as a single batched DB write when the window or chunk cap is reached."""
 
     producer: RuntimeEventProducer
     run: RunRecord
@@ -48,10 +26,12 @@ class DeltaCoalescer:
 
     @property
     def coalescing_enabled(self) -> bool:
+        """Return ``True`` when the coalesce window is positive (batching active)."""
         return self.window_ms > 0
 
     @property
     def pending(self) -> int:
+        """Return the number of buffered chunks not yet flushed to the DB."""
         return len(self._buffer)
 
     async def add_delta(
@@ -112,10 +92,9 @@ class DeltaCoalescer:
         )
 
     async def __aenter__(self) -> "DeltaCoalescer":
+        """Enter the async context manager."""
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        # Always flush — even on cancellation / exception. Buffered
-        # chunks lost to a worker crash are no worse than the model
-        # output that was being streamed when the worker died.
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Flush on exit, even on cancellation, so buffered chunks are never stranded."""
         await self.flush()

@@ -13,12 +13,18 @@ class Keys:
     """Stable string keys used by the dynamic tool-loading package."""
 
     class Builtin:
+        """Built-in tool name constants."""
+
         LOAD_TOOL_SPEC = "load_tool_spec"
 
     class Encoding:
+        """Supported text encoding labels."""
+
         UTF_8 = "utf-8"
 
     class Fields:
+        """Canonical field name strings for Pydantic validators and serialization."""
+
         ARGS_SCHEMA = "args_schema"
         CONNECTOR = "connector"
         DESCRIPTION = "description"
@@ -32,13 +38,19 @@ class Keys:
         TOOL_NAME = "tool_name"
 
     class Methods:
+        """Method name constants checked via ``getattr`` on provider instances."""
+
         LIST_TOOL_CARDS = "list_tool_cards"
         LOAD_TOOL_SPEC = "load_tool_spec"
 
     class Schema:
+        """JSON schema field name constants."""
+
         TYPE = "type"
 
     class Serialization:
+        """Pydantic serialization mode tokens."""
+
         JSON = "json"
 
 
@@ -65,9 +77,13 @@ class Messages:
     """Centralized public and validation messages for dynamic tools."""
 
     class Builtin:
+        """Built-in tool description strings sourced from the prompts package."""
+
         LOAD_TOOL_SPEC_DESCRIPTION = _LOAD_TOOL_SPEC_DESCRIPTION
 
     class Errors:
+        """Safe public error messages for tool-loading failures."""
+
         CONNECTOR_LOAD_FAILED = "The connector could not load this tool right now."
         DUPLICATE_TOOL_REGISTRATION = (
             "Multiple tools are registered with the same name."
@@ -85,12 +101,16 @@ class Messages:
         TOOL_SPEC_INVALID = "The selected tool has an invalid specification."
 
     class SpecMismatch:
+        """Spec-mismatch messages emitted when a provider returns inconsistent data."""
+
         CONNECTOR = "The selected tool returned mismatched connector metadata."
         NAME = "The selected tool returned a mismatched specification."
         PERMISSIONS = "The selected tool returned mismatched permission metadata."
         RISK = "The selected tool returned mismatched risk metadata."
 
     class Validation:
+        """Validation failure messages used by Pydantic field and model validators."""
+
         HIGH_RISK_CONFIRMATION_REQUIRED = (
             "high-risk tools must require explicit confirmation"
         )
@@ -100,40 +120,50 @@ class Messages:
 
         @classmethod
         def explicit_permission_scopes(cls, field_name: str) -> str:
+            """Return the explicit-scopes validation message for ``field_name``."""
             return f"{field_name} must contain explicit permission scopes"
 
         @classmethod
         def iterable_required(cls, field_name: str) -> str:
+            """Return the iterable-required validation message for ``field_name``."""
             return f"{field_name} must be an iterable"
 
         @classmethod
         def iterable_not_string(cls, field_name: str) -> str:
+            """Return the non-string-iterable validation message for ``field_name``."""
             return f"{field_name} must be an iterable, not a string"
 
         @classmethod
         def json_schema_object(cls, field_name: str) -> str:
+            """Return the JSON-schema-object validation message for ``field_name``."""
             return f"{field_name} must be a JSON schema object"
 
         @classmethod
         def json_serializable(cls, field_name: str) -> str:
+            """Return the JSON-serialisable validation message for ``field_name``."""
             return f"{field_name} must be JSON serializable"
 
         @classmethod
         def nonempty_string(cls, field_name: str) -> str:
+            """Return the non-empty-string validation message for ``field_name``."""
             return f"{field_name} must not be empty"
 
         @classmethod
         def schema_size_exceeded(cls, field_name: str) -> str:
+            """Return the schema-size-exceeded validation message for ``field_name``."""
             return f"{field_name} exceeds the configured schema size"
 
         @classmethod
         def schema_type_required(cls, field_name: str) -> str:
+            """Return the schema-type-required validation message for ``field_name``."""
             return f"{field_name} must include a JSON schema type"
 
         @classmethod
         def stable_slug(cls, field_name: str) -> str:
+            """Return the stable-slug validation message for ``field_name``."""
             return f"{field_name} must be a stable slug"
 
         @classmethod
         def string_required(cls, field_name: str) -> str:
+            """Return the string-required validation message for ``field_name``."""
             return f"{field_name} must be a string"

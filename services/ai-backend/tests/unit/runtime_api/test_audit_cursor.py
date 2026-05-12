@@ -9,16 +9,15 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
 
 class TestAuditCursor:
     def _client(self) -> TestClient:
-        sync_store = InMemoryRuntimeApiStore()
-        async_store = sync_store
+        store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",
@@ -26,13 +25,10 @@ class TestAuditCursor:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
-        service = RuntimeApiService(
-            persistence=async_store,
-            event_store=async_store,
-            queue=async_store,
-            settings=settings,
+        ports = RuntimeAdapterFactory.from_store(store)
+        return TestClient(
+            RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         )
-        return TestClient(RuntimeApiAppFactory.create_app(service))
 
     def test_endpoint_returns_empty_in_dev(self) -> None:
         """Without ENTERPRISE_SERVICE_TOKEN the route is open in dev; the

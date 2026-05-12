@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from runtime_api.app import RuntimeApiAppFactory
 from agent_runtime.api.constants import Messages
-from agent_runtime.api.service import RuntimeApiService
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from agent_runtime.settings import RuntimeSettings
 
@@ -59,13 +59,8 @@ class AdminOverrideFixtureMixin:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         return TestClient(app), store
 
     def _headers(

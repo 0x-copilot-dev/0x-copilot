@@ -129,6 +129,7 @@ class DraftBackend(BackendProtocol):
         user_id: str,
         emit_event: Callable[[DraftRecord], Awaitable[None]] | None = None,
     ) -> None:
+        """Initialise the draft backend bound to a store, run context, and event emitter."""
         self._store = store
         self._org_id = org_id
         self._conversation_id = conversation_id
@@ -145,6 +146,7 @@ class DraftBackend(BackendProtocol):
     # -- BackendProtocol surface ---------------------------------------------
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        """Synchronous wrapper for :meth:`awrite`."""
         return _run_sync(self.awrite(file_path, content))
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
@@ -166,6 +168,7 @@ class DraftBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,  # noqa: FBT001, FBT002
     ) -> EditResult:
+        """Synchronous wrapper for :meth:`aedit`."""
         return _run_sync(self.aedit(file_path, old_string, new_string, replace_all))
 
     async def aedit(
@@ -211,6 +214,7 @@ class DraftBackend(BackendProtocol):
         offset: int = 0,
         limit: int = 2000,
     ) -> ReadResult:
+        """Synchronous wrapper for :meth:`aread`."""
         return _run_sync(self.aread(file_path, offset, limit))
 
     async def aread(
@@ -237,6 +241,7 @@ class DraftBackend(BackendProtocol):
         )
 
     def ls(self, path: str) -> LsResult:
+        """Synchronous wrapper for :meth:`als`."""
         return _run_sync(self.als(path))
 
     async def als(self, path: str) -> LsResult:
@@ -269,6 +274,7 @@ class DraftBackend(BackendProtocol):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
+        """Synchronous wrapper for :meth:`agrep`."""
         return _run_sync(self.agrep(pattern, path, glob))
 
     async def agrep(
@@ -298,6 +304,7 @@ class DraftBackend(BackendProtocol):
         return GrepResult(matches=matches)
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Synchronous wrapper for :meth:`aglob`."""
         return _run_sync(self.aglob(pattern, path))
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
@@ -415,6 +422,7 @@ def make_event_emitter(
     """
 
     async def _emit(record: DraftRecord) -> None:
+        """Emit a draft-change event with the record payload to the run's event stream."""
         payload = {
             Keys.Field.RUN_ID: run.run_id,
             Keys.Field.CONVERSATION_ID: run.conversation_id,

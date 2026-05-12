@@ -1,4 +1,4 @@
-"""Pure-Python message-copy helper for the conversation fork (PR 6.2).
+"""Pure-Python message-copy helper for the conversation fork.
 
 The fork service hands this helper a sequence of source messages and a
 target conversation; the helper rewrites IDs into a fresh map, resets

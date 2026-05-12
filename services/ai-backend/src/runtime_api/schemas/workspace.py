@@ -1,8 +1,8 @@
-"""HTTP IO schemas for the Workspace pane data feeds (PR 1.5).
+"""HTTP IO schemas for the Workspace pane subagent and source data feeds.
 
-The wire surface is intentionally narrow: two GET responses + one query enum.
-Both responses are conversation-scoped projections; live updates over SSE
-reuse existing event types (``SUBAGENT_*`` and PR 1.1's ``source_ingested``).
+The wire surface is intentionally narrow: two GET responses and one query enum.
+Both responses are conversation-scoped projections; live updates over SSE reuse
+existing event types (``SUBAGENT_*`` and ``source_ingested``).
 """
 
 from __future__ import annotations

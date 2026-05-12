@@ -1,38 +1,26 @@
-"""Per-user inbox event bus for SSE push (PR 1.4.1).
+"""Per-user inbox event bus for SSE push notifications.
 
-This is the per-user counterpart to the run-scoped SSE bus
-(``runtime_api/sse/event_bus.py``). The inbox bus fans approval-assignment
-and approval-resolution events to the recipient user's session, whose
-identity is *not* a participant in the source run's conversation.
+Per-user counterpart to the run-scoped SSE bus. Fans approval-assignment and
+approval-resolution events to the recipient user's session — whose identity is
+not a participant in the source run's conversation.
 
-Why a separate bus, instead of a slot inside the existing run stream?
-The recipient is not authorized to subscribe to the source run's events
-— the conversation belongs to a different user. Routing inbox events
-through a per-user channel keeps the visibility contract clean.
+A separate bus is needed because the recipient is not authorised to subscribe to
+the source run's event stream; routing inbox events through a per-user channel
+keeps the visibility contract clean.
 
-Backends (P2 — see ``docs/refactor/02-sse-listen-notify.md`` §8):
+Two backends:
 
 * :class:`InMemoryInboxBus` — process-local deque + ``asyncio.Condition``
-  pub/sub. The historical default. Works only when API and worker share a
-  process. In production with separate processes, a publish from the
-  worker never reaches API-side subscribers.
-* Postgres-backed inbox bus — TODO follow-up. Requires an
-  ``inbox_events`` table (per-user retention, multi-replica safe) plus
-  ``LISTEN/NOTIFY runtime_inbox_v1`` for the wakeup. Tracked separately
-  because the storage migration is independent of the in-memory→postgres
-  switch on the run bus.
+  pub/sub. Works only when API and worker share a process. In production with
+  separate processes, a publish from the worker never reaches API-side
+  subscribers.
+* Postgres-backed inbox bus — planned follow-up. Requires an ``inbox_events``
+  table plus ``LISTEN/NOTIFY runtime_inbox_v1`` for cross-process wakeup.
 
-Schema:
-
-  - ``inbox_events`` (in-memory only for v1 — postgres storage is the
-    follow-up that pairs with the LISTEN/NOTIFY backend).
-  - ``inbox_event_cursors(user_id pk, latest_sequence_no)`` for replay.
-
-The bus exposes:
+The bus surface:
 
   - ``publish(user_id, envelope)`` — append + wake subscribers.
-  - ``wait(user_id, timeout)`` — block a subscriber until next publish
-    or timeout.
+  - ``wait(user_id, timeout)`` — block a subscriber until next publish or timeout.
   - ``list_after(user_id, after_sequence)`` — replay for SSE reconnect.
 """
 

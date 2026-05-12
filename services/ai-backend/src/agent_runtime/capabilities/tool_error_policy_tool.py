@@ -60,21 +60,19 @@ class ToolErrorPolicyTool(BaseTool):
     policy: ToolErrorPolicy = DefaultToolErrorPolicy()  # type: ignore[assignment]
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
+        """Sync invocation path: classify exceptions and surface or re-raise per policy."""
         try:
             return self.inner._run(*args, **kwargs)
         except _NEVER_CLASSIFY:
             raise
         except RunFatalToolError:
-            # Typed fatal errors propagate. The run handler catches and
-            # routes through the coordinator.
+            # Typed fatal errors always propagate; the run handler routes them.
             raise
         except BaseException as exc:  # noqa: BLE001 — intentional breadth
             classification = self.policy.classify(exc, tool=self.inner)
             if classification.outcome is ToolErrorOutcome.FAIL_RUN:
-                # The policy decided this should end the run even though
-                # the exception wasn't a RunFatalToolError subclass.
-                # Surface as RunFatalToolError so the run handler routes
-                # it correctly.
+                # Policy decided this exception should end the run; wrap as
+                # RunFatalToolError so the handler routes it correctly.
                 raise RunFatalToolError(
                     classification.sanitized_message,
                     audit_summary=classification.audit_trace,
@@ -83,6 +81,7 @@ class ToolErrorPolicyTool(BaseTool):
             return classification.to_llm_message_content()
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+        """Async invocation path: classify exceptions and surface or re-raise per policy."""
         try:
             return await self.inner._arun(*args, **kwargs)
         except _NEVER_CLASSIFY:
@@ -105,6 +104,7 @@ class ToolErrorPolicyTool(BaseTool):
         *,
         sync: bool,
     ) -> None:
+        """Log a structured ``tool_error_surfaced_to_llm`` event."""
         _LOGGER.info(
             "tool_error_surfaced_to_llm",
             extra={
@@ -134,14 +134,17 @@ class ToolErrorPolicyRegistry:
         inner: object,
         policy: ToolErrorPolicy | None = None,
     ) -> None:
+        """Wrap ``inner`` registry; default policy when none is supplied."""
         self._inner = inner
         self._policy: ToolErrorPolicy = policy or DefaultToolErrorPolicy()
 
     def list_available_tools(self, context: object) -> tuple[object, ...]:
+        """Return every tool from the inner registry wrapped in :class:`ToolErrorPolicyTool`."""
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
         return tuple(self._wrap(tool) for tool in rendered)
 
     def _wrap(self, tool: object) -> object:
+        """Wrap a single ``BaseTool`` in :class:`ToolErrorPolicyTool`; pass non-tools through unchanged."""
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, ToolErrorPolicyTool):

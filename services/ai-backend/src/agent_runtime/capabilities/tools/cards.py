@@ -74,13 +74,9 @@ class ToolDisplayTemplate(RuntimeContract):
     result_summary_template: str | None = Field(default=None, max_length=480)
     result_preview_path: str | None = Field(default=None, max_length=120)
     result_preview_row: dict[str, str] | None = Field(default=None)
-    # Polish-removal Phase 2.A (docs/refactor/01-presentation-polish-removal.md):
-    # ``True`` when the template was produced by a synthesis path
-    # (``DisplayMetadataMiddleware.synthesise_for_mcp`` or the planned
-    # ``ToolDisplayTemplate.from_tool_name`` helper). Tier 3 (Phase 3 —
-    # agent-supplied ``_display_*`` in tool args) consults this flag to
-    # decide whether to override: synthetic templates yield to the agent's
-    # copy; author-written templates always win.
+    # ``True`` when produced by a synthesis path (e.g. ``DisplayMetadataMiddleware``).
+    # Agent-supplied ``_display_*`` overrides are applied only when this flag is set;
+    # author-written templates always win.
     synthetic: bool = False
 
 
@@ -104,21 +100,25 @@ class ToolCard(RuntimeContract):
     @field_validator(Keys.Fields.NAME, Keys.Fields.CONNECTOR)
     @classmethod
     def _normalize_slug_field(cls, value: object, info: ValidationInfo) -> str:
+        """Coerce slug fields to lowercase stable identifiers."""
         return ToolValueNormalizer.normalize_slug(value, info.field_name)
 
     @field_validator(Keys.Fields.DISPLAY_NAME, Keys.Fields.SHORT_DESCRIPTION)
     @classmethod
     def _normalize_label(cls, value: str, info: ValidationInfo) -> str:
+        """Strip and validate non-empty display label fields."""
         return ToolValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
     @field_validator(Keys.Fields.TAGS, mode="before")
     @classmethod
     def _normalize_tags(cls, value: object) -> frozenset[str]:
+        """Coerce tag input to a frozenset of lowercase slug strings."""
         return ToolValueNormalizer.normalize_slug_set(value, Keys.Fields.TAGS)
 
     @field_validator(Keys.Fields.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
+        """Coerce required-scopes input to a frozenset of valid scope strings."""
         return ToolValueNormalizer.normalize_scope_set(
             value, Keys.Fields.REQUIRED_SCOPES
         )
@@ -135,17 +135,20 @@ class ToolPermissionPolicy(RuntimeContract):
     @field_validator(Keys.Fields.CONNECTOR)
     @classmethod
     def _normalize_connector(cls, value: object) -> str:
+        """Coerce connector to a stable slug identifier."""
         return ToolValueNormalizer.normalize_slug(value, Keys.Fields.CONNECTOR)
 
     @field_validator(Keys.Fields.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
+        """Coerce required-scopes input to a frozenset of valid scope strings."""
         return ToolValueNormalizer.normalize_scope_set(
             value, Keys.Fields.REQUIRED_SCOPES
         )
 
     @model_validator(mode="after")
     def _risky_tools_require_confirmation(self) -> "ToolPermissionPolicy":
+        """Reject high-risk tool specs that omit explicit confirmation."""
         if self.risk_level in {ToolRiskLevel.HIGH, ToolRiskLevel.CRITICAL}:
             if not self.requires_confirmation:
                 msg = Messages.Validation.HIGH_RISK_CONFIRMATION_REQUIRED
@@ -171,11 +174,13 @@ class LoadedToolSpec(RuntimeContract):
     @field_validator(Keys.Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
+        """Coerce tool name to a stable slug identifier."""
         return ToolValueNormalizer.normalize_slug(value, Keys.Fields.NAME)
 
     @field_validator(Keys.Fields.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: str) -> str:
+        """Strip and validate the tool description."""
         return ToolValueNormalizer.normalize_nonempty_string(
             value, Keys.Fields.DESCRIPTION
         )
@@ -185,6 +190,7 @@ class LoadedToolSpec(RuntimeContract):
     def _validate_json_schema(
         cls, value: JsonSchema, info: ValidationInfo
     ) -> JsonSchema:
+        """Validate that schema fields are JSON-serialisable mappings with a ``type`` key."""
         return ToolSchemaValidator.validate_json_schema(value, info.field_name)
 
 
@@ -197,6 +203,7 @@ class ToolLoadRequest(RuntimeContract):
     @field_validator(Keys.Fields.TOOL_NAME)
     @classmethod
     def _normalize_tool_name(cls, value: object) -> str:
+        """Coerce the requested tool name to a stable slug."""
         return ToolValueNormalizer.normalize_slug(value, Keys.Fields.TOOL_NAME)
 
 
@@ -212,6 +219,7 @@ class ToolLoadError(RuntimeContract):
     @field_validator(Keys.Fields.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: str) -> str:
+        """Strip and validate the public-facing error message."""
         return ToolValueNormalizer.normalize_nonempty_string(
             value, Keys.Fields.SAFE_MESSAGE
         )
@@ -219,6 +227,7 @@ class ToolLoadError(RuntimeContract):
     @field_validator(Keys.Fields.TOOL_NAME)
     @classmethod
     def _normalize_optional_tool_name(cls, value: str | None) -> str | None:
+        """Coerce optional tool name to a stable slug, or pass through ``None``."""
         if value is None:
             return None
         return ToolValueNormalizer.normalize_slug(value, Keys.Fields.TOOL_NAME)
@@ -232,6 +241,7 @@ class ToolLoadResult(RuntimeContract):
 
     @model_validator(mode="after")
     def _require_exactly_one_outcome(self) -> "ToolLoadResult":
+        """Enforce that exactly one of ``loaded_spec`` or ``error`` is set."""
         if (self.loaded_spec is None) == (self.error is None):
             msg = Messages.Validation.TOOL_LOAD_RESULT_EXACTLY_ONE_OUTCOME
             raise ValueError(msg)
@@ -239,6 +249,7 @@ class ToolLoadResult(RuntimeContract):
 
     @classmethod
     def ok(cls, loaded_spec: LoadedToolSpec) -> "ToolLoadResult":
+        """Return a successful load result wrapping ``loaded_spec``."""
         return cls(loaded_spec=loaded_spec)
 
     @classmethod
@@ -251,6 +262,7 @@ class ToolLoadResult(RuntimeContract):
         tool_name: str | None = None,
         correlation_id: str | None = None,
     ) -> "ToolLoadResult":
+        """Return a failure load result with a typed ``ToolLoadError``."""
         return cls(
             error=ToolLoadError(
                 code=code,
@@ -263,6 +275,7 @@ class ToolLoadResult(RuntimeContract):
 
     @property
     def succeeded(self) -> bool:
+        """Return ``True`` when the load completed without error."""
         return self.loaded_spec is not None
 
 
@@ -289,6 +302,7 @@ class ToolSchemaValidator:
 
     @classmethod
     def validate_json_schema(cls, value: JsonSchema, field_name: str) -> JsonSchema:
+        """Validate that ``value`` is a JSON-serialisable mapping with a ``type`` key."""
         if not isinstance(value, Mapping):
             msg = Messages.Validation.json_schema_object(field_name)
             raise ValueError(msg)

@@ -19,16 +19,15 @@ class Keys:
         API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
         APPROVAL_KIND = "approval_kind"
-        # PR 1.4 — two-stage approval forwarding bookkeeping.
+        # Two-stage approval forwarding bookkeeping fields.
         ACTION_SUMMARY = "action_summary"
         CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
         FORWARD_TO = "forward_to"
         FORWARDED_AT = "forwarded_at"
         FORWARDED_BY_USER_ID = "forwarded_by_user_id"
         FORWARDED_TO_USER_ID = "forwarded_to_user_id"
-        # PR 3.3 — non-blocking MCP discovery payload fields. The card
-        # variant is keyed off ``DISCOVERY_REASON`` (presence flips it
-        # from a blocking auth gate to a Connect/Skip suggestion).
+        # Non-blocking MCP discovery payload fields. Presence of ``DISCOVERY_REASON``
+        # flips the event from a blocking auth gate to a Connect/Skip suggestion.
         DISCOVERY_REASON = "discovery_reason"
         EXPECTED_VALUE = "expected_value"
         ARGS = "args"
@@ -104,7 +103,7 @@ class Keys:
         """FastAPI route ``name=`` values used for URL reverse-lookup."""
 
         APPROVAL_DECISION = "approval_decision"
-        # PR 4.4.6.4 — undo within the 60s reversibility window.
+        # Undo within the 60 s reversibility window.
         APPROVAL_UNDO = "approval_undo"
         CANCEL_RUN = "cancel_run"
         CREATE_CONVERSATION = "create_conversation"
@@ -118,11 +117,11 @@ class Keys:
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
-        # PR 1.4.1 — recipient inbox endpoint + per-user SSE channel.
+        # Recipient inbox endpoint + per-user SSE channel.
         LIST_APPROVALS = "list_approvals"
         STREAM_INBOX = "stream_inbox"
         UPDATE_CONVERSATION_CONNECTORS = "update_conversation_connectors"
-        # Usage endpoints (B4)
+        # Usage endpoints.
         USAGE_ME = "usage_me"
         USAGE_ME_CONVERSATIONS = "usage_me_conversations"
         USAGE_RUN = "usage_run"
@@ -130,45 +129,41 @@ class Keys:
         USAGE_ORG = "usage_org"
         USAGE_ORG_SUBAGENTS = "usage_org_subagents"
         USAGE_ORG_PURPOSE = "usage_org_purpose"
-        # Budget endpoints (B7)
+        # Budget endpoints.
         BUDGETS_LIST = "budgets_list"
         BUDGETS_CREATE = "budgets_create"
         BUDGETS_UPDATE = "budgets_update"
         BUDGETS_DELETE = "budgets_delete"
         BUDGETS_ME = "budgets_me"
-        # Drafts (PR 1.3)
+        # Draft endpoints.
         LIST_DRAFTS = "list_drafts"
         GET_DRAFT = "get_draft"
         PATCH_DRAFT = "patch_draft"
         SEND_DRAFT = "send_draft"
         DISCARD_DRAFT = "discard_draft"
-        # Workspace pane feeds (PR 1.5)
+        # Workspace pane feed endpoints.
         LIST_SUBAGENTS = "list_subagents"
         LIST_SOURCES = "list_sources"
-        # Retention admin (C8)
+        # Retention admin endpoints.
         RETENTION_LIST = "retention_list"
         RETENTION_UPSERT = "retention_upsert"
         RETENTION_DELETE = "retention_delete"
-        # PR 4.3 — read-only effective TTL view exposed to any tenant
-        # member (the Privacy & data Settings panel renders against it).
+        # Read-only effective TTL view exposed to tenant members (Privacy & data settings).
         RETENTION_EFFECTIVE = "retention_effective"
-        # PR 1.6 — workspace defaults + conversation lifecycle.
+        # Workspace defaults + conversation lifecycle endpoints.
         GET_WORKSPACE_DEFAULTS = "get_workspace_defaults"
         UPDATE_WORKSPACE_DEFAULTS = "update_workspace_defaults"
         UPDATE_CONVERSATION = "update_conversation"
         DELETE_CONVERSATION = "delete_conversation"
         RESTORE_CONVERSATION = "restore_conversation"
-        # PR 4.3 — workspace data lifecycle stubs (export queues + audited
-        # delete-all attempt). The actual export pipeline + cascade-delete
-        # job land in dedicated follow-ups.
+        # Workspace data lifecycle endpoints (export queue + audited delete-all).
         REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
         DELETE_WORKSPACE_DATA = "delete_workspace_data"
-        # PR 6.2 — recipient forks a shared chat into their own workspace.
+        # Recipient forks a shared chat into their own workspace.
         FORK_SHARE = "fork_share"
-        # PR A3 / 8.0.3c — owner forks their own conversation from a
-        # message ("Retry from here"). Same target conversation row shape
-        # as the share-fork path; the difference is in the source-side
-        # validation (own-org only, no share token).
+        # Owner forks their own conversation from a message ("Retry from here").
+        # Same target row shape as the share-fork path; difference is in
+        # source-side validation (own-org only, no share token).
         FORK_CONVERSATION = "fork_conversation"
 
 
@@ -183,11 +178,9 @@ class Values:
     DEFAULT_MESSAGE_LIMIT = 50
     MAX_MESSAGE_LIMIT = 200
     SSE_EVENT_NAME = "runtime_event"
-    # PR 1.4.1 — sentinel actor for system-driven approval rejections
-    # (auto-expiry sweeper, membership-revocation cascade). The audit
-    # emitter sees this and records ``actor_type=system`` instead of
-    # ``user`` so SIEM exports distinguish operator-driven from
-    # background-driven rejections.
+    # Sentinel actor for system-driven approval rejections (expiry sweeper,
+    # membership-revocation cascade). The audit emitter records ``actor_type=system``
+    # so SIEM exports distinguish background-driven from operator-driven rejections.
     SYSTEM_USER_ID = "system:runtime"
     DEFAULT_ASSIGNED_APPROVAL_LIMIT = 50
     MAX_ASSIGNED_APPROVAL_LIMIT = 200
@@ -199,10 +192,9 @@ class Values:
         CANCELLED = "cancelled"
         COMPLETED = "completed"
         FAILED = "failed"
-        # PR 1.4 — wire-level status emitted on APPROVAL_RESOLVED for the
-        # parent row of a forwarded chain. Distinguishes the "the user
-        # forwarded it on" outcome from approve / reject so the FE renders
-        # a "Waiting on @marcus" pill instead of a resolved record.
+        # Wire-level status emitted on APPROVAL_RESOLVED for the parent of a
+        # forwarded chain. Distinguishes "forwarded on" from approve/reject so
+        # the frontend renders a "Waiting on @..." pill instead of a resolved record.
         FORWARDED = "forwarded"
         QUEUED = "queued"
         RUNNING = "running"
@@ -218,10 +210,10 @@ class Values:
         READ_FILE = "read_file"
         RG = "rg"
         SEARCH_FILES = "search_files"
-        # PR 3.3 — non-blocking MCP discovery tool. Agent calls this when
-        # an *unauthenticated* MCP server would improve the answer; the
-        # tool emits an ``mcp_auth_required`` event with ``discovery_reason``
-        # set so the FE renders a Connect/Skip card without pausing the run.
+        # Non-blocking MCP discovery tool. Agent calls this when an unauthenticated
+        # MCP server would improve the answer; emits ``mcp_auth_required`` with
+        # ``discovery_reason`` so the frontend renders a Connect/Skip card without
+        # pausing the run.
         SUGGEST_MCP_CONNECTOR = "suggest_mcp_connector"
         TASK = "task"
         UNKNOWN_TOOL = "unknown_tool"
@@ -259,9 +251,8 @@ class Messages:
         """User-facing error strings for HTTP 4xx responses."""
 
         APPROVAL_NOT_FOUND = "Approval request was not found for this scope."
-        # PR 1.4 — forwarding-target validation. Messages are deliberately
-        # generic and do not reveal whether the target user exists in
-        # another tenant.
+        # Forwarding-target validation messages are deliberately generic and do not
+        # reveal whether the target user exists in another tenant.
         APPROVAL_FORWARD_INVALID_TARGET = (
             "Forward target user is not an active member of this workspace."
         )
@@ -277,61 +268,48 @@ class Messages:
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
         SAFE_FALLBACK = "The runtime API could not complete the request safely."
-        # PR 1.6 — workspace defaults model validation. Messages stay
-        # generic (no leaking the catalog membership rules) and pair
-        # with a 422 so the FE can render a field-level error.
+        # Workspace defaults model validation. Messages stay generic (no leaking
+        # catalog membership rules) and pair with 422 for field-level FE rendering.
         UNKNOWN_MODEL_PROVIDER = "Default model provider is not in the catalog."
         UNKNOWN_MODEL_NAME = "Default model name is not in the catalog."
 
     class Audit:
         """Action-name strings written to audit log rows."""
 
-        # PR 1.4 — append-only audit action for the forward link. The
-        # parent's final outcome is still ``approval_decision_recorded``
-        # (the existing action). ``approval.forward`` records the act of
-        # forwarding with chain_parent_approval_id metadata so SIEM
-        # exports can reconstruct chains end-to-end.
+        # Append-only audit action for the forward link. Records the act of forwarding
+        # with ``chain_parent_approval_id`` metadata so SIEM exports can reconstruct
+        # chains end-to-end.
         APPROVAL_FORWARD = "approval.forward"
-        # PR 3.3 — non-blocking MCP discovery suggestion. Recorded when
-        # the agent surfaces a Connect/Skip card via
-        # ``suggest_mcp_connector``. Keeps the audit chain consistent
-        # with PR 1.4 forwarded events; SIEM exports can correlate
-        # discovery suggestions with subsequent ``mcp.auth.granted`` /
-        # ``approval_decision_recorded`` rows when the user resolves.
+        # Non-blocking MCP discovery suggestion audit action. Recorded when the agent
+        # surfaces a Connect/Skip card. Correlatable with subsequent
+        # ``mcp.auth.granted`` / ``approval_decision_recorded`` rows when the user resolves.
         MCP_DISCOVERY_SUGGESTED = "mcp.discovery.suggested"
-        # PR 1.4.1 — reasons recorded in audit metadata when a system
-        # actor (the expiry sweeper) auto-rejects a pending approval.
-        # Distinct values feed SIEM dashboards and operational queries.
+        # Reasons recorded in audit metadata when a system actor auto-rejects a
+        # pending approval. Distinct values feed SIEM dashboards and operational queries.
         APPROVAL_REASON_EXPIRED = "expired"
         APPROVAL_REASON_RECIPIENT_REVOKED = "recipient_membership_revoked"
-        # PR 1.2 — per-chat connector scope mutation; metadata captures
-        # ``before`` / ``after`` / ``diff_keys`` for forensic replay.
+        # Per-chat connector scope mutation; metadata captures ``before`` / ``after``
+        # / ``diff_keys`` for forensic replay.
         CONVERSATION_CONNECTORS_UPDATE = "conversation.connectors.update"
-        # PR 1.6 — workspace defaults + conversation lifecycle audit.
-        # ``WORKSPACE_DEFAULTS_UPDATE`` metadata cross-references the
-        # ``retention_policies`` rows it inserted/updated via
-        # ``retention_policy_ids`` so SIEM can chase one event back to
-        # all the storage rows it affected.
+        # Workspace defaults + conversation lifecycle audit. ``WORKSPACE_DEFAULTS_UPDATE``
+        # metadata cross-references the ``retention_policies`` rows it inserted/updated
+        # via ``retention_policy_ids`` so SIEM can chase one event back to all affected rows.
         WORKSPACE_DEFAULTS_UPDATE = "workspace.defaults.update"
         CONVERSATION_UPDATE = "conversation.update"
         CONVERSATION_DELETE = "conversation.delete"
         CONVERSATION_RESTORE = "conversation.restore"
-        # PR 4.3 — workspace behavior overrides + privacy / export.
-        # ``WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE`` carries the full
-        # before/after blob (system_prompt_override, temperature, citation
-        # density, refusal behavior, default_reasoning_effort,
-        # training_data_opt_out). The dedicated ``training_opt_out`` row
-        # is split out because compliance auditors search for the boolean
-        # transition by action name without parsing JSONB diffs.
+        # Workspace behavior overrides audit. The ``WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE``
+        # action carries the full before/after blob. ``WORKSPACE_TRAINING_OPT_OUT_UPDATE``
+        # is split out so compliance auditors can search by action name without
+        # parsing JSONB diffs.
         WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE = "workspace.behavior_overrides.update"
         WORKSPACE_TRAINING_OPT_OUT_UPDATE = "workspace.training_opt_out.update"
-        # ``WORKSPACE_EXPORT_REQUEST`` audits a queued export — v1 ships
-        # the audit row + 202; the actual export pipeline lands later.
+        # Queued export audit row — ships the audit record; the actual export pipeline
+        # is a follow-up.
         WORKSPACE_EXPORT_REQUEST = "workspace.export.request"
-        # ``WORKSPACE_DELETE_ATTEMPT`` audits a delete-all-data attempt
-        # even though v1 returns 501; we record the typed-confirmation
-        # correctness so a forensic reader sees who is asking and how
-        # they answered the confirm gate.
+        # Delete-all-data attempt audit — recorded even when the endpoint returns 501
+        # so a forensic reader sees who requested deletion and how they answered the
+        # confirmation gate.
         WORKSPACE_DELETE_ATTEMPT = "workspace.delete_attempt"
 
     class Event:

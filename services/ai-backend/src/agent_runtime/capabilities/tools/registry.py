@@ -50,6 +50,7 @@ class DynamicToolRegistry:
     providers: Sequence[ToolSpecProvider]
 
     def __post_init__(self) -> None:
+        """Verify that every provider implements the required protocol methods."""
         for provider in self.providers:
             if not callable(getattr(provider, Keys.Methods.LIST_TOOL_CARDS, None)):
                 raise AgentRuntimeError(
@@ -97,8 +98,7 @@ class DynamicToolRegistry:
 
         Walks the providers' compact cards. Returns ``None`` when no card
         matches (unknown tool) or when the matching card was registered
-        without a ``display`` template (the field is currently optional —
-        Phase 5 of the polish-removal refactor makes it required).
+        without a ``display`` template (the field is currently optional).
         """
 
         for entry in self._collect_entries():
@@ -134,6 +134,7 @@ class DynamicToolRegistry:
         return entry
 
     def _collect_entries(self) -> tuple[RegisteredTool, ...]:
+        """Fetch and validate cards from every registered provider."""
         entries: list[RegisteredTool] = []
         for provider in self.providers:
             try:

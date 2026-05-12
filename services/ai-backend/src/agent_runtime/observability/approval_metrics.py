@@ -25,7 +25,7 @@ _CHAIN_RESOLUTION_BUCKETS = (30, 60, 300, 1800, 3600, 86400)
 class ApprovalMetrics:
     """Per-process meter facade for forward-related signals.
 
-    Constructed once by ``RuntimeApiService`` (and by the worker handler
+    Constructed once by ``ApprovalCoordinator`` (and by the worker handler
     when present). All call sites are best-effort: a failure to publish
     a metric is logged at DEBUG and never propagated.
     """

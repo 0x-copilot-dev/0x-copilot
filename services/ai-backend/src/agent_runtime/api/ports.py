@@ -102,9 +102,9 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Return a conversation for the tenant scope, ignoring user ownership.
 
-        Admin-override path (PR 1.2.1). Authorization is enforced by the
-        service layer; this port only enforces tenant isolation. Returns
-        ``None`` for cross-tenant access.
+        Admin-override path; authorization is enforced by the service layer.
+        This port enforces only tenant isolation and returns ``None`` for
+        cross-tenant access.
         """
 
     async def list_conversations(
@@ -118,8 +118,8 @@ class PersistencePort(Protocol):
     ) -> Sequence[ConversationRecord]:
         """Return conversations for the tenant/user scope, newest first.
 
-        ``include_deleted`` (PR 1.6) excludes soft-deleted rows by
-        default; setting it True returns them too.
+        ``include_deleted`` excludes soft-deleted rows by default;
+        setting it True returns them too.
         """
 
     async def list_messages(
@@ -138,15 +138,14 @@ class PersistencePort(Protocol):
     async def insert_forked_conversation(
         self, conversation: ConversationRecord
     ) -> ConversationRecord:
-        """Insert a fork-authored conversation row verbatim (PR 6.2).
+        """Insert a fork-authored conversation row verbatim.
 
-        Bypasses the idempotency check the standard ``create_conversation``
-        path runs (forks always mint a new row) and writes every column
-        the caller has populated — including ``parent_conversation_id``,
-        ``forked_from_share_id``, ``folder``, ``enabled_connectors``, and
-        ``deleted_at``. The standard path drops these fields because the
-        normal ``CreateConversationRequest`` doesn't carry them; the fork
-        service composes them itself from the share + recipient identity.
+        Bypasses the idempotency check the standard ``create_conversation`` path
+        runs (forks always mint a new row) and writes every column the caller
+        populated — including ``parent_conversation_id``, ``forked_from_share_id``,
+        ``folder``, ``enabled_connectors``, and ``deleted_at``. The standard
+        ``CreateConversationRequest`` path drops these fields; the fork service
+        composes them itself from the share and recipient identity.
         """
 
     async def update_conversation_connectors(
@@ -181,7 +180,7 @@ class PersistencePort(Protocol):
         org_id: str,
         conversation_id: str,
     ) -> RunRecord | None:
-        """Return the most recent non-terminal run for one conversation (PR 1.6)."""
+        """Return the most recent non-terminal run for one conversation."""
 
     async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
@@ -230,7 +229,7 @@ class PersistencePort(Protocol):
 
         See sync ``PersistencePort.forward_approval_request`` for the
         contract. Implementations run both writes in a single transaction
-        so partial chains never persist on failure (PR 1.4).
+        so partial chains never persist on failure.
         """
 
     async def get_approval_request(
@@ -250,11 +249,10 @@ class PersistencePort(Protocol):
         limit: int,
         cursor: tuple[datetime, str] | None,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Recipient inbox query (PR 1.4.1).
+        """Recipient inbox query, newest-first on ``(created_at DESC, approval_id DESC)``.
 
-        Newest-first ordering on ``(created_at DESC, approval_id DESC)``;
-        cursor is exclusive. The ``org_id`` filter narrows within the
-        trusted tenant scope set by the caller.
+        Cursor is exclusive. The ``org_id`` filter narrows within the trusted
+        tenant scope set by the caller.
         """
 
     async def list_pending_expired_approvals(
@@ -263,14 +261,14 @@ class PersistencePort(Protocol):
         now: datetime,
         limit: int,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Sweeper expiry-pass query (PR 1.4.1)."""
+        """Sweeper expiry-pass query: return pending approvals past their deadline."""
 
     async def list_pending_approvals_for_membership_audit(
         self,
         *,
         limit: int,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Sweeper membership-cascade query (PR 1.4.1)."""
+        """Sweeper membership-cascade query: return pending approvals for revoked members."""
 
     async def write_audit_log(self, *, event_type: str, record: object) -> None:
         """Append an audit record for security-relevant actions."""
@@ -297,7 +295,7 @@ class PersistencePort(Protocol):
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
 
-    # ----- PR 1.6: workspace defaults + conversation lifecycle ----- #
+    # ----- Workspace defaults + conversation lifecycle ----- #
 
     async def get_workspace_defaults(
         self,
@@ -332,7 +330,7 @@ class PersistencePort(Protocol):
         archived_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
-        """Apply a lifecycle PATCH to one conversation row (PR 1.6)."""
+        """Apply a lifecycle PATCH to one conversation row."""
 
     async def soft_delete_conversation(
         self,
@@ -355,23 +353,23 @@ class PersistencePort(Protocol):
         """Clear ``deleted_at``; ``None`` if the row was already reaped."""
 
     # ------------------------------------------------------------------
-    # Usage + pricing (B1, B2, B3, B4).
+    # Usage + pricing.
     #
     # Writes are best-effort: the run-completion event is the source of
     # truth, the rows below are derived aggregates. ``record_run_usage``
     # is idempotent on ``run_id``; ``record_model_call_usage`` is
     # idempotent on the row's own UUID id (caller dedupes at the source
-    # by AIMessage id). Pricing methods underwrite B3's catalog and
-    # B4's rollup loop.
+    # by AIMessage id). Pricing methods underwrite the catalog and
+    # rollup loop.
     # ------------------------------------------------------------------
 
     async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
-        """Idempotent write of a per-run usage row (B1)."""
+        """Idempotent write of a per-run usage row."""
 
     async def record_model_call_usage(
         self, record: RuntimeModelCallUsageRecord
     ) -> None:
-        """Append a per-LLM-call usage row (B2)."""
+        """Append a per-LLM-call usage row."""
 
     async def update_run_usage_cost(
         self,
@@ -381,7 +379,7 @@ class PersistencePort(Protocol):
         pricing_id: str,
         pricing_version: str,
     ) -> None:
-        """Stamp computed cost onto an existing run-usage row (B3)."""
+        """Stamp computed cost onto an existing run-usage row."""
 
     async def update_model_call_usage_cost(
         self,
@@ -391,10 +389,10 @@ class PersistencePort(Protocol):
         pricing_id: str,
         pricing_version: str,
     ) -> None:
-        """Stamp computed cost onto an existing per-call usage row (B3)."""
+        """Stamp computed cost onto an existing per-call usage row."""
 
     async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
-        """Insert or update a pricing row keyed by (provider, model, region) (B3).
+        """Insert or update a pricing row keyed by (provider, model, region).
 
         Implementations close the previous active row by setting
         ``effective_until`` when a row with a later ``effective_from``
@@ -427,10 +425,10 @@ class PersistencePort(Protocol):
         """Idempotent UPSERT of one daily per-org rollup row (B4)."""
 
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
-        """Idempotent UPSERT of one daily per-connector rollup row (PR 7.2)."""
+        """Idempotent UPSERT of one daily per-connector rollup row."""
 
     async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
-        """Idempotent UPSERT of one daily per-subagent rollup row (01d).
+        """Idempotent UPSERT of one daily per-subagent rollup row.
 
         Org-scoped (no user_id). Keyed on
         ``(org_id, day, subagent_slug, model_provider, model_name)``.
@@ -438,7 +436,7 @@ class PersistencePort(Protocol):
         """
 
     async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
-        """Idempotent UPSERT of one daily per-purpose rollup row (01d).
+        """Idempotent UPSERT of one daily per-purpose rollup row.
 
         Keyed on ``(org_id, day, purpose, model_provider, model_name)``.
         ``purpose`` is the ``Purpose`` StrEnum value.
@@ -452,7 +450,7 @@ class PersistencePort(Protocol):
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyUserRow]:
-        """Read per-user rollup rows in ``[start_day, end_day]`` (B4)."""
+        """Read per-user rollup rows in ``[start_day, end_day]``."""
 
     async def query_org_daily_usage(
         self,
@@ -461,7 +459,7 @@ class PersistencePort(Protocol):
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
-        """Read per-org rollup rows in ``[start_day, end_day]`` (B4)."""
+        """Read per-org rollup rows in ``[start_day, end_day]``."""
 
     async def query_connector_daily_usage(
         self,
@@ -470,7 +468,7 @@ class PersistencePort(Protocol):
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyConnectorRow]:
-        """Read per-connector rollup rows in ``[start_day, end_day]`` (PR 7.2)."""
+        """Read per-connector rollup rows in ``[start_day, end_day]``."""
 
     async def query_subagent_daily_usage(
         self,
@@ -497,8 +495,7 @@ class PersistencePort(Protocol):
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
-        """Scan per-LLM-call usage rows for the connector rollup loop +
-        cold-start fallback (PR 7.2).
+        """Scan per-LLM-call usage rows for the connector rollup loop and cold-start fallback.
 
         ``org_id=None`` is the rollup-loop signal to scan across tenants;
         adapter implementations must use the ``worker`` role for the
@@ -516,7 +513,7 @@ class PersistencePort(Protocol):
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Sequence[dict[str, object]]:
-        """PR 7.1 — paginated read across ``runtime_audit_log``.
+        """Paginated read across ``runtime_audit_log``.
 
         Returns dicts because the in-memory store stamps chain fields
         onto an arbitrary record shape (see ``write_audit_log``); the
@@ -738,9 +735,9 @@ class PersistencePort(Protocol):
         Per kind:
 
           - ``messages`` / ``events`` / ``memory_items``: tombstone (status
-            flip / blank content). Phase 4+: driven by ``retention_until <
-            NOW()`` with a chunked CTE when ``chunk_size > 0``. Legacy:
-            ``created_at + ttl < NOW()`` unbounded when ``chunk_size == 0``.
+            flip / blank content). When ``chunk_size > 0``: driven by
+            ``retention_until < NOW()`` via chunked CTE. When ``chunk_size == 0``:
+            legacy ``created_at + ttl < NOW()`` unbounded scan.
           - ``context_payloads``: hard delete where ``retention_until <
             now()`` (column-authoritative). Chunked when ``chunk_size > 0``.
           - ``checkpoints``: keep the latest N per ``(thread_id, namespace)``
@@ -776,9 +773,8 @@ class PersistencePort(Protocol):
         filled). Idempotent: rows with ``retention_until`` already set
         are never touched.
 
-        Phase 2 backfill — stamped value is
-        ``created_at + ttl_seconds * INTERVAL '1 second'``.
-        Only applies to MESSAGES, EVENTS, MEMORY_ITEMS; CONTEXT_PAYLOADS
+        Stamped value is ``created_at + ttl_seconds * INTERVAL '1 second'``.
+        Applies to MESSAGES, EVENTS, and MEMORY_ITEMS; CONTEXT_PAYLOADS
         is already column-driven; CHECKPOINTS is structural.
         """
 

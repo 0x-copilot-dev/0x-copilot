@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_coordinator import RunCoordinator
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -95,26 +98,39 @@ class TestInMemoryRegenerateMessage:
 
     async def test_regenerate_reuses_parent_user_message(self) -> None:
         store = InMemoryRuntimeApiStore()
-        service = RuntimeApiService(
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        model_resolver = ModelConfigResolver(settings)
+        event_producer = RuntimeEventProducer(
             persistence=store,
             event_store=store,
-            queue=store,
-            settings=RuntimeSettings.load(
-                environ={
-                    "OPENAI_API_KEY": "sk-test",
-                    "RUNTIME_DEFAULT_PROVIDER": "openai",
-                    "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                }
-            ),
+            on_event_appended=None,
         )
-        conversation = await service.create_conversation(
+        run_coordinator = RunCoordinator(
+            persistence=store,
+            queue=store,
+            event_producer=event_producer,
+            settings=settings,
+            model_resolver=model_resolver,
+        )
+        conv_coordinator = ConversationCoordinator(
+            persistence=store,
+            settings=settings,
+            run_coordinator=run_coordinator,
+        )
+        conversation = await conv_coordinator.create_conversation(
             CreateConversationRequest(
                 org_id="org_123",
                 user_id="user_123",
                 assistant_id="assistant_123",
             )
         )
-        first = await service.create_run(
+        first = await run_coordinator.create_run(
             CreateRunRequest(
                 conversation_id=conversation.conversation_id,
                 org_id="org_123",
@@ -135,7 +151,7 @@ class TestInMemoryRegenerateMessage:
             )
         )
 
-        regenerated = await service.create_run(
+        regenerated = await run_coordinator.create_run(
             CreateRunRequest(
                 conversation_id=conversation.conversation_id,
                 org_id="org_123",

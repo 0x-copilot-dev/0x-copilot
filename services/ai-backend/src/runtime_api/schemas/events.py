@@ -192,6 +192,7 @@ class RuntimeEventPresentationProjector:
     def presentation_metadata(
         cls, metadata: JsonObject
     ) -> RuntimeEventPresentation | None:
+        """Extract and validate the ``presentation`` sub-object from event metadata, or return None."""
         raw = metadata.get("presentation")
         if not isinstance(raw, dict):
             return None
@@ -689,9 +690,11 @@ class RuntimeEventPresentationProjector:
 
     @classmethod
     def _ask_a_question_requested_payload(cls, payload: JsonObject) -> JsonObject:
-        """Project ask_a_question approval payloads, preserving question text and
-        structured options. The narrow approval allow-list strips these, so
-        ask_a_question gets its own projection."""
+        """Project ask-a-question payloads, preserving question text and structured options.
+
+        The standard approval allow-list strips these fields, so this approval kind
+        gets its own projection path.
+        """
 
         safe_payload: JsonObject = {}
         for key in (
@@ -718,10 +721,11 @@ class RuntimeEventPresentationProjector:
 
     @classmethod
     def _safe_question_options(cls, options: list | tuple) -> list[JsonObject]:
-        """Coerce structured option dicts (and bare strings) into a sanitized list.
+        """Coerce option dicts and bare strings into a sanitised list.
 
         Bare strings are upgraded to ``{label: ...}`` for backwards compatibility
-        with callers that haven't moved to the structured shape yet."""
+        with callers that haven't adopted the structured shape yet.
+        """
 
         sanitized: list[JsonObject] = []
         for option in options:
@@ -904,6 +908,7 @@ class RuntimeEventPresentation(RuntimeContract):
 
     @staticmethod
     def safe_text(value: object, *, max_length: int) -> str | None:
+        """Strip HTML angle brackets, collapse whitespace, and truncate to ``max_length``."""
         if not isinstance(value, str):
             return None
         text = " ".join(value.replace("<", "").replace(">", "").split())

@@ -95,10 +95,8 @@ from runtime_worker.tool_observations import (
 )
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
-# Sync- or async-returning. Default is the async ``acreate_agent_runtime`` so
-# the worker's event loop is not blocked by the registry-listing HTTP calls
-# inside the factory; tests injecting sync fakes (``lambda **_: _FakeHarness()``)
-# continue to work because the call site awaits via ``inspect.isawaitable``.
+# Async by default (``acreate_agent_runtime``) so registry-listing HTTP calls
+# don't block the event loop; sync fakes still work via ``inspect.isawaitable``.
 AgentFactory = Callable[..., RuntimeHarness | Awaitable[RuntimeHarness]]
 RuntimeInvoker = Callable[[RuntimeHarness, Sequence[object]], object]
 RuntimeStreamer = Callable[[RuntimeHarness, Sequence[object]], AsyncIterator[object]]
@@ -172,23 +170,13 @@ class RuntimeRunHandler:
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker
         self.runtime_streamer = runtime_streamer
-        # Citations live registry (PR 1.1). When ``citation_store`` is None
-        # the ledger never binds and ``CitationLedger.cite`` returns the
-        # empty string — citations degrade to absent without breaking runs.
+        # When None, the citation ledger never binds and citations degrade to absent.
         self.citation_store = citation_store
-        # Workspace-pane drafts (PR 1.3 + 1.3.5). When ``draft_store`` is
-        # None the run handler does not construct a DraftBackend; the
-        # agent's `/drafts/` writes fall through to deepagents'
-        # ``StateBackend`` default and become non-persistent in-state files
-        # for that run only. This is the legacy / unconfigured fallback.
+        # When None, the agent's /drafts/ writes fall through to the in-state StateBackend
+        # for that run only (non-persistent legacy fallback).
         self.draft_store = draft_store
-        # PR 04 — persistent (conversation_ordinal ↔ tool_call_id)
-        # binding store. Phase 3 makes the allocator write through to
-        # this on every ``allocate_for_tool_call`` and read it back on
-        # bind so resumes / cross-turn citation resolve to the canonical
-        # binding rather than re-deriving ordinals positionally. Until
-        # Phase 3 lands the store is held but unused — wiring it now
-        # keeps the constructor surface stable across the migration.
+        # Persistent (conversation_ordinal ↔ tool_call_id) binding store. When None,
+        # ordinals are memory-only and citations degrade to absent across resumes.
         self.conversation_tool_ordinal_store = conversation_tool_ordinal_store
         self.event_producer = RuntimeEventProducer(
             persistence=self.persistence,
@@ -204,10 +192,8 @@ class RuntimeRunHandler:
         self.pricing_catalog = ModelPricingCatalog(self.persistence)
         self.budget_enforcer = BudgetEnforcer(self.persistence)
         self.budget_charger = BudgetCharger(self.persistence)
-        # Sub-PRD 01c — single boundary for usage row + cost stamping.
-        # Default-built from existing collaborators so production deploys
-        # get the production impl; tests inject ``InMemoryUsageRecorder``
-        # to assert against records directly.
+        # Default-built from collaborators so production gets the live impl;
+        # tests inject ``InMemoryUsageRecorder`` to assert records directly.
         self.usage_recorder: UsageRecorder = usage_recorder or PostgresUsageRecorder(
             persistence=self.persistence,
             pricing_catalog=self.pricing_catalog,
@@ -241,11 +227,8 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
             )
 
-        # B7 — pre-run budget preflight. Allow / Warn / Deny.
-        # Done BEFORE flipping status to RUNNING so a Deny path leaves
-        # the run in QUEUED→FAILED transition with a distinct
-        # safe_error_code='budget_exceeded' (so the UI can show
-        # "budget exceeded" instead of generic failure).
+        # Pre-run budget preflight. Done BEFORE flipping status to RUNNING so a Deny
+        # leaves the run in QUEUED→FAILED with a distinct safe_error_code.
         budget_decision = await self._preflight_budgets(run, command)
         if isinstance(budget_decision, BudgetPreflightDeny):
             await self._reject_run_for_budget(run, budget_decision)
@@ -275,18 +258,11 @@ class RuntimeRunHandler:
         ledger_token = (
             CitationLedger.bind_for_run(ledger) if ledger is not None else None
         )
-        # PR 1.1-rev2 — model-declared citation pointers.
-        #
-        # The ordinal allocator owns a per-conversation monotonic counter
-        # used by tool wrappers to prefix each tool result with
-        # ``[Tool call #N — cite as [[N]]]`` so the model has a stable
-        # pointer to embed in its prose. The seeder counts prior
-        # ``TOOL_CALL_STARTED`` events on the active branch so the new
-        # run's ordinals don't collide with anything already persisted.
-        #
-        # The resolver watches streamed assistant text for ``[[N]]``
-        # markers and emits one ``citation_made`` event per resolved
-        # marker — same wire as every other event, no parallel pipe.
+        # The ordinal allocator assigns a per-conversation monotonic counter to each
+        # tool call; tool wrappers embed that counter in result headers so the model
+        # can cite specific sources via ``[[N]]`` markers in its prose.
+        # The resolver watches streamed text for those markers and emits ``citation_made``
+        # events over the same SSE wire.
         allocator = await self._bind_conversation_ordinal_allocator(command, run)
         allocator_token = (
             ConversationOrdinalAllocator.bind_for_run(allocator)
@@ -309,34 +285,20 @@ class RuntimeRunHandler:
             "bound" if allocator_token is not None else "unbound",
             "bound" if resolver_token is not None else "unbound",
         )
-        # B8 — per-tool budget guard. Loads the org's
-        # ``runtime_tool_budgets`` snapshot, binds it alongside the
-        # in-flight ``ToolCallLedger`` so every LangChain
-        # :class:`ToolBudgetGuardedTool` invocation goes through
-        # :meth:`ToolBudgetMiddleware.check_admit` before reaching the
-        # underlying tool. ``None`` when the org has no budgets — the
-        # guard is unbound and the wrapper is a passthrough.
+        # Per-tool budget guard. Loaded per-run; ``None`` when the org has no budgets,
+        # in which case the guard is unbound and tool calls are a passthrough.
         budget_guard = await self._build_tool_budget_guard(run)
         budget_token = (
             ToolBudgetGuard.bind_for_run(budget_guard)
             if budget_guard is not None
             else None
         )
-        # Non-blocking MCP discovery service. Built per-run so
-        # idempotency / audit / event emission share the same RunRecord
-        # the ledger uses.
+        # MCP discovery service — built per-run so audit and event emission share
+        # the same RunRecord used by the citation ledger.
         discovery_service: McpDiscoveryService | None = None
         discovery_token: object | None = None
-        # Polish-removal Phase 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
-        # bind the per-run tool display lookup so every event the producer
-        # emits during this run consults the registry without the producer
-        # holding a direct reference. ``None`` until ``dependencies`` is
-        # built; cleared in the finally block.
-        #
-        # Bind the MCP descriptor registry FIRST so that any descriptor
-        # registered during the run (lazily, when the agent calls
-        # ``load_mcp_server``) lands in the dict our composite lookup
-        # consults — not in a pre-bind void.
+        # Bind the MCP descriptor registry before the tool-display lookup so lazily
+        # registered MCP descriptors are visible to the composite lookup.
         display_token: object | None = None
         mcp_display_token: object | None = None
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
@@ -439,12 +401,9 @@ class RuntimeRunHandler:
                     sealed = ledger.sealed_payloads()
                     if sealed:
                         final_payload["citations"] = sealed
-                # PR 1.1-rev2 — sealed list of ordinals the model cited
-                # in this turn's prose, in first-occurrence order. The
-                # FE consumes this for the share-recipient view and the
-                # archive replay path so chips render before any
-                # ``citation_made`` events arrive (the events are still
-                # the live truth; this is a convenience snapshot).
+                # Sealed list of ordinals cited in this turn, in first-occurrence order.
+                # The FE uses this for the share-recipient view and archive replay so
+                # citation chips render before the live ``citation_made`` events arrive.
                 if citation_resolver is not None:
                     cited_ordinals = citation_resolver.sealed_ordinals()
                     if cited_ordinals:
@@ -506,9 +465,8 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.FAILED
                 )
             )
-            # Route typed fatal tool errors to their semantic termination
-            # reason so the FE and audit log can distinguish budget /
-            # auth / policy failures from generic execution errors.
+            # Map typed fatal errors to semantic termination reasons so the FE and
+            # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
             await self.run_termination.terminate(
                 run=failed,
@@ -584,13 +542,7 @@ class RuntimeRunHandler:
         run: RunRecord,
         command: RuntimeRunCommand,
     ):
-        """B7: estimate the run's spend and check it against active budgets.
-
-        Failures fail-open: a transient persistence error must not block
-        the run. We log + return Allow so the run proceeds as if no
-        budgets were configured. Hard caps are still enforced when the
-        DB is healthy, which is the common case.
-        """
+        """Estimate the run's spend and check it against active budgets; fails open on transient errors."""
 
         try:
             pricing = await self.pricing_catalog.lookup(
@@ -600,11 +552,8 @@ class RuntimeRunHandler:
                 at=datetime.now(timezone.utc),
             )
             request_options = command.runtime_context.model_profile
-            # Conservative pre-build proxy: 4 chars/token × the model's
-            # configured input window. The estimator multiplies by the
-            # safety margin and the post-run charge keys on observed
-            # tokens — so over-estimating here only delays a true Deny,
-            # it never silently busts a hard cap.
+            # Conservative proxy: 4 chars/token × configured input window.
+            # Over-estimating delays a true Deny; it never silently busts a hard cap.
             max_input_tokens = getattr(request_options, "max_input_tokens", None)
             prompt_chars = (max_input_tokens or 0) * 4
             estimate = BudgetEstimator.estimate(
@@ -668,6 +617,7 @@ class RuntimeRunHandler:
         run: RunRecord,
         decision: "BudgetPreflightWarn",
     ) -> None:
+        """Emit a ``BUDGET_WARNING`` event when a soft-cap is crossed at preflight."""
         await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
@@ -720,22 +670,11 @@ class RuntimeRunHandler:
         status: str,
         budget_reservations: Sequence[BudgetReservationRecord] = (),
     ) -> None:
-        """Coordinate the run-completion writes through :class:`UsageRecorder`.
+        """Persist the per-run and per-LLM-call usage records, then charge budgets.
 
-        Sub-PRD 01c: this method used to inline two parallel writer
-        bodies (run-level + per-call), each with its own pricing
-        lookup + cost UPDATE. Both are now collapsed into the recorder.
-
-        Per-run aggregate (B1, B3) is the source of truth for fast
-        aggregations (B4) and budget enforcement (B7). Per-LLM-call
-        rows (B2) carry attribution dimensions. Both share the same
-        pricing snapshot (``pricing_at=completed_at``) so a clock
-        crossing a minute boundary mid-run produces one
-        ``pricing_version`` stamp, not two.
-
-        The recorder is fail-soft — every write attempt absorbs its
-        own exceptions. The run lifecycle does not break because a
-        usage row could not be persisted.
+        Both records share the same ``pricing_at`` snapshot so a clock boundary
+        mid-run produces one pricing version. The recorder is fail-soft — write
+        failures are absorbed rather than propagated to the run lifecycle.
         """
 
         usage_record = metrics.to_usage_record(
@@ -746,12 +685,8 @@ class RuntimeRunHandler:
         )
         for call_record in metrics.model_call_usage_records(run, trace_id=run.trace_id):
             await self.usage_recorder.record_call(call_record, pricing_at=completed_at)
-        # B7 — apply observed spend against active budgets. Idempotent
-        # on ``run_id``; reservations from preflight are consumed in the
-        # same call so the reaper skips them. ``cost_micro_usd`` is
-        # ``None`` whenever the recorder couldn't stamp it (pricing
-        # miss or write failure) — same semantic as pre-01c's local
-        # variable, now flowed via a typed return.
+        # Apply observed spend against budgets; idempotent on run_id. Preflight
+        # reservations are consumed in the same call so the budget reaper skips them.
         await self._charge_budgets(
             run,
             observed_micro_usd=run_result.cost_micro_usd,
@@ -766,6 +701,7 @@ class RuntimeRunHandler:
         *,
         tool_observation_index: ToolObservationIndex | None = None,
     ) -> tuple[dict[str, str], ...]:
+        """Build the message list for the LLM call, optionally injecting prior tool-result context."""
         records = await self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
@@ -797,18 +733,11 @@ class RuntimeRunHandler:
     def _build_tool_display_lookup(tool_registry: object) -> ToolDisplayLookup:
         """Build the per-run tool-display-template lookup for the producer.
 
-        Polish-removal Phases 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
-
-        - Phase 1 — probe ``tool_registry`` for ``display_for(name)``. Returns
-          a stub when the registry doesn't expose the method (today's
-          production chain wraps ``WebSearchToolRegistry``, which doesn't).
-        - Phase 2.B — fall through to the per-run MCP descriptor registry
-          populated by ``BackendMcpClient._tool_descriptor`` as servers
-          load. This is what makes synthesised MCP templates visible to
-          ``PresentationGenerator``.
-
-        Order: tool_registry first (author-written templates beat
-        synthesised MCP templates if a name collides), MCP registry second.
+        Probes ``tool_registry.display_for(name)`` first so author-written
+        templates take precedence, then falls through to the per-run MCP
+        descriptor registry populated lazily as servers load. This makes
+        synthesised MCP templates visible to ``PresentationGenerator``
+        without coupling the producer to the registry directly.
         """
 
         from agent_runtime.capabilities.mcp.descriptor_registry import (  # noqa: PLC0415
@@ -835,6 +764,7 @@ class RuntimeRunHandler:
         command: RuntimeRunCommand,
         tool_observation_index: ToolObservationIndex,
     ) -> RuntimeDependencies:
+        """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts)."""
         dependencies = self.dependencies_factory(command.runtime_context)
         update: dict[str, object] = {
             "subagent_artifacts_backend": SubagentArtifactsBackend(
@@ -846,11 +776,8 @@ class RuntimeRunHandler:
             ),
         }
         if self.draft_store is not None:
-            # PR 1.3.5 — construct a DraftBackend per run so the agent's
-            # write_file/edit_file calls to `/drafts/<uuid>.md` route
-            # through to the runtime_drafts table. Tenant identity is bound
-            # at construction (org_id, conversation_id, run_id, user_id);
-            # the model can never inject org_id via path strings.
+            # Tenant identity is bound at construction so the model cannot inject
+            # org_id via path strings when writing to /drafts/<uuid>.md.
             from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
                 DraftBackend,
             )
@@ -919,6 +846,7 @@ class RuntimeRunHandler:
         command: RuntimeRunCommand,
         run: RunRecord,
     ) -> ToolObservationIndex:
+        """Load the message history and build a ``ToolObservationIndex`` for the run."""
         records = await self.persistence.list_messages(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
@@ -933,11 +861,7 @@ class RuntimeRunHandler:
         run: RunRecord,
         selected: Sequence[MessageRecord],
     ) -> ToolObservationIndex:
-        # PR 04 — pass the persistent binding store so the builder can
-        # source ordinals from the canonical map instead of re-counting
-        # TOOL_CALL_STARTED events. Passing ``None`` (worker constructed
-        # without the store) is fine: observations come back without
-        # ordinals and the prompt context omits ``cite as [[N]]`` hints.
+        """Build a ``ToolObservationIndex`` from already-selected messages, sourcing ordinals from the binding store."""
         return await ToolObservationIndexBuilder(
             self.event_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
@@ -954,6 +878,7 @@ class RuntimeRunHandler:
         messages: list[dict[str, str]],
         prompt_context: str,
     ) -> None:
+        """Insert a SYSTEM message with prior tool context just before the last USER message."""
         insert_at = len(messages)
         for index in range(len(messages) - 1, -1, -1):
             if messages[index][cls._Fields.ROLE] == MessageRole.USER.value:
@@ -969,6 +894,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _message_content_for_runtime(cls, message: MessageRecord) -> str:
+        """Build the full string content to pass to the LLM for this message, including quote/attachment context."""
         if message.role is not MessageRole.USER:
             return message.content_text
 
@@ -992,6 +918,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _quote_context(cls, quote: Mapping[str, object] | None) -> str | None:
+        """Format the quoted-text context block, or return ``None`` if empty."""
         if not quote:
             return None
         text = StreamTextHelper.extract(
@@ -1013,6 +940,7 @@ class RuntimeRunHandler:
         parts: Sequence[Mapping[str, object]],
         content_text: str,
     ) -> str | None:
+        """Summarise structured content parts, excluding text parts that duplicate ``content_text``."""
         summaries: list[str] = []
         normalized_content = content_text.strip()
         for part in parts:
@@ -1030,6 +958,7 @@ class RuntimeRunHandler:
         cls,
         attachments: Sequence[Mapping[str, object]],
     ) -> str | None:
+        """Summarise message attachments as a bullet list, or return ``None`` if there are none."""
         summaries: list[str] = []
         for attachment in attachments:
             name = (
@@ -1052,6 +981,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _branch_context(cls, message: MessageRecord) -> str | None:
+        """Return branch/regeneration metadata as a bullet list, or ``None`` if no branch fields are set."""
         fields = {
             cls._Fields.BRANCH_ID: message.branch_id,
             cls._Fields.SOURCE_MESSAGE_ID: message.source_message_id,
@@ -1082,6 +1012,7 @@ class RuntimeRunHandler:
         part: Mapping[str, object],
         text: str | None,
     ) -> str:
+        """Format a single content part as a summary line (type, name, details, truncated text)."""
         name = StreamTextHelper.extract(
             part.get(cls._Fields.FILENAME)
         ) or StreamTextHelper.extract(part.get(cls._Fields.NAME))
@@ -1104,6 +1035,7 @@ class RuntimeRunHandler:
         *,
         content_type: str | None,
     ) -> str:
+        """Build a parenthetical detail string (content type, size, file_id, url) for a part or attachment."""
         details: list[str] = []
         if content_type is not None:
             details.append(content_type)
@@ -1120,6 +1052,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _content_text(cls, payload: Mapping[str, object]) -> str | None:
+        """Extract plain text from a content-part dict, trying ``text``, ``content``, then block sequences."""
         return (
             StreamTextHelper.extract(payload.get(cls._Fields.TEXT))
             or StreamTextHelper.extract(payload.get(cls._Fields.CONTENT))
@@ -1128,6 +1061,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _content_blocks_text(cls, value: object) -> str | None:
+        """Recursively extract plain text from a string, mapping, or sequence of content blocks."""
         if isinstance(value, str):
             return value.strip() or None
         if isinstance(value, Mapping):
@@ -1153,6 +1087,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _truncate(cls, value: str) -> str:
+        """Truncate ``value`` to ``MAX_STRUCTURED_CONTEXT_CHARS`` characters, appending ``[truncated]`` if cut."""
         if len(value) <= MAX_STRUCTURED_CONTEXT_CHARS:
             return value
         return f"{value[:MAX_STRUCTURED_CONTEXT_CHARS].rstrip()} [truncated]"
@@ -1163,6 +1098,7 @@ class RuntimeRunHandler:
         records: Sequence[MessageRecord],
         user_message_id: str,
     ) -> tuple[MessageRecord, ...]:
+        """Return the chain of messages leading to ``user_message_id``, following parent links."""
         run_user = next(
             (message for message in records if message.message_id == user_message_id),
             None,
@@ -1194,6 +1130,7 @@ class RuntimeRunHandler:
         messages: Sequence[object],
         metrics: AssistantRunMetrics,
     ) -> object:
+        """Stream the LangGraph run under a timeout and return the composed final result."""
         async with asyncio.timeout(
             command.runtime_context.model_profile.timeout_seconds
         ):
@@ -1208,13 +1145,12 @@ class RuntimeRunHandler:
                 citation_pipeline=CitationStreamPipeline.for_provider(
                     command.runtime_context.model_profile.provider
                 ),
-                # PR 1.1-rev2 — resolver was bound by the run-level
-                # try-block; the executor pulls it from the active
-                # ContextVar through the same mechanism every other
-                # bound capability uses.
+                # The resolver was bound by the run-level try-block; the
+                # executor pulls it from the active ContextVar via the
+                # same mechanism every other bound capability uses.
                 citation_resolver=CitationResolver.active(),
-                # P4 Stage 2 — opt-in coalesce window for MODEL_DELTA
-                # batching. Default 0 (disabled) so this ships dark.
+                # Opt-in coalesce window for MODEL_DELTA batching; default
+                # 0 (disabled).
                 delta_coalesce_window_ms=self.settings.execution.delta_coalesce_window_ms,
                 delta_coalesce_max_chunks=self.settings.execution.delta_coalesce_max_chunks,
             )
@@ -1222,6 +1158,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _is_action_interrupt(cls, result: object) -> bool:
+        """Return ``True`` if the result signals a pending approval or interrupt."""
         interrupts = getattr(result, cls._Fields.INTERRUPTS, None)
         if interrupts:
             return True
@@ -1298,7 +1235,7 @@ class RuntimeRunHandler:
                 )
 
     async def _build_tool_budget_guard(self, run: RunRecord) -> ToolBudgetGuard | None:
-        """B8 — load the org's per-tool budgets and build a per-run guard.
+        """Load the org's per-tool budgets and build a per-run guard.
 
         Returns ``None`` when the persistence port doesn't expose the
         method yet (older test stubs) or when the org has no rows.
@@ -1351,21 +1288,10 @@ class RuntimeRunHandler:
         command: RuntimeRunCommand,
         run: RunRecord,
     ) -> ConversationOrdinalAllocator:
-        """Build the per-conversation ordinal allocator from the binding store.
+        """Build the per-conversation ordinal allocator seeded from the persistent binding store.
 
-        PR 04 — replaces the prior positional-event-counting seeder.
-        :meth:`ConversationOrdinalAllocator.for_conversation` reads every
-        binding for ``conversation_id`` from
-        ``agent_conversation_tool_ordinals`` (migration 0026), seeds the
-        in-memory counter to ``max(conversation_ordinal)``, and the
-        allocator writes through to the same table on every fresh
-        ``allocate_for_tool_call``. Ordinals stay strictly monotonic
-        across runs and across approval resumes, with no event-counting.
-
-        When the worker was constructed without a binding store
-        (replay / eval / specific unit tests), fall back to a memory-only
-        allocator. Citations degrade to absent for that run rather than
-        crashing the dispatch path.
+        Falls back to a memory-only allocator when no store is configured; citations
+        degrade to absent for that run rather than crashing the dispatch path.
         """
 
         if self.conversation_tool_ordinal_store is None:
@@ -1449,6 +1375,7 @@ class RuntimeRunHandler:
         payload: dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
+        """Emit a lifecycle event (e.g., ``RUN_STARTED``, ``FINAL_RESPONSE``) via the event producer."""
         await self.event_producer.append_api_event(
             run=run,
             source=source,
@@ -1523,12 +1450,14 @@ class RuntimeRunHandler:
 
     @classmethod
     def _message_content(cls, message: object) -> str | None:
+        """Extract the ``content`` field from a message object or mapping."""
         if isinstance(message, Mapping):
             return cls._content_to_text(message.get(cls._Fields.CONTENT))
         return cls._content_to_text(getattr(message, cls._Fields.CONTENT, None))
 
     @classmethod
     def _content_to_text(cls, value: object) -> str | None:
+        """Convert a raw content value (string, list of blocks, or mapping) to a plain text string."""
         if isinstance(value, str):
             return value.strip() or None
         if isinstance(value, Sequence) and not isinstance(
@@ -1548,6 +1477,7 @@ class RuntimeRunHandler:
 
     @classmethod
     def _trace_text(cls, context: AgentRuntimeContext, key: str) -> str | None:
+        """Return the string value of ``key`` from ``context.trace_metadata``, or ``None`` if absent or blank."""
         value = context.trace_metadata.get(key)
         return value if isinstance(value, str) and value.strip() else None
 

@@ -34,6 +34,7 @@ class LoadSkillTool:
     async def ainvoke(
         self, raw_input: LoadSkillInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Parse input, load the skill by name, and return a bundle payload or error dict."""
         parsed_input = LoadSkillInputParser.parse(raw_input)
         if isinstance(parsed_input, dict):
             return parsed_input
@@ -53,10 +54,12 @@ class LoadSkillTool:
     async def __call__(
         self, raw_input: LoadSkillInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
     @classmethod
     def _bundle_payload(cls, bundle: VirtualSkillBundle) -> dict[str, Any]:
+        """Serialise a ``VirtualSkillBundle`` to a JSON-ready dict with ``ok: True``."""
         payload = bundle.model_dump(mode="json")
         payload["ok"] = True
         return payload
@@ -69,6 +72,7 @@ class LoadSkillInputParser:
     def parse(
         cls, raw_input: LoadSkillInput | Mapping[str, Any] | str
     ) -> LoadSkillInput | dict[str, Any]:
+        """Validate ``raw_input`` to a typed request; return an error dict on invalid skill_name."""
         if isinstance(raw_input, LoadSkillInput):
             return raw_input
         if isinstance(raw_input, str):

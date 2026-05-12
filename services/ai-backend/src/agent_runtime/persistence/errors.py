@@ -10,7 +10,7 @@ from __future__ import annotations
 
 
 class PersistenceError(Exception):
-    """Base class for typed persistence-layer errors (C3)."""
+    """Base class for typed persistence-layer errors."""
 
 
 class ConcurrentRunUpdateError(PersistenceError):

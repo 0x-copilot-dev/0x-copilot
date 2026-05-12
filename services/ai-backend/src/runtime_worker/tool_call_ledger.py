@@ -8,9 +8,8 @@ for each entry — preventing orphaned "Running" cards from sticking on the
 client when the run failed before LangGraph could close the loop.
 
 The ledger is per-run, in-memory, lifecycle-scoped to a single run handler
-invocation. Crash recovery (worker death) is the reaper's job (Phase 3) and
-relies on the persisted `runtime_tool_invocations` projection rather than
-this in-memory ledger.
+invocation. Crash recovery after a worker death relies on the persisted
+``runtime_tool_invocations`` projection rather than this in-memory ledger.
 """
 
 from __future__ import annotations
@@ -30,30 +29,26 @@ class ToolCallEntry:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     settled: bool = False
     # Settled-at timestamp drives the "latest settled" ordering for
-    # ``pop_pending_attribution`` (sub-PRD 01b).
+    # ``pop_pending_attribution``.
     settled_at: datetime | None = None
-    # B8 — observed input-token cost for the call. Populated post-execute
+    # Observed input-token cost for the call. Populated post-execute
     # by the tool-budget middleware so subsequent calls can enforce a
     # per-run input-token cap.
     input_tokens: int | None = None
-    # B8 — set when the middleware admitted the call against a budget.
+    # Set when the middleware admitted the call against a budget.
     # ``charged_calls(tool_name)`` only counts entries with
-    # ``budget_charged=True`` so REJECTED calls don't burn through the
-    # cap.
+    # ``budget_charged=True`` so REJECTED calls don't burn through the cap.
     budget_charged: bool = True
-    # Sub-PRD 01b: connector that owned this tool. Populating side is a
-    # follow-up — currently always ``None``. The carry mechanism exists
-    # so the next LLM call's row can pick up the connector slug once a
+    # Connector that owned this tool; currently always ``None`` until a
     # tool-name → connector lookup is plumbed in.
     connector_slug: str | None = None
-    # Sub-PRD 01b: ``True`` once this entry has been popped as the
-    # "originating tool" for an LLM call's attribution. Prevents
-    # double-attribution if multiple LLM emits land in the same scope
-    # after a tool settles.
+    # ``True`` once this entry has been popped as the "originating tool"
+    # for an LLM call's attribution. Prevents double-attribution when
+    # multiple LLM emits land in the same scope after a tool settles.
     consumed_for_attribution: bool = False
-    # Sub-PRD 01b: monotonic settle order. Used as the primary sort
-    # key in ``pop_pending_attribution`` so two settles that land in
-    # the same wall-clock microsecond still order deterministically.
+    # Monotonic settle order used as the primary sort key in
+    # ``pop_pending_attribution`` so ties at the same wall-clock
+    # microsecond still resolve deterministically.
     settle_order: int = 0
 
 
@@ -69,10 +64,9 @@ class ToolCallLedger:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self._entries: dict[str, ToolCallEntry] = {}
-        # Sub-PRD 01b: monotonic settle counter for stable "latest"
-        # ordering even when two ``observed_settled`` calls land in
-        # the same microsecond (Python's ``datetime.now`` resolution
-        # is platform-dependent).
+        # Monotonic settle counter for stable ordering even when two
+        # ``observed_settled`` calls land in the same microsecond
+        # (Python's ``datetime.now`` resolution is platform-dependent).
         self._settle_counter: int = 0
 
     def started(
@@ -99,12 +93,10 @@ class ToolCallLedger:
 
         No-op if the call_id is unknown — this can happen for tool_results
         emitted before a corresponding tool_call_started (e.g. event-store
-        replays into a cold ledger).
-
-        Sub-PRD 01b: also stamps ``settled_at`` and primes the entry for
-        :meth:`pop_pending_attribution`. The entry stays in the ledger
-        with ``consumed_for_attribution=False`` until the next LLM emit
-        in matching scope reads it.
+        replays into a cold ledger). Also stamps ``settled_at`` and primes
+        the entry for :meth:`pop_pending_attribution`; the entry stays in
+        the ledger with ``consumed_for_attribution=False`` until the next
+        LLM emit in matching scope reads it.
         """
 
         entry = self._entries.get(call_id)
@@ -121,11 +113,10 @@ class ToolCallLedger:
     ) -> ToolCallEntry | None:
         """Return the most recently settled tool entry for ``scope_key``.
 
-        Sub-PRD 01b: at LLM emit time, the streaming executor asks the
-        ledger "what tool's result did this call interpret?" The answer
-        is the most-recent settled entry whose ``subagent_id`` matches
-        the LLM call's scope (the LLM's own subagent slug, or ``None``
-        for orchestrator-scope calls).
+        At LLM emit time, the streaming executor asks the ledger "what
+        tool's result did this call interpret?" The answer is the most-recent
+        settled entry whose ``subagent_id`` matches the LLM call's scope
+        (the LLM's own subagent slug, or ``None`` for orchestrator-scope calls).
 
         Pop semantics:
 
@@ -178,7 +169,7 @@ class ToolCallLedger:
     def has_entries(self) -> bool:
         return bool(self._entries)
 
-    # B8 — accessors for the per-tool budget middleware -------------------
+    # Accessors for the per-tool budget middleware -------------------------
 
     def charged_calls(self, tool_name: str) -> int:
         """Return the number of admitted calls to ``tool_name`` in this run.

@@ -61,6 +61,7 @@ class RetryingTool(BaseTool):
     retry_exceptions: tuple[type[BaseException], ...] = (Exception,)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
+        """Sync retry loop; re-raises the last exception after ``max_attempts``."""
         last_exc: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
@@ -79,6 +80,7 @@ class RetryingTool(BaseTool):
         raise last_exc
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+        """Async retry loop; re-raises the last exception after ``max_attempts``."""
         last_exc: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
@@ -97,14 +99,15 @@ class RetryingTool(BaseTool):
         raise last_exc
 
     def _should_retry(self, exc: BaseException) -> bool:
+        """Return ``True`` when ``exc`` qualifies for a retry attempt."""
         if isinstance(exc, _NEVER_RETRY):
             return False
         return isinstance(exc, self.retry_exceptions)
 
     def _backoff_seconds(self, attempt: int) -> float:
-        # Exponential backoff capped at ``max_backoff_seconds``, with full
-        # jitter so concurrent callers spread their retries instead of
-        # synchronizing on each peak.
+        """Compute an exponential backoff with full jitter, capped at ``max_backoff_seconds``."""
+        # Full jitter distributes concurrent retries across the window instead
+        # of synchronising all callers at the same peak delay.
         target = min(
             self.initial_backoff_seconds * (2 ** (attempt - 1)),
             self.max_backoff_seconds,
@@ -112,6 +115,7 @@ class RetryingTool(BaseTool):
         return random.uniform(0.0, target)
 
     def _log_retry(self, *, attempt: int, exc: BaseException) -> None:
+        """Log a structured ``tool_retry`` event before sleeping."""
         _LOGGER.info(
             "tool_retry",
             extra={

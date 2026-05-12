@@ -18,8 +18,8 @@ from enterprise_service_contracts.headers import (
     SERVICE_TOKEN_HEADER,
     USER_HEADER,
 )
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.http.errors import RuntimeApiError
@@ -57,13 +57,8 @@ class TenantIsolationRuntimeMixin:
     def create_client(self) -> tuple[TestClient, InMemoryRuntimeApiStore]:
         store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(environ=self._service_environ())
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         app.state.runtime_api_store = store
         return TestClient(app), store
 
@@ -189,7 +184,7 @@ class TestTenantIsolationRuntimeApi(TenantIsolationRuntimeMixin):
             json=self.run_payload(conv["conversation_id"], self.ORG_A, self.USER_A),
         ).json()
         run_id = run["run_id"]
-        service: RuntimeApiService = client.app.state.runtime_api_service
+        service = client.app.state.conversation_query_service
 
         async def first_sse_chunk() -> None:
             stream = RuntimeSseAdapter.stream(

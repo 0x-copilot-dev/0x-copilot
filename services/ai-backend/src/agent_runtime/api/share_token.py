@@ -1,4 +1,4 @@
-"""Share token mint + verify for conversation sharing (PR 6.1).
+"""Share token mint and verify for conversation sharing.
 
 Tokens are bearer secrets carried in the share URL. We hash with sha256 and
 store the digest in ``conversation_shares.share_token_hash`` (same pattern

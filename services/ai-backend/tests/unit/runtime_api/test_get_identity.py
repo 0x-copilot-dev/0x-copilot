@@ -113,8 +113,8 @@ class TestWorkspaceRoutesUseStrictIdentity:
         self, monkeypatch
     ) -> None:
         from runtime_api.app import RuntimeApiAppFactory
-        from agent_runtime.api.service import RuntimeApiService
         from agent_runtime.settings import RuntimeSettings
+        from runtime_adapters.factory import RuntimeAdapterFactory
         from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 
         monkeypatch.delenv("ENTERPRISE_SERVICE_TOKEN", raising=False)
@@ -126,13 +126,8 @@ class TestWorkspaceRoutesUseStrictIdentity:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
-        service = RuntimeApiService(
-            persistence=async_store,
-            event_store=async_store,
-            queue=async_store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(async_store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         client = TestClient(app)
 
         resp = client.get("/v1/agent/conversations/cid/subagents")

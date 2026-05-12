@@ -1,27 +1,4 @@
-"""Per-run tool-budget guard wiring (B8 — completes the spec).
-
-Bridges :class:`ToolBudgetMiddleware` to the LangChain tool dispatch
-loop. The runtime worker constructs one :class:`ToolBudgetGuard` per
-run, binds it on a :mod:`contextvars` slot, and registers each
-model-visible tool wrapped in :class:`ToolBudgetGuardedTool` — the wrapper
-consults the active guard before delegating to the inner tool.
-
-The wrapper renders three outcomes:
-
-- :class:`ToolBudgetAdmit` — call delegates to the inner tool. The
-  guard records the observed token cost on completion so the per-run
-  cap is enforced across consecutive calls.
-- :class:`ToolBudgetWarn` — soft cap; the wrapper emits a
-  ``BUDGET_WARNING`` event (best-effort) and admits the call.
-- :class:`ToolBudgetReject` — hard cap; the inner tool is **not**
-  invoked. The wrapper returns the middleware's safe public message as
-  the tool result so the model sees "you've used your web_search
-  budget" and can adapt.
-
-When no guard is bound (no :class:`CitationLedger`-equivalent context),
-the wrapper is a passthrough — calls are not recorded, no events fire.
-This keeps unit tests of inner tools unchanged.
-"""
+"""ContextVar-bound guard that bridges ToolBudgetMiddleware to the LangChain tool dispatch loop."""
 
 from __future__ import annotations
 
@@ -55,34 +32,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _Limits:
-    """Token-cost estimate caps.
-
-    Estimating the input token cost for an arbitrary tool call without
-    encoding-model knowledge is approximate by design. We use a simple
-    1-character ≈ 0.25-token heuristic, capped so a pathological args
-    blob can't overflow the per-run cap on a single call. Production
-    tools that care about exact accounting can call
-    :meth:`ToolCallLedger.charge` themselves with measured counts.
-    """
+    """Input-token estimate caps; 1 char ≈ 0.25 tokens, capped per call."""
 
     CHARS_PER_TOKEN = 4
     MAX_ESTIMATED_TOKENS = 100_000
 
 
 class ToolBudgetGuard:
-    """Per-run holder for :class:`ToolBudgetMiddleware` + :class:`ToolCallLedger`.
-
-    The guard owns:
-
-    - the immutable middleware (built from the budget snapshot at run
-      start),
-    - the mutable :class:`ToolCallLedger` (in-flight + completed calls),
-    - an optional :class:`RuntimeEventProducer` used to emit
-      ``BUDGET_WARNING`` events on soft caps.
-
-    When the producer is ``None`` (e.g. unit tests of the wrapper alone)
-    warnings are logged instead of emitted. The wrapper still admits.
-    """
+    """Per-run holder for the budget middleware, the call ledger, and the optional event producer."""
 
     def __init__(
         self,
@@ -92,6 +49,7 @@ class ToolBudgetGuard:
         run: RunRecord | None = None,
         event_producer: object | None = None,
     ) -> None:
+        """Initialise the guard with a middleware, ledger, and optional event emitter."""
         self._middleware = middleware
         self._ledger = ledger
         self._run = run
@@ -134,9 +92,7 @@ class ToolBudgetGuard:
             call_id,
             tool_name=tool_name,
         )
-        # The ledger's per-call ``input_tokens`` slot is filled at
-        # completion via ``record_settled``; the estimate is used only
-        # for the per-call cap pre-check.
+        # The actual token cost is recorded at settlement; estimate is pre-check only.
         del estimated_input_tokens
         return call_id
 
@@ -204,14 +160,11 @@ _GUARD_CTX: ContextVar[ToolBudgetGuard | None] = ContextVar(
 
 
 class _Estimator:
-    """Cheap input-token estimate for tool args.
-
-    Encapsulated so production code paths can swap in a tighter
-    estimator (e.g. tiktoken) without touching the wrapper.
-    """
+    """Cheap character-count-based input-token estimator for tool args."""
 
     @classmethod
     def estimate(cls, args: tuple[Any, ...], kwargs: dict[str, Any]) -> int:
+        """Return an estimated input-token count for ``args``/``kwargs``, capped at ``MAX_ESTIMATED_TOKENS``."""
         try:
             payload = json.dumps([args, kwargs], default=cls._fallback)
         except (TypeError, ValueError):
@@ -223,6 +176,7 @@ class _Estimator:
 
     @staticmethod
     def _fallback(value: object) -> str:
+        """JSON serialisation fallback: convert to str."""
         return str(value)
 
 
@@ -239,6 +193,7 @@ class ToolBudgetGuardedTool(BaseTool):
     inner: BaseTool
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
+        """Sync gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
         if guard is None:
             return self.inner._run(*args, **kwargs)
@@ -247,13 +202,11 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
-            # HARD-cap rejection. Raise a typed RunFatalToolError so the
-            # run handler terminates the run via RunTerminationCoordinator
-            # instead of letting the model talk its way past the cap.
+            # Raise a typed error so the run handler terminates the run rather than
+            # letting the model attempt to talk its way past the hard cap.
             raise BudgetExceeded(decision.safe_message)
         if isinstance(decision, ToolBudgetWarn):
-            # Sync path: schedule the warning emission on the running
-            # loop if there is one; fall back to a synchronous log.
+            # Sync path: schedule warning emission on the running loop; fall back to log.
             self._schedule_warning(guard=guard, decision=decision)
         call_id = guard.record_started(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -264,6 +217,7 @@ class ToolBudgetGuardedTool(BaseTool):
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+        """Async gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
         if guard is None:
             return await self.inner._arun(*args, **kwargs)
@@ -276,9 +230,8 @@ class ToolBudgetGuardedTool(BaseTool):
         if isinstance(decision, ToolBudgetWarn):
             await guard.emit_warning(decision=decision)
         if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
-            # Defensive: an unknown decision shape would otherwise
-            # silently admit. Treat as a hard reject so unknown variants
-            # can never bypass the gate.
+            # Defensive: treat any unknown decision variant as a hard reject so
+            # future variants can never silently bypass the gate.
             raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
         call_id = guard.record_started(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -290,6 +243,7 @@ class ToolBudgetGuardedTool(BaseTool):
 
     @staticmethod
     def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:
+        """Schedule a budget-warning event on the running loop, or log if none exists."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -309,26 +263,20 @@ class ToolBudgetGuardedTool(BaseTool):
 
 
 class ToolBudgetGuardedRegistry:
-    """Wrap a tool registry so every returned tool is budget-guarded.
-
-    Mirrors the :class:`agent_runtime.capabilities.auth_gate` decorator
-    pattern: the registry-of-tools port is passed through unchanged,
-    only the ``list_available_tools`` output is rewritten to wrap each
-    BaseTool in :class:`ToolBudgetGuardedTool`. Tools that aren't
-    LangChain ``BaseTool`` instances (e.g. internal adapter objects)
-    pass through untouched — the guard only applies to the model-visible
-    LangChain layer.
-    """
+    """Registry decorator that wraps every ``BaseTool`` in a :class:`ToolBudgetGuardedTool`."""
 
     def __init__(self, *, inner: object) -> None:
+        """Wrap ``inner`` registry; all ``BaseTool`` returns will be budget-guarded."""
         self._inner = inner
 
     def list_available_tools(self, context: object) -> tuple[object, ...]:
+        """Return all tools from the inner registry, each wrapped with budget enforcement."""
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
         return tuple(self._wrap(tool) for tool in rendered)
 
     @staticmethod
     def _wrap(tool: object) -> object:
+        """Wrap ``tool`` in a ``ToolBudgetGuardedTool``; return non-BaseTool entries unchanged."""
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, ToolBudgetGuardedTool):

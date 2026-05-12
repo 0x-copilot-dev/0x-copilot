@@ -50,19 +50,21 @@ class WebSearchToolRegistry:
         )
 
     def list_available_tools(self, _context: object) -> Sequence[object]:
+        """Return the web-search tool as the default built-in tool list."""
         return (self._web_search_tool(),)
 
     @classmethod
     def _web_search_tool(cls) -> object:
+        """Build a retry-wrapped DuckDuckGo search tool.
+
+        The underlying library raises opaque ``DDGSException`` wrappers on transient
+        failures; the ``RetryingTool`` wrapper absorbs those and only re-raises after
+        sustained failure so a single hiccup does not terminate the subagent run.
+        """
         from langchain_community.tools import DuckDuckGoSearchResults
 
         from agent_runtime.capabilities.retrying_tool import RetryingTool
 
-        # ``ddgs`` (the underlying search library) raises opaque
-        # ``DDGSException`` wrappers on transient connect / rate-limit
-        # failures. Without this wrapper a single hiccup surfaces as a
-        # ``tool_exception`` and ends the subagent run; with it we absorb
-        # the transient case and only propagate after sustained failure.
         inner = DuckDuckGoSearchResults(
             name=cls.Values.WEB_SEARCH_TOOL_NAME,
             description=cls.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
@@ -83,6 +85,7 @@ class EmptyMcpRegistry:
     """MCP registry used until production MCP adapters are wired."""
 
     def list_available_servers(self, _context: object) -> Sequence[object]:
+        """Return an empty server list (no MCP servers configured)."""
         return ()
 
 
@@ -90,6 +93,7 @@ class EmptySubagentCatalog:
     """Subagent catalog used until configured subagents are wired."""
 
     def list_available_subagents(self, _context: object) -> Sequence[object]:
+        """Return an empty subagent list (no subagents configured)."""
         return ()
 
 
@@ -97,28 +101,18 @@ class DefaultRuntimeDependenciesFactory:
     """Build minimal runtime dependencies for worker-driven invocation."""
 
     def __init__(self, settings: RuntimeSettings | None = None) -> None:
+        """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
 
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
+        """Build and return the full ``RuntimeDependencies`` graph for a worker run.
+
+        Tool registries are composed outermost-to-innermost:
+        ``ToolErrorPolicyRegistry`` → ``ToolBudgetGuardedRegistry`` →
+        ``CitationCapturingRegistry`` → ``WebSearchToolRegistry``.
+        """
         self._validate_capability_mode(_context)
         mcp_registry = self._mcp_registry(_context)
-        # Tool registry composition (outer → inner):
-        #
-        #   ToolErrorPolicyRegistry — outermost. Catches every exception
-        #     from inner layers, routes through DefaultToolErrorPolicy:
-        #     RunFatalToolError → re-raise (run terminates), otherwise
-        #     return a sanitized ``ToolMessage`` content so the LLM sees
-        #     the failure and can decide what to do next.
-        #
-        #   ToolBudgetGuardedRegistry — per-tool / per-run budget gate
-        #     (B8). HARD rejections raise ``BudgetExceeded`` which
-        #     propagates up as RunFatalToolError via the policy.
-        #
-        #   CitationCapturingRegistry — lifts URLs out of tool results
-        #     into the per-run ``CitationLedger`` so the frontend
-        #     Sources tab populates without per-tool wiring.
-        #
-        #   WebSearchToolRegistry — the underlying tool layer.
         tool_registry = ToolErrorPolicyRegistry(
             inner=ToolBudgetGuardedRegistry(
                 inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
@@ -134,14 +128,7 @@ class DefaultRuntimeDependenciesFactory:
         )
 
     def _skill_source_config(self) -> SkillSourceConfig:
-        """Built-in skills are exposed alongside any backend-registered ones.
-
-        Today only `search-subagent-logs` lives under `skills/` — it teaches
-        the supervisor to read `/subagents/<task_id>/...` files when asked
-        about a delegate's tool calls or queries. We register the directory
-        as a `SkillSource` (rather than as a legacy root) so explicit scope
-        / precedence settings are available later if more skills land.
-        """
+        """Return a ``SkillSourceConfig`` that includes the built-in skills directory, if it exists."""
 
         if not BUILTIN_SKILLS_ROOT.is_dir():
             return SkillSourceConfig()
@@ -150,6 +137,7 @@ class DefaultRuntimeDependenciesFactory:
         )
 
     def _validate_capability_mode(self, context: AgentRuntimeContext) -> None:
+        """Raise ``AgentRuntimeError`` in production when no capability source is configured."""
         if self.settings.environment is not RuntimeEnvironment.PRODUCTION:
             return
         if self.settings.execution.allow_empty_capabilities:
@@ -168,6 +156,7 @@ class DefaultRuntimeDependenciesFactory:
         )
 
     def _mcp_registry(self, context: AgentRuntimeContext) -> object:
+        """Return a ``DynamicMcpRegistry`` backed by the backend provider, or an ``EmptyMcpRegistry`` if unconfigured."""
         if self.settings.mcp.backend_registry_url is None:
             return EmptyMcpRegistry()
         provider = BackendMcpProvider(
@@ -178,6 +167,7 @@ class DefaultRuntimeDependenciesFactory:
         return DynamicMcpRegistry(providers=(provider,))
 
     def _skill_registry(self, context: AgentRuntimeContext) -> object | None:
+        """Return a ``VirtualSkillRegistry`` backed by the backend provider, or ``None`` if unconfigured."""
         if self.settings.skills.backend_registry_url is None:
             return None
         provider = BackendSkillProvider(

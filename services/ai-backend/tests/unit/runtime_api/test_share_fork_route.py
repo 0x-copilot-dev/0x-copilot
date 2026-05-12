@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 
 from agent_runtime.api.conversation_fork import ConversationForkService
 from agent_runtime.api.notifications import LoggingNotificationDispatcher
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_adapters.in_memory.share_snapshot_store import InMemoryShareSnapshotStore
 from runtime_api.app import RuntimeApiAppFactory
@@ -41,7 +41,6 @@ class _RouteFixtureMixin:
         self, *, wire_fork: bool = True
     ) -> tuple[TestClient, InMemoryRuntimeApiStore, InMemoryShareSnapshotStore]:
         sync_store = InMemoryRuntimeApiStore()
-        async_store = sync_store
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",
@@ -50,19 +49,14 @@ class _RouteFixtureMixin:
             }
         )
         share_store = InMemoryShareSnapshotStore()
-        service = RuntimeApiService(
-            persistence=async_store,
-            event_store=async_store,
-            queue=async_store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(sync_store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         if wire_fork:
             app.state.share_snapshot_port = share_store
             app.state.conversation_fork_service = ConversationForkService(
-                persistence=async_store,
+                persistence=sync_store,
                 share_snapshots=share_store,
-                audit=WorkerAuditEmitter(async_store),
+                audit=WorkerAuditEmitter(sync_store),
                 notifications=LoggingNotificationDispatcher(),
             )
         else:

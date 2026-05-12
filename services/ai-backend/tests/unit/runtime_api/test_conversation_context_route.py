@@ -6,13 +6,13 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records import (
     ModelPricingRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
 )
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import (
@@ -35,12 +35,7 @@ async def _bootstrap(
             "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
         }
     )
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
-    )
+    ports = RuntimeAdapterFactory.from_store(store)
     conv = await store.create_conversation(
         CreateConversationRequest(org_id=org_id, user_id=user_id, title="Demo")
     )
@@ -57,7 +52,7 @@ async def _bootstrap(
             )
         )
     return (
-        TestClient(RuntimeApiAppFactory.create_app(service)),
+        TestClient(RuntimeApiAppFactory.create_app(ports=ports, settings=settings)),
         store,
         conv.conversation_id,
     )

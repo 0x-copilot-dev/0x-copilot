@@ -1,4 +1,4 @@
-"""Bounded retry helper for optimistic-lock CAS misses (C3).
+"""Bounded retry helper for optimistic-lock CAS misses.
 
 The runtime worker calls ``update_run_status`` and similar at hot paths where
 two competing writers (e.g. main run handler vs. cancel handler) can

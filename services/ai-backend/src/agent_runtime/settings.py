@@ -107,17 +107,14 @@ class RuntimeExecutionSettings(RuntimeContract):
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
     allow_empty_capabilities: bool = False
-    # P4 Stage 2 — coalesce window (ms) for worker-side ``MODEL_DELTA``
-    # batching. ``0`` disables coalescing (default — Stage 2 ships dark).
-    # Recommended ``50`` once measured on staging.
+    # Coalesce window in ms for worker-side ``MODEL_DELTA`` batching.
+    # ``0`` disables coalescing (default). Increase on staging after measuring.
     delta_coalesce_window_ms: int = Field(default=0, ge=0, le=1000)
-    # Hard cap on chunks per coalesce batch. Forces a flush even if the
-    # window has not expired so a runaway emit rate can't grow the buffer
-    # without bound.
+    # Hard cap on chunks per coalesce batch — forces a flush even if the
+    # window has not expired, preventing unbounded buffer growth.
     delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1024)
-    # P2 — SSE event bus backend. ``in_memory`` is the legacy single-
-    # process default; ``postgres`` enables Postgres ``LISTEN/NOTIFY`` so
-    # cross-process worker → API SSE wakeups are delivered in milliseconds.
+    # SSE event bus backend. ``in_memory`` is the single-process default;
+    # ``postgres`` enables ``LISTEN/NOTIFY`` for cross-process worker → API wakeups.
     event_bus_backend: str = "in_memory"
 
 

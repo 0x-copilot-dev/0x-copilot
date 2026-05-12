@@ -1,14 +1,4 @@
-"""Postgres-backed ``SourceStorePort`` (PR 1.5).
-
-Aggregates ``runtime_citations`` rows by unique ``(source_connector,
-source_doc_id)`` for the Workspace pane Sources tab. Borrows the parent
-store's pool + ``FieldCodec`` so encrypted columns (``title``, ``snippet``)
-decrypt at the boundary.
-
-Depends on PR 1.1's ``runtime_citations`` migration (``0015``). When PR 1.1
-ships its postgres ``CitationStorePort`` adapter, this module's SQL can be
-swapped to delegate via that port without touching the service or tests.
-"""
+"""Postgres-backed ``SourceStorePort`` that aggregates citation rows into per-source summaries."""
 
 from __future__ import annotations
 
@@ -33,6 +23,7 @@ class _CitationRowDecoder:
         codec: FieldCodec,
         org_id: str,
     ) -> SourceAggregate:
+        """Decrypt encrypted text columns and map the aggregated row to a :class:`SourceAggregate`."""
         title_cipher = row.get("title")
         snippet_cipher = row.get("snippet")
         title = (
@@ -71,12 +62,14 @@ class _CitationRowDecoder:
 
     @staticmethod
     def _optional_text(value: object) -> str | None:
+        """Return value as a non-empty string, or ``None`` if absent or blank."""
         if isinstance(value, str) and value.strip():
             return value
         return None
 
     @staticmethod
     def _optional_datetime(value: object) -> datetime | None:
+        """Coerce value to a datetime, returning ``None`` when the column is NULL."""
         if value is None:
             return None
         if isinstance(value, datetime):
@@ -85,6 +78,7 @@ class _CitationRowDecoder:
 
     @staticmethod
     def _coerce_datetime(value: object) -> datetime:
+        """Coerce a non-null column value to a datetime; raises if unparseable."""
         if isinstance(value, datetime):
             return value
         return datetime.fromisoformat(str(value))
@@ -100,6 +94,7 @@ class PostgresSourceStore:
 
     @property
     def _codec(self) -> FieldCodec:
+        """Return the parent store's FieldCodec for decrypting text columns."""
         return self._parent._codec  # type: ignore[attr-defined]
 
     async def aggregate_for_conversation(
@@ -110,6 +105,7 @@ class PostgresSourceStore:
         run_id: str | None,
         limit: int,
     ) -> Sequence[SourceAggregate]:
+        """Aggregate citations into per-source summaries, ranked by citation count."""
         capped = max(1, min(limit, self._LIMIT_HARD_CAP))
         sql = """
             SELECT

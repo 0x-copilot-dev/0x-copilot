@@ -117,9 +117,11 @@ class CitationCapturingTool(BaseTool):
     inner: BaseTool
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
+        """Sync path: delegate unchanged — citation projection requires the async path."""
         return self.inner._run(*args, **kwargs)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+        """Async path: project result to the citation ledger and append an ordinal hint."""
         # LangGraph injects tool_call_id via InjectedToolCallId on schemas that
         # declare it; the inner tool typically does not accept it, so strip
         # before forwarding. _augment_schema_with_tool_call_id ensures the
@@ -200,6 +202,7 @@ class CitationCapturingRegistry:
     """
 
     def __init__(self, *, inner: object) -> None:
+        """Wrap ``inner`` registry to intercept calls for citation capture."""
         self._inner = inner
 
     def list_available_tools(self, context: object) -> tuple[object, ...]:

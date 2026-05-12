@@ -13,29 +13,32 @@ auth session creation, and skill bundles.
 
 ## Navigation — which doc answers which question
 
-| Question                                                         | Read                                                                         |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| How is the code organised? What does each module own?            | [architecture/00-system-map.md](architecture/00-system-map.md)               |
-| How does a request travel from browser to SSE stream?            | [architecture/01-request-lifecycle.md](architecture/01-request-lifecycle.md) |
-| What Pydantic shapes and port protocols exist at every boundary? | [architecture/02-contracts.md](architecture/02-contracts.md)                 |
-| How do in-memory and Postgres adapters differ? How do I add one? | [architecture/03-adapters.md](architecture/03-adapters.md)                   |
-| How does SSE streaming and resume work?                          | [features/streaming-sse.md](features/streaming-sse.md)                       |
-| How do built-in tools and MCP tools get loaded and called?       | [features/tool-calling.md](features/tool-calling.md)                         |
-| How do citations flow from tool results into model output?       | [features/citations.md](features/citations.md)                               |
-| How does memory compression and context management work?         | [features/memory-context.md](features/memory-context.md)                     |
-| How do subagents / delegation work?                              | [features/subagents.md](features/subagents.md)                               |
-| How does the MCP auth interrupt → approval → resume cycle work?  | [features/approvals.md](features/approvals.md)                               |
-| How are token budgets enforced and costs charged?                | [features/budgets.md](features/budgets.md)                                   |
-| How does draft creation and the draft send flow work?            | [features/drafts.md](features/drafts.md)                                     |
-| How does data retention sweep and backfill work?                 | [features/retention.md](features/retention.md)                               |
-| How are token usage metrics recorded and queried?                | [features/usage-metrics.md](features/usage-metrics.md)                       |
-| How does the reasoning / thinking model stream work?             | [features/thinking-reasoning.md](features/thinking-reasoning.md)             |
-| How do I add a new built-in tool?                                | [guides/add-builtin-tool.md](guides/add-builtin-tool.md)                     |
-| How do I add new MCP middleware?                                 | [guides/add-mcp-middleware.md](guides/add-mcp-middleware.md)                 |
-| How do I add a new event type?                                   | [guides/add-event-type.md](guides/add-event-type.md)                         |
-| Full `RuntimeEventEnvelope` type + payload reference             | [reference/event-types.md](reference/event-types.md)                         |
-| All port protocol method signatures                              | [reference/persistence-ports.md](reference/persistence-ports.md)             |
-| Every environment variable and what it controls                  | [reference/env-vars.md](reference/env-vars.md)                               |
+| Question                                                         | Read                                                                             |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| How is the code organised? What does each module own?            | [architecture/00-system-map.md](architecture/00-system-map.md)                   |
+| How does a request travel from browser to SSE stream?            | [architecture/01-request-lifecycle.md](architecture/01-request-lifecycle.md)     |
+| What Pydantic shapes and port protocols exist at every boundary? | [architecture/02-contracts.md](architecture/02-contracts.md)                     |
+| How do in-memory and Postgres adapters differ? How do I add one? | [architecture/03-adapters.md](architecture/03-adapters.md)                       |
+| How does SSE streaming and resume work?                          | [features/streaming-sse.md](features/streaming-sse.md)                           |
+| How do built-in tools and MCP tools get loaded and called?       | [features/tool-calling.md](features/tool-calling.md)                             |
+| How do citations flow from tool results into model output?       | [features/citations.md](features/citations.md)                                   |
+| How does memory compression and context management work?         | [features/memory-context.md](features/memory-context.md)                         |
+| How do subagents / delegation work?                              | [features/subagents.md](features/subagents.md)                                   |
+| How does the MCP auth interrupt → approval → resume cycle work?  | [features/approvals.md](features/approvals.md)                                   |
+| How does redaction, OTEL tracing, and the audit chain work?      | [features/observability.md](features/observability.md)                           |
+| What are the security invariants every PR must preserve?         | [architecture/04-security-invariants.md](architecture/04-security-invariants.md) |
+| How are token budgets enforced and costs charged?                | [features/budgets.md](features/budgets.md)                                       |
+| How does draft creation and the draft send flow work?            | [features/drafts.md](features/drafts.md)                                         |
+| How does data retention sweep and backfill work?                 | [features/retention.md](features/retention.md)                                   |
+| How are token usage metrics recorded and queried?                | [features/usage-metrics.md](features/usage-metrics.md)                           |
+| How does the reasoning / thinking model stream work?             | [features/thinking-reasoning.md](features/thinking-reasoning.md)                 |
+| How do I add a new built-in tool?                                | [guides/add-builtin-tool.md](guides/add-builtin-tool.md)                         |
+| How do I add new MCP middleware?                                 | [guides/add-mcp-middleware.md](guides/add-mcp-middleware.md)                     |
+| How do I add a new event type?                                   | [guides/add-event-type.md](guides/add-event-type.md)                             |
+| How do I test this service correctly?                            | [guides/testing.md](guides/testing.md)                                           |
+| Full `RuntimeEventEnvelope` type + payload reference             | [reference/event-types.md](reference/event-types.md)                             |
+| All port protocol method signatures                              | [reference/persistence-ports.md](reference/persistence-ports.md)                 |
+| Every environment variable and what it controls                  | [reference/env-vars.md](reference/env-vars.md)                                   |
 
 ## Feature map — user action → docs node
 
@@ -69,13 +72,6 @@ Each diagram covers one system layer; the index below maps cluster to diagram.
 | Delegation / subagents                            | [09-delegation.puml](architecture/diagrams/clusters/09-delegation.puml)               |
 | Context / memory                                  | [10-context-memory.puml](architecture/diagrams/clusters/10-context-memory.puml)       |
 | Cross-cutting (observability, budgets, retention) | [11-cross-cutting.puml](architecture/diagrams/clusters/11-cross-cutting.puml)         |
-
-## Spec and rule docs (unchanged)
-
-- `docs/specs/` — feature specs (authoritative for implementation decisions)
-- `docs/rules/` — engineering rules (Python, testing, architecture principles)
-- `docs/prds/` — product requirement docs for work not yet shipped
-- `docs/testing/` — test strategy, edge-case matrix, fixtures
 
 ## Definition of done
 

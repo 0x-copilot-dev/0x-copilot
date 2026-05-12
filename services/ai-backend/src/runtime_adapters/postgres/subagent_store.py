@@ -1,11 +1,4 @@
-"""Postgres-backed ``SubagentStorePort`` (PR 1.5).
-
-Projects ``SUBAGENT_*`` rows in ``runtime_events`` into one
-:class:`SubagentSnapshot` per ``task_id``. Borrows the parent store's pool
-and ``_tenant_connection`` helper for RLS scoping; every read is bounded to
-the most-recent ``limit`` task ids per conversation so we never scan the
-whole event log.
-"""
+"""Postgres-backed ``SubagentStorePort`` that projects subagent snapshots from the event log."""
 
 from __future__ import annotations
 
@@ -35,6 +28,7 @@ class _SubagentRowFolder:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot | None:
+        """Fold rows for one task_id into a snapshot; returns ``None`` for empty input."""
         if not rows:
             return None
         ordered = sorted(rows, key=lambda row: row["created_at"])
@@ -55,6 +49,7 @@ class _SubagentRowFolder:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot:
+        """Create a minimal snapshot for a task_id encountered for the first time."""
         return SubagentSnapshot(
             task_id=str(row["task_id"]),
             parent_run_id=str(row["run_id"]),
@@ -71,6 +66,7 @@ class _SubagentRowFolder:
         snapshot: SubagentSnapshot,
         row: dict[str, object],
     ) -> SubagentSnapshot:
+        """Apply one event row to the current snapshot, returning an updated copy."""
         event_type = str(row.get("event_type") or "")
         created_at = cls._coerce_datetime(row["created_at"])
         if event_type == RuntimeApiEventType.SUBAGENT_STARTED.value:
@@ -109,6 +105,7 @@ class _SubagentRowFolder:
 
     @classmethod
     def _terminal_status(cls, row: dict[str, object]) -> SubagentLifecycleStatus:
+        """Derive the terminal lifecycle status from the row's status field."""
         raw = (cls._optional_text(row.get("status")) or "").lower()
         if raw == Values.Status.CANCELLED:
             return SubagentLifecycleStatus.CANCELLED
@@ -118,6 +115,7 @@ class _SubagentRowFolder:
 
     @classmethod
     def _subagent_name(cls, row: dict[str, object]) -> str:
+        """Extract the subagent display name from the row, falling back to 'subagent'."""
         candidates = (row.get("subagent_id"), cls._payload_value(row, "subagent_name"))
         for candidate in candidates:
             text = cls._optional_text(candidate)
@@ -127,6 +125,7 @@ class _SubagentRowFolder:
 
     @staticmethod
     def _payload_value(row: dict[str, object], key: str) -> object:
+        """Extract a key from the row's ``payload_json_redacted`` dict, or return ``None``."""
         payload = row.get("payload_json_redacted")
         if isinstance(payload, dict):
             return payload.get(key)
@@ -134,6 +133,7 @@ class _SubagentRowFolder:
 
     @staticmethod
     def _duration_from_payload(row: dict[str, object]) -> int | None:
+        """Return ``duration_ms`` from the row's payload if present and non-negative."""
         payload = row.get("payload_json_redacted")
         if not isinstance(payload, dict):
             return None
@@ -146,6 +146,7 @@ class _SubagentRowFolder:
     def _duration_from_started(
         *, started_at: datetime | None, completed_at: datetime
     ) -> int | None:
+        """Compute elapsed ms from start to completion, or ``None`` if start is unknown."""
         if started_at is None:
             return None
         delta = completed_at - started_at
@@ -153,12 +154,14 @@ class _SubagentRowFolder:
 
     @staticmethod
     def _optional_text(value: object) -> str | None:
+        """Return a stripped non-empty string, or ``None`` if absent or blank."""
         if isinstance(value, str) and value.strip():
             return value.strip()
         return None
 
     @staticmethod
     def _coerce_datetime(value: object) -> datetime:
+        """Coerce a non-null value to a datetime; raises if unparseable."""
         if isinstance(value, datetime):
             return value
         return datetime.fromisoformat(str(value))
@@ -180,6 +183,7 @@ class PostgresSubagentStore:
         running_only: bool,
         limit: int,
     ) -> Sequence[SubagentSnapshot]:
+        """Return subagent snapshots for a conversation, most-recent first, with token usage."""
         capped = max(1, min(limit, self._RECENT_TASK_LIMIT_HARD_CAP))
         async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
             task_ids = await self._recent_task_ids(
@@ -221,6 +225,7 @@ class PostgresSubagentStore:
         running_only: bool,
         limit: int,
     ) -> tuple[str, ...]:
+        """Fetch the most recent task_ids for a conversation, filtered by running state."""
         # We pick the LATEST event per task to decide whether to include it
         # under ``running_only``: a task is "running" iff its most recent
         # event is not SUBAGENT_COMPLETED.
@@ -262,9 +267,9 @@ class PostgresSubagentStore:
         org_id: str,
         task_ids: tuple[str, ...],
     ) -> dict[str, SubagentTokenUsage]:
-        # Per-task token rollup (PR 1.5 AC-2). The partial index
-        # ``idx_runtime_model_call_usage_org_task`` (migration 0005) covers
-        # this lookup without scanning main-graph rows.
+        """Aggregate model-call token counts keyed by task_id."""
+        # A partial index on ``(org_id, task_id)`` covers this lookup so only
+        # subagent rows are scanned, not the broader main-graph usage rows.
         sql = """
             SELECT task_id,
                    COALESCE(SUM(input_tokens), 0)        AS input_tokens,
@@ -300,6 +305,7 @@ class PostgresSubagentStore:
         conversation_id: str,
         task_ids: tuple[str, ...],
     ) -> dict[str, list[dict[str, object]]]:
+        """Return subagent lifecycle events grouped by task_id."""
         sql = """
             SELECT task_id, event_type, created_at, summary, display_title,
                    status, subagent_id, run_id, payload_json_redacted
@@ -330,6 +336,7 @@ class PostgresSubagentStore:
         conversation_id: str,
         running_only: bool,
     ) -> tuple[SubagentSnapshot, ...]:
+        """Fold per-task event rows into snapshots, preserving the requested ordering."""
         snapshots: list[SubagentSnapshot] = []
         for task_id in order:
             snapshot = _SubagentRowFolder.fold(

@@ -1,23 +1,18 @@
-"""SSE push notification bus.
+"""SSE push-notification bus with in-process and cross-process backends.
 
-Two backends are supported (P2 — see ``docs/refactor/02-sse-listen-notify.md``):
+Two backends:
 
 * :class:`InMemoryEventBus` — process-local ``asyncio.Condition`` pub/sub.
-  The historical default. Works only when API and worker share a process
-  (``RUNTIME_START_IN_PROCESS_WORKER=true`` in dev). In production, where
-  the worker is a separate process, the worker's ``notify_sync`` can never
-  wake an SSE adapter waiting on the API process — the SSE adapter falls
-  back to its 2-second poll.
-* :class:`PostgresEventBus` — Postgres ``LISTEN/NOTIFY`` pub/sub. Cross-
-  process by design. The worker's ``append_event`` fires
-  ``NOTIFY runtime_events_v1, '<run_id>:<seq>'``; the API process holds a
-  dedicated ``LISTEN`` connection and dispatches each notification to the
-  registered ``run_id`` waiter. Sub-50ms wakeup; the SSE poll fallback
-  becomes a backstop (10s) instead of the primary mechanism.
+  Works only when API and worker share a process
+  (``RUNTIME_START_IN_PROCESS_WORKER=true`` in dev). In production with a
+  separate worker process, ``notify_sync`` can never wake an API-side waiter —
+  the SSE adapter falls back to its 2-second poll.
+* :class:`PostgresEventBus` — Postgres ``LISTEN/NOTIFY`` pub/sub. Cross-process
+  by design. Sub-50ms wakeup; the SSE poll fallback becomes a backstop (10s)
+  rather than the primary mechanism.
 
-Production wires the Postgres backend via
-``RUNTIME_EVENT_BUS_BACKEND=postgres``. Default is ``in_memory`` so the
-behavior change ships dark.
+Select the backend via ``RUNTIME_EVENT_BUS_BACKEND=postgres`` (default
+``in_memory``).
 """
 
 from __future__ import annotations
@@ -112,10 +107,12 @@ class InMemoryEventBus:
             pass
 
     def unsubscribe(self, run_id: str) -> None:
+        """Drop the condition variable for ``run_id`` (idempotent)."""
         self._conditions.pop(run_id, None)
 
     @staticmethod
     async def _async_notify(condition: asyncio.Condition) -> None:
+        """Wake all waiters on ``condition`` from within the async context."""
         async with condition:
             condition.notify_all()
 

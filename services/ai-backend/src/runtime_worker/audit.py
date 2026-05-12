@@ -1,18 +1,4 @@
-"""Worker-side audit emission.
-
-The runtime worker is the only place where privileged actions actually run
-(model calls, tool invocations, run state transitions, approval resolution).
-The API layer emits audit events for the *requests* it accepts; this module
-emits the corresponding audit events for the *outcomes* the worker
-produces, completing the audit story end-to-end.
-
-Each method here builds a typed metadata dict (no LLM I/O, no payload
-content -- only counts, classes, and outcome enums) and calls
-``persistence.write_audit_log``. The chain HMAC + immutable enforcement
-happens transparently inside the store, so callers never touch the chain
-fields. Failures are swallowed and logged: an audit emission must never
-hide a real run failure or break the worker's main loop.
-"""
+"""Worker-side audit emission for privileged run, tool-call, approval, and fork outcomes."""
 
 from __future__ import annotations
 
@@ -38,8 +24,6 @@ class _Actions:
     RUN_TIMED_OUT = "run_timed_out"
     APPROVAL_DECISION = "approval_decision"
     TOOL_CALL_OUTCOME = "tool_call_outcome"
-    # PR 6.2 — conversation fork (recipient opens a shared chat in
-    # their own workspace as a new owned conversation).
     CONVERSATION_FORK = "conversation.fork"
 
 
@@ -55,18 +39,16 @@ class _ResourceTypes:
     AGENT_RUN = "agent_run"
     APPROVAL = "approval"
     TOOL_CALL = "tool_call"
-    # PR 6.2 — fork target (the *new* conversation row authorised by
-    # the share). The metadata carries the source conversation_id +
-    # share_id so SIEM queries can pivot on either side of the link.
+    # Fork target (the new conversation row). Metadata carries both
+    # source_conversation_id and share_id so SIEM queries can pivot on either side.
     CONVERSATION = "conversation"
 
 
 class _ActorTypes:
     WORKER = "worker"
     USER = "user"
-    # PR 1.4.1 — system-driven rejections (expiry sweeper, membership
-    # cascade) flag actor_type=system so SIEM dashboards can split
-    # operator-driven from background-driven decisions cleanly.
+    # System-driven rejections (expiry sweeper, membership cascade) use
+    # actor_type=system so SIEM dashboards can split background from operator decisions.
     SYSTEM = "system"
 
 
@@ -88,6 +70,7 @@ class WorkerAuditEmitter:
         self._logger = LoggingConfigurator.get_logger(self._LOGGER_NAME)
 
     async def emit_run_started(self, run: RunRecord) -> None:
+        """Emit a ``run_started`` audit event for the given run record."""
         await self._emit(
             event_type=_Actions.RUN_STARTED,
             run=run,
@@ -104,6 +87,7 @@ class WorkerAuditEmitter:
         *,
         duration_ms: int | None = None,
     ) -> None:
+        """Emit a ``run_completed`` audit event, optionally recording elapsed time."""
         metadata: dict[str, Any] = {
             "conversation_id": run.conversation_id,
             "status": AgentRunStatus.COMPLETED.value,
@@ -129,6 +113,7 @@ class WorkerAuditEmitter:
         error_code: str | None = None,
         duration_ms: int | None = None,
     ) -> None:
+        """Emit a ``run_failed`` or ``run_timed_out`` audit event depending on ``status``."""
         action = (
             _Actions.RUN_TIMED_OUT
             if status is AgentRunStatus.TIMED_OUT
@@ -162,6 +147,7 @@ class WorkerAuditEmitter:
         decided_by_user_id: str | None,
         reason: str | None = None,
     ) -> None:
+        """Emit an ``approval_decision`` audit event for an approved or denied approval request."""
         outcome = (
             _Outcomes.SUCCESS
             if decision is ApprovalDecision.APPROVED
@@ -174,14 +160,12 @@ class WorkerAuditEmitter:
         }
         if decided_by_user_id:
             metadata["decided_by_user_id"] = decided_by_user_id
-        # PR 1.4.1 — sweeper-driven rejections carry a short reason code
-        # so SIEM dashboards can split "expired" from
-        # "recipient_membership_revoked" without parsing free text.
+        # Short reason code ("expired", "recipient_membership_revoked") lets SIEM
+        # dashboards split background-driven decisions without parsing free text.
         if reason:
             metadata["reason"] = reason
-        # PR 1.4.1 — promote actor_type to system when the decider is
-        # the runtime sentinel; lets the SIEM exporter distinguish
-        # background-driven decisions from operator-driven ones.
+        # Promote actor_type to system when the decider is the runtime sentinel so
+        # the SIEM exporter can distinguish background from operator decisions.
         from agent_runtime.api.constants import Values  # local: avoid cycle
 
         actor_type = (
@@ -211,9 +195,9 @@ class WorkerAuditEmitter:
         duration_ms: int | None = None,
         error_code: str | None = None,
     ) -> None:
-        # Tool inputs/outputs are NEVER part of metadata. Only the tool
-        # name, the synthetic call_id, the outcome enum, and timing/error
-        # metadata that the store's redactor would accept anyway.
+        """Emit a ``tool_call_outcome`` audit event; tool inputs/outputs are never included."""
+        # Only tool name, call_id, outcome enum, and timing/error codes go in metadata —
+        # payload content is excluded to avoid leaking sensitive data into the audit log.
         metadata: dict[str, Any] = {
             "tool_name": tool_name,
             "call_id": call_id,
@@ -248,16 +232,11 @@ class WorkerAuditEmitter:
         from_message_id: str | None = None,
         orphan_warnings: int = 0,
     ) -> None:
-        """Audit a fork (share-fork PR 6.2 or self-fork PR A3).
+        """Emit a ``conversation.fork`` audit event for share-initiated or self-initiated forks.
 
-        Exactly one of ``share_id`` (share-fork lineage) or
-        ``from_message_id`` (self-fork lineage) is populated; the other
-        is ``None`` so SIEM exports can disambiguate the two pathways
-        from a single audit row shape.
-
-        ``orphan_warnings`` counts copied messages whose
-        ``parent_message_id`` couldn't be resolved in the snapshot set
-        (rare; data-integrity signal). The chain stays valid either way.
+        Exactly one of ``share_id`` or ``from_message_id`` is populated so SIEM queries can
+        disambiguate the two fork pathways. ``orphan_warnings`` counts messages whose parent
+        could not be resolved in the snapshot set — a data-integrity signal only.
         """
 
         metadata: dict[str, Any] = {
@@ -297,6 +276,7 @@ class WorkerAuditEmitter:
         outcome: str,
         metadata: dict[str, Any],
     ) -> None:
+        """Build and write one audit record; swallows store errors so callers are never interrupted."""
         record_org_id = org_id or (run.org_id if run else None) or "unknown"
         record_user_id = (
             user_id if user_id is not None else (run.user_id if run else None)
@@ -341,6 +321,7 @@ class _AuditIdGenerator:
 
     @classmethod
     def next(cls, *, event_type: str) -> str:
+        """Return a unique audit id embedding the event type, nanosecond timestamp, and a counter."""
         cls._COUNTER += 1
         ts_ns = int(datetime.now(timezone.utc).timestamp() * 1_000_000_000)
         return f"audit_{event_type}_{ts_ns}_{cls._COUNTER}"

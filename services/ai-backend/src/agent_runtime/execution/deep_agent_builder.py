@@ -46,10 +46,8 @@ def format_web_subagent_suffix(
 ) -> str:
     """Build the supervisor / subagent prompt suffix with a dynamic per-tool cap.
 
-    B8 — the cap interpolated here mirrors the value the future
-    :class:`ToolBudgetMiddleware` will hard-enforce. The model behaves
-    consistently with the enforced contract instead of being told a
-    different number than the runtime will tolerate.
+    The cap interpolated here mirrors the value ``ToolBudgetMiddleware``
+    hard-enforces so the model receives a consistent contract.
     """
 
     return (
@@ -84,7 +82,7 @@ def format_web_subagent_suffix(
         "delegate's tools, queries, or conversation, run `ls /subagents/` and "
         "`read_file` on the relevant `tool_calls.json` or `conversation.md` "
         "rather than guessing or saying you cannot recall.\n\n"
-        # PR 1.1-rev2 — model-declared citation pointers (subagent path).
+        # Model-declared citation pointers (subagent path).
         "Cite tool calls inline. Each tool result you read ends with a "
         "pointer of the form `[Tool call #N — <tool_name> — cite as "
         "[[N]] when referencing this result.]`. When you ground any "
@@ -156,12 +154,6 @@ class DeepAgentBuildRequest:
     skill_directories: tuple[str, ...] = ()
     interrupt_on: Mapping[str, object] | None = None
     checkpointer: object | None = None
-    # PR 4.3 — extra ``init_chat_model`` kwargs derived from workspace
-    # policy (today: ``training_data_opt_out`` per-provider headers).
-    # Derived in ``factory.py`` from
-    # ``runtime_context.workspace_behavior_overrides``; threaded here
-    # so every chat-model construction site honours workspace policy
-    # uniformly (subagents inherit the same kwargs).
     # Extra ``init_chat_model`` kwargs from workspace policy (e.g. training
     # opt-out headers). Derived in ``factory.py`` and threaded here so every
     # chat-model construction site — including subagents — honours policy

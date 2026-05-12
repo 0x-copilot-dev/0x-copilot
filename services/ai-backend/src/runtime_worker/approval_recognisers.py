@@ -1,26 +1,4 @@
-"""Vendor-specific projection from raw tool call arguments to consent-card
-``ApprovalParam`` rows. Server-side, synchronous, no I/O.
-
-Phase 3 of the consent-card redesign. PR 4.4.6.2 ships the wire schema
-and a generic allow-list projector; this module fronts that path with
-one recogniser per first-class vendor so the user sees ``Repo: acme/api
-· #42`` instead of three split rows.
-
-PR 4.4.6.4 — recognisers can also opt their vendor-specific tools into
-the 60s undo window via ``reversibility(tool_name, read_only)``. The
-default is ``None`` (no opinion → fall through to the worker's
-``read_only`` heuristic). Slack's ``post_message`` is the only tool
-flagged ``YES`` in this PR; other vendors' compensators land in
-4.4.6.4.x follow-ups.
-
-Adding a vendor:
-
-  1. Subclass ``ApprovalParamRecogniser``.
-  2. Set ``vendor_tokens`` and implement ``recognise``.
-  3. Append an instance to ``ApprovalParamRecogniserRegistry._RECOGNISERS``.
-
-No catalog edit, no schema edit, no FE edit.
-"""
+"""Vendor-specific projection from raw MCP tool-call arguments to ``ApprovalParam`` consent-card rows."""
 
 from __future__ import annotations
 
@@ -35,20 +13,18 @@ _VALUE_MAX = 128
 
 
 class ApprovalParamRecogniser(ABC):
-    """Base class for one vendor's projection logic.
+    """Abstract base for one vendor's approval-param projection.
 
-    Concrete subclasses declare ``vendor_tokens`` — substrings that,
-    when present in the lowercased / decoration-stripped ``server_name``,
-    claim the call. Tokens are compared *after* removing the
-    ``mcp_`` / ``_mcp`` / ``_com`` / ``-com`` decoration the runtime
-    appends for transport bookkeeping (mirrors
-    ``StreamOrchestrator._connector_display_name``).
+    Concrete subclasses declare ``vendor_tokens`` — substrings compared against the
+    lowercased, decoration-stripped ``server_name`` to claim a call. The ``mcp_`` /
+    ``_mcp`` / ``_com`` / ``-com`` affixes are stripped before matching.
     """
 
     vendor_tokens: ClassVar[tuple[str, ...]] = ()
 
     @classmethod
     def matches_server_name(cls, server_name: str) -> bool:
+        """Return ``True`` if any vendor token is found in the normalised server name."""
         normalized = cls._normalize_server_name(server_name)
         return any(token in normalized for token in cls.vendor_tokens)
 
@@ -60,17 +36,12 @@ class ApprovalParamRecogniser(ABC):
     def reversibility(
         cls, tool_name: str, read_only: bool
     ) -> ApprovalReversible | None:
-        """Vendor opinion on whether ``tool_name`` is reversible.
-
-        PR 4.4.6.4 — recognisers may opt specific writes into the 60s
-        undo window. Default is ``None`` ("no opinion → caller decides").
-        Read-only calls are always ``NOT_APPLICABLE`` upstream regardless.
-        """
-
+        """Return this vendor's reversibility opinion for ``tool_name``, or ``None`` to defer to the caller."""
         return None
 
     @staticmethod
     def _normalize_server_name(value: str) -> str:
+        """Strip transport decoration affixes and lowercase the server name for token matching."""
         normalized = value.strip().lower()
         if normalized.startswith("mcp_"):
             normalized = normalized[len("mcp_") :]
@@ -102,11 +73,12 @@ class ApprovalParamRecogniser(ABC):
 
 
 class SlackApprovalRecogniser(ApprovalParamRecogniser):
+    """Approval-param recogniser for Slack MCP servers."""
+
     vendor_tokens: ClassVar[tuple[str, ...]] = ("slack",)
 
-    # PR 4.4.6.4 — only ``post_message`` opts into the 60s undo window.
-    # Other Slack writes (channel admin, DM management) need their own
-    # compensators before joining the list.
+    # Only ``post_message`` opts into the undo window; other Slack writes
+    # (channel admin, DM management) lack compensating actions.
     _REVERSIBLE_TOOLS: ClassVar[frozenset[str]] = frozenset(
         {"post_message", "chat.postMessage", "chat_postMessage"}
     )
@@ -136,6 +108,8 @@ class SlackApprovalRecogniser(ApprovalParamRecogniser):
 
 
 class GitHubApprovalRecogniser(ApprovalParamRecogniser):
+    """Approval-param recogniser for GitHub MCP servers."""
+
     vendor_tokens: ClassVar[tuple[str, ...]] = ("github",)
 
     def recognise(self, arguments: Mapping[str, object]) -> tuple[ApprovalParam, ...]:
@@ -165,6 +139,8 @@ class GitHubApprovalRecogniser(ApprovalParamRecogniser):
 
 
 class LinearApprovalRecogniser(ApprovalParamRecogniser):
+    """Approval-param recogniser for Linear MCP servers."""
+
     vendor_tokens: ClassVar[tuple[str, ...]] = ("linear",)
 
     _PRIORITY: ClassVar[dict[int, str]] = {
@@ -206,6 +182,8 @@ class LinearApprovalRecogniser(ApprovalParamRecogniser):
 
 
 class NotionApprovalRecogniser(ApprovalParamRecogniser):
+    """Approval-param recogniser for Notion MCP servers."""
+
     vendor_tokens: ClassVar[tuple[str, ...]] = ("notion",)
 
     def recognise(self, arguments: Mapping[str, object]) -> tuple[ApprovalParam, ...]:
@@ -232,6 +210,7 @@ class NotionApprovalRecogniser(ApprovalParamRecogniser):
 
     @classmethod
     def _extract_title(cls, arguments: Mapping[str, object]) -> str | None:
+        """Extract a page/database title from ``arguments``, trying top-level then nested ``properties``."""
         title = arguments.get("title")
         if isinstance(title, str):
             stripped = title.strip()
@@ -248,6 +227,8 @@ class NotionApprovalRecogniser(ApprovalParamRecogniser):
 
 
 class AtlassianApprovalRecogniser(ApprovalParamRecogniser):
+    """Approval-param recogniser for Atlassian (Jira / Confluence) MCP servers."""
+
     vendor_tokens: ClassVar[tuple[str, ...]] = (
         "atlassian",
         "jira",
@@ -281,8 +262,7 @@ class AtlassianApprovalRecogniser(ApprovalParamRecogniser):
 
 
 class ApprovalParamRecogniserRegistry:
-    """Central registry. Order in ``_RECOGNISERS`` is the dispatch
-    priority — first match wins."""
+    """Central dispatch registry; first matching recogniser in ``_RECOGNISERS`` wins."""
 
     _RECOGNISERS: ClassVar[tuple[ApprovalParamRecogniser, ...]] = (
         SlackApprovalRecogniser(),
@@ -314,12 +294,7 @@ class ApprovalParamRecogniserRegistry:
     def reversibility_for(
         cls, *, server_name: str, tool_name: str, read_only: bool
     ) -> ApprovalReversible | None:
-        """Return the first matching recogniser's reversibility opinion.
-
-        PR 4.4.6.4 — caller composes this with its own default. ``None``
-        means no recogniser claimed an opinion; the caller falls back
-        to the read-only / write heuristic.
-        """
+        """Return the first matching recogniser's reversibility opinion, or ``None`` if none claimed it."""
 
         for recogniser in cls._RECOGNISERS:
             if recogniser.matches_server_name(server_name):

@@ -32,10 +32,10 @@ class PersistenceApprovalRequestRecord(RuntimeContract):
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     decided_at: datetime | None = None
-    # PR 1.4 — two-stage forwarding chain. ``chain_parent_approval_id`` is
-    # set on a child row inserted when the original requester forwards the
-    # decision to a second approver. The remaining three fields hang off
-    # the parent row and record the forward target plus timing for audit.
+    # Two-stage forwarding chain. ``chain_parent_approval_id`` is set on
+    # a child row inserted when the original requester forwards the decision
+    # to a second approver. The remaining three fields hang off the parent
+    # row and record the forward target plus timing for audit.
     chain_parent_approval_id: str | None = None
     forwarded_to_user_id: str | None = None
     forwarded_at: datetime | None = None

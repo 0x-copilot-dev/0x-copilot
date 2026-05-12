@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records import (
     BudgetEnforcement,
     BudgetPeriod,
@@ -13,6 +12,7 @@ from agent_runtime.persistence.records import (
     BudgetStatus,
 )
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
@@ -26,13 +26,10 @@ def _client() -> tuple[TestClient, InMemoryRuntimeApiStore]:
             "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
         }
     )
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
-    )
-    return TestClient(RuntimeApiAppFactory.create_app(service)), store
+    ports = RuntimeAdapterFactory.from_store(store)
+    return TestClient(
+        RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
+    ), store
 
 
 class TestBudgetCRUD:

@@ -1,4 +1,4 @@
-"""Persisted (conversation_ordinal ↔ tool_call_id) binding records (PR 04).
+"""Persisted (conversation_ordinal ↔ tool_call_id) binding records.
 
 A :class:`ToolOrdinalBindingRecord` is the durable mirror of one row in
 ``agent_conversation_tool_ordinals`` (migration 0026). The

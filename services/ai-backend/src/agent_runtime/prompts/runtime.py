@@ -42,7 +42,7 @@ DEFAULT_INSTRUCTIONS = (
     "Use only links that came from the user, conversation context, or tool "
     "results. Do not fabricate destination URLs. Do not place raw URLs on "
     "their own lines unless the user explicitly asks to see the full URL.\n\n"
-    # PR 1.1-rev2 — model-declared citation pointers.
+    # Model-declared citation pointers.
     "Cite tool calls inline. Each tool result you read contains a pointer "
     "in the form `[Tool call #N — <tool_name> — cite as [[N]] when "
     "referencing this result.]`. When you ground any factual claim in a "

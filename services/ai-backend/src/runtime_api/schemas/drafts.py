@@ -1,4 +1,4 @@
-"""HTTP IO schemas for the Workspace-pane draft artifact (PR 1.3)."""
+"""HTTP IO schemas for the Workspace-pane draft artifact."""
 
 from __future__ import annotations
 

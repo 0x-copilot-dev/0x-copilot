@@ -10,25 +10,43 @@ from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.conversation_query_service import ConversationQueryService
+from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.membership import (
     HttpWorkspaceMembershipResolver,
     InMemoryWorkspaceMembershipResolver,
     MembershipResolverUnavailable,
     WorkspaceMembershipResolver,
 )
-from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.notifications import (
+    LoggingNotificationDispatcher,
+    NotificationDispatcher,
+)
+from agent_runtime.api.run_coordinator import RunCoordinator
+from agent_runtime.api.suggestible_connectors_resolver import (
+    NullSuggestibleConnectorsResolver,
+    SuggestibleConnectorsResolver,
+)
+from agent_runtime.api.user_policies_resolver import (
+    NullUserPoliciesResolver,
+    UserPoliciesResolver,
+)
+from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from agent_runtime.deployment import (
     DeploymentProfile,
     log_profile,
     resolve_or_exit,
 )
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.observability.http_logging import (
     LoggingConfigurator,
     RequestContextMiddleware,
 )
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
@@ -56,8 +74,14 @@ class RuntimeApiAppFactory:
     @classmethod
     def create_app(
         cls,
-        service: RuntimeApiService | None = None,
+        ports: RuntimePorts | None = None,
+        settings: RuntimeSettings | None = None,
         *,
+        on_event_appended=None,
+        membership_resolver: WorkspaceMembershipResolver | None = None,
+        notification_dispatcher: NotificationDispatcher | None = None,
+        user_policies_resolver: UserPoliciesResolver | None = None,
+        suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
         configure_logging_on_create: bool = True,
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
@@ -100,19 +124,39 @@ class RuntimeApiAppFactory:
         app.add_middleware(RequestContextMiddleware)
         if configure_telemetry_on_create:
             TelemetryBootstrap.instrument_fastapi(app)
-        configured_service = service or cls.default_service(app)
-        app.state.runtime_api_service = configured_service
-        # Expose persistence directly so budget/audit routes can reach it
-        # without going through the service wrapper or runtime_ports (which
-        # is only set in the prod path via default_service).
-        app.state.runtime_persistence = configured_service.persistence
-        # P22 PR 4 — Coordinators now own the implementation; assign them
-        # directly from the service instead of constructing shims.
-        app.state.run_coordinator = configured_service._run
-        app.state.approval_coordinator = configured_service._approval
-        app.state.conversation_coordinator = configured_service._conv
-        app.state.conversation_query_service = configured_service._cqs
-        app.state.workspace_coordinator = configured_service._ws
+
+        # Build coordinators — either from the caller-supplied ports (tests)
+        # or from the production environment (default_service path).
+        (
+            _ports,
+            _settings,
+            _run,
+            _approval,
+            _conv,
+            _cqs,
+            _ws,
+            _notifications,
+        ) = cls._build_coordinators(
+            ports=ports,
+            settings=settings,
+            on_event_appended=on_event_appended,
+            membership_resolver=membership_resolver,
+            notification_dispatcher=notification_dispatcher,
+            user_policies_resolver=user_policies_resolver,
+            suggestible_connectors_resolver=suggestible_connectors_resolver,
+            app=app,
+        )
+
+        # Expose ports and coordinators on app.state so route handlers and
+        # lifespan helpers can access them via request.app.state.
+        app.state.runtime_persistence = _ports.persistence
+        app.state.runtime_event_store = _ports.event_store
+        app.state.runtime_notifications = _notifications
+        app.state.run_coordinator = _run
+        app.state.approval_coordinator = _approval
+        app.state.conversation_coordinator = _conv
+        app.state.conversation_query_service = _cqs
+        app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
@@ -164,82 +208,152 @@ class RuntimeApiAppFactory:
         return app
 
     @classmethod
-    def default_service(cls, app: FastAPI) -> RuntimeApiService:
-        """Wire the production :class:`RuntimeApiService` from environment settings."""
-        settings = RuntimeSettings.load()
-        RuntimeSettings.configure_sdk_environment(settings)
-        event_bus = cls.default_event_bus(settings)
-        # PR 1.4.1 — production wiring for the inbox bus + the
-        # composite notification dispatcher. Tests use the
-        # ``RuntimeApiService(notification_dispatcher=...)`` constructor
-        # arg directly so this app-factory wire is the only place
-        # production composes them.
-        from runtime_api.sse.inbox_bus import InboxEventBus
-        from agent_runtime.api.notifications import (
-            InboxAndEmailNotificationDispatcher,
-            LoggingNotificationDispatcher,
-        )
+    def _build_coordinators(
+        cls,
+        *,
+        ports: RuntimePorts | None,
+        settings: RuntimeSettings | None,
+        on_event_appended,
+        membership_resolver: WorkspaceMembershipResolver | None,
+        notification_dispatcher: NotificationDispatcher | None,
+        user_policies_resolver: UserPoliciesResolver | None,
+        suggestible_connectors_resolver: SuggestibleConnectorsResolver | None,
+        app: FastAPI,
+    ) -> tuple:
+        """Wire coordinators from the supplied ports or from env settings.
 
-        inbox_bus = InboxEventBus.get_default()
-        app.state.runtime_inbox_bus = inbox_bus
+        Returns ``(_ports, _settings, _run, _approval, _conv, _cqs, _ws,
+        _notifications)`` so ``create_app`` can assign them to ``app.state``
+        without a service wrapper.
 
-        async def _inbox_publish(approval, event_type, actor_user_id):
-            await inbox_bus.publish(
-                user_id=approval.user_id,
-                event_type=event_type,
-                approval_id=approval.approval_id,
-                status=approval.status.value,
-                org_id=approval.org_id,
-                conversation_id=approval.conversation_id,
-                actor_user_id=actor_user_id,
+        When *ports* is ``None`` the production path is taken: settings are
+        loaded from the environment, an event bus is configured, the inbox
+        bus is registered, and the HTTP membership resolver is wired.
+        """
+        if ports is None:
+            # Production / default path — mirror what default_service used to do.
+            _settings = settings or RuntimeSettings.load()
+            RuntimeSettings.configure_sdk_environment(_settings)
+            event_bus = cls.default_event_bus(_settings)
+
+            from runtime_api.sse.inbox_bus import InboxEventBus
+            from agent_runtime.api.notifications import (
+                InboxAndEmailNotificationDispatcher,
             )
 
-        # Production dispatcher fans out to the inbox bus + (when wired
-        # by env flag) the email channel. Email + the HTTP poster are
-        # plumbed in W4.1 alongside the notification matrix; until then
-        # we ship inbox-only and log emails via the logging fallback.
-        notification_dispatcher = InboxAndEmailNotificationDispatcher(
-            publish_inbox=_inbox_publish,
-            post=None,
-        )
-        # PR 1.4.1 — production wires the HTTP membership resolver when
-        # the trusted backend lane is configured (BACKEND_BASE_URL +
-        # ENTERPRISE_SERVICE_TOKEN). When either is missing we fall back
-        # to the in-memory empty resolver — that path is now used only
-        # by dev / single-process runs where forwarded approvals cannot
-        # reach a different workspace anyway. Tests wire their own
-        # ``InMemoryWorkspaceMembershipResolver`` via the constructor.
-        membership_resolver = cls.default_membership_resolver()
-        app.state.runtime_settings = settings
-        app.state.runtime_event_bus = event_bus
-        app.state.runtime_membership_resolver = membership_resolver
-        # PR 4.4.7 Phase 2 (Slice B) — wire the suggestible-connectors
-        # resolver. Without this the runtime defaults to ``Null`` and
-        # ``runtime_context.suggested_connectors`` is always empty, so
-        # the system prompt skips the catalog suggestions section and
-        # the agent has no idea Linear / Notion / etc. exist when the
-        # user asks "can you connect me to Linear". The factory falls
-        # back to ``MCP_BACKEND_REGISTRY_URL`` when ``BACKEND_BASE_URL``
-        # isn't set so dev (``make dev``) gets the production behavior
-        # without a Makefile change.
-        from agent_runtime.api.suggestible_connectors_resolver import (
-            SuggestibleConnectorsResolverFactory,
+            inbox_bus = InboxEventBus.get_default()
+            app.state.runtime_inbox_bus = inbox_bus
+
+            async def _inbox_publish(approval, event_type, actor_user_id):
+                await inbox_bus.publish(
+                    user_id=approval.user_id,
+                    event_type=event_type,
+                    approval_id=approval.approval_id,
+                    status=approval.status.value,
+                    org_id=approval.org_id,
+                    conversation_id=approval.conversation_id,
+                    actor_user_id=actor_user_id,
+                )
+
+            _notification_dispatcher: NotificationDispatcher = (
+                notification_dispatcher
+                if notification_dispatcher is not None
+                else InboxAndEmailNotificationDispatcher(
+                    publish_inbox=_inbox_publish,
+                    post=None,
+                )
+            )
+            _membership_resolver: WorkspaceMembershipResolver = (
+                membership_resolver
+                if membership_resolver is not None
+                else cls.default_membership_resolver()
+            )
+            app.state.runtime_settings = _settings
+            app.state.runtime_event_bus = event_bus
+            app.state.runtime_membership_resolver = _membership_resolver
+
+            from agent_runtime.api.suggestible_connectors_resolver import (
+                SuggestibleConnectorsResolverFactory,
+            )
+
+            _suggestible_connectors_resolver: SuggestibleConnectorsResolver = (
+                suggestible_connectors_resolver
+                if suggestible_connectors_resolver is not None
+                else SuggestibleConnectorsResolverFactory.default()
+            )
+            _ports = RuntimeAdapterFactory.from_settings(_settings)
+            app.state.runtime_ports = _ports
+            _on_event_appended = on_event_appended or event_bus.notify_sync
+        else:
+            # Test / caller-supplied path.
+            _ports = ports
+            _settings = settings or RuntimeSettings.load()
+            _notification_dispatcher = (
+                notification_dispatcher or LoggingNotificationDispatcher()
+            )
+            _membership_resolver = (
+                membership_resolver or InMemoryWorkspaceMembershipResolver()
+            )
+            _suggestible_connectors_resolver = (
+                suggestible_connectors_resolver or NullSuggestibleConnectorsResolver()
+            )
+            app.state.runtime_ports = _ports
+            _on_event_appended = on_event_appended
+
+        _user_policies_resolver: UserPoliciesResolver = (
+            user_policies_resolver or NullUserPoliciesResolver()
         )
 
-        suggestible_resolver = SuggestibleConnectorsResolverFactory.default()
-        ports = RuntimeAdapterFactory.from_settings(settings)
-        app.state.runtime_ports = ports
-        return RuntimeApiService(
-            persistence=ports.persistence,
-            event_store=ports.event_store,
-            queue=ports.queue,
-            settings=settings,
-            on_event_appended=event_bus.notify_sync,
-            notification_dispatcher=notification_dispatcher
-            if isinstance(notification_dispatcher, InboxAndEmailNotificationDispatcher)
-            else LoggingNotificationDispatcher(),
-            membership_resolver=membership_resolver,
-            suggestible_connectors_resolver=suggestible_resolver,
+        # Build the shared event producer.
+        _event_producer = RuntimeEventProducer(
+            persistence=_ports.persistence,
+            event_store=_ports.event_store,
+            on_event_appended=_on_event_appended,
+        )
+        _model_resolver = ModelConfigResolver(_settings)
+
+        # Construct the five coordinators.
+        _run = RunCoordinator(
+            persistence=_ports.persistence,
+            queue=_ports.queue,
+            event_producer=_event_producer,
+            settings=_settings,
+            model_resolver=_model_resolver,
+            user_policies_resolver=_user_policies_resolver,
+            suggestible_connectors_resolver=_suggestible_connectors_resolver,
+        )
+        _approval = ApprovalCoordinator(
+            persistence=_ports.persistence,
+            queue=_ports.queue,
+            event_producer=_event_producer,
+            membership_resolver=_membership_resolver,
+            notification_dispatcher=_notification_dispatcher,
+        )
+        _conv = ConversationCoordinator(
+            persistence=_ports.persistence,
+            settings=_settings,
+            run_coordinator=_run,
+        )
+        _cqs = ConversationQueryService(
+            persistence=_ports.persistence,
+            event_store=_ports.event_store,
+            settings=_settings,
+            model_resolver=_model_resolver,
+        )
+        _ws = WorkspaceCoordinator(
+            persistence=_ports.persistence,
+            settings=_settings,
+            model_resolver=_model_resolver,
+        )
+        return (
+            _ports,
+            _settings,
+            _run,
+            _approval,
+            _conv,
+            _cqs,
+            _ws,
+            _notification_dispatcher,
         )
 
     @classmethod
@@ -371,21 +485,22 @@ class RuntimeApiAppFactory:
         if ports is None:  # pragma: no cover — only hit when boot has no ports
             return None
         share_store = getattr(ports, "share_store", None) or InMemoryShareStore()
-        api_service = getattr(app.state, "runtime_api_service", None)
-        if api_service is None:
+        persistence = getattr(app.state, "runtime_persistence", None)
+        event_store = getattr(app.state, "runtime_event_store", None)
+        if persistence is None or event_store is None:
             return None
-        # Reuse the runtime API service's async ports directly — both
-        # surfaces share the same async-native InMemoryRuntimeApiStore
-        # (or PostgresRuntimeApiStore in production).
+        # Reuse the runtime ports directly — both surfaces share the same
+        # async-native InMemoryRuntimeApiStore (or PostgresRuntimeApiStore
+        # in production).
         import os as _os
 
         return ShareService(
             store=share_store,
-            persistence=api_service.persistence,
-            event_store=api_service.event_store,
+            persistence=persistence,
+            event_store=event_store,
             workspace_feed_service=getattr(app.state, "workspace_feed_service", None),
             draft_service=getattr(app.state, "draft_service", None),
-            notifications=getattr(api_service, "_notifications", None),
+            notifications=getattr(app.state, "runtime_notifications", None),
             app_base_url=_os.environ.get("RUNTIME_APP_BASE_URL", "").strip(),
         )
 
@@ -414,17 +529,17 @@ class RuntimeApiAppFactory:
         if ports is None:  # pragma: no cover — only hit when app boots without ports
             return None
 
-        # Reuse the runtime API service's persistence + notifications,
-        # so audit + inbox fan-out share the same writers as every
-        # other privileged action in this process.
-        api_service = getattr(app.state, "runtime_api_service", None)
-        if api_service is None:
+        # Reuse the runtime persistence + notifications directly so audit +
+        # inbox fan-out share the same writers as every other privileged
+        # action in this process.
+        persistence = getattr(app.state, "runtime_persistence", None)
+        if persistence is None:
             return None
         return ConversationForkService(
-            persistence=api_service.persistence,
+            persistence=persistence,
             share_snapshots=share_snapshot_port,
-            audit=WorkerAuditEmitter(api_service.persistence),
-            notifications=api_service._notifications,
+            audit=WorkerAuditEmitter(persistence),
+            notifications=getattr(app.state, "runtime_notifications", None),
         )
 
     @classmethod
@@ -439,12 +554,12 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.self_fork import SelfForkService
         from runtime_worker.audit import WorkerAuditEmitter
 
-        api_service = getattr(app.state, "runtime_api_service", None)
-        if api_service is None:
+        persistence = getattr(app.state, "runtime_persistence", None)
+        if persistence is None:
             return None
         return SelfForkService(
-            persistence=api_service.persistence,
-            audit=WorkerAuditEmitter(api_service.persistence),
+            persistence=persistence,
+            audit=WorkerAuditEmitter(persistence),
         )
 
     @classmethod

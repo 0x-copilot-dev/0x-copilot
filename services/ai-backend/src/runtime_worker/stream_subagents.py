@@ -46,11 +46,10 @@ class StreamUpdateProcessor:
         AGENT_IDS = "agent_ids"
         TITLE = "title"
         ELAPSED = "elapsed"
-        # PR 3.2.4 — children's task_ids carried on FLEET_STARTED so the FE
-        # reducer can back-stamp `parent_fleet_id` on `run_subagent` parts
-        # that were emitted earlier by the per-tool streaming path
-        # (`stream_tools._append_task_tool_call_event`) before this fleet
-        # bookend fired. See FE `upsertSubagentFleetPart` for the consumer.
+        # Children's task_ids are carried on FLEET_STARTED so the FE reducer
+        # can back-stamp `parent_fleet_id` on `run_subagent` parts that were
+        # emitted earlier by the per-tool streaming path before this fleet
+        # bookend fired.
         TASK_IDS = "task_ids"
 
     def __init__(self, event_producer: RuntimeEventProducer) -> None:
@@ -70,10 +69,10 @@ class StreamUpdateProcessor:
         # `duration_ms` field on the matching SUBAGENT_COMPLETED payload so
         # consumers don't have to join started/completed events themselves.
         self._subagent_started_at: dict[tuple[str, str], datetime] = {}
-        # Per-run metrics handle, set by the run handler so we can attach the
-        # subagent token rollup to SUBAGENT_COMPLETED payloads (B2).
+        # Per-run metrics handle, set by the run handler so subagent token
+        # rollup can be attached to SUBAGENT_COMPLETED payloads.
         self._metrics_by_run: dict[str, AssistantRunMetrics] = {}
-        # PR A2 — fleet bookend bookkeeping. `_fleet_id_by_task_id` maps a
+        # Fleet bookend bookkeeping. `_fleet_id_by_task_id` maps a
         # supervisor `task` call_id back to its fleet so SUBAGENT_COMPLETED
         # can stamp `parent_fleet_id` and decrement the remaining set;
         # `_fleet_remaining` tracks the open task_ids per fleet so the
@@ -397,10 +396,9 @@ class StreamUpdateProcessor:
             self._Fields.FLEET_ID: fleet_id,
             self._Fields.TITLE: title,
             self._Fields.AGENT_IDS: tuple(agent_ids),
-            # PR 3.2.4 — give the FE the explicit child set so it can stamp
-            # `parent_fleet_id` on existing `run_subagent` parts that were
-            # emitted by the per-tool streaming path (which fires before
-            # this update tick can group them as a fleet).
+            # Include the explicit child set so the FE can back-stamp
+            # `parent_fleet_id` on `run_subagent` parts emitted by the
+            # per-tool streaming path before this fleet bookend fires.
             self._Fields.TASK_IDS: tuple(task_ids),
         }
         self._fleet_started_at[(run.run_id, fleet_id)] = datetime.now(timezone.utc)

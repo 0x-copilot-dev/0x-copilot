@@ -1,4 +1,4 @@
-"""B8 — code-enforced per-tool call-count + input-token budgets.
+"""Code-enforced per-tool call-count and input-token budgets.
 
 Single record type maps to ``runtime_tool_budgets``. The middleware
 resolves the matching budget per (org_id, tool_name) with most-specific

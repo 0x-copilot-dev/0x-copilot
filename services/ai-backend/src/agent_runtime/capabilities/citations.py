@@ -80,6 +80,7 @@ class CitationLedger:
         source: "StreamEventSource",
         per_run_max: int = _Limits.PER_RUN_MAX,
     ) -> None:
+        """Initialise the ledger bound to a run record, citation store, event producer, and stream source."""
         self._run = run
         self._store = store
         self._producer = producer
@@ -91,6 +92,7 @@ class CitationLedger:
 
     @property
     def run_id(self) -> str:
+        """Return the run id this ledger is scoped to."""
         return self._run.run_id
 
     def sealed_payloads(self) -> list[dict[str, object]]:
@@ -121,16 +123,14 @@ class CitationLedger:
     async def register_many(self, sources: Sequence[SourceRef]) -> list[str]:
         """Register N sources in one batch; return N inline tokens in input order.
 
-        P7 — batched ingestion path used by callers that produce many
-        sources at once (notably :class:`CitationProjector`). The new
-        sources go through one bulk ``insert_many_or_get`` call and emit
-        a single ``sources_ingested`` event carrying the ordered list of
-        newly-inserted citations. Cache hits return existing tokens
-        without a DB round trip; cap-dropped sources return ``""``.
+        Batched ingestion path used by callers that produce many sources at once
+        (notably :class:`CitationProjector`). The new sources go through one bulk
+        ``insert_many_or_get`` call and emit a single ``sources_ingested`` event
+        carrying the ordered list of newly-inserted citations. Cache hits return
+        existing tokens without a DB round trip; cap-dropped sources return ``""``.
 
-        Output ordering is 1:1 with the input ``sources`` sequence so
-        callers can splice tokens back into the same positions in the
-        result text they came from.
+        Output ordering is 1:1 with the input ``sources`` sequence so callers can
+        splice tokens back into the same positions in the result text they came from.
         """
 
         if not sources:

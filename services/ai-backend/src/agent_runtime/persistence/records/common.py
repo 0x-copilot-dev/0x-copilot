@@ -57,10 +57,10 @@ class ApprovalRiskClass(StrEnum):
 class PersistenceApprovalStatus(StrEnum):
     """Persisted approval request state.
 
-    PR 1.4 — ``FORWARDED`` is a terminal state for the *parent* row in a
-    two-stage approval chain. The runtime worker never resumes the
-    LangGraph interrupt on ``FORWARDED``; resume happens on the leaf
-    child's ``APPROVED`` / ``REJECTED`` instead.
+    ``FORWARDED`` is a terminal state for the parent row in a two-stage
+    approval chain. The runtime worker never resumes the LangGraph interrupt
+    on ``FORWARDED``; resume happens on the leaf child's ``APPROVED`` /
+    ``REJECTED`` instead.
     """
 
     PENDING = "pending"

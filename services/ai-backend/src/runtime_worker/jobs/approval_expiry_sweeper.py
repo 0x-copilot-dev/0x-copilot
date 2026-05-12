@@ -1,28 +1,4 @@
-"""Approval expiry + membership-cascade sweeper (PR 1.4.1).
-
-Runs as a periodic loop alongside the runtime worker's other jobs
-(``RetentionSweeperLoop``, ``UsageRollupLoop``). Each tick:
-
-  1. Time-expiry pass: find pending approvals whose ``expires_at`` is
-     past ``now()`` and enqueue a synthetic
-     ``RuntimeApprovalResolvedCommand`` with ``decision=REJECTED`` +
-     ``reason='expired'`` + ``decided_by_user_id=Values.SYSTEM_USER_ID``.
-     The existing approval handler resolves the run with the standard
-     reject path; the audit emitter promotes ``actor_type=system``.
-
-  2. Membership-cascade pass: for the remaining pending rows, ask the
-     :class:`WorkspaceMembershipResolver` whether each recipient is
-     still active. Inactive recipients trigger the same synthetic
-     rejection with ``reason='recipient_membership_revoked'``.
-
-This is bookkeeping — no new resolution path. The sweeper enqueues
-through the existing worker queue; the handler does the rest. DRY anchor:
-the sweeper is to expiry what the resolution handler is to user-driven
-decisions.
-
-Disabled by default (``RUNTIME_APPROVAL_EXPIRY_SWEEP_ENABLED=true`` to
-opt in) so existing deployments don't start auto-rejecting on upgrade.
-"""
+"""Periodic sweeper that auto-rejects expired approvals and cascades membership revocations."""
 
 from __future__ import annotations
 
@@ -61,6 +37,7 @@ class ApprovalExpirySweeperEnv:
 
     @classmethod
     def env_float(cls, name: str, default: float) -> float:
+        """Read ``name`` from the environment as a float, returning ``default`` on miss or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -71,6 +48,7 @@ class ApprovalExpirySweeperEnv:
 
     @classmethod
     def env_int(cls, name: str, default: int) -> int:
+        """Read ``name`` from the environment as an int, returning ``default`` on miss or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -81,6 +59,7 @@ class ApprovalExpirySweeperEnv:
 
     @classmethod
     def env_bool(cls, name: str, default: bool) -> bool:
+        """Read ``name`` from the environment as a boolean, returning ``default`` on miss."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -133,6 +112,7 @@ class ApprovalExpirySweeper:
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        """Start the background sweep loop; idempotent if already running."""
         if self._task is not None:
             return
         self._task = asyncio.create_task(
@@ -140,6 +120,7 @@ class ApprovalExpirySweeper:
         )
 
     async def stop(self) -> None:
+        """Signal the sweep loop to stop and wait for it to finish."""
         self._stop.set()
         task = self._task
         self._task = None
@@ -175,6 +156,7 @@ class ApprovalExpirySweeper:
         return expired, revoked
 
     async def _sweep_expiry_pass(self) -> int:
+        """Enqueue synthetic rejections for all approvals whose ``expires_at`` is past now."""
         now = self._clock()
         rows = await self._persistence.list_pending_expired_approvals(
             now=now, limit=self._batch_size
@@ -192,6 +174,7 @@ class ApprovalExpirySweeper:
         return len(rows)
 
     async def _sweep_membership_pass(self) -> int:
+        """Enqueue synthetic rejections for approvals whose recipient is no longer an active member."""
         rows = await self._persistence.list_pending_approvals_for_membership_audit(
             limit=self._membership_batch_size
         )
@@ -202,9 +185,8 @@ class ApprovalExpirySweeper:
                     org_id=row.org_id, user_id=row.user_id
                 )
             except MembershipResolverUnavailable:
-                # Identity backend transiently down — skip this row this
-                # tick; we'll pick it up next interval. Don't reject on
-                # uncertainty.
+                # Identity backend transiently unavailable — skip and retry next tick rather
+                # than rejecting under uncertainty.
                 _LOGGER.warning(
                     "approval_membership_audit_unavailable",
                     extra={"metadata": {"approval_id": row.approval_id}},
@@ -230,6 +212,7 @@ class ApprovalExpirySweeper:
         approval: ApprovalRequestRecord,
         reason: str,
     ) -> None:
+        """Enqueue a system-actor ``REJECTED`` command for the given approval with the provided reason."""
         command = RuntimeApprovalResolvedCommand(
             approval_id=approval.approval_id,
             run_id=approval.run_id,

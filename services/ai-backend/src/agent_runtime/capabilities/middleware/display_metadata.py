@@ -1,23 +1,4 @@
-"""Display-metadata synthesis for MCP tool descriptors (polish-removal Phase 2.A).
-
-Replaces the per-tool-call presentation polish LLM with a deterministic
-:class:`ToolDisplayTemplate` produced from the vendor's MCP descriptor at
-build time. The output is pure: same ``(tool_name, connector, input_schema,
-output_shape)`` always yields the same template, so the descriptor is
-cacheable for the lifetime of the load.
-
-Resolution order at event time (for context — this module only produces
-the Tier-2 template):
-
-1. Deterministic event templates (approval / auth / error / delta).
-2. Tool template from registration / synthesis (this module).
-3. Agent-supplied ``_display_*`` from tool args (Phase 3) — wins when the
-   matched template has ``synthetic=True``.
-4. Minimal envelope fallback.
-
-See ``docs/refactor/01-presentation-polish-removal.md`` §4 Phase 2.A for
-the design and §6.1 for the ``synthetic`` flag semantics.
-"""
+"""Deterministic display-metadata synthesis for tool descriptors and display-field wrapping."""
 
 from __future__ import annotations
 
@@ -28,37 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
-# --- Tier-3 wire format (Phase 3.A) --------------------------------------
-#
-# The agent fills these two optional fields on the tool args dict when the
-# deterministic title (Tier 1/2) would be too generic. They flow through
-# the wire as ``payload.args._display_title`` / ``payload.args._display_summary``
-# and are read by ``PresentationGenerator`` only when the matched template
-# is ``synthetic=True`` (or absent).
-#
-# These constants are referenced from both the helpers below and the
-# presentation generator's Tier-3 read so the wire key only lives in one
-# place.
-
+# Wire keys (alias form) for optional agent-supplied display overrides.
+# The model emits these in tool_call args; the presentation layer reads them
+# off ``payload.args`` and applies them only when the matched template is
+# ``synthetic=True``. Single source of truth for both producers and consumers.
 DISPLAY_TITLE_KEY = "_display_title"
 DISPLAY_SUMMARY_KEY = "_display_summary"
 # Reserved kwarg key for the LangChain-injected tool_call_id. Captured by
-# both wrap branches and used by ``_DispatchEnvelope`` to forward to inner
-# tools that declare ``InjectedToolCallId``. Never visible to the model
-# (LangChain hides ``Annotated[str, InjectedToolCallId]`` fields from the
-# tool block), so it does not collide with any user-emitted arg name.
+# both wrap branches; never forwarded to the inner tool to avoid
+# ``TypeError: unexpected keyword argument`` on callables that don't
+# declare it. Never visible to the model (LangChain hides InjectedToolCallId
+# fields from the tool schema block).
 TOOL_CALL_ID_KEY = "tool_call_id"
-# Wire keys (alias form) — what the model emits in tool_call args and what
-# the projector reads off ``payload.args``. Pydantic's
-# ``populate_by_name=True`` lets the model emit either form, but the JSON
-# schema's ``alias`` is what the model sees in its tool block, so the
-# wire form is the underscore-prefixed alias.
+# Alias-form wire keys — what the model emits and what the projector reads.
 _DISPLAY_WIRE_KEYS: tuple[str, ...] = (DISPLAY_TITLE_KEY, DISPLAY_SUMMARY_KEY)
-# Validated kwarg keys (field-name form) — LangChain's ``StructuredTool``
-# converts the raw args dict to kwargs using the Pydantic FIELD names,
-# not the aliases, before invoking the wrapped coroutine. So the strip
-# target inside the wrap is BOTH the wire form (defensive — for callers
-# that bypass Pydantic) AND the field-name form.
+# Field-name-form keys — what LangChain converts alias keys to before invoking
+# the wrapped coroutine. Strip targets must cover both forms.
 _DISPLAY_FIELD_KEYS: tuple[str, ...] = ("display_title", "display_summary")
 _DISPLAY_KEYS: tuple[str, ...] = _DISPLAY_WIRE_KEYS + _DISPLAY_FIELD_KEYS
 
@@ -66,13 +32,9 @@ _DISPLAY_KEYS: tuple[str, ...] = _DISPLAY_WIRE_KEYS + _DISPLAY_FIELD_KEYS
 class DisplayMetadataMiddleware:
     """Deterministic synthesis for MCP tool descriptors. Pure, side-effect-free."""
 
-    # Mapping verb prefixes to a (verb_form, primary_entity_hint) pair.
-    # ``verb_form`` is folded into the title template; ``primary_entity_hint``
-    # is the input-schema property the synthesiser looks for first when
-    # picking a placeholder. The mapping is intentionally short — names
-    # outside it fall through to a noun-phrase humanisation, with the
-    # ``synthetic=True`` flag signalling that the agent's ``_display_*``
-    # is welcome to override (Phase 3).
+    # Maps verb prefix → (verb_form, primary_entity_keys). Names that don't
+    # match any prefix fall back to noun-phrase humanisation; ``synthetic=True``
+    # lets agent-supplied ``_display_*`` override the result.
     _VERB_FORMS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("list_", "List", ("query", "filter", "type")),
         ("search_", "Search", ("query", "q", "keyword")),
@@ -131,15 +93,8 @@ class DisplayMetadataMiddleware:
     ) -> ToolDisplayTemplate:
         """Build a deterministic :class:`ToolDisplayTemplate` for an MCP tool.
 
-        Inputs:
-            tool_name: vendor-supplied tool name (e.g. ``"list_issues"``).
-            connector: vendor display name (e.g. ``"Linear"``).
-            input_schema: JSON-schema for the args (used to pick placeholders).
-            output_shape: JSON-schema for the result (used to pick
-                ``result_preview_path`` and ``result_preview_row``).
-
-        Always sets ``synthetic=True`` so Phase 3's agent-supplied ``_display_*``
-        is allowed to override.
+        ``synthetic=True`` is always set so agent-supplied ``_display_*`` args
+        may override the synthesised values at invocation time.
         """
 
         verb_form, primary_keys = cls._verb_form_for(tool_name)
@@ -258,8 +213,7 @@ class DisplayMetadataMiddleware:
         connector_label = cls._humanise_identifier(connector)
         if not verb_form:
             return None
-        # Past-tense-ish noun phrase. We don't try to be grammatically clever —
-        # consistency matters more than fluency.
+        # Noun-phrase post-action label — consistency matters more than fluency.
         if verb_form in {"List", "Search", "Get", "Read", "Fetch", "Query"}:
             return f"{connector_label} results"
         if verb_form in {"Post to", "Send"}:
@@ -323,6 +277,7 @@ class DisplayMetadataMiddleware:
 
     @staticmethod
     def _properties(schema: Mapping[str, Any] | None) -> Mapping[str, Any]:
+        """Return the ``properties`` dict from a JSON schema, or ``{}`` if absent."""
         if not isinstance(schema, Mapping):
             return {}
         properties = schema.get("properties")
@@ -330,6 +285,7 @@ class DisplayMetadataMiddleware:
 
     @staticmethod
     def _schema_type(schema: Mapping[str, Any] | None) -> str | None:
+        """Return the primary ``type`` string from a JSON schema property, or ``None``."""
         if not isinstance(schema, Mapping):
             return None
         value = schema.get("type")
@@ -345,12 +301,14 @@ class DisplayMetadataMiddleware:
 
     @classmethod
     def _is_string_property(cls, schema: Any) -> bool:
+        """Return ``True`` when the schema describes a string-typed property."""
         return isinstance(schema, Mapping) and cls._schema_type(schema) == "string"
 
     @classmethod
     def _array_item_schema(
         cls, array_schema: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
+        """Return the ``items`` sub-schema from an array schema, or ``None``."""
         items = array_schema.get("items")
         return items if isinstance(items, Mapping) else None
 
@@ -358,6 +316,7 @@ class DisplayMetadataMiddleware:
     def _first_present(
         properties: Mapping[str, Any], keys: tuple[str, ...]
     ) -> str | None:
+        """Return the first key from ``keys`` that exists in ``properties``, or ``None``."""
         for key in keys:
             if key in properties:
                 return key
@@ -374,6 +333,7 @@ class DisplayMetadataMiddleware:
 
     @classmethod
     def _matched_prefix(cls, lowered_name: str, verb_form: str) -> str:
+        """Return the matched verb prefix string for ``lowered_name``, or ``""``."""
         if not verb_form:
             return ""
         for prefix, verb, _hints in cls._VERB_FORMS:
@@ -383,6 +343,7 @@ class DisplayMetadataMiddleware:
 
     @staticmethod
     def _humanise_identifier(value: str) -> str:
+        """Convert a snake- or kebab-case identifier to title-cased words."""
         text = value.strip()
         # Strip vendor-y suffixes that produce awkward phrasing.
         for suffix in ("_com", "_io", "_app"):
@@ -395,26 +356,14 @@ class DisplayMetadataMiddleware:
         return " ".join(word[0].upper() + word[1:] for word in words)
 
 
-# --- Tier-3 helpers (Phase 3.A) ------------------------------------------
-#
-# These are the receive-side helpers. The producer side — wrapping each
-# bound tool's args_schema and stripping at invoke time — lives in Phase
-# 3.B (``docs/refactor/01-presentation-polish-removal.md``).
-
-
 class _DisplayFields(BaseModel):
-    """Optional agent-supplied display fields appended to every wrapped
-    tool's args_schema.
+    """Optional agent-supplied display overrides appended to every wrapped tool's args_schema.
 
-    Brevity is enforced by the field ``description`` shown to the model
-    (which carries explicit examples and counter-examples), not by
-    Pydantic ``max_length`` or runtime truncation. See PRD §8 for the
-    rationale: truncation looks broken in the UI; an over-long agent
-    response just makes the card a row taller.
-
-    ``extra="forbid"`` rejects unknown ``_display_*`` keys (e.g. typoed
-    ``_display_summery``) so the wrap fails loudly during testing rather
-    than silently dropping the field.
+    Brevity is enforced by the field ``description`` shown to the model rather than
+    by ``max_length`` truncation — truncation renders as a broken card, while an
+    over-long string just makes the card taller. ``extra="forbid"`` rejects
+    unknown ``_display_*`` keys (e.g. a typo like ``_display_summery``) so
+    wrapping fails loudly during testing rather than silently dropping the field.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -448,33 +397,20 @@ class _DisplayFields(BaseModel):
             "Leave null if the tool's deterministic title is already clear."
         ),
     )
-    # NB on ``tool_call_id``: PRD §3 Part A. We intentionally do NOT declare
-    # ``tool_call_id: Annotated[str, InjectedToolCallId]`` on this base
-    # class. Doing so would force every wrap caller — including tests that
-    # bypass LangGraph and call ``ainvoke({...plain args...})`` — to use a
-    # full ``ToolCall`` envelope, since LangChain enforces envelope shape
-    # whenever a schema declares ``InjectedToolCallId``. Instead, we rely
-    # on Pydantic's model inheritance in :func:`wrap_args_schema`: when
-    # the inner tool's own ``args_schema`` already declares
-    # ``Annotated[str, InjectedToolCallId]`` (citation-capturing wrapper,
-    # every MCP tool), the wrapped schema inherits it automatically. The
-    # wrap coroutine signature ``*, tool_call_id: str = ""`` captures the
-    # injected id when present and defaults to ``""`` otherwise — both
-    # branches forward through :class:`_DispatchEnvelope` regardless.
+    # ``tool_call_id`` is deliberately NOT declared here. Declaring
+    # ``Annotated[str, InjectedToolCallId]`` forces every caller — including
+    # tests that bypass LangGraph — to use a full ToolCall envelope. Instead,
+    # the wrap coroutine captures it via ``*, tool_call_id: str = ""`` and the
+    # inner schema inherits it through Pydantic model inheritance when the
+    # inner tool already declares it (e.g. citation-capturing MCP tools).
 
 
 def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:
-    """Return a Pydantic model that extends ``args_schema`` with
-    optional ``_display_title`` + ``_display_summary`` fields.
+    """Return a Pydantic model that extends ``args_schema`` with optional ``_display_title`` and ``_display_summary`` fields.
 
-    When ``args_schema`` is ``None`` (some LangChain tools omit it) we
-    return a fresh model with just the two display fields. Either way the
-    returned class can be assigned to ``BaseTool.args_schema`` and Pydantic
-    validates inputs the same way.
-
-    Idempotent: wrapping an already-wrapped schema returns the wrapped
-    schema unchanged. This makes ``build_deep_agent`` safe to call on a
-    tools list that may include a re-bound subagent's tools.
+    Returns ``_DisplayFields`` directly when ``args_schema`` is ``None``.
+    Idempotent: a schema bearing the ``__display_wrapped__`` marker is returned unchanged,
+    making it safe to call on tools lists that pass through the wrap more than once.
     """
 
     if args_schema is None:
@@ -485,9 +421,7 @@ def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:
         f"{args_schema.__name__}WithDisplay",
         __base__=(args_schema, _DisplayFields),
     )
-    # Marker attribute so ``wrap_args_schema`` is idempotent — useful when
-    # a tools list passes through the wrap more than once (e.g. subagent
-    # composition that re-binds the supervisor's tools).
+    # Mark so re-wrapping is a no-op (subagent composition may re-apply the wrap).
     wrapped.__display_wrapped__ = True  # type: ignore[attr-defined]
     return wrapped
 
@@ -572,51 +506,25 @@ def agent_display_from_payload(
 
 
 def _non_empty_string(value: object) -> str | None:
+    """Return the stripped string when non-empty, otherwise ``None``."""
     if not isinstance(value, str):
         return None
     stripped = value.strip()
     return stripped or None
 
 
-# --- Phase 3.B tool-binding wrap -----------------------------------------
-#
-# Wraps a bound tool so its ``args_schema`` (the JSON-schema the agent
-# sees in its tool block) carries the optional ``_display_*`` fields and
-# its invocation strips them before delegating to the underlying tool.
-#
-# Two tool shapes show up in the bound tool list per
-# ``factory._model_visible_tools``:
-#
-# 1. ``StructuredTool`` — every custom dataclass adapter goes through
-#    ``factory._structured_tool``. Wrap via ``model_copy`` of the schema
-#    + the coroutine (and the sync ``func`` when present).
-# 2. Other ``BaseTool`` subclasses (DuckDuckGo etc.) — wrap by creating a
-#    NEW ``StructuredTool`` that delegates to the original via ``ainvoke``.
-#    Loses any tool-specific niceties (callbacks, custom error handlers)
-#    but is the safest path that preserves behaviour for the common case.
-#
-# Anything else is returned unchanged with a debug log — better to ship a
-# tool with no agent override than to break a tool we don't recognise.
-
-
 def wrap_tool_with_display(tool: object) -> object:
-    """Return a tool whose ``args_schema`` accepts ``_display_*`` and whose
-    invocation strips those fields before delegating to the underlying
-    implementation.
+    """Return a tool whose ``args_schema`` accepts ``_display_*`` and whose invocation strips those fields before delegating.
 
-    Idempotent: a tool whose schema already carries the
-    ``__display_wrapped__`` marker is returned unchanged.
-
-    Falls back to returning ``tool`` unchanged for shapes we don't
-    recognise — Phase 3.B's safety contract is "never break a working
-    tool to add display copy."
+    Idempotent: a tool already bearing the ``__display_wrapped__`` schema marker
+    is returned unchanged. Falls back to returning the original tool for unrecognised
+    shapes — the safety contract is "never break a working tool to add display copy."
     """
 
     args_schema = getattr(tool, "args_schema", None)
     if args_schema is not None and getattr(args_schema, "__display_wrapped__", False):
         return tool
-    # Local import — avoid a hard module-load dependency on langchain when
-    # the rest of this module is imported by tests that don't need it.
+    # Late import to avoid loading langchain in test paths that don't need it.
     try:
         from langchain_core.tools import BaseTool, StructuredTool  # noqa: PLC0415
     except ImportError:  # pragma: no cover - langchain is a hard runtime dep
@@ -630,25 +538,16 @@ def wrap_tool_with_display(tool: object) -> object:
 
 
 def wrap_tools_with_display(tools: Any) -> list[object]:
-    """Apply :func:`wrap_tool_with_display` to every entry of an iterable
-    of tools. Returns a new list — does not mutate the input."""
+    """Apply :func:`wrap_tool_with_display` to every tool and return a new list."""
 
     return [wrap_tool_with_display(tool) for tool in tools]
 
 
 class _DispatchEnvelope:
-    """Canonical LangChain ``ToolCall`` envelope shape used by wrap dispatch.
+    """Canonical LangChain ``ToolCall`` envelope builder shared by both wrap branches.
 
-    Centralised so a future LangChain bump that changes the envelope keys
-    is a one-file edit, and so the two wrap branches share one source of
-    truth for "how the wrapper hands off to its inner."
-
-    A plain ``args`` dict is rejected by ``BaseTool.ainvoke`` when the
-    inner's schema declares ``InjectedToolCallId`` (citation-capturing
-    wrapper, MCP tools). The envelope shape below is what LangChain
-    requires in that case and is harmless for tools that don't declare
-    the annotation — the ``id`` field is treated as metadata and the
-    args are extracted exactly the same way.
+    Using the full envelope is required when the inner's schema declares
+    ``InjectedToolCallId``; it is harmless for tools that don't.
     """
 
     TYPE_TOOL_CALL = "tool_call"
@@ -665,6 +564,7 @@ class _DispatchEnvelope:
         name: str,
         tool_call_id: str,
     ) -> dict[str, Any]:
+        """Build a LangChain ToolCall envelope dict."""
         return {
             cls.KEY_ARGS: args,
             cls.KEY_NAME: name,
@@ -674,19 +574,11 @@ class _DispatchEnvelope:
 
 
 def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
-    """Produce a copy of ``tool`` with wrapped schema + stripping invokers.
+    """Produce a copy of ``tool`` with the display-wrapped schema and stripping invokers.
 
-    Both ``func`` (sync) and ``coroutine`` (async) are wrapped when
-    present. ``StructuredTool.from_function`` inside ``factory.py`` only
-    sets ``coroutine`` for our adapters, but a third-party tool may set
-    ``func`` instead — handling both keeps the wrap general.
-
-    The wrapper's schema declares ``tool_call_id`` via
-    :class:`InjectedToolCallId`, so LangChain injects it as a kwarg.
-    Captured here but **not** forwarded to the inner callable — the
-    inner is a ``StructuredTool`` whose own coroutine signature does
-    not include ``tool_call_id``; passing it would raise
-    ``TypeError: unexpected keyword argument``. PRD §3 Part A.
+    Wraps both ``func`` (sync) and ``coroutine`` (async) when present.
+    ``tool_call_id`` is captured from LangChain injection but not forwarded
+    to the inner callable, which does not declare it.
     """
 
     original_schema = tool.args_schema
@@ -699,7 +591,8 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
     if callable(original_func):
 
         def _wrapped_func(*, tool_call_id: str = "", **kwargs: Any) -> Any:
-            del tool_call_id  # captured for LangChain, not forwarded — see docstring
+            """Sync dispatch path: strip display args and invoke the inner function."""
+            del tool_call_id  # captured by LangChain injection; not forwarded to inner
             real, _ = strip_display(kwargs)
             return original_func(**real)
 
@@ -708,6 +601,7 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
     if callable(original_coroutine):
 
         async def _wrapped_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+            """Async dispatch path: strip display args and await the inner coroutine."""
             del tool_call_id  # captured for LangChain, not forwarded — see docstring
             real, _ = strip_display(kwargs)
             return await original_coroutine(**real)
@@ -720,18 +614,10 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
 def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
     """Build a new ``StructuredTool`` that delegates to ``tool.ainvoke``.
 
-    Used for non-``StructuredTool`` ``BaseTool`` subclasses where we
-    can't safely mutate the args_schema + invoke methods in place. The
-    delegate invokes the original via ``BaseTool.ainvoke(envelope)``
-    where ``envelope`` is a full LangChain ``ToolCall`` dict
-    (:class:`_DispatchEnvelope`).
-
-    The full envelope is required when the inner tool's schema declares
-    :class:`InjectedToolCallId` (citation-capturing wrapper, every MCP
-    tool); passing a plain args dict raises ``ValueError`` from
-    LangChain's tool dispatch. The envelope is benign for inner tools
-    that do not declare the annotation — ``id`` is metadata, args are
-    extracted unchanged. PRD §3 Part A.
+    Used for non-``StructuredTool`` ``BaseTool`` subclasses where
+    mutating the schema in place is unsafe. The full LangChain
+    ``ToolCall`` envelope is required when the inner declares
+    ``InjectedToolCallId`` and is harmless for tools that don't.
     """
 
     original_schema = getattr(tool, "args_schema", None)
@@ -739,6 +625,7 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
     inner_name = getattr(tool, "name", "tool")
 
     async def _delegating_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+        """Delegate to ``tool.ainvoke`` with a full LangChain tool-call envelope."""
         real, _ = strip_display(kwargs)
         envelope = _DispatchEnvelope.build(
             args=real,

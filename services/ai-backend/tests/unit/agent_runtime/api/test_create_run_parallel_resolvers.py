@@ -1,5 +1,5 @@
 """P3 (refactor 03-parallel-bootstrap.md) — pin the parallel-resolver
-contract in ``RuntimeApiService.create_run``.
+contract in ``RunCoordinator.create_run``.
 
 The three run-start helpers ``_resolve_workspace_behavior_overrides`` /
 ``_resolve_user_policies`` / ``_resolve_suggested_connectors`` must run

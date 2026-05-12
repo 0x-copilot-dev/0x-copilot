@@ -35,7 +35,7 @@ class NormalizedTokenUsage(BaseModel):
     - ``audio_input_tokens`` / ``audio_output_tokens``: voice tokens
       where the provider charges separately.
 
-    Pricing math (P12 plugs in here)::
+    Pricing math::
 
         cost = (input - cached - cache_creation) * price_input
              + cached                            * price_cached_input

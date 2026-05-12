@@ -60,8 +60,7 @@ class UserContentKeys:
 
 
 # ``Patterns.SENSITIVE_KEY`` and ``Patterns.SENSITIVE_VALUE`` were
-# removed in P11.2 (see docs/refactor/01b-redaction-exact-match-deny-keys.md).
-# Key matching now uses an exact-match deny set in
+# removed. Key matching now uses an exact-match deny set in
 # ``agent_runtime.observability.redactor.DENY_KEYS``. Value pattern
 # scrubbing is gone entirely — sensitivity is tagged per-field via the
-# ``Sensitive[]`` annotation (P11.3), not detected by content shape.
+# ``Sensitive[]`` annotation, not detected by content shape.

@@ -1,27 +1,4 @@
-"""Async Postgres-backed runtime API, event store, and durable queue adapter.
-
-Built on ``psycopg.AsyncConnection`` and ``psycopg_pool.AsyncConnectionPool``.
-Hazard-fix + serialization invariants:
-
-- ``async with self._pool.connection() as conn:`` + ``async with
-  conn.transaction():`` for transactional cancellation safety.
-- ``append_event`` is lock-free: it does not take ``FOR UPDATE`` on
-  ``agent_runs``. The ``UNIQUE(run_id, sequence_no)`` index
-  (``idx_runtime_events_run_sequence`` from migration 0001) is the
-  primary guard. Concurrent appenders that race to the same
-  ``sequence_no`` lose with ``UniqueViolation`` and retry up to
-  :data:`_AppendEventRetry.MAX_ATTEMPTS` times; sustained contention
-  past the retry budget surfaces :class:`RuntimeEventSequenceConflict`.
-- ``append_events_batch`` keeps the ``agent_runs`` row lock: its purpose
-  (atomic contiguous-range allocation of N sequence_nos) is different
-  from the per-event retry shape.
-- ``create_approval_request`` uses ``INSERT … ON CONFLICT (id) DO NOTHING``
-  followed by a fallback ``SELECT`` (H2). No check-then-insert race.
-- ``set_run_latest_sequence`` is monotonic: ``UPDATE … WHERE id = $1 AND
-  latest_sequence_no < $2``. Out-of-order writes never rewind the cursor (H3).
-  The consolidated UPDATE inside ``append_event`` carries the same guard so
-  retries can never rewind the cursor either.
-"""
+"""Async Postgres-backed runtime API, event store, and durable queue adapter."""
 
 from __future__ import annotations
 
@@ -123,7 +100,7 @@ from runtime_api.schemas import (
 
 
 class _Tables:
-    """SQL table-name constants — used by C7 field encryption AAD binding."""
+    """SQL table-name constants used as Additional Authenticated Data in field encryption."""
 
     AGENT_MESSAGES = "agent_messages"
     RUNTIME_AUDIT_LOG = "runtime_audit_log"
@@ -132,10 +109,11 @@ class _Tables:
 
 
 class _AppendEventRetry:
-    """Tuning constants for the P16 lock-free ``append_event`` retry loop.
+    """Tuning constants for the lock-free ``append_event`` retry loop.
 
-    Match against the UNIQUE INDEX name from migration 0001:
-    ``CREATE UNIQUE INDEX idx_runtime_events_run_sequence ON runtime_events (run_id, sequence_no)``.
+    The unique index ``idx_runtime_events_run_sequence (run_id, sequence_no)`` is the
+    primary guard. Concurrent appenders that land on the same sequence number retry
+    up to ``MAX_ATTEMPTS`` times with jittered backoff before surfacing a conflict error.
     """
 
     SEQUENCE_INDEX = "idx_runtime_events_run_sequence"
@@ -163,25 +141,23 @@ class _Columns:
     CONVERSATION_ID = "conversation_id"
     COUNT = "count"
     CREATED_AT = "created_at"
-    # PR 1.4 — two-stage approval forwarding bookkeeping columns on
-    # runtime_approval_requests (migration 0017).
+    # Two-stage approval forwarding bookkeeping columns on runtime_approval_requests.
     CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
-    # PR 1.4.1 Gap #7 — chain depth column (migration 0018).
     CHAIN_DEPTH = "chain_depth"
     FORWARDED_AT = "forwarded_at"
     FORWARDED_DECIDED_AT = "forwarded_decided_at"
     FORWARDED_TO_USER_ID = "forwarded_to_user_id"
     ENABLED_CONNECTORS = "enabled_connectors"
     DELETED_AT = "deleted_at"
-    # PR 1.6 — workspace defaults + conversation lifecycle columns.
+    # Workspace defaults + conversation lifecycle columns.
     DEFAULT_MODEL = "default_model"
     DEFAULT_CONNECTORS = "default_connectors"
-    # PR 4.3 — workspace-policy knobs JSONB column on workspace_defaults.
+    # Workspace-policy knobs JSONB column on workspace_defaults.
     BEHAVIOR_OVERRIDES = "behavior_overrides"
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
-    # PR 6.2 — conversation fork lineage (migration 0022).
+    # Conversation fork lineage column.
     FORKED_FROM_SHARE_ID = "forked_from_share_id"
     DISPLAY_TITLE = "display_title"
     EDITED_AT = "edited_at"
@@ -238,7 +214,7 @@ class _Columns:
 
 
 class _PoolEnv:
-    """Env-var keys + defaults for runtime DB pool tuning (C4)."""
+    """Env-var keys and defaults for runtime DB connection-pool tuning."""
 
     POOL_MIN_SIZE = "RUNTIME_DB_POOL_MIN_SIZE"
     POOL_MAX_SIZE = "RUNTIME_DB_POOL_MAX_SIZE"
@@ -246,7 +222,7 @@ class _PoolEnv:
     STATEMENT_TIMEOUT_MS = "RUNTIME_DB_STATEMENT_TIMEOUT_MS"
     LOCK_TIMEOUT_MS = "RUNTIME_DB_LOCK_TIMEOUT_MS"
     IDLE_IN_TXN_TIMEOUT_MS = "RUNTIME_DB_IDLE_IN_TXN_TIMEOUT_MS"
-    # C10 read-replica routing.
+    # Read-replica routing.
     READ_REPLICA_URL = "RUNTIME_DB_READ_REPLICA_URL"
     READ_REPLICA_MAX_LAG_SECONDS = "RUNTIME_DB_READ_REPLICA_MAX_LAG_SECONDS"
 
@@ -261,6 +237,7 @@ class _PoolEnv:
 
     @classmethod
     def env_int(cls, name: str, default: int) -> int:
+        """Return an int from an env var, falling back to ``default`` on missing or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -271,6 +248,7 @@ class _PoolEnv:
 
     @classmethod
     def env_float(cls, name: str, default: float) -> float:
+        """Return a float from an env var, falling back to ``default`` on missing or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -384,32 +362,24 @@ class PostgresRuntimeApiStore:
             raise ValueError("Either database_url or pool must be provided.")
         self.database_url = database_url
         self._role = role
-        # P2 — when True, every successful ``append_event`` /
-        # ``append_events_batch`` fires ``NOTIFY <channel>, '<run_id>:<seq>'``
-        # so cross-process listeners (the SSE adapter in the API process)
-        # wake within milliseconds. The NOTIFY runs inside the same
-        # transaction as the INSERT — if the INSERT rolls back the NOTIFY
-        # is silently discarded by Postgres. Default False so the existing
-        # in-memory event-bus path is unaffected.
+        # When True, every successful ``append_event`` / ``append_events_batch``
+        # fires ``NOTIFY <channel>, '<run_id>:<seq>'`` so cross-process SSE listeners
+        # wake within milliseconds. The NOTIFY runs inside the same transaction as the
+        # INSERT — if the INSERT rolls back the NOTIFY is silently discarded by Postgres.
         self._notify_after_append = notify_after_append
         self._notify_channel = notify_channel
-        # C7 phase 1: ``field_encryption`` defaults to ``NullFieldEncryption``
-        # so writes stay v0 (plaintext) until an operator flips
-        # ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``. The injection point is
-        # available now so phase 2 wiring (encrypt-on-write, decrypt-on-read
-        # for every targeted column) can happen without touching the
-        # constructor again.
+        # ``field_encryption`` defaults to ``NullFieldEncryption`` so writes stay
+        # v0 (plaintext) until an operator flips ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``.
+        # The injection point is available now so write-and-read wiring can happen
+        # without changing the constructor signature.
         self._field_encryption: FieldEncryption = (
             field_encryption
             if field_encryption is not None
             else FieldEncryptionFactory.from_env()
         )
-        # C7 phase 2: codec is the per-call-site facade (encrypt/decrypt
-        # text + jsonb + version-aware reads). ``RUNTIME_FIELD_ENCRYPTION
-        # _STRICT_READS=true`` is set by operators after backfill confirms
-        # ``min(encryption_version)=1`` and turns v0 reads into errors so
-        # any missed sweep surfaces immediately instead of silently
-        # returning plaintext.
+        # ``RUNTIME_FIELD_ENCRYPTION_STRICT_READS=true`` turns v0 reads into errors
+        # after a successful backfill — any row still at version 0 surfaces
+        # immediately rather than silently returning plaintext.
         strict_reads = os.environ.get(
             "RUNTIME_FIELD_ENCRYPTION_STRICT_READS", "false"
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -453,10 +423,9 @@ class PostgresRuntimeApiStore:
             )
             self._owns_pool = True
             self._metrics.bind_pool(self._pool)
-        # C10: optional read replica.  Falls back to primary on health
-        # failure or if unset.  Constructor wiring keeps the test harness
-        # injectable; env-driven config kicks in only when no explicit
-        # replica was passed.
+            # Optional read replica — falls back to primary on health failure or if unset.
+        # Constructor injection keeps the test harness injectable; env-driven config
+        # kicks in only when no explicit replica was passed.
         self._replica_pool: AsyncConnectionPool | None = replica_pool
         self._owns_replica_pool = False
         self._replica_healthy = self._replica_pool is not None
@@ -514,21 +483,12 @@ class PostgresRuntimeApiStore:
     async def _tenant_connection(
         self, *, org_id: str | None = None, role: str | None = None
     ) -> AsyncIterator[psycopg.AsyncConnection]:  # type: ignore[type-arg]
-        """Acquire a pool connection and stamp the RLS session vars (C5).
+        """Acquire a pool connection and stamp RLS session variables.
 
-        - ``org_id``: when set, runs ``set_config('app.current_org_id', ...)``
-          so the ``tenant_isolation`` policies on tenant-scoped tables match
-          once Stage 3 enables RLS.
-        - ``role``: when set, runs ``set_config('app.role', ...)`` so policies
-          that key off ``app.role='worker'`` (e.g. the outbox's
-          ``tenant_or_worker`` policy) grant cross-tenant access to the worker
-          process. Defaults to ``self._role`` ('api' or 'worker') so every
-          API connection still tags itself in the unlikely event we extend
-          policies later.
-
-        During Stage 1+2 the policies are dormant — ENABLE ROW LEVEL SECURITY
-        has not been applied — so setting the vars is harmless and lets us
-        instrument logs to confirm every checkout flows through here.
+        Sets ``app.current_org_id`` when ``org_id`` is given so row-level security
+        policies on tenant-scoped tables match. Sets ``app.role`` so policies that
+        distinguish 'worker' from 'api' access (e.g. the outbox cross-tenant policy)
+        grant the right scope. Harmless when RLS is not yet enabled.
         """
 
         async with self._pool.connection() as conn:
@@ -567,13 +527,11 @@ class PostgresRuntimeApiStore:
     async def _read_only_connection(
         self, *, org_id: str | None = None
     ) -> AsyncIterator[psycopg.AsyncConnection]:  # type: ignore[type-arg]
-        """C10 — pick the replica when healthy; fall back to primary.
+        """Acquire a read-only connection, preferring the replica over the primary.
 
-        Used by ``@reader``-annotated methods. Tenant scoping (RLS session
-        var from C5) still applies on the replica because policies
-        replicate by default. Failures while opening the replica
-        connection silently degrade to the primary so the request still
-        succeeds — degraded latency is better than a 5xx.
+        Used by ``@reader``-annotated methods. Tenant RLS session variables still
+        apply on the replica (policies replicate by default). Replica failures degrade
+        silently to the primary — latency degrades, but the request still succeeds.
         """
 
         if self._replica_pool is not None and self._replica_healthy:
@@ -693,11 +651,11 @@ class PostgresRuntimeApiStore:
         org_id: str,
         conversation_id: str,
     ) -> ConversationRecord | None:
-        """Return a conversation by org only — admin-override path (PR 1.2.1).
+        """Return a conversation scoped by org only, bypassing the user filter.
 
         Admin authorization is enforced by the service layer; this method
         only enforces tenant isolation. Cross-tenant rows are filtered by
-        the org_id predicate AND by RLS at the connection level.
+        the org_id predicate and by RLS at the connection level.
         """
 
         async with self._tenant_connection(org_id=org_id) as conn:
@@ -722,11 +680,10 @@ class PostgresRuntimeApiStore:
     ) -> Sequence[ConversationRecord]:
         """Return scoped conversations ordered by latest update.
 
-        ``include_deleted`` (PR 1.6) skips soft-deleted rows by default
-        (the sidebar query). The partial index
-        ``idx_agent_conversations_org_user_active_updated`` (migration
-        0020) covers this hot path; the full-coverage index from
-        migration 0001 still serves the ``include_deleted=true`` case.
+        Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default —
+        the sidebar query path. A partial index covering active conversations
+        serves this hot path; the include-deleted path falls back to the full index.
+
         """
 
         archived_filter = "" if include_archived else "AND status <> 'archived'"
@@ -785,11 +742,10 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
 
-    # --- PR 1.6: workspace defaults + conversation lifecycle ---------- #
-
     async def get_workspace_defaults(
         self, *, org_id: str
     ) -> WorkspaceDefaultsRecord | None:
+        """Return the workspace defaults row for an org, or ``None`` if not yet set."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -809,6 +765,7 @@ class PostgresRuntimeApiStore:
     async def upsert_workspace_defaults(
         self, *, record: WorkspaceDefaultsRecord
     ) -> WorkspaceDefaultsRecord:
+        """Persist workspace-level defaults for an org, inserting or replacing the existing row."""
         # Retention is composed by the service from ``retention_policies``
         # — never touched here. Persist only the columns owned by the
         # workspace_defaults table.
@@ -821,11 +778,9 @@ class PostgresRuntimeApiStore:
             connector_id: (list(scopes) if scopes is not None else None)
             for connector_id, scopes in record.default_connectors.items()
         }
-        # PR 4.3 — serialise the behavior_overrides Pydantic model into
-        # the JSONB blob. ``exclude_none=True`` keeps absent fields out
-        # of the row so we never persist a noisy ``{"temperature": null,
-        # ...}`` shape; consumers always read via the typed Pydantic
-        # model on the way back.
+        # Serialise the behavior_overrides Pydantic model into the JSONB blob.
+        # ``exclude_none=True`` keeps absent fields out so the stored shape is
+        # clean; consumers always deserialise via the typed model on the way back.
         behavior_overrides_json = record.behavior_overrides.model_dump(
             mode="json",
             exclude_none=True,
@@ -871,9 +826,8 @@ class PostgresRuntimeApiStore:
         service from ``retention_policies`` (we never persist it on
         this row).
 
-        ``behavior_overrides`` (PR 4.3) is hydrated from JSONB; an
-        absent / empty / forward-incompatible blob falls back to the
-        Pydantic default (all-None / opt-out=False).
+        ``behavior_overrides`` is hydrated from JSONB; an absent, empty, or
+        forward-incompatible blob falls back to the Pydantic default (all-None / opt-out=False).
         """
 
         default_model_json = row.get(_Columns.DEFAULT_MODEL) or {}
@@ -1059,13 +1013,12 @@ class PostgresRuntimeApiStore:
     async def insert_forked_conversation(
         self, conversation: ConversationRecord
     ) -> ConversationRecord:
-        """Insert a fork-authored conversation row verbatim (PR 6.2).
+        """Insert a fork-authored conversation row verbatim.
 
-        Distinct from ``create_conversation``: bypasses idempotency
-        (forks always mint a new row) and writes every column the caller
-        has populated, including the lineage pointers
-        (``parent_conversation_id``, ``forked_from_share_id``) and the
-        per-chat connector scope override the standard path drops.
+        Distinct from ``create_conversation``: bypasses idempotency (forks always mint
+        a new row) and writes every column the caller has populated, including lineage
+        pointers (``parent_conversation_id``, ``forked_from_share_id``) and the per-chat
+        connector scope override that the standard path drops.
         """
 
         # Encode the per-chat connector scope override the same way the
@@ -1131,7 +1084,7 @@ class PostgresRuntimeApiStore:
             )
 
         async with self._tenant_connection(org_id=conversation.org_id) as conn:
-            # Single transaction for the whole multi-statement op (H4): if we
+            # Single transaction for the whole multi-statement op: if we
             # release the connection mid-way we lose atomicity.
             async with conn.transaction():
                 if request.idempotency_key is not None:
@@ -1148,9 +1101,8 @@ class PostgresRuntimeApiStore:
                     )
                     existing = await cur.fetchone()
                     if existing is not None:
-                        # C7 phase 2: the joined ``user_content_text`` may
-                        # be a v1 envelope; decrypt before comparing
-                        # against the caller's plaintext input.
+                        # The joined ``user_content_text`` may be an encrypted envelope;
+                        # decrypt before comparing against the caller's plaintext input.
                         existing_user_text = self._codec.decrypt_text(
                             existing[_Columns.USER_CONTENT_TEXT],
                             encryption_version=int(
@@ -1278,7 +1230,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         conversation_id: str,
     ) -> RunRecord | None:
-        """Return the most recent non-terminal run on a conversation (PR 1.6)."""
+        """Return the most recent non-terminal run on a conversation."""
 
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
@@ -1300,7 +1252,7 @@ class PostgresRuntimeApiStore:
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
     ) -> RunRecord:
-        """Update mutable run status with optimistic-lock CAS (C3).
+        """Update mutable run status with optimistic-lock compare-and-swap.
 
         Reads ``row_version`` alongside the run row, then issues an UPDATE
         whose WHERE clause asserts the same version and bumps it. If a
@@ -1343,7 +1295,7 @@ class PostgresRuntimeApiStore:
     async def set_run_latest_sequence(
         self, *, run_id: str, latest_sequence_no: int
     ) -> RunRecord:
-        """Persist latest event sequence for a run, monotonically (H3).
+        """Persist latest event sequence for a run, monotonically.
 
         The UPDATE only writes when the new value is strictly greater than the
         stored one. If two appends arrive out of order under async concurrency,
@@ -1382,7 +1334,7 @@ class PostgresRuntimeApiStore:
         """Persist an approval decision against the approval request row."""
 
         decision_reason = record.reason if record.reason is not None else record.answer
-        # PR 4.4.6.4 — round-trip ``decided_at`` into the metadata blob
+        # Round-trip ``decided_at`` into the metadata blob
         # so the undo endpoint can compute the 60s window without a
         # separate decision lookup. Mirrors the in-memory adapter; the
         # blob is the existing zero-migration seam.
@@ -1418,7 +1370,7 @@ class PostgresRuntimeApiStore:
         *,
         record: ApprovalRequestRecord,
     ) -> ApprovalRequestRecord:
-        """Persist a pending approval request, idempotent on ``approval_id`` (H2).
+        """Persist a pending approval request, idempotent on ``approval_id``.
 
         Atomic upsert: ``INSERT … ON CONFLICT (id) DO NOTHING``. If the insert
         was a no-op (someone else got there first), fetch the existing row and
@@ -1489,12 +1441,11 @@ class PostgresRuntimeApiStore:
         child: ApprovalRequestRecord,
         now: datetime,
     ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
-        """Atomic parent→FORWARDED + child INSERT for two-stage approvals.
+        """Atomically transition the parent to FORWARDED and insert the child approval.
 
-        PR 1.4 — single transaction (single ``async with conn.transaction()``)
-        covers both writes so a partial chain never persists. Idempotent on
-        ``child.approval_id`` via the same ``ON CONFLICT (id) DO NOTHING``
-        guard the create_approval_request path uses.
+        A single transaction covers both writes so a partial chain never persists.
+        Idempotent on ``child.approval_id`` via ``ON CONFLICT (id) DO NOTHING`` —
+        the same guard used by ``create_approval_request``.
         """
 
         from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
@@ -1563,7 +1514,7 @@ class PostgresRuntimeApiStore:
                         child.expires_at,
                         child.created_at,
                         parent_approval_id,
-                        # PR 1.4.1 Gap #7 — service caps the value via
+                        # The service caps the value via
                         # APPROVAL_FORWARD_MAX_CHAIN_DEPTH; the table CHECK
                         # is the belt-and-braces guard.
                         child.chain_depth or 1,
@@ -1622,8 +1573,8 @@ class PostgresRuntimeApiStore:
         Centralised so the create_approval_request / forward_approval_request
         / get_approval_request paths all populate the new chain fields
         consistently. ``row.get`` is used for the columns added in
-        migration 0017 so older rows (or older test fixtures) that don't
-        carry them still load.
+        schema columns added in a later migration so older rows (or test
+        fixtures) that predate those columns still load correctly.
         """
 
         return ApprovalRequestRecord(
@@ -1709,7 +1660,7 @@ class PostgresRuntimeApiStore:
                     "__event_type__": event_type,
                 }
                 sig = signer.sign(prev_hash=prev_hash, payload=payload)
-                # C7 phase 2: encrypt the redacted metadata blob; the
+                # Encrypt the redacted metadata blob; the
                 # rest of the row is HMAC-chain-signed clear (the chain
                 # is the load-bearing tamper guard, not the metadata).
                 metadata_encrypted = self._codec.encrypt_jsonb(
@@ -1760,6 +1711,7 @@ class PostgresRuntimeApiStore:
         after_id: str | None,
         limit: int,
     ) -> tuple[dict, ...]:
+        """Return up to ``limit`` audit log rows for SIEM export, paginated by ``after_id``."""
         # Cross-tenant scan via the worker role (same trust contract as
         # ``query_run_usage_for_range(org_id=None)``); the SIEM pump is the
         # only legitimate caller and runs under the operator's service token.
@@ -1792,7 +1744,7 @@ class PostgresRuntimeApiStore:
                         (after_id, bounded),
                     )
                 rows = await cur.fetchall()
-        # C7 phase 2: SIEM consumers receive plaintext metadata. Decrypt
+        # SIEM consumers receive plaintext metadata — decrypt
         # per-row using the row's own encryption_version so v0 (legacy)
         # rows pass through and v1 rows get unwrapped.
         decoded: list[dict] = []
@@ -1937,7 +1889,7 @@ class PostgresRuntimeApiStore:
                 deletion_sig = signer.sign(
                     prev_hash=prev_hash, payload=deletion_payload
                 )
-                # C7 phase 2: encrypt the redacted metadata JSON.
+                # Encrypt the redacted metadata JSON.
                 deletion_metadata_encrypted = self._codec.encrypt_jsonb(
                     deletion_metadata,
                     table=_Tables.RUNTIME_AUDIT_LOG,
@@ -2002,11 +1954,11 @@ class PostgresRuntimeApiStore:
         )
 
     # ------------------------------------------------------------------
-    # Usage + pricing (B1, B2, B3, B4)
+    # Usage + pricing
     # ------------------------------------------------------------------
 
     async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
-        """Idempotent INSERT of one ``runtime_run_usage`` row (B1).
+        """Idempotent INSERT of one ``runtime_run_usage`` row.
 
         ``ON CONFLICT (run_id) DO NOTHING`` makes worker retries safe; if
         the row already exists, the second write is a no-op. The row is a
@@ -2075,7 +2027,7 @@ class PostgresRuntimeApiStore:
     async def record_model_call_usage(
         self, record: RuntimeModelCallUsageRecord
     ) -> None:
-        """Append a per-LLM-call usage row (B2).
+        """Append a per-LLM-call usage row.
 
         Rows are unique by their own UUID id so no ON CONFLICT is needed;
         upstream dedupe (one row per AIMessage id) is the worker's job.
@@ -2146,6 +2098,7 @@ class PostgresRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
+        """Back-fill the cost fields on a run usage row after pricing is resolved."""
         async with self._tenant_connection(role=self._role) as conn:
             await conn.execute(
                 """
@@ -2166,6 +2119,7 @@ class PostgresRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
+        """Back-fill the cost fields on a model-call usage row after pricing is resolved."""
         async with self._tenant_connection(role=self._role) as conn:
             await conn.execute(
                 """
@@ -2179,7 +2133,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
-        """Replace the active pricing row for (provider, model, region) (B3).
+        """Replace the active pricing row for (provider, model, region).
 
         The partial unique index on ``effective_until IS NULL`` requires
         that we close any prior active row before inserting the new one.
@@ -2249,6 +2203,7 @@ class PostgresRuntimeApiStore:
         region: str,
         at: datetime,
     ) -> ModelPricingRecord | None:
+        """Return the active pricing row for (provider, model, region) at ``at``, or ``None``."""
         async with self._tenant_connection(role=self._role) as conn:
             cur = await conn.execute(
                 """
@@ -2272,6 +2227,7 @@ class PostgresRuntimeApiStore:
         limit: int,
         cursor: str | None = None,
     ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run usage rows with no cost yet computed, keyset-paginated by ``cursor``."""
         cursor_clause = "AND id > %s" if cursor is not None else ""
         params: tuple[object, ...] = (limit, cursor) if cursor is not None else (limit,)
         async with self._tenant_connection(role=self._role) as conn:
@@ -2290,6 +2246,7 @@ class PostgresRuntimeApiStore:
         return tuple(self._run_usage_record(row) for row in rows)
 
     async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        """Insert or replace the per-user per-day usage aggregate for (org, user, day, model)."""
         async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
@@ -2331,6 +2288,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        """Insert or replace the per-org per-day usage aggregate for (org, day, model)."""
         async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
@@ -2373,6 +2331,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        """Insert or replace the per-connector per-day usage aggregate for (org, day, connector, model)."""
         async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
@@ -2415,6 +2374,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        """Insert or replace the per-subagent per-day usage aggregate for (org, day, subagent, model)."""
         async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
@@ -2468,6 +2428,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        """Insert or replace the per-purpose per-day usage aggregate for (org, day, purpose, model)."""
         async with self._tenant_connection(org_id=row.org_id) as conn:
             await conn.execute(
                 """
@@ -2529,6 +2490,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyUserRow]:
+        """Return daily usage rows for a user within the given day range, newest first."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2551,6 +2513,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
+        """Return daily usage rows for an org within the given day range, newest first."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2572,6 +2535,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyConnectorRow]:
+        """Return daily connector usage rows for an org within the given day range, newest first."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2593,6 +2557,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailySubagentRow]:
+        """Return daily subagent usage rows for an org within the given day range, newest first."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2614,6 +2579,7 @@ class PostgresRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyPurposeRow]:
+        """Return daily purpose usage rows for an org within the given day range, newest first."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2634,6 +2600,7 @@ class PostgresRuntimeApiStore:
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return model-call usage rows within the time window; ``org_id=None`` scans all tenants."""
         # Cold-start fallback (per-tenant) AND rollup-loop scan (org_id=None).
         # Caller bounds the window: API endpoints cap at 30d, rollup loop at
         # the configured trailing window (default 2d).
@@ -2671,6 +2638,7 @@ class PostgresRuntimeApiStore:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Sequence[dict[str, object]]:
+        """Return audit log events for an org with optional filters; binary hash fields are hex-encoded."""
         clauses = ["org_id = %s", "(seq IS NULL OR seq > %s)"]
         params: list[object] = [org_id, after_seq]
         if action_prefix is not None:
@@ -2715,6 +2683,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> RuntimeRunUsageRecord | None:
+        """Return the usage record for a single run, or ``None`` if not yet written."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2734,6 +2703,7 @@ class PostgresRuntimeApiStore:
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run usage rows within the time window; ``org_id=None`` scans all tenants for rollup."""
         # Cold-start fallback (per-tenant) AND rollup-loop scan (org_id=None).
         # Caller bounds the window: API endpoints cap at 30d, rollup loop at
         # the configured trailing window (default 2d).
@@ -2763,8 +2733,7 @@ class PostgresRuntimeApiStore:
             params = (org_id, start, end)
         # When ``org_id`` is None we're scanning across tenants for the
         # rollup loop — use the worker role connection so the
-        # outbox-style ``tenant_or_worker`` precedent applies once Stage 3
-        # of C5 enables RLS broadly.
+        # outbox-style ``tenant_or_worker`` RLS policy grants cross-tenant access.
         if org_id is None:
             cm = self._role_connection("worker")
         else:
@@ -2784,6 +2753,7 @@ class PostgresRuntimeApiStore:
         end: datetime,
         limit: int,
     ) -> Sequence[UsageConversationAggregateRecord]:
+        """Return the top conversations by token usage for a user within the time window."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2837,6 +2807,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return all model-call usage rows for a run, ordered by call time ascending."""
         async with self._read_only_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2856,6 +2827,7 @@ class PostgresRuntimeApiStore:
         user_id: str,
         conversation_id: str,
     ) -> RuntimeRunUsageRecord | None:
+        """Return the most recent run usage record for a conversation, skipping PII-purged rows."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2876,6 +2848,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[CompressionEventRecord]:
+        """Return all context-compression events for a run, ordered by occurrence time ascending."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -2889,7 +2862,7 @@ class PostgresRuntimeApiStore:
         return tuple(self._compression_event_record(r) for r in rows)
 
     # ------------------------------------------------------------------
-    # Budgets (B7).
+    # Budgets.
     # ------------------------------------------------------------------
 
     async def lookup_budgets_for_run(
@@ -2899,6 +2872,7 @@ class PostgresRuntimeApiStore:
         user_id: str,
         now: datetime | None = None,
     ) -> Sequence[BudgetWithState]:
+        """Return active budgets (org-scope + user-scope) with current period spend and reservations."""
         # ``LEFT JOIN LATERAL`` collapses three queries (budget, state for
         # the current period, sum of unconsumed reservations for the
         # current period) into one round-trip. Period start is computed
@@ -2978,6 +2952,7 @@ class PostgresRuntimeApiStore:
         run_id: str,
         now: datetime,
     ) -> ChargeOutcome:
+        """Atomically increment period spend; idempotent per run_id; returns the charge outcome."""
         async with self._role_connection("worker") as conn:
             # Try INSERT first so a fresh-period charge succeeds without
             # a separate "create state row" call. ON CONFLICT DO NOTHING
@@ -3043,6 +3018,7 @@ class PostgresRuntimeApiStore:
         reserved_tokens: int,
         now: datetime,
     ) -> BudgetReservationRecord | None:
+        """Create a budget reservation for a run; idempotent per (budget_id, run_id); returns None on conflict."""
         from agent_runtime.budgets.reservations import BudgetReservationManager
 
         from uuid import uuid4
@@ -3085,6 +3061,7 @@ class PostgresRuntimeApiStore:
     async def consume_budget_reservation(
         self, *, reservation_id: str, now: datetime
     ) -> None:
+        """Mark a budget reservation as consumed so it is excluded from future hold totals."""
         async with self._role_connection("worker") as conn:
             await conn.execute(
                 """
@@ -3096,6 +3073,7 @@ class PostgresRuntimeApiStore:
             )
 
     async def reap_expired_budget_reservations(self, *, now: datetime) -> int:
+        """Delete all unconsumed reservations whose TTL has passed; returns the count deleted."""
         async with self._role_connection("worker") as conn:
             cur = await conn.execute(
                 """
@@ -3107,6 +3085,7 @@ class PostgresRuntimeApiStore:
             return cur.rowcount or 0
 
     async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        """Return all budgets for an org, newest first."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -3122,7 +3101,7 @@ class PostgresRuntimeApiStore:
     async def list_tool_budgets_for_org(
         self, *, org_id: str
     ) -> Sequence[ToolBudgetRecord]:
-        """B8 — return per-tool budgets the org can see (own rows + global).
+        """Return per-tool budgets visible to the org: own rows plus global (org_id IS NULL) rows.
 
         The RLS policy ``tenant_or_global`` on ``runtime_tool_budgets``
         already lets a tenant connection read its own rows AND the
@@ -3165,6 +3144,7 @@ class PostgresRuntimeApiStore:
         )
 
     async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        """Return a single budget by ID, or ``None`` if not found."""
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -3176,6 +3156,7 @@ class PostgresRuntimeApiStore:
         return self._budget_record(row) if row is not None else None
 
     async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Insert a new budget row and return the record unchanged."""
         async with self._tenant_connection(org_id=record.org_id) as conn:
             await conn.execute(
                 """
@@ -3203,6 +3184,7 @@ class PostgresRuntimeApiStore:
         return record
 
     async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Update mutable budget fields (enforcement, limits, status) and return the record."""
         async with self._tenant_connection(org_id=record.org_id) as conn:
             await conn.execute(
                 """
@@ -3227,6 +3209,7 @@ class PostgresRuntimeApiStore:
         return record
 
     async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        """Hard-delete a budget row; silently a no-op if the row does not exist."""
         async with self._tenant_connection(org_id=org_id) as conn:
             await conn.execute(
                 "DELETE FROM usage_budgets WHERE org_id = %s AND id = %s",
@@ -3234,12 +3217,13 @@ class PostgresRuntimeApiStore:
             )
 
     # ------------------------------------------------------------------
-    # Retention (C8). The sweeper walks orgs cross-tenant under
+    # Retention — the sweeper walks orgs cross-tenant under
     # ``app.role='worker'`` so RLS allows the per-org policy lookup +
     # tombstone/delete; same trust contract as the usage rollup loop.
     # ------------------------------------------------------------------
 
     async def list_retention_orgs(self) -> tuple[str, ...]:
+        """Return distinct org IDs that have rows in any retention-managed table."""
         async with self._role_connection("worker") as conn:
             async with conn.cursor() as cur:
                 # Distinct org_ids across the affected tables. The UNION
@@ -3260,6 +3244,7 @@ class PostgresRuntimeApiStore:
     async def list_retention_policies(
         self, *, org_id: str
     ) -> tuple[RetentionPolicyRecord, ...]:
+        """Return all retention policies for an org, ordered by creation time."""
         async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -3278,6 +3263,7 @@ class PostgresRuntimeApiStore:
     async def upsert_retention_policy(
         self, record: RetentionPolicyRecord
     ) -> RetentionPolicyRecord:
+        """Insert or update a retention policy; conflict on (org, scope, resource_id, kind) updates TTL only."""
         async with self._tenant_connection(org_id=record.org_id) as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -3310,6 +3296,7 @@ class PostgresRuntimeApiStore:
         return record
 
     async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        """Remove a retention policy row; silently a no-op if the row does not exist."""
         async with self._tenant_connection(org_id=org_id) as conn:
             await conn.execute(
                 "DELETE FROM retention_policies WHERE org_id = %s AND id = %s",
@@ -3325,7 +3312,8 @@ class PostgresRuntimeApiStore:
         dry_run: bool = False,
         chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
-        # chunk_size > 0 → Phase 4 retention_until-based chunked CTE.
+        """Expire or tombstone rows matching the retention kind; ``chunk_size>0`` uses keyset chunking."""
+        # chunk_size > 0 → retention_until-based chunked CTE (avoids full-table scan on large orgs).
         # chunk_size == 0 → legacy created_at+ttl unbounded SQL (flag=false).
         if chunk_size > 0:
             if kind is RetentionKind.MESSAGES:
@@ -3556,7 +3544,7 @@ class PostgresRuntimeApiStore:
         return outcome.model_copy(update={"deleted": affected})
 
     # ------------------------------------------------------------------
-    # Phase 4 — chunked retention_until-based sweep methods
+    # Chunked retention_until-based sweep methods
     #
     # Each uses a CTE to select up to ``chunk_size`` due rows, then
     # UPDATEs (or DELETEs) them in one statement.  FOR UPDATE SKIP LOCKED
@@ -3866,6 +3854,7 @@ class PostgresRuntimeApiStore:
         ttl_seconds: int,
         chunk_size: int,
     ) -> int:
+        """Populate ``retention_until`` on rows that have it NULL, up to ``chunk_size`` at a time; returns rows updated."""
         table = {
             RetentionKind.MESSAGES: "agent_messages",
             RetentionKind.EVENTS: "runtime_events",
@@ -3912,6 +3901,7 @@ class PostgresRuntimeApiStore:
         resource_id: str | None,
         ttl_seconds: int | None,
     ) -> int:
+        """Rewrite ``retention_until`` for all rows affected by the given policy; returns rows updated."""
         table = {
             RetentionKind.MESSAGES: "agent_messages",
             RetentionKind.EVENTS: "runtime_events",
@@ -3970,16 +3960,17 @@ class PostgresRuntimeApiStore:
     async def insert_retention_deletion_evidence(
         self, record: RetentionDeletionEvidenceRecord
     ) -> None:
+        """Persist sweep evidence so auditors can verify that retention obligations were met."""
         # Map sweeper fields onto the existing runtime_deletion_evidence
-        # schema (declared in migration 0001). The table was designed for
-        # user-erasure flows; we repurpose it here using:
+        # schema. The table was designed for user-erasure flows; we
+        # repurpose it here using:
         #   user_id           → "__retention_sweeper__" sentinel
         #   request_type      → "retention_sweep"
         #   reason            → JSON context (kind, counts, dry_run)
         #   messages_tombstoned → tombstoned count (all tombstone kinds)
         #   runs_cancelled    → deleted count (hard-delete kinds)
         #   events_retained   → skipped_legal_hold count
-        # Phase 2 will add proper per-kind columns via migration.
+        # Future: add proper per-kind columns via migration.
         import json
 
         reason_json = json.dumps(
@@ -4411,12 +4402,11 @@ class PostgresRuntimeApiStore:
         cancel-mid-stream race costs one retry on the loser.
 
         Consolidated writes: ``agent_runs.latest_sequence_no`` advances
-        inside the same transaction as the event INSERT. The H3
-        monotonic guard prevents rewinds even under retry.
-        ``RuntimeEventProducer`` therefore skips its separate
-        ``set_run_latest_sequence`` call.
+        inside the same transaction as the event INSERT. A monotonic guard
+        prevents rewinds even under retry. ``RuntimeEventProducer``
+        therefore skips its separate ``set_run_latest_sequence`` call.
 
-        P2 (NOTIFY): fires ``NOTIFY <channel>, '<run_id>:<seq>'`` when
+        NOTIFY: fires ``NOTIFY <channel>, '<run_id>:<seq>'`` when
         ``self._notify_after_append`` is True. The NOTIFY rides inside
         the same transaction as the INSERT, so a rolled-back attempt
         produces no NOTIFY.
@@ -4492,7 +4482,7 @@ class PostgresRuntimeApiStore:
                     payload=event.payload,
                     metadata=event.metadata,
                 )
-                # C7 phase 2: encrypt payload_json_redacted +
+                # Encrypt payload_json_redacted +
                 # metadata_json_redacted with AAD bound to (table,
                 # column, org_id). The presentation_json is NOT encrypted
                 # because it's the projector's pre-rendered card the
@@ -4565,8 +4555,8 @@ class PostgresRuntimeApiStore:
                     ),
                 )
                 # Fold the cursor advance into the same transaction.
-                # Monotonic guard mirrors set_run_latest_sequence (H3) so
-                # a peer that has already advanced the cursor between our
+                # Monotonic guard mirrors set_run_latest_sequence so a peer
+                # that has already advanced the cursor between our
                 # MAX(sequence_no) read and our INSERT cannot rewind it.
                 await conn.execute(
                     """
@@ -4585,7 +4575,7 @@ class PostgresRuntimeApiStore:
                     ),
                 )
                 if self._notify_after_append:
-                    # P2 — fire NOTIFY inside the same transaction; if the
+                    # Fire NOTIFY inside the same transaction; if the
                     # INSERT rolls back the NOTIFY is silently discarded
                     # by Postgres. Channel name is parameterised at
                     # construction; payload is ``<run_id>:<sequence_no>``.
@@ -4599,7 +4589,7 @@ class PostgresRuntimeApiStore:
     def _is_event_sequence_conflict(exc: psycopg_errors.UniqueViolation) -> bool:
         """Return True when ``exc`` came from the runtime_events sequence index.
 
-        Discriminates the P16 retry-on-race path from any other unique
+        Discriminates the retry-on-race path from any other unique
         violation that might surface through the same transaction (no
         other writes happen in :meth:`_append_event_once`, but we match
         on the index name explicitly so a future addition can't silently
@@ -4628,7 +4618,7 @@ class PostgresRuntimeApiStore:
     async def append_events_batch(
         self, events: Sequence[RuntimeEventDraft]
     ) -> Sequence[RuntimeEventEnvelope]:
-        """Append N events under one transaction (P4 Stage 2).
+        """Append N events under one atomic transaction.
 
         Used by the worker's ``DeltaCoalescer`` to flush a batch of
         ``MODEL_DELTA`` chunks. All events must share the same ``run_id``
@@ -4645,7 +4635,7 @@ class PostgresRuntimeApiStore:
           * One multi-row ``INSERT`` of N events (one round-trip to
             Postgres regardless of batch size).
           * One final ``UPDATE agent_runs.latest_sequence_no`` with the
-            H3 monotonic guard.
+            monotonic guard (no rewinds under retry).
 
         Empty input returns ``()`` without opening a connection. Per-event
         encryption + envelope building still runs in Python (the codec
@@ -4814,7 +4804,7 @@ class PostgresRuntimeApiStore:
                     (last_sequence, first.run_id, last_sequence),
                 )
                 if self._notify_after_append:
-                    # P2 — one NOTIFY per batch. The payload carries the
+                    # One NOTIFY per batch — the payload carries the
                     # *highest* sequence number; SSE adapters always
                     # ``replay_events(after_sequence=N)`` so they pick up
                     # everything in the batch in one round-trip.
@@ -5029,7 +5019,7 @@ class PostgresRuntimeApiStore:
                 row.get(_Columns.ENABLED_CONNECTORS)
             ),
             connectors_updated_at=row.get(_Columns.CONNECTORS_UPDATED_AT),
-            # PR 1.6 — lifecycle columns. ``row.get`` keeps the hydrator
+            # Lifecycle columns — ``row.get`` keeps the hydrator
             # forward-compatible with rows from databases pre-migration
             # 0020 (returns None when the column is absent).
             deleted_at=row.get(_Columns.DELETED_AT),
@@ -5058,8 +5048,8 @@ class PostgresRuntimeApiStore:
         return scopes
 
     def _message_record(self, row: dict[str, object]) -> MessageRecord:
-        # C7 phase 2: decrypt content_text / content_json / metadata_json
-        # using the row's encryption_version. Rows pre-phase-2 stay v0
+        # Decrypt content_text / content_json / metadata_json
+        # using the row's encryption_version. Unencrypted rows stay v0
         # (plaintext) and pass through unchanged.
         version = int(row.get(_Columns.ENCRYPTION_VERSION, 0) or 0)
         org_id = str(row[_Columns.ORG_ID])
@@ -5153,7 +5143,7 @@ class PostgresRuntimeApiStore:
                 source=StreamEventSource(row[_Columns.SOURCE]),
             )
 
-        # C7 phase 2: decrypt JSONB envelopes for the two encrypted columns.
+        # Decrypt JSONB envelopes for the encrypted columns.
         version = int(row.get(_Columns.ENCRYPTION_VERSION, 0) or 0)
         org_id = str(row[_Columns.ORG_ID])
         payload_json = self._codec.decrypt_jsonb(
@@ -5245,7 +5235,7 @@ class PostgresRuntimeApiStore:
     async def _insert_message(
         self, conn: psycopg.AsyncConnection, message: MessageRecord
     ) -> None:
-        # C7 phase 2: encrypt content_text / content_json / metadata_json
+        # Encrypt content_text / content_json / metadata_json
         # per the codec's active mode. ``encryption_version`` reflects the
         # mode used here so reads of THIS row know whether to decrypt.
         version = self._codec.write_version
@@ -5354,7 +5344,7 @@ class PostgresRuntimeApiStore:
             ),
         )
 
-    # ----- CitationStorePort (PR 1.1 follow-up B) ---------------------------
+    # ----- CitationStorePort ------------------------------------------------
 
     async def insert_many_or_get(
         self, records: Sequence[CitationRecord]
@@ -5364,8 +5354,8 @@ class PostgresRuntimeApiStore:
         Two DB round trips total regardless of batch size:
 
         1. One multi-VALUES ``INSERT … ON CONFLICT DO NOTHING`` against
-           the unique index ``runtime_citations_run_source_uk`` from
-           migration 0015. Conflicts skip silently.
+           the unique index ``runtime_citations_run_source_uk``.
+           Conflicts skip silently.
         2. One ``SELECT … WHERE (run_id, connector, doc_id) IN (…)``
            covering every input key, so existing rows come back alongside
            newly-inserted ones.
@@ -5479,6 +5469,7 @@ class PostgresRuntimeApiStore:
     async def list_for_run(
         self, *, org_id: str, run_id: str
     ) -> Sequence[CitationRecord]:
+        """Return all citations for a run, ordered by ordinal ascending."""
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.execute(
@@ -5496,6 +5487,7 @@ class PostgresRuntimeApiStore:
     async def list_for_conversation(
         self, *, org_id: str, conversation_id: str
     ) -> Sequence[CitationRecord]:
+        """Return all citations for a conversation, ordered by creation time then ordinal ascending."""
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.execute(

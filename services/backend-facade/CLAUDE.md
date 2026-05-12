@@ -4,7 +4,8 @@ Product-facing API (`backend_facade/`). The single HTTP surface that web, Mac, a
 
 ## Before changing behavior
 
-Read this service's `README.md`, `ARCHITECTURE.md`, and `TESTING.md` first.
+Read [docs/README.md](docs/README.md) to find the relevant doc, then read it before implementing.
+Architecture, features, and reference docs are the source of truth.
 
 ## Boundaries (hard)
 

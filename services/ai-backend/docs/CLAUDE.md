@@ -1,24 +1,19 @@
-# AI Backend Docs — Spec-First Workflow
+# AI Backend Docs
 
-Docs are the contract future agents implement against. Treat them as authoritative.
+This KB is the authoritative reference for the `ai-backend` service.
 
-## PRD requirements
+## Before changing behavior
 
-A PRD must state:
+Read [README.md](README.md) to find the relevant doc, then read it before implementing.
+Architecture, features, guides, and reference docs are the source of truth.
 
-- Problem
-- Goals
-- Non-goals
-- Acceptance criteria
-- Risks
-- Unit testing requirements
+## When a spec is needed
 
-## Spec requirements
+For new features or significant behavior changes: write a spec first.
 
 A spec must include:
 
-- Architecture
-- Module boundaries
+- Module boundaries and file paths
 - Pydantic contracts (full field-level shape)
 - Edge cases
 - Security considerations
@@ -27,11 +22,17 @@ A spec must include:
 
 ## Workflow
 
-- Before implementing or changing behavior, read the matching spec under `docs/specs/`.
-- Keep implementation decisions consistent with Deep Agents, LangGraph, LangChain, and Agent Skills primitives.
-- **Do not remove edge cases to simplify implementation.** If an edge case in the spec is hard, raise it — don't drop it silently.
-- When implementation changes a contract, invariant, or edge case, update the spec in the same change.
+1. Read [README.md](README.md) — find which doc covers the area you're changing.
+2. Read that doc — understand current behavior and invariants.
+3. Check [architecture/04-security-invariants.md](architecture/04-security-invariants.md)
+   — verify your change does not violate a listed invariant.
+4. Implement.
+5. Write tests per [guides/testing.md](guides/testing.md).
+6. Update the KB doc if you changed a contract, invariant, or module boundary.
 
-## What docs are not
+## Rules
 
-PRDs are for future product/architecture work that hasn't shipped yet. For day-to-day implementation, the spec is what you read — not the PRD.
+- **Do not remove edge cases to simplify implementation.** If an edge case is hard, raise it.
+- **Never bypass permission checks** in `capabilities/` middleware.
+- **Never leak internal errors** to model output or HTTP responses — convert to typed domain errors.
+- **Update the KB doc** when implementation changes a contract, invariant, or edge case.

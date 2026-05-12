@@ -127,12 +127,11 @@ class MemoryPolicyAuthorizer:
     ) -> MemoryPolicyDecision:
         """Return whether a memory operation is allowed by path policy.
 
-        ``memory_writes_allowed=False`` (PR 8.0.5) short-circuits every
-        write with the dedicated ``MEMORY_DISABLED_BY_USER`` message —
-        keeps the user-toggled refusal cleanly separable from the
-        policy-denied path in observability + audit. ``None`` (the
-        default) leaves existing call sites that don't yet thread the
-        snapshot working unchanged.
+        ``memory_writes_allowed=False`` short-circuits every write with the
+        dedicated ``MEMORY_DISABLED_BY_USER`` message, keeping the user-toggled
+        refusal cleanly separable from the policy-denied path in observability
+        and audit. ``None`` (the default) leaves existing call sites that don't
+        yet thread the snapshot working unchanged.
         """
 
         # ``memory_writes_allowed=False`` originates from the user's privacy

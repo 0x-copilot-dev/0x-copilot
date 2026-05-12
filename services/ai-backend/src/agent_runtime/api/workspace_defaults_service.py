@@ -44,7 +44,7 @@ class WorkspaceDefaultsService:
 
     Read materialises deployment fallbacks when no row exists; write
     composes a defaults upsert + retention upserts in one shot. The
-    caller (``RuntimeApiService``) is responsible for the audit row
+    caller (``WorkspaceCoordinator``) is responsible for the audit row
     that wraps the whole call (one row, ``workspace.defaults.update``).
     """
 
@@ -72,9 +72,9 @@ class WorkspaceDefaultsService:
             else self._deployment_default_model()
         )
         default_connectors = record.default_connectors if record is not None else {}
-        # PR 4.3 — surface behavior_overrides as part of the public read.
-        # Absent row materialises to the default WorkspaceBehaviorOverrides
-        # (all-None / opt-out=False) so the FE always sees a complete shape.
+        # Surface behavior_overrides as part of the public read. An absent row
+        # materialises to the default WorkspaceBehaviorOverrides (all-None /
+        # opt-out=False) so the frontend always sees a complete shape.
         behavior_overrides = (
             record.behavior_overrides
             if record is not None
@@ -282,9 +282,8 @@ class WorkspaceDefaultsService:
                 else {}
             ),
             "retention_days": before_retention_days,
-            # PR 4.3 — record the full overrides shape (post-redaction
-            # by Pydantic; system_prompt_override is in cleartext but
-            # auditing the change is the explicit intent).
+            # Record the full overrides shape (post-Pydantic redaction). The
+            # system_prompt_override is in cleartext; auditing the change is explicit.
             "behavior_overrides": before_overrides.model_dump(
                 mode="json", exclude_none=True
             ),

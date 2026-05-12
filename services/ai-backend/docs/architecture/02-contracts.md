@@ -130,6 +130,28 @@ Higher-level ports for capability-specific state:
 
 ---
 
+## Event sequence invariants
+
+These invariants are depended upon by the SSE adapter, the replay endpoint, cancellation,
+and any client that reconnects with `after_sequence=N`.
+
+- `sequence_no` starts at **1** for every new run.
+- `sequence_no` is **monotonically increasing with no gaps** within a run. A run with 5 events
+  has sequences `1, 2, 3, 4, 5` — never `1, 3, 4` or `1, 2, 2`.
+- `list_events_after(run_id, after_sequence=N)` returns envelopes with `sequence_no > N`.
+  A client that received up to `sequence_no=42` reconnects with `after_sequence=42` and gets `43, 44, …`.
+- `latest_sequence_no` on the run row is the H3 "never-rewind" invariant: it is only ever
+  written with a guard `WHERE latest_sequence_no < $new_value`. It never decreases.
+- Cancel mid-stream: the cancellation event and any in-flight model delta events produce
+  consecutive sequence numbers in some order. Both are persisted.
+- `append_events_batch()` is atomic: either all envelopes in the batch are written with their
+  assigned sequence numbers, or none are.
+
+Implementation: `UNIQUE(run_id, sequence_no)` Postgres constraint is the source of truth.
+Rare `UniqueViolation` on concurrent appends triggers up to 3 retries with jittered backoff (≤50 ms).
+
+---
+
 ## Pydantic policy at boundaries
 
 1. **Every** function that crosses a module boundary accepts and returns Pydantic models,

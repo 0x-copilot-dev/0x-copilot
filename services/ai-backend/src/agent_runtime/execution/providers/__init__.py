@@ -1,4 +1,4 @@
-"""Provider-specific stream adapters (PR 1.1 follow-up D scaffold).
+"""Provider-specific stream adapters for native citation primitives.
 
 Each adapter wraps a raw provider stream, intercepts native citation
 primitives (Anthropic ``citations_delta``, OpenAI Responses

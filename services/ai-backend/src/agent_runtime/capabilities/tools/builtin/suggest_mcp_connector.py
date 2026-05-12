@@ -1,21 +1,9 @@
-"""Non-blocking MCP discovery tool (PR 3.3).
+"""Non-blocking MCP discovery tool that emits a Connect/Skip card without interrupting the run.
 
-The agent calls this when it identifies an MCP server that *would*
-improve the answer but isn't authenticated. Unlike
-:class:`agent_runtime.capabilities.mcp.middleware.auth_mcp.AuthMcpTool`,
-this tool **never interrupts** — it emits one ``mcp_auth_required`` event
-with ``discovery_reason`` set so the FE renders a Connect/Skip card,
-then returns immediately. The harness keeps streaming.
-
-Wiring:
-
-- Registered in :func:`agent_runtime.execution.factory._model_visible_tools`
-  *only* when the discovery feature flag is on. Skipped from
-  ``interrupt_on=`` so the LangGraph graph never pauses on its calls.
-- Resolves the active :class:`McpDiscoveryService` via the ContextVar
-  the worker binds in :meth:`runtime_worker.handlers.run.run_handler.handle`.
-- Tool inputs are validated through a Pydantic contract (per
-  ``services/ai-backend/CLAUDE.md``: every IO boundary is typed).
+The agent calls this when an unauthenticated MCP server would improve the answer. Unlike
+:class:`~agent_runtime.capabilities.mcp.middleware.auth_mcp.AuthMcpTool`, this tool never
+interrupts — it emits one ``mcp_auth_required`` event with ``discovery_reason`` set, then
+returns immediately. The harness keeps streaming.
 """
 
 from __future__ import annotations
@@ -81,6 +69,7 @@ class SuggestMcpConnectorTool:
     async def ainvoke(
         self, raw_input: SuggestMcpConnectorInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Validate input, call the discovery service, and return its result."""
         parsed = SuggestMcpConnectorInputParser.parse(raw_input)
         if isinstance(parsed, dict):
             return parsed
@@ -94,6 +83,7 @@ class SuggestMcpConnectorTool:
     async def __call__(
         self, raw_input: SuggestMcpConnectorInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
 
@@ -105,6 +95,7 @@ class SuggestMcpConnectorInputParser:
         cls,
         raw_input: SuggestMcpConnectorInput | Mapping[str, Any] | str,
     ) -> SuggestMcpConnectorInput | dict[str, Any]:
+        """Return a validated input model or a rejection dict on validation failure."""
         if isinstance(raw_input, SuggestMcpConnectorInput):
             return raw_input
         if isinstance(raw_input, str):
@@ -123,6 +114,7 @@ class SuggestMcpConnectorInputParser:
 
     @staticmethod
     def _first_error_message(exc: ValidationError) -> str:
+        """Return the most specific safe message for the first validation error."""
         for error in exc.errors():
             field = error.get("loc", ("?",))[0]
             if field == "server_id":

@@ -1,17 +1,12 @@
-"""Privacy-settings snapshot consumed by the AI runtime (PR B2 / 8.0.3f).
+"""Privacy-settings snapshot consumed by the AI runtime.
 
 The backend's ``/internal/v1/policies/privacy`` endpoint composes a
 workspace default + per-user override into a hydrated full shape. The
-AI runtime fetches that shape once at run start and caches it on
+runtime fetches that shape once at run start and caches it on
 ``AgentRuntimeContext`` so the retention sweeper, memory consumer,
-provider-call layer, and audit redactor can each read the same
-snapshot without a second round-trip.
-
-This module is the read-side companion to
-:class:`backend_app.privacy.store.PrivacySettingsRow`. It deliberately
-holds no I/O — adapters land in
-:mod:`agent_runtime.api.privacy_fetcher` (out of scope here; the
-snapshot is the contract).
+provider-call layer, and audit redactor can each read the same snapshot
+without a second round-trip. This module is I/O-free; adapters live in
+:mod:`agent_runtime.api.privacy_fetcher`.
 """
 
 from __future__ import annotations
@@ -22,7 +17,7 @@ from enum import StrEnum
 
 
 class DataResidencyRegion(StrEnum):
-    """Mirror of the backend's region enum."""
+    """Data-residency region values mirroring the backend's region enum."""
 
     US_EAST_1 = "us-east-1"
     EU_WEST_1 = "eu-west-1"
@@ -134,6 +129,7 @@ class PrivacySettingsSnapshot:
 
 
 def _bool(value: object, *, default: bool) -> bool:
+    """Return ``value`` when it is a strict bool, otherwise return ``default``."""
     if isinstance(value, bool):
         return value
     return default

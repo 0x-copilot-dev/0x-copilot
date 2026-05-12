@@ -141,17 +141,13 @@ class UsageQueryService:
         run_user_lookup: Mapping[str, str],
         refreshed_at: datetime,
     ) -> tuple[UsageDailyConnectorRow, ...]:
-        """Aggregate per-LLM-call rows into per-org-per-connector-per-day-per-model
-        rollups (PR 7.2 + Sub-PRD 01d).
+        """Aggregate per-LLM-call rows into per-org-per-connector-per-day-per-model rollups.
 
-        ``run_user_lookup`` maps ``run_id -> user_id`` for the rows in
-        scope so the rollup can compute ``distinct_users`` without
-        denormalising user_id onto every per-call row. ``connector_slug``
-        coalesces ``None`` to the empty string for the "(unattributed)"
-        bucket — the natural-key PK does not allow ``NULL``.
-
-        Sub-PRD 01d: bucket key extends with ``model_name`` so reports
-        can split a connector's cost across multiple models.
+        ``run_user_lookup`` maps ``run_id -> user_id`` for the rows in scope so the rollup
+        can compute ``distinct_users`` without denormalising user_id onto every per-call row.
+        ``connector_slug`` coalesces ``None`` to the empty string for the "(unattributed)"
+        bucket — the natural-key PK does not allow ``NULL``. Bucket key extends with
+        ``model_name`` so reports can split a connector's cost across multiple models.
         """
 
         buckets: dict[
@@ -191,13 +187,11 @@ class UsageQueryService:
         *,
         refreshed_at: datetime,
     ) -> tuple[UsageDailySubagentRow, ...]:
-        """Aggregate per-LLM-call rows into per-org-per-subagent-per-model-per-day
-        rollups (Sub-PRD 01d).
+        """Aggregate per-LLM-call rows into per-org-per-subagent-per-model-per-day rollups.
 
-        Org-scoped (no ``user_id`` JOIN). ``subagent_slug`` coalesces
-        ``None`` to the empty string for the orchestrator-scope bucket
-        — matches the connector rollup's "(unattributed)" pattern.
-        Every captured token kind is summed.
+        Org-scoped (no ``user_id`` JOIN). ``subagent_slug`` coalesces ``None`` to the empty
+        string for the orchestrator-scope bucket — matches the connector rollup's
+        "(unattributed)" pattern. Every captured token kind is summed.
         """
 
         buckets: dict[
@@ -234,11 +228,10 @@ class UsageQueryService:
         *,
         refreshed_at: datetime,
     ) -> tuple[UsageDailyPurposeRow, ...]:
-        """Aggregate per-LLM-call rows into per-org-per-purpose-per-model-per-day
-        rollups (Sub-PRD 01d).
+        """Aggregate per-LLM-call rows into per-org-per-purpose-per-model-per-day rollups.
 
-        ``purpose`` defaults to ``'main'`` on records that pre-date 01b
-        (the column default). Every captured token kind is summed.
+        ``purpose`` defaults to ``'main'`` on records that pre-date the attribution
+        column (the column default). Every captured token kind is summed.
         """
 
         buckets: dict[
@@ -496,7 +489,7 @@ class _RollupBucket:
 
 
 class _ConnectorRollupBucket:
-    """Accumulator for per-org-per-connector-per-day rollups (PR 7.2).
+    """Accumulator for per-org-per-connector-per-day rollups.
 
     Mirrors ``_RollupBucket`` but consumes per-LLM-call rows directly
     (the run-level rollup buckets only see run-aggregates, which can't
@@ -548,13 +541,11 @@ class _ConnectorRollupBucket:
 
 
 class _DimensionRollupBucket:
-    """Accumulator for per-LLM-call rollups keyed on any single
-    dimension (subagent slug or purpose). Sub-PRD 01d.
+    """Accumulator for per-LLM-call rollups keyed on any single dimension (subagent or purpose).
 
-    Mirrors ``_ConnectorRollupBucket`` but sums every captured token
-    kind (01a's reasoning / cache_creation / audio kinds included) and
-    counts LLM calls rather than distinct runs. ``call_count`` is the
-    natural unit for "average cost per call" reports.
+    Mirrors ``_ConnectorRollupBucket`` but sums every captured token kind (reasoning,
+    cache_creation, and audio kinds included) and counts LLM calls rather than distinct runs.
+    ``call_count`` is the natural unit for "average cost per call" reports.
     """
 
     def __init__(self) -> None:
@@ -584,7 +575,7 @@ class _DimensionRollupBucket:
 
 
 class _SubagentRollupBucket(_DimensionRollupBucket):
-    """Per-subagent rollup bucket. Sub-PRD 01d."""
+    """Per-subagent rollup bucket."""
 
     def to_subagent_row(
         self,
@@ -617,7 +608,7 @@ class _SubagentRollupBucket(_DimensionRollupBucket):
 
 
 class _PurposeRollupBucket(_DimensionRollupBucket):
-    """Per-purpose rollup bucket. Sub-PRD 01d."""
+    """Per-purpose rollup bucket."""
 
     def to_purpose_row(
         self,

@@ -1,4 +1,4 @@
-"""Persisted conversation share records (PR 6.1).
+"""Persisted conversation share records.
 
 A share is one row in ``conversation_shares`` granting an org's members
 (workspace mode) or a named recipient set (specific mode) read-only access

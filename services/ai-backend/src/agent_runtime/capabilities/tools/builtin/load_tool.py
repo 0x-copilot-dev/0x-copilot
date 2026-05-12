@@ -49,6 +49,7 @@ class LoadToolSpecTool:
     def __call__(
         self, raw_input: LoadToolInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Delegate to ``invoke``."""
         return self.invoke(raw_input)
 
     @classmethod
@@ -57,6 +58,7 @@ class LoadToolSpecTool:
         raw_input: LoadToolInput | Mapping[str, Any] | str,
         correlation_id: str,
     ) -> LoadToolInput | ToolLoadResult:
+        """Return a validated input model or a ``ToolLoadResult`` failure on invalid input."""
         if isinstance(raw_input, LoadToolInput):
             return raw_input
         if isinstance(raw_input, str):

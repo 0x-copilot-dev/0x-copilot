@@ -1,22 +1,20 @@
-"""Postgres ``LISTEN/NOTIFY`` cross-process SSE bus (P2).
+"""Postgres ``LISTEN/NOTIFY`` cross-process SSE event bus.
 
-Worker process appends an event → Postgres adapter fires
+Worker appends an event → Postgres adapter fires
 ``NOTIFY runtime_events_v1, '<run_id>:<seq>'``. The API process holds one
 dedicated ``LISTEN`` connection; its background ``listen_loop`` task reads
-notifications and wakes the per-run ``asyncio.Event`` registered by the
-SSE adapter via ``wait``. The SSE adapter wakes within milliseconds of the
-event being appended in the worker — no more 2-second poll fallback.
+notifications and wakes the per-run ``asyncio.Event`` registered by the SSE
+adapter. The SSE adapter wakes within milliseconds — the 10-second poll
+fallback is a backstop for missed notifications during reconnect.
 
 Connection ownership:
-  * One dedicated psycopg ``AsyncConnection`` is held for the lifetime of
-    the API process. ``LISTEN`` is connection-bound; recycling the
-    connection breaks the subscription.
-  * NOTIFY emissions come from regular pool connections (transient — a
-    NOTIFY inside a transaction delivers when the transaction commits).
-  * On listener-side connection drop, ``listen_loop`` reconnects with
-    exponential backoff (capped at ``MAX_BACKOFF_SECONDS``) and re-issues
-    ``LISTEN``. Notifications missed during the gap are recovered by the
-    SSE adapter's poll fallback (10s when this bus is configured).
+
+* One dedicated psycopg ``AsyncConnection`` is held for the process lifetime.
+  ``LISTEN`` is connection-bound; recycling the connection breaks the subscription.
+* NOTIFY emissions come from regular pool connections (NOTIFY inside a
+  transaction delivers when the transaction commits).
+* On listener-side drop, ``listen_loop`` reconnects with exponential backoff
+  (capped at ``MAX_BACKOFF_SECONDS``) and re-issues ``LISTEN``.
 """
 
 from __future__ import annotations
@@ -215,11 +213,13 @@ class PostgresEventBus:
                     backoff = min(backoff * 2.0, MAX_BACKOFF_SECONDS)
 
     async def _open_connection(self) -> None:
+        """Open the listener connection if not already open."""
         if self._connection is not None:
             return
         self._connection = await self._connection_factory()
 
     async def _close_connection(self) -> None:
+        """Close and discard the listener connection, swallowing errors to allow clean teardown."""
         conn = self._connection
         self._connection = None
         if conn is None:

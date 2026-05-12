@@ -8,8 +8,11 @@ from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
 )
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_coordinator import RunCoordinator
+from agent_runtime.execution.models import ModelConfigResolver
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
 from runtime_worker.stream_events import StreamOrchestrator as RuntimeStreamPartAdapter
 
@@ -26,7 +29,7 @@ class RuntimeEventTimelineTestMixin:
     async def create_store_and_run(
         self,
         runtime_context_admin: AgentRuntimeContext,
-    ) -> tuple[InMemoryRuntimeApiStore, RuntimeApiService, RunRecord]:
+    ) -> tuple[InMemoryRuntimeApiStore, RuntimeEventProducer, RunRecord]:
         store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(
             environ={
@@ -35,20 +38,32 @@ class RuntimeEventTimelineTestMixin:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
-        service = RuntimeApiService(
+        model_resolver = ModelConfigResolver(settings)
+        event_producer = RuntimeEventProducer(
             persistence=store,
             event_store=store,
-            queue=store,
-            settings=settings,
+            on_event_appended=None,
         )
-        conversation = await service.create_conversation(
+        run_coordinator = RunCoordinator(
+            persistence=store,
+            queue=store,
+            event_producer=event_producer,
+            settings=settings,
+            model_resolver=model_resolver,
+        )
+        conv_coordinator = ConversationCoordinator(
+            persistence=store,
+            settings=settings,
+            run_coordinator=run_coordinator,
+        )
+        conversation = await conv_coordinator.create_conversation(
             CreateConversationRequest(
                 org_id=runtime_context_admin.org_id,
                 user_id=runtime_context_admin.user_id,
                 title=self.Values.CONVERSATION_TITLE,
             )
         )
-        run_response = await service.create_run(
+        run_response = await run_coordinator.create_run(
             CreateRunRequest(
                 conversation_id=conversation.conversation_id,
                 org_id=runtime_context_admin.org_id,
@@ -70,7 +85,7 @@ class RuntimeEventTimelineTestMixin:
                 },
             )
         )
-        return store, service, store.runs[run_response.run_id]
+        return store, event_producer, store.runs[run_response.run_id]
 
 
 class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
@@ -80,7 +95,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+        await RuntimeStreamPartAdapter(service).append_activity_events(
             run=run,
             chunk={
                 "type": "messages",
@@ -127,7 +142,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+        await RuntimeStreamPartAdapter(service).append_activity_events(
             run=run,
             chunk={
                 "type": "custom",
@@ -142,7 +157,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
             delta=None,
         )
         delta_envelope = _store.events_by_run[run.run_id][-1]
-        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+        await RuntimeStreamPartAdapter(service).append_activity_events(
             run=run,
             chunk={
                 "type": "messages",
@@ -177,7 +192,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         store, service, run = await self.create_store_and_run(runtime_context_admin)
-        adapter = RuntimeStreamPartAdapter(service.event_producer)
+        adapter = RuntimeStreamPartAdapter(service)
 
         for chunk in (
             {
@@ -251,7 +266,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         store, service, run = await self.create_store_and_run(runtime_context_admin)
-        adapter = RuntimeStreamPartAdapter(service.event_producer)
+        adapter = RuntimeStreamPartAdapter(service)
 
         for chunk in (
             {
@@ -375,7 +390,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+        await RuntimeStreamPartAdapter(service).append_activity_events(
             run=run,
             chunk={
                 "type": "custom",
@@ -402,7 +417,7 @@ class TestRuntimeEventTimeline(RuntimeEventTimelineTestMixin):
     ) -> None:
         _store, service, run = await self.create_store_and_run(runtime_context_admin)
 
-        await RuntimeStreamPartAdapter(service.event_producer).append_activity_events(
+        await RuntimeStreamPartAdapter(service).append_activity_events(
             run=run,
             chunk={
                 "type": "custom",

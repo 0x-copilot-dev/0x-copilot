@@ -70,21 +70,19 @@ class RuntimeWorker:
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds
-        # Citations live registry (PR 1.1). When the persistence adapter
-        # itself satisfies CitationStorePort (Postgres path), reuse the
-        # same connection-pooled instance. In-memory dev wires a sibling
-        # InMemoryCitationStore so unit tests don't need Postgres.
+        # When the persistence adapter satisfies CitationStorePort (Postgres
+        # path), reuse the same connection-pooled instance. In-memory dev
+        # wires a sibling InMemoryCitationStore so unit tests don't need
+        # Postgres.
         citation_store: CitationStorePort = (
             self.persistence
             if isinstance(self.persistence, CitationStorePort)
             else InMemoryCitationStore()
         )
-        # PR 04 — persistent (conversation_ordinal ↔ tool_call_id)
-        # binding store for the model-declared citation system.
-        # Defaults to a fresh InMemory adapter when the worker is
-        # constructed without one — sufficient for in-process dev and
-        # unit tests; production wiring (e.g. ``RuntimeApiAppFactory``)
-        # injects a Postgres adapter sharing the runtime_api_store
+        # Persistent (conversation_ordinal ↔ tool_call_id) binding store
+        # for the citation ordinal system. Defaults to an in-memory adapter
+        # when not explicitly supplied — sufficient for dev and unit tests;
+        # production wiring injects a Postgres adapter that shares the main
         # connection pool.
         self.conversation_tool_ordinal_store: ConversationToolOrdinalStorePort = (
             conversation_tool_ordinal_store or InMemoryConversationToolOrdinalStore()

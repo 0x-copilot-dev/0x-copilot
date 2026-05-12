@@ -34,11 +34,11 @@ from enterprise_service_contracts.scopes import (
 from fastapi.testclient import TestClient
 
 from agent_runtime.api.constants import Messages
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
 )
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
@@ -69,13 +69,8 @@ class BehaviorOverridesFixtureMixin:
                 "RUNTIME_DEFAULT_MODEL": self.Values.DEFAULT_MODEL_NAME,
             }
         )
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         return TestClient(app), store
 
     def _headers(

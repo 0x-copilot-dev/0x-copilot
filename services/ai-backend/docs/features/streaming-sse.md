@@ -141,6 +141,32 @@ and `RuntimeInboxEventBus`. These are distinct from per-run streams.
 
 ---
 
+## Postgres LISTEN/NOTIFY (multi-pod production)
+
+`runtime_api/sse/postgres_event_bus.py`
+
+In production (`RUNTIME_STORE_BACKEND=postgres`), the event bus is backed by Postgres
+`LISTEN`/`NOTIFY`. One dedicated `psycopg` connection per API replica listens on a channel
+named `runtime_events_<run_id>`. When the worker appends an event and calls
+`NOTIFY runtime_events_<run_id>, '<run_id>:<sequence_no>'`, all API replicas holding an SSE
+connection for that run are woken simultaneously.
+
+**Latency:** Postgres LISTEN/NOTIFY reduces p50 SSE latency from ~1 s (polling) to ~50 ms.
+
+**Reconnect:** The listener connection uses exponential backoff (cap 30 s) on disconnect.
+
+**Fan-out:** All `asyncio.Event` waiters for a given `run_id` on the same API process are
+woken together when a notification arrives.
+
+**Poll fallback:** Even with LISTEN/NOTIFY, the `FALLBACK_POLL_SECONDS=2.0` timeout still
+applies. A missed notification (NOTIFY fired before LISTEN completed) is caught by the
+next poll. Events are never lost — the fallback is the safety net, not the primary path.
+
+**NOTIFY payload bounds:** `<run_id>:<sequence_no>` — UUIDs plus an integer, well under
+Postgres's 8 KB NOTIFY payload limit.
+
+---
+
 ## Extension points
 
 - To add a new terminal status: update `AgentRunStatus`, add to `TERMINAL_RUN_STATUSES`,

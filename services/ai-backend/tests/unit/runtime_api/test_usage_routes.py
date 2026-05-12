@@ -6,12 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records import (
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
 )
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
@@ -29,12 +29,7 @@ def _client_with_seed_runs(
             "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
         }
     )
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
-    )
+    ports = RuntimeAdapterFactory.from_store(store)
     completed = datetime.now(timezone.utc) - timedelta(hours=1)
     store.run_usage["r1"] = RuntimeRunUsageRecord(
         id="r1",
@@ -72,7 +67,9 @@ def _client_with_seed_runs(
         completed_at=completed,
         status="completed",
     )
-    return TestClient(RuntimeApiAppFactory.create_app(service)), store
+    return TestClient(
+        RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
+    ), store
 
 
 class TestUsageMe:

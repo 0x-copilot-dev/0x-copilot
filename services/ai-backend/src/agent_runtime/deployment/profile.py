@@ -44,12 +44,11 @@ class DeploymentFeatureToggles(BaseModel):
     require_field_level_encryption: bool
     require_kms_token_vault: bool
     siem_export_required: bool
-    # P12 Step 2/3 — which source the seed_pricing script + refresh loop
-    # consume for the catalog. ``"litellm"`` (default) uses the vendored
-    # LiteLLM data; ``"yaml"`` is the air-gapped fallback that reads the
-    # hand-curated quarterly seeds. Air-gapped deployments override the
-    # default by setting their profile's value to ``"yaml"`` (or running
-    # the script with ``--source yaml``).
+    # Controls which source the seed-pricing script and refresh loop use.
+    # ``"litellm"`` (default) uses the vendored LiteLLM data; ``"yaml"`` is
+    # the air-gapped fallback that reads the hand-curated quarterly seeds.
+    # Air-gapped deployments override this by setting their profile value to
+    # ``"yaml"`` (or running the script with ``--source yaml``).
     pricing_primary_source: str
 
 

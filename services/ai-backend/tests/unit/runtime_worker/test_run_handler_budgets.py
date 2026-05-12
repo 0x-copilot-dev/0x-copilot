@@ -16,8 +16,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import RuntimeDependencies
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.persistence.records import (
     BudgetEnforcement,
@@ -49,17 +52,28 @@ def _settings() -> RuntimeSettings:
 
 
 async def _seed_run(store: InMemoryRuntimeApiStore, settings: RuntimeSettings) -> str:
-    service = RuntimeApiService(
-        persistence=store, event_store=store, queue=store, settings=settings
+    model_resolver = ModelConfigResolver(settings)
+    event_producer = RuntimeEventProducer(
+        persistence=store, event_store=store, on_event_appended=None
     )
-    conversation = await service.create_conversation(
+    run_coordinator = RunCoordinator(
+        persistence=store,
+        queue=store,
+        event_producer=event_producer,
+        settings=settings,
+        model_resolver=model_resolver,
+    )
+    conv_coordinator = ConversationCoordinator(
+        persistence=store, settings=settings, run_coordinator=run_coordinator
+    )
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    response = await service.create_run(
+    response = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",

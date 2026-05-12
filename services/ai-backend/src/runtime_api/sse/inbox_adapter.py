@@ -1,13 +1,10 @@
-"""Per-user inbox SSE adapter (PR 1.4.1).
+"""Per-user inbox SSE adapter for approval-assignment and resolution events.
 
-Mirrors :class:`RuntimeSseAdapter` shape — same ``?after_sequence=N``
-reconnect contract, same ``event:``/``id:``/``data:`` framing — but
-keys subscriptions by ``user_id`` instead of ``run_id``. The recipient
-of a forwarded approval subscribes here even when they aren't a
-participant in any active run.
-
-Wire format is intentionally compatible with the run-stream SSE so the
-FE can use one parser for both.
+Mirrors :class:`RuntimeSseAdapter` — same ``?after_sequence=N`` reconnect
+contract, same ``event:``/``id:``/``data:`` SSE framing — but keys
+subscriptions by ``user_id`` instead of ``run_id``. The recipient of a
+forwarded approval subscribes here without being a participant in any active
+run.
 """
 
 from __future__ import annotations

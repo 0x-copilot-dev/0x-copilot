@@ -10,9 +10,15 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
     StreamEventSource,
 )
-from agent_runtime.api.service import RuntimeApiService
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
+from agent_runtime.api.notifications import LoggingNotificationDispatcher
+from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.persistence.records import OutboxStatus
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -67,6 +73,41 @@ class _TestSettings:
         )
 
 
+def _make_coordinators(
+    store: InMemoryRuntimeApiStore,
+    settings: RuntimeSettings,
+) -> tuple[
+    RunCoordinator, ConversationCoordinator, ApprovalCoordinator, RuntimeEventProducer
+]:
+    """Build the three core coordinators + event producer from an in-memory store."""
+    model_resolver = ModelConfigResolver(settings)
+    event_producer = RuntimeEventProducer(
+        persistence=store,
+        event_store=store,
+        on_event_appended=None,
+    )
+    run_coordinator = RunCoordinator(
+        persistence=store,
+        queue=store,
+        event_producer=event_producer,
+        settings=settings,
+        model_resolver=model_resolver,
+    )
+    conv_coordinator = ConversationCoordinator(
+        persistence=store,
+        settings=settings,
+        run_coordinator=run_coordinator,
+    )
+    approval_coordinator = ApprovalCoordinator(
+        persistence=store,
+        queue=store,
+        event_producer=event_producer,
+        membership_resolver=InMemoryWorkspaceMembershipResolver(),
+        notification_dispatcher=LoggingNotificationDispatcher(),
+    )
+    return run_coordinator, conv_coordinator, approval_coordinator, event_producer
+
+
 class _TestHelpers:
     @staticmethod
     async def create_queued_run(
@@ -75,20 +116,15 @@ class _TestHelpers:
         *,
         model: dict[str, object] | None = None,
     ) -> str:
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        conversation = await service.create_conversation(
+        run_coordinator, conv_coordinator, _, _ = _make_coordinators(store, settings)
+        conversation = await conv_coordinator.create_conversation(
             CreateConversationRequest(
                 org_id="org_123",
                 user_id="user_123",
                 assistant_id="assistant_123",
             )
         )
-        response = await service.create_run(
+        response = await run_coordinator.create_run(
             CreateRunRequest(
                 conversation_id=conversation.conversation_id,
                 org_id="org_123",
@@ -101,7 +137,7 @@ class _TestHelpers:
 
     @staticmethod
     async def append_subagent_observation(
-        service: RuntimeApiService,
+        event_producer: RuntimeEventProducer,
         store: InMemoryRuntimeApiStore,
         *,
         run_id: str,
@@ -127,7 +163,7 @@ class _TestHelpers:
             started_payload["visibility"] = visibility.value
         if redaction_state is not None:
             started_payload["redaction_state"] = redaction_state.value
-        await service.event_producer.append_api_event(
+        await event_producer.append_api_event(
             run=store.runs[run_id],
             source=StreamEventSource.SUBAGENT,
             event_type=RuntimeApiEventType.SUBAGENT_STARTED,
@@ -143,7 +179,7 @@ class _TestHelpers:
             completed_payload["visibility"] = visibility.value
         if redaction_state is not None:
             completed_payload["redaction_state"] = redaction_state.value
-        await service.event_producer.append_api_event(
+        await event_producer.append_api_event(
             run=store.runs[run_id],
             source=StreamEventSource.SUBAGENT,
             event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
@@ -152,7 +188,7 @@ class _TestHelpers:
 
     @staticmethod
     async def append_tool_observation(
-        service: RuntimeApiService,
+        event_producer: RuntimeEventProducer,
         store: InMemoryRuntimeApiStore,
         *,
         run_id: str,
@@ -172,7 +208,7 @@ class _TestHelpers:
             payload["visibility"] = visibility.value
         if redaction_state is not None:
             payload["redaction_state"] = redaction_state.value
-        await service.event_producer.append_api_event(
+        await event_producer.append_api_event(
             run=store.runs[run_id],
             source=StreamEventSource.TOOL,
             event_type=RuntimeApiEventType.TOOL_CALL_STARTED,
@@ -193,7 +229,7 @@ class _TestHelpers:
             result_payload["visibility"] = visibility.value
         if redaction_state is not None:
             result_payload["redaction_state"] = redaction_state.value
-        await service.event_producer.append_api_event(
+        await event_producer.append_api_event(
             run=store.runs[run_id],
             source=StreamEventSource.TOOL,
             event_type=RuntimeApiEventType.TOOL_RESULT,
@@ -278,20 +314,17 @@ async def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> 
 async def test_runtime_worker_builds_history_from_selected_branch() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -321,7 +354,7 @@ async def test_runtime_worker_builds_history_from_selected_branch() -> None:
             parent_message_id=assistant.message_id,
         )
     )
-    edited = await service.create_run(
+    edited = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -356,20 +389,17 @@ async def test_runtime_worker_builds_history_from_selected_branch() -> None:
 async def test_runtime_worker_resolves_live_assistant_parent_id_for_history() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -390,7 +420,7 @@ async def test_runtime_worker_resolves_live_assistant_parent_id_for_history() ->
         )
     )
 
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -423,20 +453,17 @@ async def test_runtime_worker_resolves_live_assistant_parent_id_for_history() ->
 async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -445,7 +472,9 @@ async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    await _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
+    await _TestHelpers.append_tool_observation(
+        event_producer, store, run_id=first.run_id
+    )
     assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_jira_answer",
@@ -457,7 +486,7 @@ async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -499,20 +528,17 @@ async def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
 
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -533,7 +559,7 @@ async def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    second = await service.create_run(
+    second = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -554,20 +580,17 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
 
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -577,7 +600,7 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
         )
     )
     await _TestHelpers.append_subagent_observation(
-        service,
+        event_producer,
         store,
         run_id=first.run_id,
         subagent_name="general-purpose",
@@ -598,7 +621,7 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -629,20 +652,17 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
 async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -651,7 +671,9 @@ async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() 
             model={"provider": "openai", "model_name": "gpt-5.4-mini"},
         )
     )
-    await _TestHelpers.append_tool_observation(service, store, run_id=first.run_id)
+    await _TestHelpers.append_tool_observation(
+        event_producer, store, run_id=first.run_id
+    )
     assistant = await store.append_message(
         MessageRecord(
             message_id="assistant_with_prior_tool",
@@ -663,7 +685,7 @@ async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() 
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -704,20 +726,17 @@ async def test_runtime_worker_prior_tool_loader_returns_full_persisted_result() 
 async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -727,7 +746,7 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         )
     )
     await _TestHelpers.append_tool_observation(
-        service,
+        event_producer,
         store,
         run_id=first.run_id,
         output={"issues": [{"key": "AUTH-123"}]},
@@ -743,7 +762,7 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    sibling = await service.create_run(
+    sibling = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -754,13 +773,13 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         )
     )
     await _TestHelpers.append_tool_observation(
-        service,
+        event_producer,
         store,
         run_id=sibling.run_id,
         call_id="call_sibling",
         output={"issues": [{"key": "SIBLING-999"}]},
     )
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -789,20 +808,17 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
 async def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    first = await service.create_run(
+    first = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -812,14 +828,14 @@ async def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
         )
     )
     await _TestHelpers.append_tool_observation(
-        service,
+        event_producer,
         store,
         run_id=first.run_id,
         visibility=RuntimeEventVisibility.INTERNAL,
         output={"secret": "internal-only"},
     )
     await _TestHelpers.append_tool_observation(
-        service,
+        event_producer,
         store,
         run_id=first.run_id,
         call_id="call_offloaded",
@@ -837,7 +853,7 @@ async def test_runtime_worker_skips_unsafe_prior_tool_observations() -> None:
             parent_message_id=first.user_message_id,
         )
     )
-    follow_up = await service.create_run(
+    follow_up = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -869,20 +885,17 @@ async def test_runtime_worker_excludes_current_run_tool_results_from_initial_pro
 ):
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    current = await service.create_run(
+    current = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -892,7 +905,7 @@ async def test_runtime_worker_excludes_current_run_tool_results_from_initial_pro
         )
     )
     await _TestHelpers.append_tool_observation(
-        service,
+        event_producer,
         store,
         run_id=current.run_id,
         output={"issues": [{"key": "CURRENT-1"}]},
@@ -914,20 +927,17 @@ async def test_runtime_worker_excludes_current_run_tool_results_from_initial_pro
 async def test_runtime_worker_includes_structured_composer_context() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create()
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    conversation = await service.create_conversation(
+    conversation = await conv_coordinator.create_conversation(
         CreateConversationRequest(
             org_id="org_123",
             user_id="user_123",
             assistant_id="assistant_123",
         )
     )
-    response = await service.create_run(
+    response = await run_coordinator.create_run(
         CreateRunRequest(
             conversation_id=conversation.conversation_id,
             org_id="org_123",
@@ -1689,13 +1699,10 @@ async def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> No
             },
         )
     )
-    service = RuntimeApiService(
-        persistence=store,
-        event_store=store,
-        queue=store,
-        settings=settings,
+    run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
+        _make_coordinators(store, settings)
     )
-    await service.record_approval_decision(
+    await approval_coordinator.record_approval_decision(
         org_id=run.org_id,
         approval_id=approval_id,
         request=ApprovalDecisionRequest(

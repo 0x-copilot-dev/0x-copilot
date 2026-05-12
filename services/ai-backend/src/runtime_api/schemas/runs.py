@@ -243,6 +243,7 @@ class CreateRunRequest(RuntimeContract):
 
     @model_validator(mode="after")
     def _require_identity_or_context(self) -> "CreateRunRequest":
+        """Guard against client-supplied ``runtime_context`` and enforce identity presence."""
         if self.runtime_context is not None:
             raise ValueError(
                 "runtime_context is server-owned and cannot be supplied by clients"

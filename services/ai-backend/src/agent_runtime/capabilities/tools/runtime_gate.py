@@ -1,22 +1,10 @@
-"""Run-start gate for tool-use policy modes (PR 8.0.5 §2.2).
+"""Run-start gate that enforces tool-use policy modes for each loaded tool.
 
-Decides whether a loaded tool can dispatch under the user's
-tool-use policy. Three branches:
-
-* ``mode = auto``   ⇒ allow; existing fast path.
-* ``mode = ask``    ⇒ require approval (one-time per run + tool_name).
-* ``mode = require``⇒ require approval (every dispatch).
-* ``mode = block``  ⇒ reject the run with a stable safe message.
-
-Reuses the existing approval flow (``APPROVAL_REQUESTED`` /
-``APPROVAL_RESOLVED``) for ask/require modes — no new envelope kinds,
-no new audit actions, no new FE renderer. ``block`` translates to
-``RUN_REJECTED`` (already wired by B7 budget enforcement).
-
-The gate is pure logic: callers feed in the snapshot + spec; the gate
-returns a :class:`ToolGateDecision` carrying the chosen branch + the
-policy axis that fired (so the audit emitter can stamp ``policy_fired``
-without reverse-engineering it).
+Four branches: ``auto`` (allow), ``ask`` (approval once per run + tool_name),
+``require`` (approval on every dispatch), ``block`` (reject the run). Reuses the
+existing approval flow for ask/require; ``block`` maps to ``RUN_REJECTED``. Pure
+logic — callers feed in the snapshot and spec; the gate returns a
+:class:`ToolGateDecision` with the chosen branch and the policy axis that fired.
 """
 
 from __future__ import annotations
@@ -63,6 +51,7 @@ class ToolGateDecision:
 
     @classmethod
     def allow(cls) -> "ToolGateDecision":
+        """Return an ALLOW decision with no policy axis recorded."""
         return cls(action=ToolGateAction.ALLOW)
 
     @classmethod
@@ -72,6 +61,7 @@ class ToolGateDecision:
         kind: ToolUsePolicyKind,
         mode: ToolUsePolicyMode,
     ) -> "ToolGateDecision":
+        """Return a REQUIRE_APPROVAL decision; ``one_time`` is set only for ask mode."""
         return cls(
             action=ToolGateAction.REQUIRE_APPROVAL,
             policy_fired=kind,
@@ -81,6 +71,7 @@ class ToolGateDecision:
 
     @classmethod
     def reject(cls, *, kind: ToolUsePolicyKind) -> "ToolGateDecision":
+        """Return a REJECT decision with the per-axis safe rejection message."""
         return cls(
             action=ToolGateAction.REJECT,
             policy_fired=kind,

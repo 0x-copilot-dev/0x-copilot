@@ -24,7 +24,6 @@ class RuntimeCancelHandler:
         persistence: PersistencePort,
         event_store: EventStorePort,
     ) -> None:
-        # Always async on the inside (Phase D).
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.event_producer = RuntimeEventProducer(
@@ -36,6 +35,7 @@ class RuntimeCancelHandler:
         )
 
     async def handle(self, command: RuntimeCancelCommand) -> None:
+        """Cancel the run if it exists and the requester is the run's owner; otherwise no-ops."""
         run = await self.persistence.get_run(
             org_id=command.org_id, run_id=command.run_id
         )

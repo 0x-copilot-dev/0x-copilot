@@ -86,6 +86,7 @@ class SystemSkillsProjector:
         self._root = root
 
     def list_skills(self) -> SystemSkillListResponse:
+        """Discover and project all skills under the builtin skills root."""
         if not self._root.is_dir():
             return SystemSkillListResponse(skills=())
 
@@ -99,6 +100,7 @@ class SystemSkillsProjector:
 
     @classmethod
     def _project(cls, skill_directory: Path) -> SystemSkillResponse:
+        """Read and project one skill directory into the public wire shape."""
         skill_path = skill_directory / "SKILL.md"
         markdown = SkillManifestReader.read_markdown(skill_path)
         manifest = SkillManifestParser.parse(markdown, skill_path=skill_path)
@@ -123,10 +125,12 @@ class SystemSkillsProjector:
 
     @staticmethod
     def _display_name(slug: str) -> str:
+        """Convert a kebab/snake-case skill slug into a title-cased display name."""
         return " ".join(part.capitalize() for part in slug.replace("_", "-").split("-"))
 
     @staticmethod
     def _file_mtime(path: Path) -> datetime:
+        """Return the file's modification time as a UTC datetime; falls back to now on OSError."""
         try:
             stat = path.stat()
         except OSError:

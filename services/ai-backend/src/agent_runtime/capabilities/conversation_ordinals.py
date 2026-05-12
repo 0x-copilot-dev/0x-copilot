@@ -41,6 +41,7 @@ class ConversationOrdinalAllocator:
         starting_ordinal: int = 0,
         ordinal_to_tool_call_id: dict[int, str] | None = None,
     ) -> None:
+        """Initialise the allocator with optional pre-seeded binding state from a prior run."""
         if starting_ordinal < 0:
             raise ValueError("starting_ordinal must be non-negative")
         self._org_id = org_id
@@ -61,10 +62,12 @@ class ConversationOrdinalAllocator:
 
     @property
     def conversation_id(self) -> str:
+        """Return the conversation id this allocator is scoped to."""
         return self._conversation_id
 
     @property
     def run_id(self) -> str:
+        """Return the run id that created this allocator instance."""
         return self._run_id
 
     @property

@@ -79,8 +79,7 @@ class RuntimeWorkerEntrypoint:
                         "late_arrival_minutes": rollup_loop._late_arrival_minutes,
                     },
                 )
-            # C8: opt-in (default off) so existing deploys don't
-            # start tombstoning rows on upgrade.
+            # Opt-in (default off) so existing deploys are unaffected on upgrade.
             if RetentionSweeperLoopEnv.env_bool(
                 RetentionSweeperLoopEnv.ENABLED, default=False
             ):
@@ -95,9 +94,8 @@ class RuntimeWorkerEntrypoint:
                         "dry_run": retention_loop._dry_run,
                     },
                 )
-            # C11: opt-in (default off). Operator must have
-            # ``pg_stat_statements`` installed; the scraper logs
-            # once and exits if not.
+            # Opt-in (default off). Requires ``pg_stat_statements`` installed;
+            # the scraper logs once and exits if not.
             if DbStatementMetricsCollectorEnv.env_bool(
                 DbStatementMetricsCollectorEnv.ENABLED, default=False
             ):
@@ -128,10 +126,9 @@ class RuntimeWorkerEntrypoint:
                     "db_statement_metrics_collector_started",
                     metadata={"interval_seconds": statement_collector._interval},
                 )
-            # P12 Step 3 — opt-in (default off). When enabled the worker
-            # re-ingests LiteLLM pricing on a daily cadence and diffs
-            # against the active rows; ``PRICING_REFRESH_AUTO_APPLY=true``
-            # promotes diffs into writes (off by default — log-only).
+            # Opt-in (default off). When enabled the worker re-ingests LiteLLM pricing
+            # on a daily cadence; ``PRICING_REFRESH_AUTO_APPLY=true`` promotes diffs into
+            # writes (off by default — log-only).
             if PricingRefreshLoopEnv.env_bool(
                 PricingRefreshLoopEnv.ENABLED, default=False
             ):
@@ -147,9 +144,8 @@ class RuntimeWorkerEntrypoint:
                         "sanity_threshold": str(pricing_refresh_loop._sanity_threshold),
                     },
                 )
-            # C8 Phase 2 — opt-in (default off). Stamps ``retention_until``
-            # on existing rows that pre-date migration 0030. Runs once at
-            # startup and completes before the main loop begins.
+            # Opt-in (default off). Stamps ``retention_until`` on historical rows
+            # that pre-date retention policy enforcement. Runs once at startup.
             if RetentionBackfillJobEnv.env_bool(
                 RetentionBackfillJobEnv.ENABLED, default=False
             ):

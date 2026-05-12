@@ -63,9 +63,9 @@ RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies
 AgentFactory = Callable[..., RuntimeHarness | Awaitable[RuntimeHarness]]
 RuntimeResumer = Callable[[RuntimeHarness, object], AsyncIterator[object]]
 
-# PR 1.3.5 — discriminator written into ``approval.metadata['kind']`` by
-# DraftService.send so this handler can route draft-send approvals through
-# their own resolution path instead of the LangGraph resume path.
+# Discriminator written into ``approval.metadata['kind']`` by the draft-send path so
+# this handler routes draft-send approvals through their own resolution path instead of
+# the LangGraph resume path.
 _APPROVAL_KIND_DRAFT_SEND = "draft_send"
 
 _AUDIT_DRAFT_SEND_COMPLETED = "draft.send.completed"
@@ -85,10 +85,9 @@ class RuntimeApprovalHandler:
         TYPE = "type"
         STATUS = "status"
         MESSAGE = "message"
-        # PR 3.2.5 Phase 3 — set on approval.metadata when the original
-        # interrupt fired inside a subagent's subgraph. Drives the paired
-        # ``SUBAGENT_RESUMED`` emit on resolution so the FE flips the
-        # row's status back to ``running`` before any subsequent
+        # Set on approval.metadata when the interrupt fired inside a subagent's
+        # subgraph. Drives the paired ``SUBAGENT_RESUMED`` emit on resolution so
+        # the FE flips the row's status back to ``running`` before the next
         # progress event arrives.
         PARENT_TASK_ID = "parent_task_id"
         REASON = "reason"
@@ -127,41 +126,26 @@ class RuntimeApprovalHandler:
         )
         self.stream_event_mapper = StreamOrchestrator(self.event_producer)
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
-        # PR 1.3.5 — when a draft-send approval lands the handler routes
-        # through ``_resolve_draft_send_approval`` instead of the LangGraph
-        # resume path. The draft store must be provided for that path to
-        # function; absent it, draft-send approvals fall through to the
-        # default early-return (status transitions skipped) — surfaced as
-        # an audit gap rather than a crash.
+        # Required for draft-send approvals; absent on unit-test construction.
+        # Without it, draft-send approvals skip status transitions rather than crashing.
         self._draft_store = draft_store
-        # PR 04 — bound at construction so the resumed allocator is
-        # rebuilt from the persistent binding map rather than re-counting
-        # events. Optional so handler unit tests can construct without
-        # the store; production wiring (RuntimeWorker) always supplies
-        # one (in-memory or postgres adapter).
+        # Bound at construction so the resumed allocator is rebuilt from the
+        # persistent binding map rather than re-counting events. Optional; production
+        # always supplies one.
         self._conversation_tool_ordinal_store: (
             ConversationToolOrdinalStorePort | None
         ) = conversation_tool_ordinal_store
-        # PR 3.2.5 Phase 3 — explicit dedup so a transient retry of
-        # ``handle()`` for the same approval cannot re-emit
-        # ``SUBAGENT_RESUMED``. Upstream approval-status idempotency
-        # generally short-circuits the second invocation before it reaches
-        # the resume path, but this set is the belt-and-braces guarantee
-        # that the FE reducer's ``running → running`` no-op never has to
-        # absorb a duplicate (and that audit replay stays single-emit).
-        # Keyed by ``(run_id, task_id)`` because handler instances are
-        # scoped per-worker and outlive a single approval.
+        # Dedup guard keyed by (run_id, task_id) so retried ``handle()`` calls cannot
+        # re-emit ``SUBAGENT_RESUMED`` for the same approval.
         self._resumed_task_ids: set[tuple[str, str]] = set()
 
     async def handle(self, command: RuntimeApprovalResolvedCommand) -> None:
-        # PR 1.4 — two-stage approval forwarding. The API service has already
-        # resolved the parent row to status=FORWARDED, inserted the child
-        # row addressed to the recipient, emitted approval_resolved/
-        # approval_forwarded/approval_requested events, and audited the
-        # forward. The graph stays paused (run.status remains
-        # WAITING_FOR_APPROVAL); resume hangs off the leaf child's
-        # approve/reject which flows through the existing single-actor
-        # path on a different approval_id. So: nothing to do here.
+        """Process an approval-resolved command: audit the decision, then resume or terminate the run.
+
+        Forwarded approvals are no-ops here — the graph stays paused until the
+        leaf recipient's own approve/reject flows through the existing path.
+        """
+        # Forwarded decisions are handled by the leaf recipient's command; nothing to do.
         if command.decision is ApprovalDecision.FORWARDED:
             return
         run = await self.persistence.get_run(
@@ -196,11 +180,8 @@ class RuntimeApprovalHandler:
             reason=getattr(command, "reason", None),
         )
         metadata = approval.metadata
-        # PR 1.3.5 — Workspace-pane draft-send approvals are conversation-
-        # scoped events that don't suspend a LangGraph runtime. We detect
-        # them here (after recording the decision through the existing
-        # audit emitter) and handle the state transitions inline before
-        # the LangGraph-resume path would have run.
+        # Draft-send approvals don't suspend a LangGraph runtime, so we handle
+        # their state transitions inline before the LangGraph-resume path runs.
         if metadata.get("kind") == _APPROVAL_KIND_DRAFT_SEND:
             await self._resolve_draft_send_approval(
                 run=run,
@@ -218,11 +199,9 @@ class RuntimeApprovalHandler:
         ):
             return
 
-        # The user's answer flows back to the agent via the LangGraph resume
-        # value (and is persisted as part of the tool result event). We do NOT
-        # append it as a top-level USER message — doing that surfaced the
-        # answer as a stray user-message bubble disconnected from the
-        # question card in the chat thread.
+        # The user's answer flows back to the agent via the LangGraph resume value
+        # (persisted as part of the tool-result event). It is NOT appended as a USER
+        # message — that would render a stray bubble disconnected from the question card.
         resume = self._resume_payload(command, metadata)
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
@@ -230,28 +209,17 @@ class RuntimeApprovalHandler:
                 status=AgentRunStatus.RUNNING,
             )
         )
-        # PR 3.2.5 Phase 3 — if the original interrupt fired inside a
-        # subagent's subgraph, emit ``SUBAGENT_RESUMED`` BEFORE invoking
-        # the LangGraph resumer. The FE reducer keys on ``task_id`` to
-        # flip the fleet row's state from ``paused`` back to ``running``;
-        # ordering it ahead of the resume avoids a race where a tool
-        # event from the resumed branch lands first and gets rendered
-        # against a still-paused row.
+        # Emit SUBAGENT_RESUMED before invoking the LangGraph resumer so the FE
+        # reducer can flip the subagent row to ``running`` before any tool event
+        # from the resumed branch arrives.
         await self._maybe_emit_subagent_resumed(
             run=running,
             approval=approval,
             command=command,
         )
-        # PR 1.1-rev2 — bind a fresh allocator + resolver for the resume.
-        # ``handle_resolved`` runs in a separate async task from the
-        # original ``RuntimeRunHandler.handle`` (the original task ended
-        # with the run paused; this task is the queue's approval-resolved
-        # callback). The original allocator/resolver were unbound when
-        # the run paused, so we need a new pair seeded from the
-        # already-persisted ``TOOL_CALL_STARTED`` events of all prior
-        # runs in the conversation INCLUDING the run being resumed —
-        # tools that fired before the pause already burned their
-        # ordinals.
+        # Bind a fresh allocator + resolver: the original task ended when the run
+        # paused, so its bindings are gone. The new allocator is seeded from the
+        # persistent binding map so ordinals burned before the pause are not reused.
         allocator = await self._build_allocator_for_resume(running)
         allocator_token = ConversationOrdinalAllocator.bind_for_run(allocator)
         citation_resolver = CitationResolver(
@@ -261,13 +229,9 @@ class RuntimeApprovalHandler:
             source=StreamEventSource.MODEL,
         )
         resolver_token = CitationResolver.bind_for_run(citation_resolver)
-        # Polish-removal Phase 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
-        # bind the per-run tool display lookup AND the MCP descriptor
-        # registry before the resumed graph starts emitting tool events.
-        # The resumed run runs in a fresh async task from the original
-        # handle(), so the bindings set by RuntimeRunHandler are no longer
-        # in scope. MCP descriptors loaded post-pause re-register on this
-        # fresh registry as the agent re-discovers servers.
+        # Bind the per-run tool display lookup and MCP descriptor registry before
+        # the resumed graph starts emitting tool events. The resumed run runs in a
+        # fresh async task, so the original RuntimeRunHandler bindings are gone.
         dependencies = self.dependencies_factory(running.runtime_context)
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
@@ -322,13 +286,9 @@ class RuntimeApprovalHandler:
             ToolDisplayLookupContext.unbind(display_token)
             McpDisplayRegistryContext.unbind(mcp_display_token)
 
-    # PR 3.2.5 Phase 3 — paired with the ``SUBAGENT_PAUSED`` emit in
-    # ``stream_events.append_activity_events``. ``approval`` is the
-    # ``ApprovalRequestRecord`` we just resolved; if its ``metadata``
-    # carries ``parent_task_id`` (set on creation when the interrupt
-    # fired inside a subagent's subgraph), reuse it as the ``task_id``
-    # of the resume signal so the FE reducer's existing ``applySubagent``
-    # slot finds the row by task_id.
+    # Paired with the ``SUBAGENT_PAUSED`` emit; if ``approval.metadata`` carries
+    # ``parent_task_id`` the same task_id is reused in the resume signal so the
+    # FE reducer finds the subagent row by task_id.
     _SUBAGENT_RESUME_REASONS = {
         ApprovalDecision.APPROVED: "approved",
         ApprovalDecision.REJECTED: "rejected",
@@ -341,6 +301,7 @@ class RuntimeApprovalHandler:
         approval: object,
         command: RuntimeApprovalResolvedCommand,
     ) -> None:
+        """Emit ``SUBAGENT_RESUMED`` if the resolved approval originated inside a subagent subgraph."""
         metadata = getattr(approval, "metadata", None)
         if not isinstance(metadata, Mapping):
             return
@@ -373,21 +334,10 @@ class RuntimeApprovalHandler:
         self,
         run: RunRecord,
     ) -> ConversationOrdinalAllocator:
-        """Build the allocator for a resumed run.
+        """Rebuild the ordinal allocator from the persistent binding store for a resumed run.
 
-        PR 04 — replaces the prior message-walking + event-counting
-        seeder. The resumed allocator is reconstructed from the
-        persistent ``(conversation_ordinal ↔ tool_call_id)`` binding
-        store; the in-memory counter resumes at ``max(persisted)`` so
-        every fresh allocation post-pause is strictly greater than any
-        ordinal already burned pre-pause. Tool calls that re-dispatch on
-        resume (LangGraph reuses the same ``call_id``) collapse to the
-        existing binding instead of allocating again.
-
-        When the worker was constructed without a binding store
-        (replay / eval), fall back to a memory-only allocator. This
-        path doesn't carry ordinals across the pause but it never
-        crashes the resume.
+        Falls back to a fresh memory-only allocator when no binding store is available
+        (replay / eval paths); ordinals are not carried across the pause in that case.
         """
 
         if self._conversation_tool_ordinal_store is None:
@@ -411,6 +361,7 @@ class RuntimeApprovalHandler:
         resume: object,
         metrics: AssistantRunMetrics,
     ) -> object:
+        """Stream a resumed LangGraph run and return the composed final result."""
         result = await StreamingExecutor.run(
             stream=self.runtime_resumer(harness, resume),
             run=run,
@@ -422,8 +373,6 @@ class RuntimeApprovalHandler:
             citation_pipeline=CitationStreamPipeline.for_provider(
                 run.runtime_context.model_profile.provider
             ),
-            # P4 Stage 2 — opt-in coalesce window for MODEL_DELTA batching.
-            # Default 0 (disabled) so this ships dark.
             delta_coalesce_window_ms=self.settings.execution.delta_coalesce_window_ms,
             delta_coalesce_max_chunks=self.settings.execution.delta_coalesce_max_chunks,
         )
@@ -435,6 +384,7 @@ class RuntimeApprovalHandler:
         final_text: str | None,
         metrics: AssistantRunMetrics,
     ) -> None:
+        """Persist the final assistant message (if any), emit ``FINAL_RESPONSE``, and mark the run completed."""
         metrics_payload = metrics.to_payload(completed_at=datetime.now(timezone.utc))
         if final_text is not None:
             usage = metrics_payload.get("usage")
@@ -487,6 +437,7 @@ class RuntimeApprovalHandler:
         command: RuntimeApprovalResolvedCommand,
         metadata: Mapping[str, object],
     ) -> dict[str, object]:
+        """Build the LangGraph resume value dict appropriate for the approval kind."""
         approval_kind = StreamTextHelper.extract(
             metadata.get(cls._Fields.APPROVAL_KIND)
         )
@@ -522,19 +473,10 @@ class RuntimeApprovalHandler:
         decision: ApprovalDecision,
         decided_by_user_id: str | None,
     ) -> None:
-        """Apply a draft-send approval decision: persist v+2 + audit + emit.
+        """Apply a draft-send approval: persist the new draft version, emit ``DRAFT_UPDATED``, and complete the run.
 
-        Approve → ``status=sent`` + audit ``draft.send.completed``.
-        Reject  → ``status=draft`` + audit ``draft.send.rejected``.
-
-        The actual connector tool dispatch is owned by a dedicated send-
-        effect outbox worker (out-of-scope for PR 1.3.5 phase 2 — see
-        ``docs/new-design/pr-1.3.5-draft-completion.md`` §3.5). This
-        handler is responsible only for the draft-state transition + the
-        audit chain entry. Once the dispatch worker lands it will read
-        ``status=send_pending_approval`` rows and post to the connector;
-        the post-dispatch transition to ``status=sent`` (or
-        ``send_failed``) will replace the inline transition we do here.
+        Approve → ``status=sent``; Reject → ``status=draft``. Skips silently when the draft
+        store is absent or the draft is no longer in ``send_pending_approval`` state.
         """
 
         from agent_runtime.persistence.records import DraftStatus  # noqa: PLC0415
@@ -547,8 +489,7 @@ class RuntimeApprovalHandler:
             return
         latest = await self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
         if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
-            # State changed since the approval was posted (e.g. a
-            # concurrent discard); skip the transition.
+            # State changed since the approval was posted (e.g. a concurrent discard).
             return
 
         if decision is ApprovalDecision.APPROVED:
@@ -576,9 +517,7 @@ class RuntimeApprovalHandler:
                 "decided_by_user_id": decided_by_user_id,
             },
         )
-        # Mark the host run completed when the approval was the only
-        # outstanding action. We do not fail the run on reject — rejection
-        # is a normal outcome.
+        # Rejection is a normal outcome — mark the run completed either way.
         completed = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -599,6 +538,7 @@ class RuntimeApprovalHandler:
         decided_by_user_id: str,
         status: object,
     ) -> object:
+        """Return a new ``DraftRecord`` at ``previous.version + 1`` with the given status."""
         from datetime import datetime, timezone  # noqa: PLC0415
         from agent_runtime.persistence.records import DraftRecord  # noqa: PLC0415
 
@@ -620,6 +560,7 @@ class RuntimeApprovalHandler:
         )
 
     async def _emit_draft_updated(self, *, run: RunRecord, record: object) -> None:
+        """Emit a ``DRAFT_UPDATED`` event carrying the persisted draft's new version and status."""
         payload: dict[str, object] = {
             "draft_id": record.draft_id,
             "version": record.version,
@@ -647,6 +588,7 @@ class RuntimeApprovalHandler:
         action: str,
         extra_metadata: dict[str, object] | None = None,
     ) -> None:
+        """Write a draft-send audit log entry; no-ops when the persistence port has no audit method."""
         write_audit = getattr(self.persistence, "write_audit_log", None)
         if write_audit is None:
             return

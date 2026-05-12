@@ -1,13 +1,4 @@
-"""Postgres-backed ``DraftStorePort``.
-
-Borrows the parent store's connection pool and :class:`FieldCodec`, runs all queries
-through ``_tenant_connection`` so RLS session variables are stamped, and never
-mutates rows in place — every status change inserts a new ``runtime_drafts`` row
-with ``version = previous + 1``.
-
-Encrypted columns: ``title``, ``content_text``, and ``target_metadata`` (v1 envelopes).
-``citation_ids`` stays plaintext to allow exact-match joins against citation IDs.
-"""
+"""Postgres-backed ``DraftStorePort``."""
 
 from __future__ import annotations
 
@@ -180,6 +171,7 @@ class PostgresDraftStore:
         expected_version: int,
         expected_status: DraftStatus | None = None,
     ) -> DraftRecord:
+        """Return the draft if version and status match; raises :class:`OptimisticConflict` otherwise."""
         latest = await self.latest(org_id=org_id, draft_id=draft_id)
         if latest is None:
             raise KeyError(draft_id)
@@ -194,6 +186,7 @@ class PostgresDraftStore:
         return latest
 
     def _row_to_record(self, row: tuple[object, ...]) -> DraftRecord:
+        """Decrypt and unpack a raw Postgres tuple into a :class:`DraftRecord`."""
         codec = self._codec
         (
             row_id,

@@ -264,6 +264,7 @@ class ConnectorScopeValidator:
 
     @classmethod
     def coerce(cls, value: object) -> ConversationConnectorScopes:
+        """Coerce an untyped connector-scopes dict into the canonical shape, normalising ids and scope lists."""
         if value is None:
             return {}
         if not isinstance(value, dict):
@@ -276,12 +277,14 @@ class ConnectorScopeValidator:
 
     @staticmethod
     def _coerce_connector_id(value: object) -> str:
+        """Validate and strip a connector id string."""
         if not isinstance(value, str) or not value.strip():
             raise ValueError("connector id must be a non-empty string")
         return value.strip()
 
     @staticmethod
     def _coerce_scopes(connector_id: str, value: object) -> tuple[str, ...] | None:
+        """Coerce a per-connector scope list or null; raises on unexpected shape."""
         if value is None:
             return None
         if isinstance(value, list | tuple):

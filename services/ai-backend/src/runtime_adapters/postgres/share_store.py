@@ -1,16 +1,4 @@
-"""Postgres-backed ``ShareStorePort`` (PR 6.1).
-
-Borrows the parent :class:`PostgresRuntimeApiStore`'s pool and
-``_tenant_connection`` helper so RLS session vars are stamped on every
-access.
-
-Token lookups (the recipient endpoint) are intentionally org-agnostic —
-the recipient submits a token before the server knows which tenant it
-belongs to. The lookup runs through ``_pool.connection()`` directly
-(no ``app.current_org_id`` set), and the Postgres row's ``org_id``
-column is the source of truth that the API service uses to set the GUC
-for *subsequent* reads in the same request.
-"""
+"""Postgres-backed ``ShareStorePort``."""
 
 from __future__ import annotations
 
@@ -45,6 +33,7 @@ class PostgresShareStore:
         share: ShareRecord,
         recipients: Sequence[ShareRecipientRecord],
     ) -> ShareRecord:
+        """Persist a new share row and its initial recipients in one transaction."""
         async with self._parent._tenant_connection(  # type: ignore[attr-defined]
             org_id=share.org_id
         ) as conn:
@@ -96,6 +85,7 @@ class PostgresShareStore:
     # -- read ---------------------------------------------------------------
 
     async def get_by_id(self, *, org_id: str, share_id: str) -> ShareRecord | None:
+        """Return a share scoped by org, or ``None`` if not found."""
         async with self._parent._tenant_connection(  # type: ignore[attr-defined]
             org_id=org_id
         ) as conn:
@@ -114,6 +104,7 @@ class PostgresShareStore:
         conversation_id: str,
         include_revoked: bool,
     ) -> Sequence[ShareRecord]:
+        """Return shares for a conversation, newest first; optionally include revoked rows."""
         clause = "WHERE org_id = %s AND conversation_id = %s"
         if not include_revoked:
             clause += " AND revoked_at IS NULL"
@@ -129,9 +120,11 @@ class PostgresShareStore:
         return tuple(self._row_to_record(row) for row in rows)
 
     async def find_by_token_hash(self, *, share_token_hash: str) -> ShareRecord | None:
-        # Org-agnostic: the recipient hasn't proven membership yet, so the
-        # service hasn't set ``app.current_org_id``. The unique partial
-        # index makes this O(1).
+        """Return the share matching a token hash, or ``None`` if not found.
+
+        Org-agnostic — the recipient presents a token before the server knows
+        the tenant, so no RLS session var is stamped on this connection.
+        """
         async with self._parent._pool.connection() as conn:  # type: ignore[attr-defined]
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -144,6 +137,7 @@ class PostgresShareStore:
     async def list_recipients(
         self, *, org_id: str, share_id: str
     ) -> Sequence[ShareRecipientRecord]:
+        """Return recipients for a share, ordered by grant time."""
         async with self._parent._tenant_connection(  # type: ignore[attr-defined]
             org_id=org_id
         ) as conn:
@@ -178,6 +172,7 @@ class PostgresShareStore:
         share_id: str,
         recipients: Sequence[ShareRecipientRecord],
     ) -> tuple[Sequence[str], Sequence[str]]:
+        """Atomically replace the recipient list; returns (added_user_ids, removed_user_ids)."""
         new_ids = {recipient.user_id for recipient in recipients}
         async with self._parent._tenant_connection(  # type: ignore[attr-defined]
             org_id=org_id
@@ -223,6 +218,7 @@ class PostgresShareStore:
         expires_at: datetime | None = None,
         clear_expires_at: bool = False,
     ) -> ShareRecord | None:
+        """Apply a partial update; returns the refreshed record or ``None`` if not found."""
         sets: list[str] = []
         params: list[object] = []
         if sources_visible_to_viewer is not None:
@@ -253,6 +249,7 @@ class PostgresShareStore:
     async def revoke_share(
         self, *, org_id: str, share_id: str, now: datetime
     ) -> ShareRecord | None:
+        """Stamp ``revoked_at``; idempotent if already revoked. Returns the updated record."""
         async with self._parent._tenant_connection(  # type: ignore[attr-defined]
             org_id=org_id
         ) as conn:
@@ -271,6 +268,7 @@ class PostgresShareStore:
 
     @staticmethod
     def _select_columns(clause: str) -> str:
+        """Build a SELECT statement for the shares table with the given WHERE/ORDER clause."""
         return f"""
             SELECT share_id, org_id, conversation_id, created_by_user_id,
                    view_access, sources_visible_to_viewer,
@@ -282,6 +280,7 @@ class PostgresShareStore:
 
     @staticmethod
     def _row_to_record(row: tuple[object, ...]) -> ShareRecord:
+        """Unpack a raw Postgres tuple into a :class:`ShareRecord`."""
         (
             share_id,
             org_id,

@@ -4,7 +4,8 @@ Core backend (`backend_app/`). Today owns: MCP registration, OAuth state, token 
 
 ## Before changing behavior
 
-Read this service's `README.md`, `ARCHITECTURE.md`, and `TESTING.md` first.
+Read [docs/README.md](docs/README.md) to find the relevant doc, then read it before implementing.
+Architecture, features, guides, and reference docs are the source of truth.
 
 ## Boundaries
 

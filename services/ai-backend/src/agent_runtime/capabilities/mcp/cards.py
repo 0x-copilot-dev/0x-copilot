@@ -131,11 +131,13 @@ class McpServerCard(RuntimeContract):
     @field_validator(Keys.Field.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
+        """Coerce the name field to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.NAME)
 
     @field_validator(Keys.Field.SERVER_ID)
     @classmethod
     def _normalize_optional_server_id(cls, value: str | None) -> str | None:
+        """Coerce optional server id to a stable slug, or pass through ``None``."""
         if value is None:
             return None
         return McpValueNormalizer.normalize_id(value, Keys.Field.SERVER_ID)
@@ -143,6 +145,7 @@ class McpServerCard(RuntimeContract):
     @field_validator("display_name")
     @classmethod
     def _normalize_optional_display_name(cls, value: str | None) -> str | None:
+        """Strip and validate optional display name, or pass through ``None``."""
         if value is None:
             return None
         return McpValueNormalizer.normalize_nonempty_string(value, "display_name")
@@ -150,6 +153,7 @@ class McpServerCard(RuntimeContract):
     @field_validator(Keys.Field.SHORT_DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
+        """Strip and validate the description field."""
         return McpValueNormalizer.normalize_nonempty_string(
             value,
             Keys.Field.SHORT_DESCRIPTION,
@@ -164,6 +168,7 @@ class McpServerCard(RuntimeContract):
     )
     @classmethod
     def _normalize_enum_value(cls, value: object) -> str:
+        """Coerce enum value field to its string representation."""
         if isinstance(value, StrEnum):
             return value.value
         return McpValueNormalizer.normalize_nonempty_string(
@@ -173,6 +178,7 @@ class McpServerCard(RuntimeContract):
     @field_validator(Keys.Field.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
+        """Coerce required-scopes input to a frozenset of valid scope strings."""
         return McpValueNormalizer.normalize_scope_set(value, Keys.Field.REQUIRED_SCOPES)
 
     @field_validator(
@@ -182,6 +188,7 @@ class McpServerCard(RuntimeContract):
     def _normalize_allowed_ids(
         cls, value: object, info: ValidationInfo
     ) -> frozenset[str]:
+        """Coerce allowed-ids input to a frozenset of slug strings."""
         return McpValueNormalizer.normalize_id_set(value, info.field_name)
 
 
@@ -195,11 +202,13 @@ class McpLoadRequest(RuntimeContract):
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
     def _normalize_server_name(cls, value: object) -> str:
+        """Coerce the server name to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.SERVER_NAME)
 
     @field_validator(Keys.Field.LOCAL_TOOL_NAMES, mode="before")
     @classmethod
     def _normalize_local_tool_names(cls, value: object) -> frozenset[str]:
+        """Coerce local-tool-names input to a frozenset of slug strings."""
         return McpValueNormalizer.normalize_slug_set(value, Keys.Field.LOCAL_TOOL_NAMES)
 
 
@@ -249,16 +258,19 @@ class McpToolCallRequest(RuntimeContract):
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
     def _normalize_server_name(cls, value: object) -> str:
+        """Coerce the server name to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.SERVER_NAME)
 
     @field_validator(Keys.Field.TOOL_NAME)
     @classmethod
     def _normalize_tool_name(cls, value: object) -> str:
+        """Coerce the tool name to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.TOOL_NAME)
 
     @field_validator(Keys.Field.ARGUMENTS, mode="before")
     @classmethod
     def _validate_arguments(cls, value: object) -> dict[str, Any]:
+        """Validate that ``arguments`` is a JSON-serialisable object."""
         if value is None:
             return {}
         if not isinstance(value, Mapping):
@@ -290,11 +302,13 @@ class McpToolDescriptor(RuntimeContract):
     @field_validator(Keys.Field.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
+        """Coerce the name field to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.NAME)
 
     @field_validator(Keys.Field.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
+        """Strip and validate the description field."""
         return McpValueNormalizer.normalize_nonempty_string(
             value, Keys.Field.DESCRIPTION
         )
@@ -302,11 +316,13 @@ class McpToolDescriptor(RuntimeContract):
     @field_validator(Keys.Field.INPUT_SCHEMA, Keys.Field.OUTPUT_SHAPE)
     @classmethod
     def _validate_schema(cls, value: JsonSchema, info: ValidationInfo) -> JsonSchema:
+        """Validate that the schema field is a JSON-serialisable object."""
         return McpSchemaValidator.validate_json_schema(value, info.field_name)
 
     @field_validator(Keys.Field.RISK_LEVEL, mode="before")
     @classmethod
     def _normalize_risk_level(cls, value: object) -> str:
+        """Coerce risk level to a valid ``ToolRiskLevel`` string."""
         if isinstance(value, StrEnum):
             return value.value
         return McpValueNormalizer.normalize_nonempty_string(
@@ -324,6 +340,7 @@ class McpResourceAccessPolicy(RuntimeContract):
     @field_validator(Keys.Field.REQUIRED_SCOPES, mode="before")
     @classmethod
     def _normalize_required_scopes(cls, value: object) -> frozenset[str]:
+        """Coerce required-scopes input to a frozenset of valid scope strings."""
         return McpValueNormalizer.normalize_scope_set(value, Keys.Field.REQUIRED_SCOPES)
 
 
@@ -342,6 +359,7 @@ class McpResourceDescriptor(RuntimeContract):
     @field_validator(Keys.Field.URI)
     @classmethod
     def _normalize_uri(cls, value: object) -> str:
+        """Strip and validate the URI field."""
         normalized = McpValueNormalizer.normalize_nonempty_string(value, Keys.Field.URI)
         parsed = urlsplit(normalized)
         scheme = parsed.scheme.lower()
@@ -352,6 +370,7 @@ class McpResourceDescriptor(RuntimeContract):
     @field_validator(Keys.Field.NAME, Keys.Field.MIME_TYPE, Keys.Field.DESCRIPTION)
     @classmethod
     def _normalize_label(cls, value: object, info: ValidationInfo) -> str:
+        """Strip and validate the label field."""
         return McpValueNormalizer.normalize_nonempty_string(value, info.field_name)
 
 
@@ -368,11 +387,13 @@ class McpConnectionMetadata(RuntimeContract):
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
     def _normalize_server_name(cls, value: object) -> str:
+        """Coerce the server name to a stable slug identifier."""
         return McpValueNormalizer.normalize_slug(value, Keys.Field.SERVER_NAME)
 
     @field_validator(Keys.Field.TRANSPORT, Keys.Field.AUTH_MODE, mode="before")
     @classmethod
     def _normalize_enum_value(cls, value: object) -> str:
+        """Coerce enum value field to its string representation."""
         if isinstance(value, StrEnum):
             return value.value
         return McpValueNormalizer.normalize_nonempty_string(
@@ -382,6 +403,7 @@ class McpConnectionMetadata(RuntimeContract):
     @field_validator(Keys.Field.CONNECTION_ID)
     @classmethod
     def _normalize_connection_id(cls, value: object) -> str:
+        """Coerce connection id to a stable slug identifier."""
         return McpValueNormalizer.normalize_id(value, Keys.Field.CONNECTION_ID)
 
 
@@ -394,6 +416,7 @@ class McpLoadWarning(RuntimeContract):
     @field_validator(Keys.Field.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
+        """Strip and validate the safe public error message."""
         return McpValueNormalizer.normalize_nonempty_string(
             value, Keys.Field.SAFE_MESSAGE
         )
@@ -421,6 +444,7 @@ class McpLoadError(RuntimeContract):
     @field_validator(Keys.Field.SAFE_MESSAGE)
     @classmethod
     def _normalize_safe_message(cls, value: object) -> str:
+        """Strip and validate the safe public error message."""
         return McpValueNormalizer.normalize_nonempty_string(
             value, Keys.Field.SAFE_MESSAGE
         )
@@ -428,6 +452,7 @@ class McpLoadError(RuntimeContract):
     @field_validator(Keys.Field.SERVER_NAME)
     @classmethod
     def _normalize_optional_server_name(cls, value: str | None) -> str | None:
+        """Coerce optional server name to a slug, or pass through ``None``."""
         if value is None:
             return None
         return McpValueNormalizer.normalize_slug(value, Keys.Field.SERVER_NAME)
@@ -435,6 +460,7 @@ class McpLoadError(RuntimeContract):
     @field_validator(Keys.Field.CORRELATION_ID)
     @classmethod
     def _normalize_correlation_id(cls, value: object) -> str:
+        """Coerce the correlation id to a non-empty string."""
         return McpValueNormalizer.normalize_id(value, Keys.Field.CORRELATION_ID)
 
 

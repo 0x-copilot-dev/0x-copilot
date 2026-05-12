@@ -29,8 +29,8 @@ from agent_runtime.api.notifications import (
     InboxAndEmailNotificationDispatcher,
 )
 from agent_runtime.api.approval_coordinator import ApprovalCoordinator
-from agent_runtime.api.service import RuntimeApiService
-from agent_runtime.settings import RuntimeSettings
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -121,7 +121,7 @@ def _make_service(
     *,
     membership: dict[tuple[str, str], bool] | None = None,
     dispatcher=None,
-) -> RuntimeApiService:
+) -> ApprovalCoordinator:
     default_membership = {
         (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
         (_Values.ORG_ID, _Values.FORWARD_TARGET_USER_ID): True,
@@ -129,21 +129,17 @@ def _make_service(
     resolver = InMemoryWorkspaceMembershipResolver(
         membership if membership is not None else default_membership
     )
-    settings = RuntimeSettings.load(
-        environ={
-            "OPENAI_API_KEY": "sk-test",
-            "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            "RUNTIME_MAX_PARALLEL_TASKS": "4",
-        }
-    )
-    return RuntimeApiService(
+    event_producer = RuntimeEventProducer(
         persistence=store,
         event_store=store,
+        on_event_appended=None,
+    )
+    return ApprovalCoordinator(
+        persistence=store,
         queue=store,
-        settings=settings,
+        event_producer=event_producer,
         membership_resolver=resolver,
-        notification_dispatcher=dispatcher,
+        notification_dispatcher=dispatcher or LoggingNotificationDispatcher(),
     )
 
 
@@ -331,22 +327,17 @@ class TestServiceForwardWithMembershipResolver:
             async def is_active_member(self, **_):
                 raise MembershipResolverUnavailable("identity backend down")
 
-        from agent_runtime.api.service import RuntimeApiService
-
-        settings = RuntimeSettings.load(
-            environ={
-                "OPENAI_API_KEY": "sk-test",
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                "RUNTIME_MAX_PARALLEL_TASKS": "4",
-            }
-        )
-        service = RuntimeApiService(
+        event_producer = RuntimeEventProducer(
             persistence=store,
             event_store=store,
+            on_event_appended=None,
+        )
+        service = ApprovalCoordinator(
+            persistence=store,
             queue=store,
-            settings=settings,
+            event_producer=event_producer,
             membership_resolver=_UnavailableResolver(),
+            notification_dispatcher=LoggingNotificationDispatcher(),
         )
         request = ApprovalDecisionRequest(
             decision=ApprovalDecision.FORWARDED,

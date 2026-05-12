@@ -25,6 +25,8 @@ from agent_runtime.validation import ValueNormalizer
 
 
 class VirtualSkillCard(RuntimeContract):
+    """Compact Skill summary for listing and capability gating."""
+
     skill_id: str
     name: str
     display_name: str
@@ -38,6 +40,8 @@ class VirtualSkillCard(RuntimeContract):
 
 
 class VirtualSkillBundle(RuntimeContract):
+    """Full Skill payload including markdown content, returned on explicit load."""
+
     skill_id: str
     name: str
     display_name: str
@@ -53,11 +57,13 @@ RawSkillCard = VirtualSkillCard | Mapping[str, object]
 
 
 class SkillProvider(Protocol):
+    """Adapter boundary for Skill card listing and on-demand bundle loading."""
+
     async def list_skill_cards(self) -> Sequence[RawSkillCard]:
         """Return compact, model-visible Skill cards."""
 
     async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
-        """Return the full Skill markdown by stable name."""
+        """Return the full Skill markdown bundle by stable name."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,7 @@ class BackendSkillProvider:
     timeout_seconds: float = 10
 
     async def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
+        """Fetch compact Skill cards for the runtime context from the backend."""
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.get(
                 f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
@@ -85,6 +92,7 @@ class BackendSkillProvider:
         )
 
     async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+        """Fetch the full Skill bundle by stable name from the backend."""
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.get(
                 f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
@@ -111,6 +119,7 @@ class VirtualSkillRegistry:
     async def list_available_skills(
         self, context: object
     ) -> tuple[VirtualSkillCard, ...]:
+        """Return enabled Skill cards visible to the runtime context, sorted by name."""
         runtime_context = ValueNormalizer.coerce_runtime_context(context)
         cards = self._card_cache
         if cards is None:
@@ -129,6 +138,7 @@ class VirtualSkillRegistry:
         )
 
     async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
+        """Load and cache the full Skill bundle by name; raise on unknown or duplicate."""
         if name in self._bundle_cache:
             return self._bundle_cache[name]
         matches: list[SkillProvider] = []
@@ -160,6 +170,7 @@ class VirtualSkillRegistry:
     async def _collect_cards(
         self, context: AgentRuntimeContext
     ) -> tuple[VirtualSkillCard, ...]:
+        """Fetch and validate raw cards from all registered providers."""
         cards: list[VirtualSkillCard] = []
         for provider in self.providers:
             try:
@@ -195,6 +206,7 @@ class BackendSkillServiceAuth:
 
     @staticmethod
     def headers(runtime_context: AgentRuntimeContext) -> dict[str, str]:
+        """Return service-token headers when ``ENTERPRISE_SERVICE_TOKEN`` is set; else ``{}``."""
         token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
         if not token:
             return {}

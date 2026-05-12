@@ -1,4 +1,4 @@
-"""OTel meters for DB pool health and atomic-write outcomes (C3 + C4).
+"""OTel meters for DB pool health and atomic-write outcomes.
 
 The runtime exports OpenTelemetry metrics over OTLP; there is no in-process
 Prometheus surface. These helpers keep meter creation and instrument names

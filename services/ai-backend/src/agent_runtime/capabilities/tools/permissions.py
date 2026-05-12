@@ -15,7 +15,7 @@ from agent_runtime.capabilities.tools.cards import (
 
 
 class ToolUsePolicyKind(StrEnum):
-    """Mirror of the backend's three policy axes (PR B1 / 8.0.3d)."""
+    """Policy axes that map tool side-effects to enforcement granularity."""
 
     READ = "read"
     WRITE = "write"
@@ -47,6 +47,7 @@ class ToolUsePolicySnapshot:
     __slots__ = ("_modes",)
 
     def __init__(self, modes: Mapping[ToolUsePolicyKind, ToolUsePolicyMode]) -> None:
+        """Initialise with a resolved (kind → mode) mapping."""
         self._modes = dict(modes)
 
     @classmethod
@@ -111,6 +112,7 @@ _DEFAULT_MODES: dict[ToolUsePolicyKind, ToolUsePolicyMode] = {
 
 
 def _kind_for_tool_policy(policy: ToolPermissionPolicy) -> ToolUsePolicyKind:
+    """Map a tool's permission policy onto the coarsest matching policy axis."""
     if policy.risk_level in {ToolRiskLevel.HIGH, ToolRiskLevel.CRITICAL}:
         return ToolUsePolicyKind.DESTRUCTIVE
     # `getattr` not strictly necessary but a future field may move
@@ -177,13 +179,12 @@ class ToolPermissionChecker:
         cls,
         snapshot: ToolUsePolicySnapshot | None,
     ) -> ToolUsePolicySnapshot:
-        """PR B1 / 8.0.3d — return the snapshot the runtime caches on
-        ``AgentRuntimeContext`` at run start.
+        """Return the snapshot the runtime caches on ``AgentRuntimeContext`` at run start.
 
-        Accepts an existing snapshot (passed through verbatim) or
-        ``None`` (returns a deployment-default snapshot). Centralised
-        here so callers don't need to import ``ToolUsePolicySnapshot``
-        directly to get a sensible default.
+        Accepts an existing snapshot (passed through verbatim) or ``None``
+        (returns a deployment-default snapshot). Centralised here so callers
+        do not need to import ``ToolUsePolicySnapshot`` directly to get a
+        sensible default.
         """
 
         if snapshot is None:
@@ -198,6 +199,7 @@ class ToolPermissionChecker:
         connector: str,
         required_scopes: frozenset[str],
     ) -> bool:
+        """Return whether the context holds all required scopes at both the session and connector level."""
         if not required_scopes.issubset(context.permission_scopes):
             return False
 

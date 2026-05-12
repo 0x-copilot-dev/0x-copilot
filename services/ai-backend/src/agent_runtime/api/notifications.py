@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# User preference matrix (PR 4.1 follow-up)
+# User notification preference matrix
 # ---------------------------------------------------------------------------
 # The frontend stores a 4×3 matrix at ``user_preferences.notifications.matrix``
 # keyed by event × channel. The dispatcher consults the recipient's matrix
@@ -275,7 +275,7 @@ class _Env:
 
 
 # ---------------------------------------------------------------------------
-# Slack DM port (PR 4.1 follow-up — Slack channel for the matrix)
+# Slack DM notification port
 # ---------------------------------------------------------------------------
 # The notification matrix supports three channels: email, slack, desktop.
 # Email rides the existing email port; desktop rides the inbox SSE bus.

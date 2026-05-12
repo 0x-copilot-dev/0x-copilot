@@ -70,6 +70,27 @@ class RuntimeAdapterFactory:
     """Build runtime adapters for API and worker processes."""
 
     @classmethod
+    def from_store(cls, store: InMemoryRuntimeApiStore) -> RuntimePorts:
+        """Build a minimal in-memory :class:`RuntimePorts` from an existing store.
+
+        Tests use this helper to construct ports without importing
+        :class:`RuntimeApiService`.  Every satellite store is freshly
+        constructed so they share no state with other test instances.
+        """
+        return RuntimePorts(
+            persistence=store,
+            event_store=store,
+            queue=store,
+            backend="in_memory",
+            lifecycle=store,
+            draft_store=InMemoryDraftStore(),
+            share_store=InMemoryShareStore(),
+            conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+            subagent_store=InMemorySubagentStore(store),
+            source_store=InMemorySourceStore(InMemoryCitationStore()),
+        )
+
+    @classmethod
     def from_settings(
         cls, settings: RuntimeSettings, *, role: str = "api"
     ) -> RuntimePorts:

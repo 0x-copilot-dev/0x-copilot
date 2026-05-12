@@ -1,4 +1,4 @@
-"""Pydantic records for per-tenant retention policies and sweep evidence (C8).
+"""Pydantic records for per-tenant retention policies and sweep evidence.
 
 Each row in ``retention_policies`` is one ``(scope, resource_id, kind)`` policy
 with a TTL in seconds. Most-specific policy wins at resolution time:
@@ -76,9 +76,9 @@ class RetentionDeletionEvidenceRecord(RuntimeContract):
     """One row written to ``runtime_deletion_evidence`` per non-empty sweep outcome.
 
     The existing table schema (migration 0001) uses generic column names
-    designed for user-initiated erasure flows. Until Phase 2 adds proper
-    sweeper columns, we write via a mapping documented in the adapter.
-    The ``reason`` field carries the full per-kind JSON context so
+    designed for user-initiated erasure flows. We write via a mapping
+    documented in the adapter until the schema grows dedicated sweeper
+    columns. The ``reason`` field carries the full per-kind JSON context so
     compliance reviewers can answer "what was deleted, when" without
     parsing worker logs.
     """

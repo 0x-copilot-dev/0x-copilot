@@ -34,6 +34,7 @@ class SkillAccessPolicy(SkillContract):
     @field_validator(Keys.Fields.ALLOWED_SOURCES, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_allowed_sources(cls, value: object) -> frozenset[str]:
+        """Coerce allowed-sources input to a frozenset of ``SkillSourceScope`` values."""
         return frozenset(
             SkillPolicyNormalizer.normalize_source_path(item)
             for item in SkillPolicyNormalizer.coerce_iterable(value)
@@ -46,6 +47,7 @@ class SkillAccessPolicy(SkillContract):
     )
     @classmethod
     def _normalize_slug_set(cls, value: object) -> frozenset[str]:
+        """Coerce slug-set input to a frozenset of lowercase slug strings."""
         return frozenset(
             SkillPolicyNormalizer.normalize_slug(item)
             for item in SkillPolicyNormalizer.coerce_iterable(value)
@@ -108,6 +110,7 @@ class SkillAccessEvaluator:
         policy: SkillAccessPolicy,
         skill: ConfiguredSkill,
     ) -> bool:
+        """Return whether ``skill`` passes all three policy gates: source, deny-list, and tools."""
         if not cls.is_source_allowed(policy, skill.source):
             return False
         if skill.manifest.name in policy.denied_skill_names:
@@ -116,9 +119,11 @@ class SkillAccessEvaluator:
 
     @classmethod
     def is_source_allowed(cls, policy: SkillAccessPolicy, source: SkillSource) -> bool:
+        """Return whether ``source`` is in the policy allow-list and has a compatible scope."""
         if str(source.path) not in policy.allowed_sources:
             return False
-
+        # A source is in-scope when it is marked SHARED (available to all agents)
+        # or when its per-agent scope matches the policy's agent type.
         required_scope = SkillSourceScope(policy.agent_type.value)
         return SkillSourceScope.SHARED in source.scope or required_scope in source.scope
 
@@ -128,6 +133,7 @@ class SkillAccessEvaluator:
         policy: SkillAccessPolicy,
         skills: tuple[ConfiguredSkill, ...],
     ) -> tuple[str, ...]:
+        """Return distinct source directory paths for all policy-visible skills, in discovery order."""
         directories: list[str] = []
         seen: set[str] = set()
         for skill in skills:
@@ -146,12 +152,14 @@ class SkillPolicyNormalizer:
 
     @classmethod
     def normalize_source_path(cls, value: object) -> str:
+        """Resolve ``value`` to an absolute string path; raise on non-string/Path input."""
         if not isinstance(value, str | Path):
             raise ValueError(Messages.Validation.SOURCE_PATH_STRING)
         return str(Path(value).expanduser().resolve(strict=False))
 
     @classmethod
     def normalize_slug(cls, value: object) -> str:
+        """Lower-case and validate ``value`` as a stable slug; raise on invalid input."""
         if not isinstance(value, str):
             raise ValueError(Messages.Validation.STRING_POLICY_SLUG)
         normalized = value.strip().lower()
@@ -161,6 +169,7 @@ class SkillPolicyNormalizer:
 
     @classmethod
     def coerce_iterable(cls, value: object) -> tuple[object, ...]:
+        """Wrap scalars in a one-element tuple; convert iterables; return ``()`` for ``None``."""
         if value is None:
             return ()
         if isinstance(value, str | Path):

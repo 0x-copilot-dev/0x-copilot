@@ -13,8 +13,8 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
 )
 from agent_runtime.api.events import RuntimeEventProducer
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.persistence.records import RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.sse.adapter import RuntimeSseAdapter
@@ -44,13 +44,8 @@ class FastApiRuntimeApiTestMixin:
                 "RUNTIME_MAX_PARALLEL_TASKS": "4",
             }
         )
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         app.state.runtime_api_store = store
         return TestClient(app), store
 
@@ -131,7 +126,7 @@ class FastApiRuntimeApiTestMixin:
     ) -> str:
         chunks: list[str] = []
         async for chunk in RuntimeSseAdapter.stream(
-            service=client.app.state.runtime_api_service,
+            service=client.app.state.conversation_query_service,
             org_id=self.Values.ORG_ID,
             user_id=self.Values.USER_ID,
             run_id=run_id,
@@ -233,13 +228,8 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
                 "RUNTIME_MAX_PARALLEL_TASKS": "4",
             }
         )
-        service = RuntimeApiService(
-            persistence=store,
-            event_store=store,
-            queue=store,
-            settings=settings,
-        )
-        app = RuntimeApiAppFactory.create_app(service)
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         client = TestClient(app)
         conversation = client.post(
             "/v1/agent/conversations", json=self.conversation_payload()

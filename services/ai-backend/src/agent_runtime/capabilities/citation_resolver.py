@@ -50,6 +50,7 @@ class CitationResolver:
         __slots__ = ("accumulated", "emitted")
 
         def __init__(self) -> None:
+            """Initialise a fresh per-delta accumulation buffer."""
             self.accumulated: str = ""
             # Keyed by (prose_offset, ordinal) so the same ordinal at two
             # different prose positions emits twice (two chips), while a
@@ -64,6 +65,7 @@ class CitationResolver:
         producer: "RuntimeEventProducer",
         source: "StreamEventSource",
     ) -> None:
+        """Initialise the resolver bound to a run, ordinal allocator, event producer, and stream source."""
         self._run = run
         self._allocator = allocator
         self._producer = producer
@@ -74,6 +76,7 @@ class CitationResolver:
 
     @property
     def run_id(self) -> str:
+        """Return the run id this resolver is scoped to."""
         return self._run.run_id
 
     async def observe_delta(self, *, message_id: str, delta_text: str) -> None:
@@ -99,6 +102,7 @@ class CitationResolver:
             )
 
     async def _observe(self, *, message_id: str, delta_text: str) -> None:
+        """Accumulate delta text and emit a ``citation_made`` event for each new ``[[N]]`` match."""
         # Late import to avoid the capabilities ↔ runtime_api.schemas circular
         # import path that CitationLedger also side-steps the same way.
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415

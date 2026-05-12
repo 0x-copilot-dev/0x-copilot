@@ -1,4 +1,4 @@
-"""Per-user inbox SSE wire schemas (PR 1.4.1)."""
+"""Per-user inbox SSE wire schemas for approval-assigned and approval-resolved events."""
 
 from __future__ import annotations
 

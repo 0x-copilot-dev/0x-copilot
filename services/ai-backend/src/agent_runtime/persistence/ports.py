@@ -180,7 +180,7 @@ class SourceStorePort(Protocol):
 
 @runtime_checkable
 class CitationStorePort(Protocol):
-    """Idempotent citation persistence boundary (PR 1.1).
+    """Idempotent citation persistence boundary.
 
     The :class:`agent_runtime.capabilities.citations.CitationLedger` is the
     only intended caller. Tools, provider adapters, and replay paths all
@@ -223,7 +223,7 @@ class CitationStorePort(Protocol):
 
 @runtime_checkable
 class ConversationToolOrdinalStorePort(Protocol):
-    """Persistent ``(conversation_ordinal ↔ tool_call_id)`` binding store (PR 04).
+    """Persistent ``(conversation_ordinal ↔ tool_call_id)`` binding store.
 
     Owned by the
     :class:`agent_runtime.capabilities.conversation_ordinals.ConversationOrdinalAllocator`.
@@ -276,7 +276,7 @@ class ConversationToolOrdinalStorePort(Protocol):
 
 @runtime_checkable
 class ShareStorePort(Protocol):
-    """Conversation share + recipient persistence boundary (PR 6.1).
+    """Conversation share and recipient persistence boundary.
 
     Mutations are typed (no merge-patch on the port — the service composes
     the diff and calls the right method). Reads are scoped:

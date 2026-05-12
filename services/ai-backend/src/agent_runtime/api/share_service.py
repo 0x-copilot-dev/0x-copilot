@@ -100,8 +100,7 @@ class ShareService:
     """
 
     _ADMIN_SCOPE = "admin:users"
-    """Scope present on workspace admins (matches PR 1.6 / 1.4 / 1.2.1
-    convention — see ``enterprise_service_contracts.scopes``)."""
+    """Scope present on workspace admins (see ``enterprise_service_contracts.scopes``)."""
 
     def __init__(
         self,
@@ -476,7 +475,7 @@ class ShareService:
         )
 
     # ------------------------------------------------------------------
-    # ShareSnapshotPort — token resolution for PR 6.2 fork service
+    # ShareSnapshotPort — token resolution for the fork service
     # ------------------------------------------------------------------
 
     async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:

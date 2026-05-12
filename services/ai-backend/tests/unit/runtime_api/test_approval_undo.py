@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import status as http_status
 
-from agent_runtime.api.service import RuntimeApiService
-from agent_runtime.settings import RuntimeSettings
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
+from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -96,29 +98,24 @@ async def _seed(
     return record
 
 
-def _make_service(store: InMemoryRuntimeApiStore) -> RuntimeApiService:
-    from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
-
-    settings = RuntimeSettings.load(
-        environ={
-            "OPENAI_API_KEY": "sk-test",
-            "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            "RUNTIME_MAX_PARALLEL_TASKS": "4",
-        }
-    )
-    return RuntimeApiService(
+def _make_service(store: InMemoryRuntimeApiStore) -> ApprovalCoordinator:
+    event_producer = RuntimeEventProducer(
         persistence=store,
         event_store=store,
+        on_event_appended=None,
+    )
+    return ApprovalCoordinator(
+        persistence=store,
         queue=store,
-        settings=settings,
+        event_producer=event_producer,
         membership_resolver=InMemoryWorkspaceMembershipResolver(
             {(_Values.ORG_ID, _Values.USER_ID): True}
         ),
+        notification_dispatcher=LoggingNotificationDispatcher(),
     )
 
 
-async def _approve(service: RuntimeApiService) -> None:
+async def _approve(service: ApprovalCoordinator) -> None:
     await service.record_approval_decision(
         org_id=_Values.ORG_ID,
         approval_id=_Values.APPROVAL_ID,

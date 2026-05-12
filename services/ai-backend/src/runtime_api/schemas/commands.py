@@ -19,7 +19,7 @@ from runtime_api.schemas.common import ApprovalDecision
 # means "no propagation": the worker starts a fresh trace, which is the
 # same behavior the system had before P13.
 class RuntimeRunCommand(RuntimeContract):
-    """Durable command enqueued after run creation."""
+    """Durable command enqueued after run creation; carries trace-propagation headers for the worker."""
 
     command_id: str = Field(default_factory=lambda: uuid4().hex)
     run_id: str
@@ -53,14 +53,14 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     org_id: str
     decision: ApprovalDecision
     answer: str | None = None
-    # PR 1.4.1 — populated by the API service from the request, or by
-    # the expiry sweeper as ``Values.SYSTEM_USER_ID`` when the rejection
-    # is system-driven (timeout / membership cascade). The audit emitter
-    # promotes ``actor_type=system`` for sentinel values.
+    # Populated by the API service from the request, or by the expiry sweeper
+    # as ``Values.SYSTEM_USER_ID`` for system-driven rejections (timeout /
+    # membership cascade). The audit emitter promotes ``actor_type=system``
+    # for sentinel values.
     decided_by_user_id: str | None = None
-    # PR 1.4.1 — short reason code recorded in audit metadata; lets
-    # operational dashboards distinguish "expired" from
-    # "recipient_membership_revoked" without parsing free text.
+    # Short reason code for audit metadata; lets operational dashboards
+    # distinguish "expired" from "recipient_membership_revoked" without
+    # parsing free-text fields.
     reason: str | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

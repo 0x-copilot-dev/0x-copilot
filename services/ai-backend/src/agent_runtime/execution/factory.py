@@ -171,13 +171,12 @@ async def _assemble_harness(
     of the assembly path — they are required by definition to produce the
     same ``RuntimeHarness`` for a given resolved capability set.
 
-    P3 §11.c — ``skill_cards`` is now resolved upstream as the 5th branch
-    of the ``acreate_agent_runtime`` gather. It used to be a sequential
-    ``await`` here; pulling it into the fan-out removes the last
-    sequential await between the listing pass and the builder kickoff.
+    ``skill_cards`` is resolved upstream as the 5th branch of the
+    ``acreate_agent_runtime`` gather, removing the last sequential await
+    between the listing pass and the builder kickoff.
     """
 
-    # PR 1.3.5 — translate SubagentDefinition.fs_permissions to deepagents'
+    # Translate SubagentDefinition.fs_permissions to deepagents'
     # FilesystemPermission rules so subagents only get write access to
     # ``/drafts/`` (and other privileged prefixes) when their definition
     # explicitly grants it.
@@ -206,8 +205,8 @@ async def _assemble_harness(
             ),
             suggestions=runtime_context.suggested_connectors,
         )
-        # PR 4.3 — compute workspace-policy kwargs (e.g. training opt-out
-        # provider headers) once per build and thread them through every
+        # Compute workspace-policy kwargs (e.g. training opt-out provider
+        # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
         # same kwargs because they share the runtime context.
         extra_model_kwargs = workspace_model_kwargs(
@@ -452,14 +451,13 @@ async def _skill_cards(
 def _instructions_with_suggested_connectors(
     *, instructions: str, suggestions: Sequence[object]
 ) -> str:
-    """PR 4.4.7 Phase 2 (Slice B) — render the catalog suggestions
-    section.
+    """Append the catalog suggestions block to the base instructions.
 
     Renders only when ``suggestions`` is non-empty so a run with no
     suggestible catalog entries pays no token tax. Each row carries
     just the slug, display name, and a one-line scope/description so
-    the agent has enough context to map a user request to a relevant
-    suggestion via the existing ``suggest_mcp_connector`` tool.
+    the agent can map a user request to a relevant suggestion via the
+    ``suggest_mcp_connector`` tool.
     """
 
     if not suggestions:
@@ -556,8 +554,8 @@ def _composed_deep_backend(
     a default. We register two prefixes:
 
     - ``/subagents/`` → read-only subagent execution trace projection.
-    - ``/drafts/`` → versioned, append-only Workspace-pane draft persistence
-      (PR 1.3). Catches the agent's existing ``write_file`` / ``edit_file``
+    - ``/drafts/`` → versioned, append-only Workspace-pane draft persistence.
+      Catches the agent's existing ``write_file`` / ``edit_file``
       tool calls and turns them into ``runtime_drafts`` rows + ``DRAFT_UPDATED``
       events.
 

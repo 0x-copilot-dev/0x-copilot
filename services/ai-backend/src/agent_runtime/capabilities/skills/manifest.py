@@ -42,6 +42,7 @@ class SkillManifestError(Exception):
         *,
         skill_path: Path | None = None,
     ) -> None:
+        """Initialise with a typed error code, a safe public message, and optional skill path."""
         super().__init__(safe_message)
         self.code = code
         self.safe_message = safe_message
@@ -70,11 +71,13 @@ class SkillManifest(BaseModel):
     @field_validator(Keys.Fields.NAME)
     @classmethod
     def _normalize_name(cls, value: object) -> str:
+        """Coerce the skill name to a stable slug identifier."""
         return SkillTextNormalizer.normalize_slug(value, Keys.Fields.NAME)
 
     @field_validator(Keys.Fields.DESCRIPTION)
     @classmethod
     def _normalize_description(cls, value: object) -> str:
+        """Strip and validate the skill description."""
         return SkillTextNormalizer.normalize_nonempty_string(
             value,
             Keys.Fields.DESCRIPTION,
@@ -83,6 +86,7 @@ class SkillManifest(BaseModel):
     @field_validator(Keys.Fields.LICENSE)
     @classmethod
     def _normalize_license(cls, value: object) -> str | None:
+        """Strip and validate the optional license string."""
         if value is None:
             return None
         return SkillTextNormalizer.normalize_nonempty_string(value, Keys.Fields.LICENSE)
@@ -90,6 +94,7 @@ class SkillManifest(BaseModel):
     @field_validator(Keys.Fields.COMPATIBILITY, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_compatibility(cls, value: object) -> frozenset[str]:
+        """Coerce compatibility values to a frozenset of non-empty strings."""
         return frozenset(
             SkillTextNormalizer.normalize_nonempty_string(
                 item,
@@ -104,6 +109,7 @@ class SkillManifest(BaseModel):
     @field_validator(Keys.Fields.ALLOWED_TOOLS, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_allowed_tools(cls, value: object) -> frozenset[str]:
+        """Coerce allowed-tools values to a frozenset of slug strings."""
         return frozenset(
             SkillTextNormalizer.normalize_slug(item, Keys.Fields.ALLOWED_TOOLS)
             for item in SkillTextNormalizer.coerce_iterable(
@@ -115,6 +121,7 @@ class SkillManifest(BaseModel):
     @field_validator(Keys.Fields.METADATA, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_metadata(cls, value: object) -> dict[str, JsonScalar]:
+        """Coerce the metadata dict; fold unknown top-level scalar keys into it."""
         if value is None:
             return {}
         if not isinstance(value, Mapping):
@@ -156,6 +163,7 @@ class SkillManifestParser:
         *,
         skill_path: Path | None,
     ) -> tuple[str, str]:
+        """Split ``markdown`` into ``(frontmatter, body)`` at the ``---`` delimiters."""
         if not markdown.strip():
             raise SkillManifestError(
                 SkillErrorCode.EMPTY_SKILL,
@@ -196,6 +204,7 @@ class SkillManifestParser:
         *,
         skill_path: Path | None,
     ) -> dict[str, object]:
+        """Parse YAML from a raw frontmatter string; raise ``SkillManifestError`` on failure."""
         try:
             parsed = yaml.safe_load(frontmatter)
         except yaml.YAMLError as exc:
@@ -217,6 +226,7 @@ class SkillManifestParser:
         cls,
         raw_manifest: dict[str, object],
     ) -> dict[str, object]:
+        """Fold any unknown scalar top-level keys into the ``metadata`` dict."""
         metadata = dict(raw_manifest.get(Keys.Fields.METADATA) or {})
         normalized: dict[str, object] = {}
 
@@ -233,6 +243,7 @@ class SkillManifestParser:
 
     @classmethod
     def error_code_from_validation(cls, exc: ValidationError) -> SkillErrorCode:
+        """Map a Pydantic ``ValidationError`` to the most specific ``SkillErrorCode``."""
         missing_required = any(
             error[Keys.Pydantic.ERROR_TYPE] == Keys.Pydantic.MISSING
             for error in exc.errors()
@@ -275,6 +286,7 @@ class SkillManifestReader:
 
     @classmethod
     def validate_file_size(cls, skill_path: Path, *, max_bytes: int) -> None:
+        """Raise ``SkillManifestError`` when ``skill_path`` exceeds ``max_bytes``."""
         try:
             file_size = skill_path.stat().st_size
         except OSError as exc:
@@ -293,6 +305,7 @@ class SkillManifestReader:
 
     @classmethod
     def read_markdown(cls, skill_path: Path) -> str:
+        """Read UTF-8 text from ``skill_path``; raise ``SkillManifestError`` on OS errors."""
         try:
             return skill_path.read_text(encoding=Keys.Encoding.UTF_8)
         except OSError as exc:
@@ -314,6 +327,7 @@ class SkillAssetReferenceValidator:
         *,
         skill_path: Path | None = None,
     ) -> None:
+        """Validate all local Markdown link targets in ``markdown_body`` against ``skill_directory``."""
         directory = Path(skill_directory)
         for raw_reference in Patterns.MARKDOWN_LINK.findall(markdown_body):
             reference = raw_reference.strip().split(Keys.Characters.HASH, maxsplit=1)[0]
@@ -329,6 +343,7 @@ class SkillAssetReferenceValidator:
         *,
         skill_path: Path | None,
     ) -> None:
+        """Validate a single local reference path; raise on traversal or missing file."""
         reference_path = Path(reference)
         if reference_path.is_absolute() or Keys.Characters.SLASH_DOT_DOT in (
             reference_path.parts
@@ -358,10 +373,12 @@ class SkillAssetReferenceValidator:
 
     @classmethod
     def should_skip_reference(cls, reference: str) -> bool:
+        """Return ``True`` when ``reference`` is empty or an external URL."""
         return not reference or cls.is_external_reference(reference)
 
     @classmethod
     def is_external_reference(cls, reference: str) -> bool:
+        """Return ``True`` when ``reference`` has an external URI scheme."""
         lowered = reference.lower()
         return (
             Keys.Links.SCHEME_SEPARATOR in lowered
@@ -388,6 +405,7 @@ class SkillTextNormalizer:
 
     @classmethod
     def normalize_metadata_key(cls, value: object) -> str:
+        """Validate and strip a metadata key; raise on non-string or empty."""
         if not isinstance(value, str):
             raise ValueError(Messages.Validation.METADATA_KEY_STRING)
         normalized = value.strip()
@@ -397,4 +415,5 @@ class SkillTextNormalizer:
 
     @classmethod
     def is_json_scalar(cls, value: object) -> bool:
+        """Return ``True`` when ``value`` is a JSON-serialisable scalar."""
         return value is None or isinstance(value, str | int | float | bool)

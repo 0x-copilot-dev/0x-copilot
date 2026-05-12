@@ -37,7 +37,7 @@ class SubagentLifecycleStatus(str, Enum):
 
 
 class SubagentTokenUsage(RuntimeContract):
-    """Per-subagent token rollup over ``runtime_model_call_usage`` (PR 1.5 AC-2).
+    """Per-subagent token rollup over ``runtime_model_call_usage``.
 
     Computed by SUM-GROUP-BY on ``task_id``; absent when a subagent has not
     yet logged any model call (rare but possible for sub-second cancellations).

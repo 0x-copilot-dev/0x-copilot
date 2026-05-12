@@ -1,23 +1,4 @@
-"""C8 Phase 2: one-shot backfill job for ``retention_until`` columns.
-
-Stamps ``retention_until = created_at + ttl_seconds`` on existing rows in
-``agent_messages``, ``runtime_events``, and ``runtime_memory_items`` that
-were written before the column existed (migration 0030). Runs at worker
-startup and exits when all unset rows are filled (or when there are no
-policies to apply).
-
-Disabled by default. Opt-in: ``RETENTION_BACKFILL_ENABLED=true``.
-
-Chunk size is configurable via ``RETENTION_BACKFILL_CHUNK`` (default
-10 000). Each chunk is one UPDATE statement; the job loops until the
-adapter returns 0 rows for a given (org, kind) pair.
-
-The TTL applied is the org-scope resolved TTL from the 5-level
-``RetentionPolicyResolver``. Per-conversation and per-user overrides on
-historical rows are not applied here — Phase 3's write-time stamping and
-recompute-on-policy-change will handle those going forward. This covers
-the vast majority of rows correctly (org-scope policy is the common case).
-"""
+"""One-shot startup job that back-fills ``retention_until`` on rows written before the column existed."""
 
 from __future__ import annotations
 
@@ -34,8 +15,7 @@ from agent_runtime.retention import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# CONTEXT_PAYLOADS already has retention_until (from migration 0001).
-# CHECKPOINTS keep-latest-N rule is structural, not TTL-based.
+# CONTEXT_PAYLOADS already have retention_until; CHECKPOINTS use a keep-latest-N rule, not TTL.
 _BACKFILL_KINDS: tuple[RetentionKind, ...] = (
     RetentionKind.MESSAGES,
     RetentionKind.EVENTS,
@@ -53,6 +33,7 @@ class RetentionBackfillJobEnv:
 
     @classmethod
     def env_int(cls, name: str, default: int) -> int:
+        """Read ``name`` from the environment as a positive int, returning ``default`` on miss or invalid value."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -64,6 +45,7 @@ class RetentionBackfillJobEnv:
 
     @classmethod
     def env_bool(cls, name: str, default: bool) -> bool:
+        """Read ``name`` from the environment as a boolean, returning ``default`` on miss."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -138,6 +120,7 @@ class RetentionBackfillJob:
     async def _backfill_kind(
         self, *, org_id: str, kind: RetentionKind, ttl_seconds: int
     ) -> int:
+        """Loop until all unset rows for (org_id, kind) are stamped; returns total rows updated."""
         total = 0
         while True:
             count = await self._persistence.backfill_retention_until(

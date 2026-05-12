@@ -1,26 +1,4 @@
-"""C8 retention sweeper loop.
-
-Runs alongside the runtime worker (similar lifecycle as
-``UsageRollupLoop`` from B4). Every ``RETENTION_SWEEP_INTERVAL_SECONDS``
-(default 600) it:
-
-  1. ``list_retention_orgs()`` — distinct org_ids in the affected tables.
-  2. Per org: load policies, build a ``RetentionPolicyResolver``
-     (Phase 4: used only for CHECKPOINTS; other kinds read ``retention_until``).
-  3. For each kind, dispatch to ``sweep_retention_kind()``.
-  4. Phase 4 (``RETENTION_SWEEP_USE_RETENTION_UNTIL=true``, default on):
-     loop until the adapter returns 0 rows for the chunk; resolver is
-     bypassed for all kinds except CHECKPOINTS (which still needs ttl).
-  5. Emit per-tenant tally to OTel + write ``runtime_deletion_evidence``
-     row on every non-empty outcome (Phase 1).
-
-Disabled by default (``RETENTION_SWEEP_ENABLED=true`` to opt in) so
-existing deployments don't start tombstoning rows on upgrade.
-
-Phase 4 flag: ``RETENTION_SWEEP_USE_RETENTION_UNTIL`` (default ``true``).
-Set to ``false`` for one release to fall back to the legacy
-``created_at + ttl < NOW()`` unbounded sweep during a cautious rollout.
-"""
+"""Periodic per-tenant retention sweeper that tombstones and hard-deletes expired rows across all data kinds."""
 
 from __future__ import annotations
 
@@ -51,12 +29,11 @@ class RetentionSweeperLoopEnv:
     INTERVAL_SECONDS = "RETENTION_SWEEP_INTERVAL_SECONDS"
     ENABLED = "RETENTION_SWEEP_ENABLED"
     DRY_RUN = "RETENTION_SWEEP_DRY_RUN"
-    # Phase 4: switch sweep SQL to retention_until-based chunked CTE.
+    # When true (default), sweep SQL uses ``retention_until``-based chunked CTE.
     USE_RETENTION_UNTIL = "RETENTION_SWEEP_USE_RETENTION_UNTIL"
-    # Rows per chunk per (org, kind) call. 0 disables chunking (legacy path).
+    # Rows per chunk per (org, kind) call; 0 disables chunking (legacy unbounded path).
     CHUNK_SIZE = "RETENTION_SWEEP_CHUNK"
-    # Phase 5: grace period before hard-deleting tombstoned rows.
-    # 0 (default) = skip the second-pass hard-delete entirely (safe default).
+    # Grace period before hard-deleting tombstoned rows; 0 (default) skips the hard-delete pass.
     GRACE_DAYS_MESSAGES = "RETENTION_TOMBSTONE_GRACE_DAYS_MESSAGES"
     GRACE_DAYS_EVENTS = "RETENTION_TOMBSTONE_GRACE_DAYS_EVENTS"
     GRACE_DAYS_MEMORY_ITEMS = "RETENTION_TOMBSTONE_GRACE_DAYS_MEMORY_ITEMS"
@@ -66,6 +43,7 @@ class RetentionSweeperLoopEnv:
 
     @classmethod
     def env_float(cls, name: str, default: float) -> float:
+        """Read ``name`` from the environment as a float, returning ``default`` on miss or parse error."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -76,6 +54,7 @@ class RetentionSweeperLoopEnv:
 
     @classmethod
     def env_bool(cls, name: str, default: bool) -> bool:
+        """Read ``name`` from the environment as a boolean, returning ``default`` on miss."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -83,6 +62,7 @@ class RetentionSweeperLoopEnv:
 
     @classmethod
     def env_int(cls, name: str, default: int) -> int:
+        """Read ``name`` from the environment as a positive int, returning ``default`` on miss or invalid value."""
         raw = os.environ.get(name)
         if raw is None or raw.strip() == "":
             return default
@@ -102,9 +82,8 @@ class RetentionSweeperLoop:
         RetentionKind.MESSAGES,
         RetentionKind.EVENTS,
         RetentionKind.MEMORY_ITEMS,
-        # Phase 5: second-pass hard-delete after grace period.
-        # Run AFTER the first-pass tombstones so rows have status='deleted'
-        # before the hard-delete query looks for them.
+        # Tombstoned kinds run AFTER first-pass tombstones so the hard-delete query
+        # finds rows already in status='deleted'.
         RetentionKind.MESSAGES_TOMBSTONED,
         RetentionKind.EVENTS_TOMBSTONED,
         RetentionKind.MEMORY_ITEMS_TOMBSTONED,
@@ -182,11 +161,13 @@ class RetentionSweeperLoop:
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        """Start the background sweep loop; idempotent if already running."""
         if self._task is not None:
             return
         self._task = asyncio.create_task(self._run(), name="retention-sweeper-loop")
 
     async def stop(self) -> None:
+        """Signal the sweep loop to stop and wait for it to finish."""
         self._stop.set()
         task = self._task
         self._task = None
@@ -293,8 +274,8 @@ class RetentionSweeperLoop:
                     ),
                 }
             )
-            # Dry-run: one chunk only (force-rollback means rows never
-            # disappear, so looping would never converge).
+            # Dry-run stops after one chunk: force-rollback means rows never disappear,
+            # so looping would never converge.
             if self._dry_run or chunk.tombstoned + chunk.deleted == 0:
                 break
 
@@ -323,7 +304,7 @@ class RetentionSweeperLoop:
         kind: RetentionKind,
         resolver: RetentionPolicyResolver,
     ) -> RetentionSweepOutcome | None:
-        """Pre-Phase-4 path: single-pass created_at+ttl sweep (flag=false)."""
+        """Single-pass ``created_at+ttl`` sweep used when ``use_retention_until`` is disabled."""
 
         resolved = resolver.resolve(kind=kind)
         if resolved.ttl_seconds is None and kind is not RetentionKind.CONTEXT_PAYLOADS:

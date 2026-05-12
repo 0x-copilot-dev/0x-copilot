@@ -1,24 +1,16 @@
 """Assistant response metrics collected during runtime execution.
 
-Sub-PRD 01a — token extraction is now centralized in
+Token extraction is centralized in
 :mod:`agent_runtime.observability.token_usage`. This module is the
 worker-side accumulator: it observes a normalized usage value object
 per chunk, dedupes per-AIMessage, and materializes per-call /
 per-run / per-subagent records.
 
-Sub-PRD 01b — per-call slots also carry a typed
-:class:`UsageAttributionContext` built at emit time by the streaming
-executor. ``model_call_usage_records`` materializes the attribution
-columns (``subagent_id``, ``connector_slug``, ``purpose``,
-``originating_tool_call_id``, ``originating_tool_name``) from the
-stamped context. The slot's own ``task_id`` continues to come from
-LangGraph chunk metadata (no more ``next(iter(active_subagent_tasks))``
-arbitration).
-
-The provider-coupled walker that used to live here as
-``TokenUsageExtractor`` is gone. Use
-:class:`agent_runtime.observability.token_usage.TokenUsageExtractorRegistry`
-to obtain an extractor for a given provider slug.
+Per-call slots carry a typed :class:`UsageAttributionContext` built at
+emit time by the streaming executor. ``model_call_usage_records``
+materializes the attribution columns (``subagent_id``,
+``connector_slug``, ``purpose``, ``originating_tool_call_id``,
+``originating_tool_name``) from the stamped context.
 """
 
 from __future__ import annotations
@@ -51,15 +43,10 @@ class _PerCallSlot:
     Holds the latest provider-reported counts for a single LLM call.
     Counts are *merged* on each ``observe`` (field-wise max) because
     providers stream cumulative usage across chunks of the same
-    AIMessage.
-
-    Sub-PRD 01b: the slot also carries a typed
-    :class:`UsageAttributionContext` stamped by the streaming executor
-    at emit time. The context populates the ``subagent_id``,
-    ``connector_slug``, ``purpose``, and ``originating_tool_*`` columns
-    on the materialized row. ``task_id`` is read from the context too
-    so the row's per-task attribution comes from chunk metadata, not
-    from worker-local set arbitration.
+    AIMessage. Also carries a typed :class:`UsageAttributionContext`
+    stamped by the streaming executor to populate attribution columns
+    (subagent_id, connector_slug, purpose, originating_tool_*) on the
+    materialized row.
     """
 
     __slots__ = (
@@ -151,7 +138,7 @@ class _PerCallSlot:
 
 
 class PerCallTokenAccumulator:
-    """Per-AIMessage token bucket keyed by ``message.id`` (B2).
+    """Per-AIMessage token bucket keyed by ``message.id``.
 
     The streaming loop calls ``observe(usage, message_id=...)`` once
     per chunk that carries usage. The accumulator dedupes by
@@ -177,17 +164,11 @@ class PerCallTokenAccumulator:
         context: UsageAttributionContext | None = None,
         started_at: datetime | None = None,
     ) -> _PerCallSlot:
-        """Merge ``usage`` into the slot for ``message_id`` and stamp
-        ``context`` (if provided).
+        """Merge ``usage`` into the slot for ``message_id`` and stamp ``context`` if provided.
 
-        Sub-PRD 01b: ``context`` replaces the prior per-arg
-        ``task_id=...`` stamping. The context carries every attribution
-        dimension; the slot reads via property accessors. A subsequent
-        ``observe`` with a different context overwrites — by design,
-        the LATEST emit's context wins (a stream chunk shouldn't ever
-        change attribution mid-message, but if the streaming executor
-        re-stamps with refined context closer to message close, that's
-        the more accurate stamp).
+        A subsequent ``observe`` with a different context overwrites — by design,
+        the latest emit's context wins so that a refined context stamped closer to
+        message close is more accurate than an earlier one.
         """
 
         slot = self._slots.get(message_id)
@@ -229,18 +210,7 @@ class PerCallTokenAccumulator:
         )
 
     def subagent_rollup(self, task_id: str) -> AssistantSubagentUsageRollup:
-        """Sum per-call usage attributed to ``task_id`` (B2 spec §2.3).
-
-        Sub-PRD 01b: ``slot.task_id`` is read from the slot's stamped
-        :class:`UsageAttributionContext` (chunk-namespace-derived) —
-        no more worker-local set arbitration.
-
-        The wire schema (``AssistantSubagentUsageRollup``) carries
-        input / output / cached_input / total only — the four new
-        kinds aren't surfaced to the FE until 01d. The captured rows
-        (``runtime_model_call_usage``) DO carry them, so per-subagent
-        SQL queries can already access them.
-        """
+        """Sum per-call usage attributed to ``task_id``; reads attribution from the slot's context."""
 
         input_tokens = 0
         output_tokens = 0
@@ -345,14 +315,9 @@ class AssistantRunMetrics:
     ) -> None:
         """Capture provider token usage when present on a stream object.
 
-        Sub-PRD 01b: ``context`` replaces the prior ``task_id=`` arg.
-        The streaming executor builds a
-        :class:`UsageAttributionContext` from chunk metadata + ledger
-        state and hands it in. The context stamps onto the slot; the
-        row builder reads attribution columns from it.
-
-        The extractor returns a :class:`NormalizedTokenUsage` or
-        ``None`` (no usage block on this chunk — nothing to record).
+        The streaming executor passes a :class:`UsageAttributionContext`
+        built from chunk metadata; the context stamps onto the per-call
+        slot. Returns without recording when the chunk carries no usage block.
         """
 
         usage = self._extractor.extract(value)
@@ -373,14 +338,11 @@ class AssistantRunMetrics:
         *,
         trace_id: str,
     ) -> tuple[RuntimeModelCallUsageRecord, ...]:
-        """Build one ``runtime_model_call_usage`` row per finalized call (B2).
+        """Build one ``runtime_model_call_usage`` row per finalized call.
 
-        Sub-PRD 01b: attribution columns (``task_id``, ``subagent_id``,
-        ``connector_slug``, ``purpose``, ``originating_tool_*``) come
-        from the slot's stamped :class:`UsageAttributionContext`. Slots
-        without a context (e.g. recorded before the streaming executor
-        had a chance to build one) fall back to the ``Purpose.MAIN``
-        defaults the column has.
+        Attribution columns (task_id, subagent_id, connector_slug, purpose,
+        originating_tool_*) come from the slot's :class:`UsageAttributionContext`.
+        Slots without a context fall back to ``Purpose.MAIN`` defaults.
         """
 
         records: list[RuntimeModelCallUsageRecord] = []
@@ -464,7 +426,7 @@ class AssistantRunMetrics:
         completed_at: datetime,
         status: str,
     ) -> RuntimeRunUsageRecord:
-        """Build the per-run usage row at ``RUN_COMPLETED`` time (B1).
+        """Build the per-run usage row at ``RUN_COMPLETED`` time.
 
         Reads from the same accumulator that backs ``to_payload`` so
         the denormalized row and the event payload always agree.
@@ -506,14 +468,12 @@ class AssistantRunMetrics:
         )
 
     def chunk_has_usage(self, value: object) -> bool:
-        """Return True iff this chunk carries a usage block.
+        """Return ``True`` iff this chunk carries a usage block.
 
-        Used by the streaming executor to gate
-        ``MODEL_CALL_COMPLETED`` emission — only emit on a chunk that
-        actually closed the call. Sub-PRD 01a moved this from a
-        free-standing class method on ``TokenUsageExtractor`` to an
-        instance method on the metrics object, so the provider-aware
-        extractor is the one making the decision.
+        Used by the streaming executor to gate ``MODEL_CALL_COMPLETED``
+        emission: emit only on the chunk that actually closed the call.
+        The provider-aware extractor makes the decision, so callers need
+        not know the provider's usage-reporting conventions.
         """
 
         return self._extractor.extract(value) is not None

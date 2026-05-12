@@ -142,6 +142,7 @@ class ToolLoader:
         loaded_spec: LoadedToolSpec,
         resolution: RegisteredTool,
     ) -> str | None:
+        """Return a safe error message when the spec's identity fields don't match the card, else ``None``."""
         card: ToolCard = resolution.card
         policy = loaded_spec.permission_policy
         if loaded_spec.name != card.name:
@@ -156,6 +157,7 @@ class ToolLoader:
 
     @classmethod
     def _safe_tool_name(cls, tool_name: str) -> str | None:
+        """Normalise ``tool_name`` to a slug; return ``None`` if it is invalid."""
         try:
             return ToolValueNormalizer.normalize_slug(tool_name, Keys.Fields.TOOL_NAME)
         except ValueError:

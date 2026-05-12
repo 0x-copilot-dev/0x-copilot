@@ -9,6 +9,8 @@ class Keys:
     """Stable string keys used by the skills middleware package."""
 
     class Characters:
+        """Single-character string constants used in frontmatter parsing."""
+
         COLON = ":"
         COMMA = ","
         HASH = "#"
@@ -22,12 +24,18 @@ class Keys:
         TAB = "\t"
 
     class DeepAgents:
+        """Key names used in the deep-agents skill bundle interface."""
+
         SKILLS = "skills"
 
     class Encoding:
+        """Encoding name constants."""
+
         UTF_8 = "utf-8"
 
     class Fields:
+        """Field name constants for skill manifests and source configs."""
+
         ALLOWED_SOURCES = "allowed_sources"
         ALLOWED_TOOLS = "allowed_tools"
         COMPATIBILITY = "compatibility"
@@ -44,20 +52,28 @@ class Keys:
         SKILL_DIRECTORY = "skill_directory"
 
     class Files:
+        """Well-known file name constants."""
+
         SKILL_MD = "SKILL.md"
 
     class Frontmatter:
+        """Marker strings for YAML frontmatter parsing."""
+
         BOUNDARY = "---"
         COMMENT_PREFIX = "#"
         LIST_PREFIX = "- "
 
     class Links:
+        """URI prefix strings used to detect non-relative link schemes."""
+
         DATA = "data:"
         FRAGMENT = "#"
         MAILTO = "mailto:"
         SCHEME_SEPARATOR = "://"
 
     class Pydantic:
+        """Pydantic configuration constant strings."""
+
         BEFORE = "before"
         ERROR_TYPE = "type"
         FORBID = "forbid"
@@ -96,6 +112,8 @@ class Messages:
     """Centralized public and validation messages for skills middleware."""
 
     class Errors:
+        """Safe public error message strings for skills middleware."""
+
         ASSET_MISSING = "Skill asset reference does not exist."
         ASSET_UNSAFE = "Skill asset references must stay inside the skill directory."
         FRONTMATTER_EMPTY = "Skill frontmatter must not be empty."
@@ -113,6 +131,8 @@ class Messages:
         )
 
     class Validation:
+        """Validation error message constants and factory methods."""
+
         METADATA_MAPPING_REQUIRED = "metadata must be a mapping"
         METADATA_VALUES_SCALAR = "metadata values must be JSON scalar values"
         METADATA_KEY_STRING = "metadata keys must be strings"
@@ -124,28 +144,35 @@ class Messages:
 
         @classmethod
         def iterable_not_string(cls, field_name: str) -> str:
+            """Return a message for when a string is passed where an iterable is required."""
             return f"{field_name} must be an iterable, not a string"
 
         @classmethod
         def iterable_required(cls, field_name: str) -> str:
+            """Return a message for when a non-iterable value is passed."""
             return f"{field_name} must be an iterable"
 
         @classmethod
         def nonempty_string(cls, field_name: str) -> str:
+            """Return a message for when an empty string is passed."""
             return f"{field_name} must not be empty"
 
         @classmethod
         def path_string(cls, field_name: str) -> str:
+            """Return a message for when a value is not a string or Path."""
             return f"{field_name} must be a string or Path"
 
         @classmethod
         def stable_slug(cls, field_name: str) -> str:
+            """Return a message for when a value is not a stable slug."""
             return f"{field_name} must be a stable slug"
 
         @classmethod
         def string_or_iterable(cls, field_name: str) -> str:
+            """Return a message for when a value is neither a string nor an iterable."""
             return f"{field_name} must be a string or iterable of strings"
 
         @classmethod
         def string_required(cls, field_name: str) -> str:
+            """Return a message for when a non-string value is passed."""
             return f"{field_name} must be a string"

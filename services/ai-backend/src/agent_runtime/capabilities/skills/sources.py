@@ -48,11 +48,13 @@ class SkillSource(SkillContract):
     @field_validator(Keys.Fields.PATH, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_path(cls, value: object) -> Path:
+        """Resolve the path value to an absolute ``Path`` object."""
         return SkillSourceNormalizer.normalize_path(value, Keys.Fields.PATH)
 
     @field_validator(Keys.Fields.SCOPE, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_scope(cls, value: object) -> frozenset[SkillSourceScope]:
+        """Coerce the scope input to a ``frozenset[SkillSourceScope]``."""
         return SkillSourceNormalizer.normalize_scope(value)
 
 
@@ -66,6 +68,7 @@ class SkillSourceConfig(SkillContract):
     @field_validator(Keys.Fields.ROOTS, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_roots(cls, value: object) -> tuple[str, ...]:
+        """Coerce roots input to a tuple of non-empty path strings."""
         return SkillSourceNormalizer.normalize_roots(value)
 
     def as_sources(self) -> tuple[SkillSource, ...]:
@@ -98,6 +101,7 @@ class ConfiguredSkill(SkillContract):
     @field_validator(Keys.Fields.SKILL_DIRECTORY, mode=Keys.Pydantic.BEFORE)
     @classmethod
     def _normalize_skill_directory(cls, value: object) -> Path:
+        """Resolve the skill directory value to an absolute ``Path`` object."""
         return SkillSourceNormalizer.normalize_path(value, Keys.Fields.SKILL_DIRECTORY)
 
 
@@ -139,6 +143,11 @@ class SkillSourceRegistry:
 
     @classmethod
     def iter_skill_directories(cls, source: SkillSource) -> tuple[Path, ...]:
+        """Return skill directories under ``source.path``, sorted by name.
+
+        If the source root itself contains a ``SKILL.md`` it is returned as-is;
+        otherwise every child directory that contains a ``SKILL.md`` is collected.
+        """
         try:
             if not source.path.exists() or not source.path.is_dir():
                 raise OSError(Messages.Errors.SKILL_SOURCE_UNREADABLE)
@@ -158,10 +167,12 @@ class SkillSourceRegistry:
 
     @classmethod
     def source_sort_key(cls, source: SkillSource) -> tuple[int, str]:
+        """Return a ``(precedence, path)`` sort key for deterministic ordering."""
         return source.precedence, str(source.path)
 
     @classmethod
     def path_name(cls, path: Path) -> str:
+        """Return the final component of ``path`` for alphabetical directory sorting."""
         return path.name
 
 
@@ -170,6 +181,7 @@ class SkillSourceNormalizer:
 
     @classmethod
     def normalize_path(cls, value: object, field_name: str) -> Path:
+        """Resolve ``value`` to an absolute ``Path``; raise on non-path or empty input."""
         if not isinstance(value, str | Path):
             raise ValueError(Messages.Validation.path_string(field_name))
         raw_path = Path(value).expanduser()
@@ -179,6 +191,7 @@ class SkillSourceNormalizer:
 
     @classmethod
     def normalize_scope(cls, value: object) -> frozenset[SkillSourceScope]:
+        """Coerce ``value`` to a ``frozenset[SkillSourceScope]``; default to ``SHARED`` for ``None``."""
         if value is None:
             return frozenset({SkillSourceScope.SHARED})
         if isinstance(value, str):
@@ -194,6 +207,7 @@ class SkillSourceNormalizer:
 
     @classmethod
     def normalize_roots(cls, value: object) -> tuple[str, ...]:
+        """Coerce ``value`` to a tuple of non-empty root path strings."""
         if value is None:
             return ()
         if isinstance(value, str):

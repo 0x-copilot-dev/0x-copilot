@@ -1,4 +1,4 @@
-"""Persisted citation records (PR 1.1).
+"""Persisted citation records.
 
 A :class:`CitationRecord` is the durable mirror of the wire ``CitationSourceRef``
 emitted on ``source_ingested`` runtime events. The :class:`CitationLedger`

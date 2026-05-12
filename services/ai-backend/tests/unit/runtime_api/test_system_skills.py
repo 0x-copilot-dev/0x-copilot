@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.system_skills import SystemSkillsProjector
@@ -27,10 +27,10 @@ class TestSystemSkillsEndpoint:
                 "RUNTIME_MAX_PARALLEL_TASKS": "1",
             }
         )
-        service = RuntimeApiService(
-            persistence=store, event_store=store, queue=store, settings=settings
+        ports = RuntimeAdapterFactory.from_store(store)
+        return TestClient(
+            RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         )
-        return TestClient(RuntimeApiAppFactory.create_app(service))
 
     def test_returns_search_subagent_logs_in_settings_ui_shape(self) -> None:
         """A real filesystem skill should round-trip into a settings-UI payload.

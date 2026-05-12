@@ -110,6 +110,7 @@ class AskAQuestionTool:
     async def ainvoke(
         self, raw_input: AskAQuestionInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Validate input, emit a LangGraph interrupt, and translate the resume payload."""
         parsed = AskAQuestionInputParser.parse(raw_input)
         if isinstance(parsed, dict):
             return parsed
@@ -138,9 +139,11 @@ class AskAQuestionTool:
     async def __call__(
         self, raw_input: AskAQuestionInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
     def _approval_id(self) -> str:
+        """Return a per-invocation approval id scoped to the current run."""
         # Per-invocation suffix: trace_id is stable across multiple ask_a_question
         # calls inside the same run/trace, which would collapse them to a single
         # approval row + UI card. token_hex makes each request its own entity in
@@ -149,6 +152,7 @@ class AskAQuestionTool:
 
     @classmethod
     def _resume_result(cls, resume: object) -> dict[str, Any]:
+        """Translate the LangGraph resume payload into a normalized tool result dict."""
         decision = None
         answer: str | None = None
         selected: list[str] = []
@@ -193,6 +197,7 @@ class AskAQuestionTool:
 
     @staticmethod
     def _compose_answer(*, selected: list[str], free_text: str | None) -> str | None:
+        """Concatenate selected option labels and free text into one answer string."""
         parts: list[str] = []
         parts.extend(selected)
         if free_text:
@@ -209,6 +214,7 @@ class AskAQuestionInputParser:
     def parse(
         cls, raw_input: AskAQuestionInput | Mapping[str, Any] | str
     ) -> AskAQuestionInput | dict[str, Any]:
+        """Return a validated input model or a rejection dict on missing ``question``."""
         if isinstance(raw_input, AskAQuestionInput):
             return raw_input
         if isinstance(raw_input, str):

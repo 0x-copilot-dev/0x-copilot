@@ -13,8 +13,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.api.service import RuntimeApiService
-from agent_runtime.settings import RuntimeSettings
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
+from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -105,16 +107,14 @@ def _make_service(
     store: InMemoryRuntimeApiStore,
     *,
     membership: dict[tuple[str, str], bool] | None = None,
-) -> RuntimeApiService:
-    """Build a service wired to the in-memory store.
+) -> ApprovalCoordinator:
+    """Build an ApprovalCoordinator wired to the in-memory store.
 
     PR 1.4.1 — by default we seed the canonical Sarah → Marcus
     forwarding scenario as active members so the existing tests don't
     have to know about the resolver. Tests that exercise the resolver
     edge cases pass an explicit ``membership`` dict.
     """
-
-    from agent_runtime.api.membership import InMemoryWorkspaceMembershipResolver
 
     default_membership = {
         (_Values.ORG_ID, _Values.REQUESTER_USER_ID): True,
@@ -123,20 +123,17 @@ def _make_service(
     resolver = InMemoryWorkspaceMembershipResolver(
         membership if membership is not None else default_membership
     )
-    settings = RuntimeSettings.load(
-        environ={
-            "OPENAI_API_KEY": "sk-test",
-            "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            "RUNTIME_MAX_PARALLEL_TASKS": "4",
-        }
-    )
-    return RuntimeApiService(
+    event_producer = RuntimeEventProducer(
         persistence=store,
         event_store=store,
+        on_event_appended=None,
+    )
+    return ApprovalCoordinator(
+        persistence=store,
         queue=store,
-        settings=settings,
+        event_producer=event_producer,
         membership_resolver=resolver,
+        notification_dispatcher=LoggingNotificationDispatcher(),
     )
 
 

@@ -1,14 +1,4 @@
-"""C7 backfill job: re-encrypt existing v0 rows under the active envelope adapter.
-
-Scoped per (table, column) so an operator can resume after a partial run
-or run only a subset under load. The job batches rows, rate-limits between
-batches, and is idempotent — re-running advances the cursor on
-``encryption_version=0`` without rewriting v1 rows.
-
-Phase 1 ships the framework + a single demo column (``agent_messages.
-content_text``) so we have a working test surface; phase 2 adds the
-remaining columns from the C7 spec table.
-"""
+"""Backfill job that re-encrypts existing ``encryption_version=0`` rows under the active envelope adapter."""
 
 from __future__ import annotations
 
@@ -46,15 +36,8 @@ class BackfillTarget:
     column_type: str  # "text" or "json"
 
 
-# Default target set covers every column wired by C7 phase 2.
-#
-# Skipped intentionally:
-#   - runtime_subagent_results.response_text
-#   - runtime_tool_invocations.{args,result_summary}_json_redacted
-#   - runtime_memory_items.content_summary
-# Those tables have schema columns prepared by 0011 but no active write
-# path in PostgresRuntimeApiStore yet — backfill them once the writer
-# code lands so we don't rewrite an empty table on every run.
+# Default target set. Tables without an active write path are excluded
+# intentionally to avoid rewriting empty tables on every run.
 _DEFAULT_TARGETS: tuple[BackfillTarget, ...] = (
     BackfillTarget(table="agent_messages", column="content_text", column_type="text"),
     BackfillTarget(table="agent_messages", column="content_json", column_type="json"),
@@ -77,7 +60,7 @@ _DEFAULT_TARGETS: tuple[BackfillTarget, ...] = (
 )
 
 
-# Back-compat alias — phase 1 callers used the narrower name.
+# Back-compat alias for earlier callers that referenced the narrower name.
 _PHASE_1_TARGETS = _DEFAULT_TARGETS
 
 
@@ -107,9 +90,8 @@ class FieldEncryptionBackfill:
             )
         self._database_url = database_url
         self._field_encryption = field_encryption
-        # Use the codec so JSONB columns get the correct
-        # ``{"$enc": "v1:..."}`` wrapper rather than a raw envelope
-        # string (which Postgres would reject as invalid JSONB).
+        # The codec wraps JSONB columns with the ``{"$enc": "v1:..."}`` envelope so
+        # Postgres doesn't reject a raw envelope string as invalid JSONB.
         self._codec = FieldCodec(field_encryption)
         self._targets = targets
         self._batch_size = batch_size or int(
@@ -133,6 +115,7 @@ class FieldEncryptionBackfill:
         return totals
 
     async def _run_target(self, target: BackfillTarget) -> int:
+        """Process one target table/column until all v0 rows are rewritten; returns the total count."""
         rewritten = 0
         loop = asyncio.get_running_loop()
         while True:
@@ -151,6 +134,7 @@ class FieldEncryptionBackfill:
         return rewritten
 
     def _rewrite_batch(self, target: BackfillTarget) -> int:
+        """Encrypt one batch of v0 rows for ``target`` in a single transaction; returns the row count."""
         select_sql = (
             f"SELECT id, org_id, {target.column} AS payload "
             f"FROM {target.table} "
@@ -181,8 +165,7 @@ class FieldEncryptionBackfill:
                             target, row["payload"], org_id=org_id
                         )
                     except EncryptionUnavailableError:
-                        # KMS is wedged — abort the batch; outer loop will
-                        # retry on the next pass.
+                        # KMS unavailable — abort the batch; the outer loop retries next pass.
                         conn.rollback()
                         raise
                     cur.execute(
@@ -199,10 +182,10 @@ class FieldEncryptionBackfill:
     def _encrypt_for_target(
         self, target: BackfillTarget, value: Any, *, org_id: str
     ) -> Any:
+        """Encrypt ``value`` for the given target's column type; skips rows already encrypted."""
         if target.column_type == "json":
-            # Already-encrypted rows show up as `{"$enc": "..."}`; skip
-            # them. The WHERE encryption_version=0 should already exclude
-            # those, but defensive-program against a partial backfill.
+            # Defensive guard against partial backfills: already-encrypted rows show up as
+            # ``{"$enc": "..."}`` which the WHERE clause should exclude, but skip them anyway.
             if isinstance(value, dict) and len(value) == 1 and "$enc" in value:
                 return Jsonb(value)
             encrypted = self._codec.encrypt_jsonb(
@@ -222,11 +205,12 @@ class FieldEncryptionBackfill:
 
     @staticmethod
     def _coerce_text_to_bytes(value: Any) -> bytes:
+        """Coerce a text column value to bytes for encryption; JSON-encodes non-string/bytes values."""
         if isinstance(value, bytes):
             return value
         if isinstance(value, str):
             return value.encode("utf-8")
         return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
-    # Phase-1 alias kept so existing tests + any operator scripts keep working.
+    # Back-compat alias for existing tests and operator scripts.
     _coerce_to_bytes = _coerce_text_to_bytes

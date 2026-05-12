@@ -31,7 +31,9 @@ class CapabilityAuthCheck:
 class _ToolRegistryLike(Protocol):
     """Structural view of the built-in tool registry consumed by the gate."""
 
-    def list_available_tools(self, context: object) -> tuple[ToolCard, ...]: ...
+    def list_available_tools(self, context: object) -> tuple[ToolCard, ...]:
+        """Return available tool cards for the given context."""
+        ...
 
 
 class _McpServerLike(Protocol):
@@ -52,9 +54,9 @@ class _McpServerLike(Protocol):
 class _McpRegistryLike(Protocol):
     """Structural view of the MCP registry consumed by the gate."""
 
-    async def list_available_servers(
-        self, context: object
-    ) -> Iterable[_McpServerLike]: ...
+    async def list_available_servers(self, context: object) -> Iterable[_McpServerLike]:
+        """Return available MCP server entries for the given context."""
+        ...
 
 
 class CapabilityAuthGate:
@@ -75,6 +77,7 @@ class CapabilityAuthGate:
         tool_registry: _ToolRegistryLike,
         mcp_registry: _McpRegistryLike,
     ) -> None:
+        """Initialise the gate with a tool registry and an MCP registry."""
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
 

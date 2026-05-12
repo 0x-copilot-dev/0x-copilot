@@ -1,11 +1,10 @@
-"""Per-provider model-kwargs adapters for workspace + user policy knobs.
+"""Per-provider model-kwargs adapters for workspace and user policy knobs.
 
 The agent runtime reads workspace policy from
-``AgentRuntimeContext.workspace_behavior_overrides`` (a JSON-shape blob
-populated at run-create from ``workspace_defaults.behavior_overrides``)
-and per-user policy from ``AgentRuntimeContext.user_policies_json``
-(populated at run-create from backend's
-``/internal/v1/policies/runtime`` aggregate, PR 8.0.5).
+``AgentRuntimeContext.workspace_behavior_overrides`` (populated at
+run-create from ``workspace_defaults.behavior_overrides``) and per-user
+policy from ``AgentRuntimeContext.user_policies_json`` (populated from
+the backend's ``/internal/v1/policies/runtime`` aggregate).
 
 Two load-bearing knobs:
 
@@ -14,19 +13,18 @@ Two load-bearing knobs:
   "do not train" signal. User opt-out wins (privacy is a one-way
   ratchet — a user opting out cannot be silently re-enrolled by a
   more permissive workspace setting).
-* ``region`` (user, PR 8.0.5) — pins the run to a specific provider
-  deployment. ``None`` means "use whatever the deployment configured
-  for this provider" (= today's behaviour).
+* ``region`` (user) — pins the run to a specific provider deployment.
+  ``None`` means "use whatever the deployment configured for this
+  provider."
 
 Public surface:
 
-* :func:`workspace_model_kwargs(provider, overrides)` — workspace
-  opt-out (legacy; kept for callers that haven't migrated).
-* :func:`user_policy_model_kwargs(provider, user_policies_json)` —
-  per-user opt-out + region (PR 8.0.5).
-* :class:`RegionUnavailableError` — raised when the user pinned a
-  region the deployment doesn't have a mapping for. The runtime
-  worker catches this and translates to ``RUN_REJECTED``.
+* :func:`workspace_model_kwargs(provider, overrides)` — workspace opt-out.
+* :func:`user_policy_model_kwargs(provider, user_policies_json)` — per-user
+  opt-out + region routing.
+* :class:`RegionUnavailableError` — raised when the user pinned a region
+  the deployment doesn't have a mapping for; the runtime worker catches
+  this and translates to ``RUN_REJECTED``.
 """
 
 from __future__ import annotations
@@ -164,12 +162,12 @@ def user_policy_model_kwargs(
     provider: str,
     user_policies_json: Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """PR 8.0.5 — opt-out header + region routing from the user snapshot.
+    """Return opt-out header and region routing kwargs from the user snapshot.
 
     Composes with :func:`workspace_model_kwargs` at the call site:
     user opt-out is a one-way ratchet (cannot be silently disabled
     by a less-strict workspace setting), and region is a per-user
-    knob that doesn't have a workspace counterpart today.
+    knob without a workspace counterpart.
     """
 
     if not user_policies_json:
