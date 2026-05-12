@@ -81,14 +81,66 @@ class UsageConnectorRow(RuntimeContract):
     ``connector_slug`` is the empty string for the "(unattributed)"
     bucket — calls before any tool fired this turn. The frontend
     renders the empty slug as a localised label.
+
+    Sub-PRD 01d: ``model_name`` carries the model split. Empty string
+    represents pre-01d rows (no model dimension on the connector
+    rollup before the migration).
     """
 
     connector_slug: str
+    model_name: str = ""
     input: NonNegativeInt = 0
     output: NonNegativeInt = 0
     cached_input: NonNegativeInt = 0
     total: NonNegativeInt = 0
     runs_count: NonNegativeInt = 0
+    cost_micro_usd: int | None = None
+
+
+class UsageSubagentRow(RuntimeContract):
+    """One row of the org-scoped by-subagent breakdown (Sub-PRD 01d).
+
+    ``subagent_slug`` is the empty string for orchestrator-scope LLM
+    calls (mirrors the connector rollup's "(unattributed)" pattern).
+    Carries every captured token kind so per-subagent reports are
+    total-correct.
+    """
+
+    subagent_slug: str
+    model_provider: str
+    model_name: str
+    call_count: NonNegativeInt = 0
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cached_input: NonNegativeInt = 0
+    cache_creation_input: NonNegativeInt = 0
+    reasoning: NonNegativeInt = 0
+    audio_input: NonNegativeInt = 0
+    audio_output: NonNegativeInt = 0
+    total: NonNegativeInt = 0
+    cost_micro_usd: int | None = None
+
+
+class UsagePurposeRow(RuntimeContract):
+    """One row of the org-scoped by-purpose breakdown (Sub-PRD 01d).
+
+    ``purpose`` is one of the ``Purpose`` StrEnum values
+    (``main`` / ``tool_planning`` / ``tool_interpretation`` /
+    ``subagent_work`` / ``context_compression``).
+    """
+
+    purpose: str
+    model_provider: str
+    model_name: str
+    call_count: NonNegativeInt = 0
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cached_input: NonNegativeInt = 0
+    cache_creation_input: NonNegativeInt = 0
+    reasoning: NonNegativeInt = 0
+    audio_input: NonNegativeInt = 0
+    audio_output: NonNegativeInt = 0
+    total: NonNegativeInt = 0
     cost_micro_usd: int | None = None
 
 
@@ -127,6 +179,32 @@ class UsageOrgResponse(RuntimeContract):
     by_model: tuple[UsageModelRow, ...] = ()
     by_user: tuple[UsageConversationRow, ...] = ()
     by_connector: tuple[UsageConnectorRow, ...] = ()
+    cold_start_fallback: bool = False
+
+
+class UsageOrgSubagentsResponse(RuntimeContract):
+    """Response shape for ``GET /v1/usage/org/subagents`` (Sub-PRD 01d).
+
+    Admin-only — same auth scope as ``/v1/usage/org``. Returns rows
+    sorted by ``cost_micro_usd`` descending (or ``total`` tokens when
+    cost is unknown).
+    """
+
+    period: UsagePeriodWindow
+    currency: Literal["USD"] = "USD"
+    rows: tuple[UsageSubagentRow, ...] = ()
+    cold_start_fallback: bool = False
+
+
+class UsageOrgPurposeResponse(RuntimeContract):
+    """Response shape for ``GET /v1/usage/org/purpose`` (Sub-PRD 01d).
+
+    Admin-only. Returns rows sorted by ``cost_micro_usd`` descending.
+    """
+
+    period: UsagePeriodWindow
+    currency: Literal["USD"] = "USD"
+    rows: tuple[UsagePurposeRow, ...] = ()
     cold_start_fallback: bool = False
 
 

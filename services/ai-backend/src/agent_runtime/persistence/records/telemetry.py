@@ -176,16 +176,78 @@ class UsageDailyConnectorRow(RuntimeContract):
     bucket (LLM calls before any tool fired this turn). The base table
     stores ``NULL``; the rollup loop coalesces to ``''`` so the row is
     representable inside the natural-key PK.
+
+    Sub-PRD 01d: ``model_name`` extends the PK so a single connector
+    can split costs across multiple models (e.g. atlassian on
+    gpt-5.4-mini vs claude-3.7). Empty string represents
+    pre-migration rows that didn't carry a model dimension.
     """
 
     org_id: str
     day: datetime
     connector_slug: str
+    model_name: str = ""
     runs_count: NonNegativeInt
     distinct_users: NonNegativeInt
     input_tokens: NonNegativeInt
     output_tokens: NonNegativeInt
     cached_input_tokens: NonNegativeInt
+    total_tokens: NonNegativeInt
+    cost_micro_usd: int | None = None
+    refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UsageDailySubagentRow(RuntimeContract):
+    """Daily per-org-per-subagent rollup row (Sub-PRD 01d).
+
+    Org-scoped (no user_id) — matches the connector rollup pattern.
+    ``subagent_slug`` is the empty string for orchestrator-scope LLM
+    calls (mirrors the connector rollup's "(unattributed)" bucket).
+
+    Carries all seven token kinds 01a captured so per-subagent reports
+    are total-correct even for reasoning / cached / audio workloads.
+    """
+
+    org_id: str
+    day: datetime
+    subagent_slug: str
+    model_provider: str
+    model_name: str
+    call_count: NonNegativeInt
+    input_tokens: NonNegativeInt
+    output_tokens: NonNegativeInt
+    cached_input_tokens: NonNegativeInt
+    cache_creation_input_tokens: NonNegativeInt = 0
+    reasoning_tokens: NonNegativeInt = 0
+    audio_input_tokens: NonNegativeInt = 0
+    audio_output_tokens: NonNegativeInt = 0
+    total_tokens: NonNegativeInt
+    cost_micro_usd: int | None = None
+    refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UsageDailyPurposeRow(RuntimeContract):
+    """Daily per-org-per-purpose rollup row (Sub-PRD 01d).
+
+    ``purpose`` is the ``Purpose`` enum value (``main`` /
+    ``tool_planning`` / ``tool_interpretation`` / ``subagent_work`` /
+    ``context_compression``). Lets ops answer "what share of org
+    spend is context compression" without scanning raw rows.
+    """
+
+    org_id: str
+    day: datetime
+    purpose: str
+    model_provider: str
+    model_name: str
+    call_count: NonNegativeInt
+    input_tokens: NonNegativeInt
+    output_tokens: NonNegativeInt
+    cached_input_tokens: NonNegativeInt
+    cache_creation_input_tokens: NonNegativeInt = 0
+    reasoning_tokens: NonNegativeInt = 0
+    audio_input_tokens: NonNegativeInt = 0
+    audio_output_tokens: NonNegativeInt = 0
     total_tokens: NonNegativeInt
     cost_micro_usd: int | None = None
     refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

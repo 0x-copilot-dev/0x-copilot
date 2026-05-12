@@ -212,7 +212,6 @@ class TestNotifyApprovalAssigned:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
         )
 
@@ -244,7 +243,6 @@ class TestNotifyApprovalAssigned:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
             preference_fetcher=fetcher,
         )
@@ -276,7 +274,6 @@ class TestNotifyApprovalAssigned:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
             preference_fetcher=fetcher,
         )
@@ -306,7 +303,6 @@ class TestNotifyApprovalAssigned:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
             preference_fetcher=fetcher,
         )
@@ -319,12 +315,10 @@ class TestNotifyApprovalAssigned:
         assert inbox.calls == []
         assert poster.calls == []
 
-    async def test_email_env_off_overrides_matrix(self) -> None:
-        # Even if the matrix says "email me", a deployment with
-        # ``email_enabled=False`` skips email — the env flag is the
-        # belt to the matrix's suspenders, not the other way around.
+    async def test_email_unconfigured_skips_email(self) -> None:
+        # Even if the matrix says "email me", a deployment without an
+        # HttpPoster wired skips email — config presence is the gate.
         inbox = _RecordingInbox()
-        poster = _RecordingPoster()
         fetcher = InMemoryUserPreferenceFetcher(
             {
                 "user_marcus": {
@@ -338,8 +332,6 @@ class TestNotifyApprovalAssigned:
         )
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
-            post=poster,
-            email_enabled=False,
             service_token="tkn",
             preference_fetcher=fetcher,
         )
@@ -350,7 +342,6 @@ class TestNotifyApprovalAssigned:
         )
 
         assert len(inbox.calls) == 1
-        assert poster.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -361,14 +352,12 @@ class TestNotifyApprovalAssigned:
 class TestNotifyApprovalResolved:
     async def test_resolution_uses_run_finished_defaults(self) -> None:
         # Defaults: run_finished → desktop only. No fetcher → defaults
-        # apply → desktop fires, email does not (even though
-        # email_enabled=True).
+        # apply → desktop fires, email does not.
         inbox = _RecordingInbox()
         poster = _RecordingPoster()
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
         )
 
@@ -402,7 +391,6 @@ class TestNotifyApprovalResolved:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
             preference_fetcher=fetcher,
         )
@@ -492,7 +480,6 @@ class TestFetcherFailureFallthrough:
         dispatcher = InboxAndEmailNotificationDispatcher(
             publish_inbox=inbox,
             post=poster,
-            email_enabled=True,
             service_token="tkn",
             preference_fetcher=_RaisingFetcher(),
         )
@@ -508,12 +495,11 @@ class TestFetcherFailureFallthrough:
 
 
 class TestSlackChannel:
-    async def test_slack_default_off_no_calls(self) -> None:
-        # Default ``slack_enabled=False`` env → never dispatch slack
-        # even when the matrix would allow it. Slack is a deploy-level
-        # opt-in (mirrors the email flag) so a customer that hasn't
-        # configured Slack never sees stray "would-have-sent" lines.
-        slack = _RecordingSlack()
+    async def test_slack_unconfigured_no_calls(self) -> None:
+        # No slack adapter wired → never dispatch slack even when the
+        # matrix would allow it. Slack is gated on config presence, so a
+        # deployment that hasn't configured Slack never sees stray
+        # "would-have-sent" lines.
         fetcher = InMemoryUserPreferenceFetcher(
             {
                 "user_marcus": {
@@ -529,18 +515,16 @@ class TestSlackChannel:
             publish_inbox=_RecordingInbox(),
             post=None,
             preference_fetcher=fetcher,
-            slack=slack,
-            slack_enabled=False,
         )
 
+        # No assertion needed beyond "this doesn't blow up" — there's no
+        # slack adapter to record into.
         await dispatcher.notify_approval_assigned(
             approval=_approval(user_id="user_marcus"),
             forwarded_by_user_id="user_sarah",
         )
 
-        assert slack.calls == []
-
-    async def test_slack_enabled_and_user_opted_in(self) -> None:
+    async def test_slack_configured_and_user_opted_in(self) -> None:
         slack = _RecordingSlack()
         fetcher = InMemoryUserPreferenceFetcher(
             {
@@ -558,7 +542,6 @@ class TestSlackChannel:
             post=None,
             preference_fetcher=fetcher,
             slack=slack,
-            slack_enabled=True,
         )
 
         await dispatcher.notify_approval_assigned(
@@ -577,8 +560,8 @@ class TestSlackChannel:
         assert isinstance(meta, dict)
         assert meta["forwarded_by_user_id"] == "user_sarah"
 
-    async def test_slack_enabled_but_user_opted_out(self) -> None:
-        # Even with the feature flag on, the user's matrix decides.
+    async def test_slack_configured_but_user_opted_out(self) -> None:
+        # Even with slack configured, the user's matrix decides.
         slack = _RecordingSlack()
         fetcher = InMemoryUserPreferenceFetcher(
             {
@@ -596,7 +579,6 @@ class TestSlackChannel:
             post=None,
             preference_fetcher=fetcher,
             slack=slack,
-            slack_enabled=True,
         )
 
         await dispatcher.notify_approval_assigned(
@@ -626,7 +608,6 @@ class TestSlackChannel:
             post=None,
             preference_fetcher=fetcher,
             slack=slack,
-            slack_enabled=True,
         )
 
         await dispatcher.notify_approval_resolved(
@@ -656,7 +637,6 @@ class TestSlackChannel:
             post=None,
             preference_fetcher=fetcher,
             slack=slack,
-            slack_enabled=True,
         )
 
         await dispatcher.notify_share_forked(
@@ -678,7 +658,6 @@ class TestSlackChannel:
             publish_inbox=inbox,
             post=None,
             slack=_RaisingSlack(),
-            slack_enabled=True,
         )
 
         # Default fetcher → defaults; approval_needed slack default is

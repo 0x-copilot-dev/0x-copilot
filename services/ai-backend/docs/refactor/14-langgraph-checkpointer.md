@@ -1,11 +1,36 @@
 # Refactor PRD — LangGraph Checkpointer adoption (P17 / Phase 5)
 
-**Status:** Draft — pre-investigation. **High retraction risk** — see disclaimer below.
+**Status:** ✅ **Shipped 2026-05-11** — delete-only after verification spike. See [spike report](spikes/phase-5-verification.md#p17--checkpointer--verified-evidence).
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §3](../architecture/refactor-audit.md#3-library-replacements) (CheckpointStorePort row)
 **Roadmap slot:** [P17](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Pre-requisite:** none in this folder; LangGraph version pinned by Deep Agents dependency
-**Blocks:** [P21 LangGraph interrupts](18-langgraph-interrupts.md) — durable interrupts require Checkpointer
+**Blocks:** Nothing structural — the durability question that the original PRD assumed P21 needed has been re-classified as an open product question, not a refactor blocker. See [spike §P21](spikes/phase-5-verification.md#p21--langgraph-interrupts--verified-evidence).
+
+---
+
+## Shipped result (2026-05-11)
+
+**`CheckpointStorePort` and `CheckpointRecord` had zero callers.** No adapter implementations existed. LangGraph already runs with its own `InMemorySaver` via [`runtime_checkpointer()`](../../src/agent_runtime/execution/deep_agent_builder.py) — there was no "two checkpoint stories" problem to consolidate. The port was residue from an earlier iteration.
+
+**Landed changes:**
+
+- Deleted `agent_runtime/persistence/records/checkpoints.py`.
+- Removed `CheckpointStorePort` from [`agent_runtime/persistence/ports.py`](../../src/agent_runtime/persistence/ports.py) (and its `CheckpointRecord` import).
+- Removed `CheckpointRecord` + `CheckpointStorePort` re-exports from [`agent_runtime/persistence/__init__.py`](../../src/agent_runtime/persistence/__init__.py) and [`agent_runtime/persistence/records/__init__.py`](../../src/agent_runtime/persistence/records/__init__.py).
+- Dropped `CheckpointRecord` from `PERSISTENCE_TABLE_RECORDS`.
+- Dropped the `CheckpointRecord` test case in `tests/unit/agent_runtime/persistence/test_persistence_contracts.py`.
+- 1680 unit tests pass (no callers broke — because there weren't any).
+
+**Optional follow-up (a different PRD, not P17):** Decide whether `runtime_checkpointer()` should default to `langgraph.checkpoint.postgres.PostgresSaver` for durable graph state. This is a product question (do we want graph state to survive worker restart?), not a refactor cleanup. It surfaces in the [P21 spike](spikes/phase-5-verification.md#p21--langgraph-interrupts--verified-evidence) as well.
+
+**Risk:** Trivial. Mechanical deletion of unreachable code.
+**Behaviors to preserve:** None. The port has no behavior.
+
+---
+
+_The remainder of this PRD documents the pre-spike framing for archival reference only. The verified result above is the binding scope._
+
+---
 
 ---
 

@@ -88,9 +88,9 @@ class WorkspaceDataRoutes:
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "only scope='workspace' is supported in this version",
             )
-        result = await RuntimeApiRoutes.service(request).request_workspace_export(
-            org_id=org_id, actor_user_id=user_id
-        )
+        result = await RuntimeApiRoutes.workspace_coordinator(
+            request
+        ).request_workspace_export(org_id=org_id, actor_user_id=user_id)
         return WorkspaceExportResponse(
             export_id=str(result["export_id"]),
             status=str(result["status"]),
@@ -120,7 +120,9 @@ class WorkspaceDataRoutes:
         # boxes occasionally strip the body. Query param keeps the
         # surface portable across CDNs and proxies.
         typed_correctly = confirm_slug.strip() == org_id
-        await RuntimeApiRoutes.service(request).record_workspace_delete_attempt(
+        await RuntimeApiRoutes.workspace_coordinator(
+            request
+        ).record_workspace_delete_attempt(
             org_id=org_id,
             actor_user_id=user_id,
             typed_confirmation_correct=typed_correctly,

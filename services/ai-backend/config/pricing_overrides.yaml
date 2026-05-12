@@ -1,0 +1,85 @@
+# Pricing overrides — applied on top of the primary source
+# (LiteLLM in production, YAML seeds in air-gapped boot).
+#
+# See: services/ai-backend/docs/refactor/01-pricing-from-litellm.md §4.3
+#
+# Every entry MUST carry a `reason` field. The loader fails closed if
+# `reason` is missing. Treat the reason as the audit trail: when an
+# override outlives its purpose, the next reviewer reads the reason
+# and decides whether to remove the entry.
+#
+# All rate values are micro-USD per 1M tokens (integer). 1 USD =
+# 1_000_000 micro_usd. Override entries are stamped with
+# `pricing_source: override` by the loader and inherit
+# `overrides_version` as their `pricing_version`.
+#
+# Migration entries below were generated at the Step 2 cutover from
+# the divergences surfaced by the `compare_litellm` CLI on 2026-05-11.
+# Each preserves the value that was previously billing — the **active
+# row at switchover reads identically before and after** (PRD §5).
+# The reviewer flow: walk these entries, verify each rate against the
+# provider's published catalog, then either remove the override
+# (accept LiteLLM) or update the reason with the published-rate
+# citation.
+
+overrides_version: "migration-2026-05-11"
+
+overrides:
+  # claude-opus-4-7 — LiteLLM has $5/$25/$0.50 per 1M; seed has $15/$75/$1.50.
+  # 3× discrepancy. Pin to seed values until provider catalog reconciles.
+  - provider: anthropic
+    model_name: claude-opus-4-7
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 15_000_000
+    output_per_1m_micro_usd: 75_000_000
+    cached_input_per_1m_micro_usd: 1_500_000
+    context_window_tokens: 1_000_000
+    reason: "Step 2 cutover: seed value preserved while LiteLLM discrepancy (3x lower) is investigated. Verify against provider catalog before removing."
+
+  # gpt-5 — LiteLLM has $1.25/$10/$0.125 per 1M; seed has $12.5/$50/$1.25.
+  # 10× discrepancy on input/output, 272K vs 400K context window.
+  - provider: openai
+    model_name: gpt-5
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 12_500_000
+    output_per_1m_micro_usd: 50_000_000
+    cached_input_per_1m_micro_usd: 1_250_000
+    context_window_tokens: 400_000
+    reason: "Step 2 cutover: seed value preserved while LiteLLM discrepancy (10x lower, smaller context) is investigated. Verify against provider catalog before removing."
+
+  # gpt-5.4-mini — LiteLLM has $0.75/$4.5/$0.075 per 1M; seed has $1.5/$6/$0.15.
+  # 2× discrepancy on input/output, 272K vs 200K context window.
+  - provider: openai
+    model_name: gpt-5.4-mini
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 1_500_000
+    output_per_1m_micro_usd: 6_000_000
+    cached_input_per_1m_micro_usd: 150_000
+    context_window_tokens: 200_000
+    reason: "Step 2 cutover: seed value preserved while LiteLLM discrepancy (2x lower) is investigated. Verify against provider catalog before removing."
+
+  # gemini-2.5-pro — not present in vendored LiteLLM catalog at all.
+  # Override is the only way to bill this model until upstream adds it.
+  - provider: google
+    model_name: gemini-2.5-pro
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 1_250_000
+    output_per_1m_micro_usd: 5_000_000
+    cached_input_per_1m_micro_usd: 312_500
+    context_window_tokens: 2_000_000
+    reason: "Not present in vendored LiteLLM catalog. Override carries the value from google-2026-q1.v1 seed. Remove once LiteLLM upstream ships this model."
+
+  # gemini-2.5-flash — same as above.
+  - provider: google
+    model_name: gemini-2.5-flash
+    region: global
+    effective_from: 2026-01-01T00:00:00Z
+    input_per_1m_micro_usd: 75_000
+    output_per_1m_micro_usd: 300_000
+    cached_input_per_1m_micro_usd: 18_750
+    context_window_tokens: 1_000_000
+    reason: "Not present in vendored LiteLLM catalog. Override carries the value from google-2026-q1.v1 seed. Remove once LiteLLM upstream ships this model."

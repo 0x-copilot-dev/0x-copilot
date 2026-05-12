@@ -53,7 +53,7 @@ from agent_runtime.prompts.runtime import (
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
-from agent_runtime.execution.atlas_task_tool import install_atlas_task_tool
+from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
 
 # Replace deepagents' built-in `task` tool builder with ours so each
 # subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
@@ -195,7 +195,6 @@ async def _assemble_harness(
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
             runtime_context=runtime_context,
-            mcp_discovery_enabled=runtime_dependencies.mcp_discovery_enabled,
         )
         model_instructions = _instructions_with_suggested_connectors(
             instructions=_instructions_with_skill_cards(
@@ -267,7 +266,6 @@ def _model_visible_tools(
     skill_registry: object | None,
     prior_tool_result_loader: object | None,
     runtime_context: AgentRuntimeContext,
-    mcp_discovery_enabled: bool = False,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
     auth_session_creator = _auth_session_creator(mcp_registry)
@@ -277,7 +275,7 @@ def _model_visible_tools(
         include_auth_mcp=auth_session_creator is not None,
         include_skill_loader=skill_registry is not None
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
-        include_mcp_discovery=mcp_discovery_enabled,
+        include_mcp_discovery=True,
     )
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
@@ -333,18 +331,12 @@ def _model_visible_tools(
             AskAQuestionInput,
         )
     )
-    # PR 3.3 — non-blocking MCP discovery. Registered only when the
-    # feature flag is on so the agent never sees the tool in a
-    # deployment that hasn't opted in. The tool itself short-circuits
-    # to ``discovery_disabled`` when no service is bound on the worker
-    # side — defence in depth, never an authoritative gate.
-    if mcp_discovery_enabled:
-        model_tools.append(
-            _structured_tool(
-                SuggestMcpConnectorTool(),
-                SuggestMcpConnectorInput,
-            )
+    model_tools.append(
+        _structured_tool(
+            SuggestMcpConnectorTool(),
+            SuggestMcpConnectorInput,
         )
+    )
     return tuple(model_tools)
 
 

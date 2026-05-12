@@ -73,7 +73,6 @@ SIEM_EXPORTER_FILE_PATH=/var/log/siem/audit.jsonl
 Pump-wide env vars:
 
 ```bash
-SIEM_PUMP_ENABLED=true                   # default false; opt-in
 SIEM_PUMP_INTERVAL_SECONDS=5             # default 5
 SIEM_PUMP_BATCH_SIZE=100                 # default 100
 AI_BACKEND_INTERNAL_BASE_URL=http://ai-backend:8000

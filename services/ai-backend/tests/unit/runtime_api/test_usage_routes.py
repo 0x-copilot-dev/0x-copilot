@@ -133,6 +133,121 @@ class TestUsageRun:
         assert response.status_code == 404
 
 
+class TestUsageOrgSubagents:
+    """Sub-PRD 01d — ``/v1/usage/org/subagents`` endpoint contract."""
+
+    def _seed_call(
+        self,
+        store: InMemoryRuntimeApiStore,
+        *,
+        org_id: str,
+        subagent_id: str | None,
+        created_at: datetime,
+        input_tokens: int = 100,
+        output_tokens: int = 50,
+    ) -> None:
+        store.model_call_usage.append(
+            RuntimeModelCallUsageRecord(
+                id=f"call-{len(store.model_call_usage)}",
+                org_id=org_id,
+                run_id="r1",
+                conversation_id="conv-1",
+                trace_id="trace-1",
+                subagent_id=subagent_id,
+                model_provider="openai",
+                model_name="gpt-5.4-mini",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=0,
+                total_tokens=input_tokens + output_tokens,
+                duration_ms=500,
+                created_at=created_at,
+            )
+        )
+
+    def test_cold_start_fallback_synthesizes_rows_from_live_scan(self) -> None:
+        client, store = _client_with_seed_runs()
+        completed = datetime.now(timezone.utc) - timedelta(hours=1)
+        self._seed_call(
+            store, org_id="org_a", subagent_id="researcher", created_at=completed
+        )
+        self._seed_call(
+            store, org_id="org_a", subagent_id="writer", created_at=completed
+        )
+        response = client.get(
+            "/v1/usage/org/subagents",
+            params={"org_id": "org_a", "period": "30d"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cold_start_fallback"] is True
+        slugs = {row["subagent_slug"] for row in body["rows"]}
+        assert slugs == {"researcher", "writer"}
+
+    def test_returns_empty_rows_when_no_data(self) -> None:
+        client, _ = _client_with_seed_runs()
+        response = client.get(
+            "/v1/usage/org/subagents",
+            params={"org_id": "org_a", "period": "30d"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["rows"] == []
+        assert body["cold_start_fallback"] is True
+
+
+class TestUsageOrgPurpose:
+    """Sub-PRD 01d — ``/v1/usage/org/purpose`` endpoint contract."""
+
+    def _seed_call(
+        self,
+        store: InMemoryRuntimeApiStore,
+        *,
+        org_id: str,
+        purpose: str,
+        created_at: datetime,
+    ) -> None:
+        store.model_call_usage.append(
+            RuntimeModelCallUsageRecord(
+                id=f"call-{len(store.model_call_usage)}",
+                org_id=org_id,
+                run_id="r1",
+                conversation_id="conv-1",
+                trace_id="trace-1",
+                purpose=purpose,
+                model_provider="openai",
+                model_name="gpt-5.4-mini",
+                input_tokens=100,
+                output_tokens=50,
+                cached_input_tokens=0,
+                total_tokens=150,
+                duration_ms=500,
+                created_at=created_at,
+            )
+        )
+
+    def test_cold_start_fallback_groups_by_purpose(self) -> None:
+        client, store = _client_with_seed_runs()
+        completed = datetime.now(timezone.utc) - timedelta(hours=1)
+        self._seed_call(store, org_id="org_a", purpose="main", created_at=completed)
+        self._seed_call(
+            store, org_id="org_a", purpose="tool_interpretation", created_at=completed
+        )
+        self._seed_call(
+            store, org_id="org_a", purpose="tool_interpretation", created_at=completed
+        )
+        response = client.get(
+            "/v1/usage/org/purpose",
+            params={"org_id": "org_a", "period": "30d"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cold_start_fallback"] is True
+        by_purpose = {row["purpose"]: row for row in body["rows"]}
+        assert by_purpose["main"]["call_count"] == 1
+        assert by_purpose["tool_interpretation"]["call_count"] == 2
+
+
 class TestUsageByConnector:
     """PR 7.2 — by_connector axis on /v1/usage/me + /v1/usage/conversations."""
 

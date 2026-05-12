@@ -124,9 +124,6 @@ DATABASE_URL=
 RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
 RUNTIME_WORKER_LOCK_SECONDS=60
 RUNTIME_START_IN_PROCESS_WORKER=true
-# P4 Stage 1 — fold append_event INSERT + agent_runs cursor UPDATE into
-# one transaction (default on; flip false to roll back).
-RUNTIME_EVENT_WRITE_CONSOLIDATED=true
 # P4 Stage 2 — worker-side MODEL_DELTA coalesce window (ms). 0 disabled.
 # Recommended 50 once measured on staging.
 RUNTIME_DELTA_COALESCE_WINDOW_MS=0
@@ -136,10 +133,6 @@ RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
 # wakeups (drops p50 SSE delivery from ~1s to ~50ms in multi-process
 # deploys; needs DATABASE_URL configured).
 RUNTIME_EVENT_BUS_BACKEND=in_memory
-# P7 PR2 — citation projector emits one ``sources_ingested`` event per
-# tool result (vs. N ``source_ingested`` events). Default off (PR2
-# ships dark); flip on per worker process after staging validation.
-RUNTIME_BATCH_SOURCE_INGESTION=false
 ```
 
 Run requests should not include API keys. Provider credentials are loaded by

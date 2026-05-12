@@ -1,12 +1,11 @@
-"""P16 — lock-free ``append_event`` path tests.
+"""Lock-free ``append_event`` path tests.
 
 Two test surfaces:
 
 - **Integration** (skipped when ``TEST_DATABASE_URL`` is unset): exercise the
-  real Postgres adapter with ``lock_free_appends=True`` and verify monotonic
-  sequence allocation, idempotent retry on cancel-mid-stream race, parity
-  with the legacy ``FOR UPDATE`` path, and that the ``set_run_latest_sequence``
-  cursor never rewinds under ``_consolidated_writes=True``.
+  real Postgres adapter and verify monotonic sequence allocation, idempotent
+  retry on cancel-mid-stream race, and that ``set_run_latest_sequence``
+  never rewinds under the consolidated-write path.
 
 - **Unit** (no DB required): exercise the pure retry-loop semantics —
   ``_is_event_sequence_conflict`` discriminates by constraint name,
@@ -79,35 +78,12 @@ _REQUIRES_DB = pytest.mark.skipif(
 
 
 @pytest.fixture
-async def lock_free_store() -> AsyncIterator[PostgresRuntimeApiStore]:
-    """Store with the P16 lock-free toggle ON."""
-
+async def postgres_store() -> AsyncIterator[PostgresRuntimeApiStore]:
     store = PostgresRuntimeApiStore(
         os.environ["TEST_DATABASE_URL"],
         pool_min_size=2,
         pool_max_size=20,
         pool_acquire_timeout_seconds=10.0,
-        lock_free_appends=True,
-    )
-    await store.open()
-    try:
-        await store.migrate()
-        yield store
-    finally:
-        await store.close()
-
-
-@pytest.fixture
-async def lock_free_consolidated_store() -> AsyncIterator[PostgresRuntimeApiStore]:
-    """Lock-free toggle + P4 consolidated writes — exercise both together."""
-
-    store = PostgresRuntimeApiStore(
-        os.environ["TEST_DATABASE_URL"],
-        pool_min_size=2,
-        pool_max_size=20,
-        pool_acquire_timeout_seconds=10.0,
-        lock_free_appends=True,
-        consolidated_writes=True,
     )
     await store.open()
     try:
@@ -198,36 +174,35 @@ def _draft(
 
 @_REQUIRES_DB
 class TestLockFreeAppendIntegration:
-    """Real Postgres — exercise the P16 lock-free path end to end."""
+    """Real Postgres — exercise the lock-free path end to end."""
 
-    async def test_sequential_appends_under_lock_free_path(
-        self, lock_free_store: PostgresRuntimeApiStore
+    async def test_sequential_appends(
+        self, postgres_store: PostgresRuntimeApiStore
     ) -> None:
-        """Sequential appends produce 1..N with no gaps when the row lock is dropped."""
+        """Sequential appends produce 1..N with no gaps."""
 
-        org_id, _user_id, run_id, conv_id = await _seed_run(lock_free_store)
+        org_id, _user_id, run_id, conv_id = await _seed_run(postgres_store)
         sequences = []
         for i in range(20):
-            envelope = await lock_free_store.append_event(
+            envelope = await postgres_store.append_event(
                 _draft(run_id=run_id, conv_id=conv_id, org_id=org_id, payload_index=i)
             )
             sequences.append(envelope.sequence_no)
         assert sequences == list(range(1, 21))
-        latest = await lock_free_store.get_latest_sequence(run_id=run_id)
+        latest = await postgres_store.get_latest_sequence(run_id=run_id)
         assert latest == 20
 
-    async def test_concurrent_appends_lock_free_keep_monotonic_sequence(
-        self, lock_free_store: PostgresRuntimeApiStore
+    async def test_concurrent_appends_keep_monotonic_sequence(
+        self, postgres_store: PostgresRuntimeApiStore
     ) -> None:
         """100 concurrent appends to the same run produce 1..100 — no gaps, no
-        duplicates — under the P16 lock-free path. The UNIQUE index + retry
-        loop replace the H1 row lock.
+        duplicates. The UNIQUE index + retry loop replace any row lock.
         """
 
-        org_id, _user_id, run_id, conv_id = await _seed_run(lock_free_store)
+        org_id, _user_id, run_id, conv_id = await _seed_run(postgres_store)
 
         async def append(i: int) -> int:
-            envelope = await lock_free_store.append_event(
+            envelope = await postgres_store.append_event(
                 _draft(run_id=run_id, conv_id=conv_id, org_id=org_id, payload_index=i)
             )
             return envelope.sequence_no
@@ -235,86 +210,28 @@ class TestLockFreeAppendIntegration:
         results = await asyncio.gather(*[append(i) for i in range(100)])
         assert sorted(results) == list(range(1, 101))
         assert len(set(results)) == 100
-        latest = await lock_free_store.get_latest_sequence(run_id=run_id)
+        latest = await postgres_store.get_latest_sequence(run_id=run_id)
         assert latest == 100
 
-    async def test_consolidated_writes_cursor_never_rewinds_under_retry(
-        self, lock_free_consolidated_store: PostgresRuntimeApiStore
+    async def test_cursor_never_rewinds_under_retry(
+        self, postgres_store: PostgresRuntimeApiStore
     ) -> None:
-        """Under lock-free + consolidated writes, the H3 monotonic guard still
-        prevents ``agent_runs.latest_sequence_no`` from rewinding even when a
-        retry races a concurrent peer.
+        """H3 monotonic guard prevents ``agent_runs.latest_sequence_no`` from
+        rewinding even when a retry races a concurrent peer.
         """
 
-        store = lock_free_consolidated_store
-        org_id, _, run_id, conv_id = await _seed_run(store)
+        org_id, _, run_id, conv_id = await _seed_run(postgres_store)
 
-        # 30 concurrent appends — enough to provoke retries on a real DB.
         async def append(i: int) -> int:
-            envelope = await store.append_event(
+            envelope = await postgres_store.append_event(
                 _draft(run_id=run_id, conv_id=conv_id, org_id=org_id, payload_index=i)
             )
             return envelope.sequence_no
 
         results = await asyncio.gather(*[append(i) for i in range(30)])
-        # Sequence is gapless 1..30.
         assert sorted(results) == list(range(1, 31))
-        # Cursor advanced to the max (never rewound by a losing retry).
-        latest = await store.get_latest_sequence(run_id=run_id)
+        latest = await postgres_store.get_latest_sequence(run_id=run_id)
         assert latest == 30
-
-    async def test_parity_with_legacy_path_under_concurrency(
-        self, lock_free_store: PostgresRuntimeApiStore
-    ) -> None:
-        """Two separate runs — one through lock-free, one through legacy — see
-        the same end state for the same input sequence. Parity smoke.
-        """
-
-        # Reuse the same store for the lock-free run; spin up a sibling store
-        # with the toggle off for the legacy run. They share the same DB so
-        # we keep runs distinct via suffix.
-        legacy_store = PostgresRuntimeApiStore(
-            os.environ["TEST_DATABASE_URL"],
-            pool_min_size=2,
-            pool_max_size=20,
-            pool_acquire_timeout_seconds=10.0,
-            lock_free_appends=False,
-        )
-        await legacy_store.open()
-        try:
-            await legacy_store.migrate()
-            lf_org, _, lf_run, lf_conv = await _seed_run(lock_free_store)
-            lg_org, _, lg_run, lg_conv = await _seed_run(legacy_store)
-
-            async def burst(
-                store: PostgresRuntimeApiStore,
-                run_id: str,
-                conv_id: str,
-                org_id: str,
-            ) -> list[int]:
-                results = await asyncio.gather(
-                    *[
-                        store.append_event(
-                            _draft(
-                                run_id=run_id,
-                                conv_id=conv_id,
-                                org_id=org_id,
-                                payload_index=i,
-                            )
-                        )
-                        for i in range(50)
-                    ]
-                )
-                return sorted(env.sequence_no for env in results)
-
-            lock_free_seqs, legacy_seqs = await asyncio.gather(
-                burst(lock_free_store, lf_run, lf_conv, lf_org),
-                burst(legacy_store, lg_run, lg_conv, lg_org),
-            )
-            assert lock_free_seqs == list(range(1, 51))
-            assert legacy_seqs == list(range(1, 51))
-        finally:
-            await legacy_store.close()
 
 
 # --------------------------------------------------------------------------
@@ -379,10 +296,7 @@ class TestRetryLoopBehavior:
     def _store() -> PostgresRuntimeApiStore:
         # Construct without opening the pool — we never call methods that
         # touch the DB; we patch ``_append_event_once`` directly.
-        return PostgresRuntimeApiStore(
-            "postgresql://unused:unused@127.0.0.1/unused",
-            lock_free_appends=True,
-        )
+        return PostgresRuntimeApiStore("postgresql://unused:unused@127.0.0.1/unused")
 
     @staticmethod
     def _draft() -> RuntimeEventDraft:
@@ -407,11 +321,11 @@ class TestRetryLoopBehavior:
     async def test_succeeds_after_one_conflict(self, monkeypatch) -> None:
         store = self._store()
         sentinel = MagicMock(name="envelope")
-        attempts: list[bool] = []
+        attempts = {"n": 0}
 
-        async def fake_once(event: RuntimeEventDraft, *, take_row_lock: bool):
-            attempts.append(take_row_lock)
-            if len(attempts) == 1:
+        async def fake_once(event: RuntimeEventDraft):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
                 raise self._sequence_conflict()
             return sentinel
 
@@ -423,8 +337,7 @@ class TestRetryLoopBehavior:
         monkeypatch.setattr(asyncio, "sleep", fake_sleep)
         result = await store.append_event(self._draft())
         assert result is sentinel
-        assert len(attempts) == 2
-        assert attempts == [False, False]  # lock-free path on every retry
+        assert attempts["n"] == 2
 
         # No DB so we don't need to close; the store never opened a pool.
         with suppress(Exception):
@@ -436,7 +349,7 @@ class TestRetryLoopBehavior:
         store = self._store()
         call_count = {"n": 0}
 
-        async def fake_once(event: RuntimeEventDraft, *, take_row_lock: bool):
+        async def fake_once(event: RuntimeEventDraft):
             call_count["n"] += 1
             raise self._sequence_conflict()
 
@@ -459,7 +372,7 @@ class TestRetryLoopBehavior:
         unrelated = self._other_violation()
         call_count = {"n": 0}
 
-        async def fake_once(event: RuntimeEventDraft, *, take_row_lock: bool):
+        async def fake_once(event: RuntimeEventDraft):
             call_count["n"] += 1
             raise unrelated
 
@@ -472,27 +385,6 @@ class TestRetryLoopBehavior:
             await store.append_event(self._draft())
         # Exactly one attempt — non-matching constraint propagates immediately.
         assert call_count["n"] == 1
-
-        with suppress(Exception):
-            await store.close()
-
-    async def test_legacy_path_calls_once_with_lock(self, monkeypatch) -> None:
-        store = PostgresRuntimeApiStore(
-            "postgresql://unused:unused@127.0.0.1/unused",
-            lock_free_appends=False,
-        )
-        sentinel = MagicMock(name="envelope")
-        seen: list[bool] = []
-
-        async def fake_once(event: RuntimeEventDraft, *, take_row_lock: bool):
-            seen.append(take_row_lock)
-            return sentinel
-
-        monkeypatch.setattr(store, "_append_event_once", fake_once)
-        result = await store.append_event(self._draft())
-        assert result is sentinel
-        # Legacy path: one attempt with the row lock; no retry wrapper.
-        assert seen == [True]
 
         with suppress(Exception):
             await store.close()

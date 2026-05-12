@@ -166,7 +166,9 @@ The signal in this category is "one type per concept, all the way down." Adding 
 
 **Risk.** Medium. Mechanical consolidation, but citations are user-visible and any drift is obvious.
 
-### 2.3 Four-way permission model (3 specific + 1 generic)
+### 2.3 Four-way permission model (3 specific + 1 generic) — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted after code review (see [`docs/refactor/08-service-consolidation.md` §1.6](../refactor/08-service-consolidation.md)). The four "permissions" solve **four distinct problems**: `ToolPermissionPolicy` mirrors backend read/write/destructive policy modes; `McpPermissionPolicy.is_server_card_visible` filters MCP cards by health + auth; `SkillAccessPolicy` is the main-agent vs subagent least-privilege filter; `CapabilityAuthGate.check` answers connector-reachability for the Workspace-pane draft-send flow. They share a keyword and nothing else.
 
 **What we see.** Per [C6](04-capabilities.puml): `ToolPermissionChecker`, `McpPermissionPolicy`, `SkillPermissionPolicy`, plus a generic [`CapabilityAuthGate`](../../src/agent_runtime/capabilities/auth_gate.py).
 
@@ -178,7 +180,9 @@ The signal in this category is "one type per concept, all the way down." Adding 
 
 **Risk.** Low–Medium. Mostly a code-organization change.
 
-### 2.4 ToolBudgetMiddleware → ToolBudgetGuard two-step
+### 2.4 ToolBudgetMiddleware → ToolBudgetGuard two-step — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted (see [`docs/refactor/08-service-consolidation.md` §1.5](../refactor/08-service-consolidation.md)). Reading both files shows a textbook **policy vs interceptor** separation: `ToolBudgetMiddleware` is a stateless pure-decision module; `ToolBudgetGuard` is the per-run ContextVar-bound runtime interceptor that wires the policy into LangChain tool dispatch. Merging them is strictly worse.
 
 **What we see.** [`capabilities/tool_budget_middleware.py`](../../src/agent_runtime/capabilities/tool_budget_middleware.py) calls into [`capabilities/tool_budget_guard.py`](../../src/agent_runtime/capabilities/tool_budget_guard.py).
 
@@ -188,7 +192,9 @@ The signal in this category is "one type per concept, all the way down." Adding 
 
 **Risk.** Low.
 
-### 2.5 DraftBackend in capabilities
+### 2.5 DraftBackend in capabilities — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted (see [`docs/refactor/07-cluster-boundary-moves.md` §2.1](../refactor/07-cluster-boundary-moves.md)). `DraftBackend` implements `deepagents.backends.protocol.BackendProtocol`. The model exercises it through deepagents' built-in `write_file` / `edit_file` tools, with `/drafts/` routed by `CompositeBackend` to `DraftBackend.awrite` / `aedit`. The translation `write_file("/drafts/<id>.md") → DraftStorePort.insert_version` is the entire reason the file exists. `capabilities/backends/` is the correct home.
 
 **What we see.** [`capabilities/backends/draft_backend.py`](../../src/agent_runtime/capabilities/backends/draft_backend.py).
 
@@ -198,7 +204,9 @@ The signal in this category is "one type per concept, all the way down." Adding 
 
 **Risk.** Low. File move + import updates.
 
-### 2.6 Service splits inside C4 that should be one service each
+### 2.6 Service splits inside C4 that should be one service each — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted (see [`docs/refactor/08-service-consolidation.md`](../refactor/08-service-consolidation.md) §1.1–1.4): Fork (conversation vs self) = distinct security postures with shared logic already in `MessageCopyPlanner`; Workspace (feed vs defaults) = distinct read-aggregation vs read/write-settings surfaces; McpDiscovery vs SuggestibleConnectors = distinct consumers + lifecycles per [f7](f7-mcp-add.puml); `UsageService` (492 LOC, not a utility) owns two distinct surfaces (`/context` builder + `/v1/usage` rollups) per [f9](f9-usage-metrics.puml).
 
 **What we see.** Per [C4](05-runtime-services.puml):
 
@@ -274,7 +282,9 @@ The same bug exists twice: [`event_bus.py`](../../src/runtime_api/sse/event_bus.
 
 See [1.1](#11-presentationgenerator-polish-on-every-event). This is also a latency / cost finding — the polish costs tokens, contributes background load to the model providers, and doubles event volume in the store.
 
-### 4.3 Per-event DB amplification
+### 4.3 Per-event DB amplification — **PARTIALLY RESOLVED (2026-05-11)**
+
+> **Resolution.** Sub-items 1–2 (combined INSERT + UPDATE in one txn) shipped earlier behind `RUNTIME_EVENT_WRITE_CONSOLIDATED` (P4). Sub-item 3 (drop `SELECT … FOR UPDATE`) shipped 2026-05-10 as P16 ([`docs/refactor/13-per-run-sequence.md`](../refactor/13-per-run-sequence.md)) behind `RUNTIME_LOCK_FREE_APPENDS` toggle (default off). `append_event` now dispatches to `_append_event_once(take_row_lock)`; lock-free path retries on `UniqueViolation` keyed on `idx_runtime_events_run_sequence` (up to 3 attempts with jittered backoff capped at 50ms). New `RuntimeEventSequenceConflict` exception surfaces retry-budget exhaustion. Latent `RuntimeEventDraft.org_id` bug fixed in the same change. 1533 unit tests pass.
 
 **What we see.** Per [f1](f1-single-turn.puml) and [C3](07-adapters.puml) hazard fixes:
 
@@ -418,7 +428,9 @@ That's **3 DB ops per event**. With PRESENTATION_UPDATED, **6 ops per user-visib
 
 **Risk.** Low–Medium after dependent refactors.
 
-### 5.4 `atlas_task_tool.py` in execution/
+### 5.4 `atlas_task_tool.py` in execution/ — **RESOLVED (2026-05-11)**
+
+> **Resolution.** File moved from [`agent_runtime/execution/atlas_task_tool.py`](../../src/agent_runtime/delegation/subagents/atlas_task_tool.py) to [`agent_runtime/delegation/subagents/atlas_task_tool.py`](../../src/agent_runtime/delegation/subagents/atlas_task_tool.py). Single import update in `factory.py:56`. 1533 unit tests pass. See [`docs/refactor/07-cluster-boundary-moves.md` §1`](../refactor/07-cluster-boundary-moves.md).
 
 **What we see.** [`agent_runtime/execution/atlas_task_tool.py`](../../src/agent_runtime/execution/atlas_task_tool.py) — "supervisor task → subagent trace linking" per [C5](08-execution-prompts.puml).
 
@@ -428,7 +440,9 @@ That's **3 DB ops per event**. With PRESENTATION_UPDATED, **6 ops per user-visib
 
 **Risk.** Low.
 
-### 5.5 `agent_runtime/api/` mixes coordinator with domain services
+### 5.5 `agent_runtime/api/` mixes coordinator with domain services — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted (see [`docs/refactor/07-cluster-boundary-moves.md` §2.2](../refactor/07-cluster-boundary-moves.md)). The project's own [CLAUDE.md](../../CLAUDE.md) defines `agent_runtime/api/` as _"presentation/service layer for the runtime API."_ The package name `api/` means service layer in this codebase, not HTTP edge (which lives in `runtime_api/`). The current layout is consistent with itself. Moving domain services to `agent_runtime/services/` would require updating CLAUDE.md first and create churn without architectural benefit (the worker still imports from outside its own cluster either way).
 
 **What we see.** [`api/`](../../src/agent_runtime/api/) holds both `RuntimeApiService` (coordinator) AND `DraftService` / `ShareService` / `WorkspaceFeedService` etc. (domain services). This is the C4/C5 split confusion.
 
@@ -448,7 +462,9 @@ That's **3 DB ops per event**. With PRESENTATION_UPDATED, **6 ops per user-visib
 
 **Risk.** Trivial.
 
-### 5.7 `dev_auth_bypass_allowed` toggle on `DeploymentProfile`
+### 5.7 `dev_auth_bypass_allowed` toggle on `DeploymentProfile` — **RETRACTED (2026-05-11)**
+
+> **Resolution.** Retracted. The toggle is **not stale** — it's an active deny-list guard. [`deployment/profile.py:154-157`](../../src/agent_runtime/deployment/profile.py#L154) reads `DEV_AUTH_BYPASS=true` from env and _rejects_ it unless the active profile's `dev_auth_bypass_allowed=True` (only the development profile is). The root [`CLAUDE.md`](../../../../CLAUDE.md) note ("DEV*AUTH_BYPASS no longer exists") refers to the runtime \_use* of the variable; the _guard_ against accidental reactivation in non-dev profiles stays by design.
 
 **What we see.** [`agent_runtime/deployment/profile.py`](../../src/agent_runtime/deployment/profile.py) lists `dev_auth_bypass_allowed` as one of its toggles.
 

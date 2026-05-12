@@ -1,11 +1,55 @@
 # Refactor PRD — Repository pattern collapse (P19 / Phase 5)
 
-**Status:** Draft — pre-investigation. **High retraction risk** — see disclaimer below.
+**Status:** ✅ **Dead-port deletion shipped 2026-05-11** (one open follow-up question on splitting the 794-LOC `PersistencePort`). See [spike report](spikes/phase-5-verification.md#p19--repository-collapse--verified-evidence).
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §2.1](../architecture/refactor-audit.md#21-9-persistence-ports--17-record-types)
 **Roadmap slot:** [P19](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Pre-requisite:** [P5 async-only ports](01-async-only-ports.md) — **shipped**. `agent_runtime/api/ports.py` is now async-native single-Protocol; `async_ports.py` + `async_wrappers.py` + `AsyncInMemoryRuntimeApiStore` are deleted. Anything in this PRD that referenced sync/async pair plumbing is past-tense.
-**Risk:** High — this is the largest single restructure in the audit. The retraction-risk disclaimer below is doubly relevant.
+**Pre-requisite:** [P5 async-only ports](01-async-only-ports.md) — **shipped**.
+
+---
+
+## Verified result (2026-05-11)
+
+The original PRD's "9 ports + 17 records → 4 repositories" framing was structurally the same kind of overcounting that retracted P14 and P15. Caller analysis showed:
+
+| Port                               | Real callers (excl. adapter / factory) | Disposition                            |
+| ---------------------------------- | -------------------------------------- | -------------------------------------- |
+| `MemoryMetadataPort`               | **0**                                  | Delete                                 |
+| `PayloadStoragePort`               | **0**                                  | Delete                                 |
+| `DraftStorePort`                   | 4                                      | Keep                                   |
+| `SubagentStorePort`                | 1                                      | Keep (legitimate substitution surface) |
+| `SourceStorePort`                  | 1                                      | Keep                                   |
+| `CitationStorePort`                | 4                                      | Keep                                   |
+| `ConversationToolOrdinalStorePort` | 5                                      | Keep                                   |
+| `ShareStorePort`                   | 1                                      | Keep                                   |
+
+The 17 record types are mostly **Pydantic boundary types** that the engineering rules ([`docs/CLAUDE.md`](../CLAUDE.md): "Use Pydantic at every IO/domain boundary") mandate. They are not storage shapes pretending to be domain types. Don't collapse them into ORM models.
+
+**The one piece of the original PRD that survives:** [`agent_runtime/api/ports.py`](../../src/agent_runtime/api/ports.py) is 794 LOC defining a `PersistencePort` with 60+ methods. That is a real opportunity for a topic-split (e.g. `ConversationPersistencePort`, `RunPersistencePort`, `ApprovalPersistencePort`, `AdminPersistencePort` — single adapter implementing all of them). But it is its own PRD, narrower than P19 as written, and only worth opening if caller-cluster analysis confirms the topic boundaries are real.
+
+### Shipped scope for P19 (2026-05-11)
+
+**Landed:**
+
+- Removed `MemoryMetadataPort` and `PayloadStoragePort` from [`agent_runtime/persistence/ports.py`](../../src/agent_runtime/persistence/ports.py) (and the `ContextPayloadRecord` / `MemoryItemRecord` / `MemoryScopeRecord` imports that fed them).
+- Deleted `agent_runtime/persistence/records/memory.py` and `agent_runtime/persistence/records/payloads.py` — all three records had zero callers in production code.
+- Removed the orphaned common enums (`RuntimeMemoryScopeType`, `PayloadKind`, `PayloadStorageBackend`, `PayloadRedactionState`) from [`records/common.py`](../../src/agent_runtime/persistence/records/common.py) — they only fed the deleted records.
+- Dropped the deleted records from `PERSISTENCE_TABLE_RECORDS` and from the `__all__` re-export lists in [`persistence/__init__.py`](../../src/agent_runtime/persistence/__init__.py) and [`persistence/records/__init__.py`](../../src/agent_runtime/persistence/records/__init__.py).
+- Trimmed the contract test (`test_persistence_contracts.py`) to drop the deleted records' fixtures.
+- 1680 unit tests pass.
+
+**Tables not touched.** `runtime_memory_scopes`, `runtime_memory_items`, and `runtime_checkpoints` remain in the DDL (retention sweep operates on them via raw SQL). Dropping the tables themselves is a separate question that depends on whether any future memory subsystem will be wired through these schemas.
+
+**Open follow-up (separate PRD, not P19's scope):** topic-split `PersistencePort` (794 LOC, ~60 methods on one Protocol). Open only if a caller analysis on [`RuntimeApiService`](../../src/agent_runtime/api/service.py) shows methods cluster by topic in real use. Otherwise it's a cosmetic split that fragments callers and adds friction.
+
+**Risk:** Trivial — deleted ports/records had zero callers.
+**Behaviors preserved:** None — the deleted ports had no behavior.
+
+---
+
+_The remainder of this PRD documents the pre-spike framing for archival reference only. The verified result above is the binding scope._
+
+---
 
 ---
 

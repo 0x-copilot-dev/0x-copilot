@@ -293,8 +293,6 @@ HttpPoster = Callable[
 
 class _Env:
     BACKEND_BASE_URL = "BACKEND_BASE_URL"
-    EMAIL_ENABLED = "RUNTIME_APPROVAL_EMAIL_ENABLED"
-    SLACK_ENABLED = "RUNTIME_APPROVAL_SLACK_ENABLED"
 
 
 # ---------------------------------------------------------------------------
@@ -372,12 +370,11 @@ class LoggingSlackDispatcher:
 class InboxAndEmailNotificationDispatcher:
     """Production dispatcher: fans out to the inbox SSE bus + email + Slack.
 
-    Each channel is independently optional. Email is gated on
-    ``RUNTIME_APPROVAL_EMAIL_ENABLED`` so deployments without an SMTP
-    relay degrade to inbox-only without code change. Slack is gated on
-    ``RUNTIME_APPROVAL_SLACK_ENABLED`` + a ``SlackDispatcherPort``
-    adapter being injected; the default ``LoggingSlackDispatcher`` is
-    safe but writes structured logs only.
+    Each channel is gated on whether the channel's dependencies are
+    wired at construction:
+      * email — dispatch only when an ``HttpPoster`` is injected.
+      * slack — dispatch only when a ``SlackDispatcherPort`` is injected.
+    Inbox is always active.
 
     Class name is preserved (callers reference it by name across the
     runtime); the docstring carries the truth that it now handles three
@@ -391,10 +388,8 @@ class InboxAndEmailNotificationDispatcher:
         post: HttpPoster | None = None,
         backend_base_url: str | None = None,
         service_token: str | None = None,
-        email_enabled: bool | None = None,
         preference_fetcher: UserPreferenceFetcher | None = None,
         slack: SlackDispatcherPort | None = None,
-        slack_enabled: bool | None = None,
     ) -> None:
         self._publish_inbox = publish_inbox
         self._post = post
@@ -406,11 +401,6 @@ class InboxAndEmailNotificationDispatcher:
         self._service_token = service_token or os.environ.get(
             "ENTERPRISE_SERVICE_TOKEN", ""
         )
-        self._email_enabled = (
-            email_enabled
-            if email_enabled is not None
-            else _env_bool(_Env.EMAIL_ENABLED, False)
-        )
         # PR 4.1 follow-up: consult the recipient's notification matrix
         # before fanning out. Default: a no-op fetcher → deployment
         # defaults apply, so behavior pre-PR is unchanged for any deploy
@@ -418,16 +408,7 @@ class InboxAndEmailNotificationDispatcher:
         self._preference_fetcher: UserPreferenceFetcher = (
             preference_fetcher or _DefaultsOnlyUserPreferenceFetcher()
         )
-        # PR 4.1 follow-up — Slack channel. If no port is injected, we
-        # still allow the channel (gated by env + matrix) to fall back
-        # to ``LoggingSlackDispatcher`` so the dispatch path is exercised
-        # in dev and "would-have-sent" entries appear in logs.
-        self._slack: SlackDispatcherPort = slack or LoggingSlackDispatcher()
-        self._slack_enabled = (
-            slack_enabled
-            if slack_enabled is not None
-            else _env_bool(_Env.SLACK_ENABLED, False)
-        )
+        self._slack: SlackDispatcherPort | None = slack
 
     async def notify_approval_assigned(
         self,
@@ -444,17 +425,15 @@ class InboxAndEmailNotificationDispatcher:
                 event_type="approval_assigned",
                 actor_user_id=forwarded_by_user_id,
             )
-        if (
-            self._email_enabled
-            and self._post is not None
-            and _channel_allowed(matrix, event="approval_needed", channel="email")
+        if self._post is not None and _channel_allowed(
+            matrix, event="approval_needed", channel="email"
         ):
             await self._safe_email(
                 approval=approval,
                 template="approval_assigned",
                 actor_user_id=forwarded_by_user_id,
             )
-        if self._slack_enabled and _channel_allowed(
+        if self._slack is not None and _channel_allowed(
             matrix, event="approval_needed", channel="slack"
         ):
             await self._safe_slack(
@@ -492,10 +471,8 @@ class InboxAndEmailNotificationDispatcher:
                 event_type="approval_resolved",
                 actor_user_id=decided_by_user_id,
             )
-        if (
-            self._email_enabled
-            and self._post is not None
-            and _channel_allowed(matrix, event="run_finished", channel="email")
+        if self._post is not None and _channel_allowed(
+            matrix, event="run_finished", channel="email"
         ):
             await self._safe_email(
                 approval=approval,
@@ -503,7 +480,7 @@ class InboxAndEmailNotificationDispatcher:
                 actor_user_id=decided_by_user_id,
                 extra={"decision": decision.value},
             )
-        if self._slack_enabled and _channel_allowed(
+        if self._slack is not None and _channel_allowed(
             matrix, event="run_finished", channel="slack"
         ):
             await self._safe_slack(
@@ -553,7 +530,7 @@ class InboxAndEmailNotificationDispatcher:
                     }
                 },
             )
-        if self._slack_enabled and _channel_allowed(
+        if self._slack is not None and _channel_allowed(
             matrix, event="mention", channel="slack"
         ):
             await self._safe_slack(
@@ -630,6 +607,8 @@ class InboxAndEmailNotificationDispatcher:
         exception there has nowhere to go.
         """
 
+        if self._slack is None:
+            return
         try:
             await self._slack.send_notification(
                 recipient_user_id=recipient_user_id,
@@ -700,10 +679,3 @@ class InboxAndEmailNotificationDispatcher:
                 },
                 exc_info=True,
             )
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}

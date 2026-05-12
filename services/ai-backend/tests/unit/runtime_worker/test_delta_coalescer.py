@@ -44,10 +44,8 @@ class _FixturesMixin:
     USER_MESSAGE_ID = "msg_p4s2_user"
     TRACE_ID = "trace_p4s2"
 
-    def _seed(
-        self, *, consolidated_writes: bool = False
-    ) -> tuple[InMemoryRuntimeApiStore, RunRecord]:
-        store = InMemoryRuntimeApiStore(consolidated_writes=consolidated_writes)
+    def _seed(self) -> tuple[InMemoryRuntimeApiStore, RunRecord]:
+        store = InMemoryRuntimeApiStore()
         store.messages[self.USER_MESSAGE_ID] = MessageRecord(
             message_id=self.USER_MESSAGE_ID,
             conversation_id=self.CONVERSATION_ID,
@@ -135,8 +133,8 @@ class TestInMemoryAppendEventsBatch(_FixturesMixin):
             "chunk-3",
         ]
 
-    async def test_batch_consolidated_advances_cursor_to_max(self) -> None:
-        store, _ = self._seed(consolidated_writes=True)
+    async def test_batch_advances_cursor_to_max(self) -> None:
+        store, _ = self._seed()
         await store.append_events_batch([self._draft() for _ in range(3)])
         run = await store.get_run(org_id=self.ORG_ID, run_id=self.RUN_ID)
         assert run is not None
@@ -228,12 +226,11 @@ class TestProducerAppendApiEventsBatch(_FixturesMixin):
         # adapter pulls all 5 in one wakeup.
         assert notifications == [self.RUN_ID]
 
-    async def test_batch_consolidated_skips_separate_set_latest(self) -> None:
-        store, run = self._seed(consolidated_writes=True)
+    async def test_batch_producer_skips_separate_set_latest(self) -> None:
+        store, run = self._seed()
         producer = RuntimeEventProducer(persistence=store, event_store=store)
 
         original_set = store.set_run_latest_sequence
-        producer_calls = 0
         adapter_calls = 0
 
         async def counting_set(*args, **kwargs):
@@ -251,35 +248,8 @@ class TestProducerAppendApiEventsBatch(_FixturesMixin):
         )
 
         # Adapter advances the cursor in-line for each batched draft → 3
-        # internal calls. Producer must NOT add a 4th (consolidated path).
+        # internal calls. Producer never adds an extra one.
         assert adapter_calls == 3
-        assert producer_calls == 0
-
-    async def test_batch_unconsolidated_calls_set_latest_once(self) -> None:
-        store, run = self._seed(consolidated_writes=False)
-        producer = RuntimeEventProducer(persistence=store, event_store=store)
-
-        call_args: list[int] = []
-        original_set = store.set_run_latest_sequence
-
-        async def recording_set(*, run_id, latest_sequence_no):
-            call_args.append(latest_sequence_no)
-            return await original_set(
-                run_id=run_id, latest_sequence_no=latest_sequence_no
-            )
-
-        store.set_run_latest_sequence = recording_set  # type: ignore[method-assign]
-
-        await producer.append_api_events_batch(
-            run=run,
-            source=StreamEventSource.MODEL,
-            event_type=RuntimeApiEventType.MODEL_DELTA,
-            entries=[{"payload": {"delta": "x"}} for _ in range(3)],
-        )
-
-        # Unconsolidated: producer makes one cursor-advance call per batch
-        # (with the highest sequence number).
-        assert call_args == [3]
 
 
 class TestDeltaCoalescerPassthrough(_FixturesMixin):

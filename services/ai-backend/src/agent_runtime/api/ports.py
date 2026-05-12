@@ -31,6 +31,8 @@ from agent_runtime.persistence.records import (
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
     UsageDailyUserRow,
 )
 from runtime_api.schemas import (
@@ -425,6 +427,21 @@ class PersistencePort(Protocol):
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
         """Idempotent UPSERT of one daily per-connector rollup row (PR 7.2)."""
 
+    async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        """Idempotent UPSERT of one daily per-subagent rollup row (01d).
+
+        Org-scoped (no user_id). Keyed on
+        ``(org_id, day, subagent_slug, model_provider, model_name)``.
+        ``subagent_slug=''`` is the orchestrator-scope bucket.
+        """
+
+    async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        """Idempotent UPSERT of one daily per-purpose rollup row (01d).
+
+        Keyed on ``(org_id, day, purpose, model_provider, model_name)``.
+        ``purpose`` is the ``Purpose`` StrEnum value.
+        """
+
     async def query_user_daily_usage(
         self,
         *,
@@ -452,6 +469,24 @@ class PersistencePort(Protocol):
         end_day: datetime,
     ) -> Sequence[UsageDailyConnectorRow]:
         """Read per-connector rollup rows in ``[start_day, end_day]`` (PR 7.2)."""
+
+    async def query_subagent_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailySubagentRow]:
+        """Read per-subagent rollup rows in ``[start_day, end_day]`` (01d)."""
+
+    async def query_purpose_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyPurposeRow]:
+        """Read per-purpose rollup rows in ``[start_day, end_day]`` (01d)."""
 
     async def query_model_call_usage_for_range(
         self,
@@ -742,8 +777,8 @@ class EventStorePort(Protocol):
           * roll back as one transaction on any failure mid-batch (no
             partial writes);
           * advance ``agent_runs.latest_sequence_no`` to ``max(sequence_no)``
-            in the same transaction when ``consolidates_cursor_writes`` is
-            enabled (mirrors the single-event ``append_event`` consolidation).
+            in the same transaction (mirrors the single-event
+            ``append_event`` cursor consolidation).
 
         An empty input list returns ``()`` without touching the store.
         """

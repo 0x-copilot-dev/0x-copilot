@@ -288,7 +288,6 @@ async def test_event_producer_attaches_presentation_synchronously() -> None:
     assert envelope.event_type == RuntimeApiEventType.TOOL_RESULT
     # Single envelope written — no async polish patch event follows.
     assert len(event_store.drafts) == 1
-    assert persistence.latest_sequence_no == 1
 
 
 async def test_event_producer_uses_tool_template_when_lookup_resolves() -> None:

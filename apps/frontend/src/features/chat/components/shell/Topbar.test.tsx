@@ -144,4 +144,44 @@ describe("Topbar", () => {
       });
     });
   });
+
+  describe("depth announcement", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    it("announces a polite message when depth changes", async () => {
+      const { rerender } = render(<Topbar {...baseProps} depth="balanced" />);
+      // Mount renders an empty live region — no announcement on first paint.
+      expect(
+        screen
+          .getAllByRole("status")
+          .map((node) => node.textContent ?? "")
+          .filter((text) => text.includes("Depth:")),
+      ).toHaveLength(0);
+      rerender(<Topbar {...baseProps} depth="deep" />);
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((node) => node.textContent?.includes("Depth: Deep")),
+        ).toBe(true);
+      });
+      // Region clears after ~2s so screen readers don't replay stale text.
+      act(() => {
+        vi.advanceTimersByTime(2100);
+      });
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((node) => (node.textContent ?? "").includes("Depth:")),
+        ).toBe(false);
+      });
+    });
+  });
 });

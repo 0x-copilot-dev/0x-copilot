@@ -91,25 +91,15 @@ class RuntimeAdapterFactory:
         """
 
         backend = settings.store.backend
-        # P4 — single source of truth for the cursor-write consolidation
-        # flag. Both adapters honor it identically; producers auto-detect
-        # via ``event_store.consolidates_cursor_writes``.
-        consolidated_writes = settings.execution.consolidated_event_writes
         # P2 — when the SSE bus is the Postgres LISTEN/NOTIFY backend, the
         # postgres adapter must fire a NOTIFY after every append so the
         # API process's listener wakes the SSE adapter cross-process.
         # In-memory bus doesn't need this — that path uses asyncio.Condition.
         notify_after_append = settings.execution.event_bus_backend.lower() == "postgres"
-        # P16 — drops the per-run ``agent_runs`` row lock from
-        # ``append_event``. In-memory adapter ignores it; its per-run
-        # counter is already a single in-process writer.
-        lock_free_appends = settings.execution.lock_free_appends
         # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
-            in_memory_store = InMemoryRuntimeApiStore(
-                consolidated_writes=consolidated_writes
-            )
+            in_memory_store = InMemoryRuntimeApiStore()
             return RuntimePorts(
                 persistence=in_memory_store,
                 event_store=in_memory_store,
@@ -132,9 +122,7 @@ class RuntimeAdapterFactory:
             postgres_store = PostgresRuntimeApiStore(
                 settings.store.database_url,
                 role=role,
-                consolidated_writes=consolidated_writes,
                 notify_after_append=notify_after_append,
-                lock_free_appends=lock_free_appends,
             )
             return RuntimePorts(
                 persistence=postgres_store,

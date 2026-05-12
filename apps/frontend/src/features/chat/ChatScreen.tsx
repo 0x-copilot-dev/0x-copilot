@@ -100,6 +100,8 @@ import {
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
+import { useArchivedSources } from "../sources/useArchivedSources";
+import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
 import {
   scrollChatToCitation,
   scrollChatToEvent,

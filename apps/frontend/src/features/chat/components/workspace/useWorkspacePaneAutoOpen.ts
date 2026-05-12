@@ -1,10 +1,7 @@
-// PR 1.5 — workspace pane auto-open trigger.
-//
-// The pane defaults closed, then auto-opens on the first conversation
-// switch where any of the four content tabs has non-zero data. Once the
-// user manually toggles the pane, their preference wins; this hook only
-// computes whether *the initial state* on conversation switch should be
-// open. ChatScreen wires it to a one-shot effect keyed by conversationId.
+// PR 1.5 — workspace pane auto-open trigger (pure predicate).
+// PR 3.1 — React-side memory hook on top of the predicate so callers
+//          fire `openOn(tab)` exactly once per conversation visit, with
+//          a suppression flag for manual-close behavior PR 3.2 owns.
 
 import { useEffect, useRef } from "react";
 
@@ -15,6 +12,12 @@ export type WorkspacePaneTabId =
   | "approvals"
   | "skills";
 
+/**
+ * Returns true on the first conversation switch where any of the four
+ * content tabs has non-zero data. Once the user manually toggles the
+ * pane, their preference wins; this predicate only decides whether
+ * *the initial state* on conversation switch should be open.
+ */
 export function shouldAutoOpenWorkspacePane(opts: {
   subagentCount: number;
   sourceCount: number;
@@ -30,9 +33,9 @@ export function shouldAutoOpenWorkspacePane(opts: {
 }
 
 /**
- * PR 3.1 — companion of `shouldAutoOpenWorkspacePane` that picks the
- * specific tab to open. Priority: agents (running) > sources > draft >
- * approvals. Pure function, table-tested.
+ * Returns the tab the pane should auto-open onto, or null if none of
+ * the content tabs has data. Priority: agents (running) > sources >
+ * drafts > approvals.
  */
 export function autoOpenTab(opts: {
   subagentCount: number;
@@ -60,10 +63,9 @@ export interface WorkspacePaneAutoOpenSignalOptions {
 }
 
 /**
- * PR 3.1 — React-side memory layer over `autoOpenTab`. Fires
- * `onAutoOpen` exactly once per conversation visit when the relevant
- * count first becomes non-zero. PR 3.2 mounts the consumer; until then
- * ChatScreen passes a no-op and the hook is inert.
+ * PR 3.1 React-hook layer over `autoOpenTab` that fires `onAutoOpen`
+ * exactly once per conversation visit. PR 3.2 mounts the consumer; until
+ * then ChatScreen passes a no-op and the hook is inert.
  */
 export function useWorkspacePaneAutoOpenSignal({
   conversationId,

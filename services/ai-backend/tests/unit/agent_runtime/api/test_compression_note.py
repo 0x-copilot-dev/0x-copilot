@@ -115,7 +115,6 @@ async def test_append_compression_note_emits_note_envelope_with_payload_fields()
     assert envelope.payload["strategy"] == "summarize"
     assert envelope.payload["summary"] == "Summarised 3 older messages."
     assert envelope.payload["payload_refs"] == {"summary_id": "ctx_sum_42"}
-    assert persistence.latest_sequence_no == 1
 
 
 async def test_append_compression_note_omits_optional_fields_when_unset() -> None:

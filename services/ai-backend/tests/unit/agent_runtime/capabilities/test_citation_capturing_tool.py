@@ -172,7 +172,9 @@ class TestCitationCapturingTool(CitationCapturingFixtureMixin):
             "web_search",
             "web_search",
         ]
-        assert len(events.drafts) == 2
+        # Projector batches: one sources_ingested event carries both rows.
+        assert len(events.drafts) == 1
+        assert events.drafts[0].event_type.value == "sources_ingested"
 
     def test_duplicate_url_within_one_call_dedupes_to_one_event(self) -> None:
         _, events, store, token = self._bind_ledger()

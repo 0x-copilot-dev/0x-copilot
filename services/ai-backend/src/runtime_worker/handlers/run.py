@@ -67,7 +67,11 @@ from agent_runtime.execution.providers.citation_pipeline import CitationStreamPi
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord
-from agent_runtime.pricing import CostCalculator, ModelPricingCatalog
+from agent_runtime.observability.usage_recorder import (
+    PostgresUsageRecorder,
+    UsageRecorder,
+)
+from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -157,6 +161,7 @@ class RuntimeRunHandler:
         conversation_tool_ordinal_store: (
             ConversationToolOrdinalStorePort | None
         ) = None,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -199,6 +204,14 @@ class RuntimeRunHandler:
         self.pricing_catalog = ModelPricingCatalog(self.persistence)
         self.budget_enforcer = BudgetEnforcer(self.persistence)
         self.budget_charger = BudgetCharger(self.persistence)
+        # Sub-PRD 01c — single boundary for usage row + cost stamping.
+        # Default-built from existing collaborators so production deploys
+        # get the production impl; tests inject ``InMemoryUsageRecorder``
+        # to assert against records directly.
+        self.usage_recorder: UsageRecorder = usage_recorder or PostgresUsageRecorder(
+            persistence=self.persistence,
+            pricing_catalog=self.pricing_catalog,
+        )
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -309,10 +322,9 @@ class RuntimeRunHandler:
             if budget_guard is not None
             else None
         )
-        # PR 3.3 — non-blocking MCP discovery service. Built per-run so
+        # Non-blocking MCP discovery service. Built per-run so
         # idempotency / audit / event emission share the same RunRecord
-        # the ledger uses. Returns ``None`` when the feature is off; the
-        # tool short-circuits to ``discovery_disabled`` in that case.
+        # the ledger uses.
         discovery_service: McpDiscoveryService | None = None
         discovery_token: object | None = None
         # Polish-removal Phase 1 + 2.B (docs/refactor/01-presentation-polish-removal.md):
@@ -345,11 +357,7 @@ class RuntimeRunHandler:
                 runtime_context=command.runtime_context,
                 dependencies=dependencies,
             )
-            discovery_token = (
-                McpDiscoveryService.bind_for_run(discovery_service)
-                if discovery_service is not None
-                else None
-            )
+            discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
             harness_or_coro = self.agent_factory(
                 context=command.runtime_context,
                 dependencies=dependencies,
@@ -712,137 +720,44 @@ class RuntimeRunHandler:
         status: str,
         budget_reservations: Sequence[BudgetReservationRecord] = (),
     ) -> None:
-        """Best-effort write of the per-run usage row + cost stamp (B1, B3).
+        """Coordinate the run-completion writes through :class:`UsageRecorder`.
 
-        The run-completion event is the source of truth; this denormalized
-        row is a derived aggregate that powers fast aggregations (B4) and
-        budget enforcement (B7). A failure here must never break the run
-        lifecycle, so we swallow exceptions and let observability surface
-        them as a metric.
+        Sub-PRD 01c: this method used to inline two parallel writer
+        bodies (run-level + per-call), each with its own pricing
+        lookup + cost UPDATE. Both are now collapsed into the recorder.
 
-        After the row is written we look up pricing-as-of ``completed_at``
-        and stamp the cost. Pricing miss → row stays at ``cost_micro_usd
-        IS NULL`` (B3 spec: unknown models are null-safe).
+        Per-run aggregate (B1, B3) is the source of truth for fast
+        aggregations (B4) and budget enforcement (B7). Per-LLM-call
+        rows (B2) carry attribution dimensions. Both share the same
+        pricing snapshot (``pricing_at=completed_at``) so a clock
+        crossing a minute boundary mid-run produces one
+        ``pricing_version`` stamp, not two.
 
-        Finally (B7) we charge the observed spend against any matching
-        budgets, idempotent on ``run_id``. Reservations from the
-        preflight are consumed inside the charger so the reaper skips
-        them.
+        The recorder is fail-soft — every write attempt absorbs its
+        own exceptions. The run lifecycle does not break because a
+        usage row could not be persisted.
         """
 
-        cost_micro_usd_observed: int | None = None
-        observed_tokens = 0
-        try:
-            usage_record = metrics.to_usage_record(
-                run, completed_at=completed_at, status=status
-            )
-            await self.persistence.record_run_usage(usage_record)
-            observed_tokens = usage_record.total_tokens
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "runtime_run_usage_write_failed",
-                extra={"metadata": {"run_id": run.run_id}},
-                exc_info=True,
-            )
-            return
-        await self._record_per_call_usage(run, metrics=metrics)
-        try:
-            pricing = await self.pricing_catalog.lookup(
-                provider=run.model_provider,
-                model_name=run.model_name,
-                region="global",
-                at=completed_at,
-            )
-            if pricing is not None:
-                computed_cost: int = CostCalculator.compute(
-                    input_tokens=usage_record.input_tokens,
-                    output_tokens=usage_record.output_tokens,
-                    cached_input_tokens=usage_record.cached_input_tokens,
-                    pricing=pricing,
-                )
-                cost_micro_usd_observed = computed_cost
-                await self.persistence.update_run_usage_cost(
-                    run_id=run.run_id,
-                    cost_micro_usd=computed_cost,
-                    pricing_id=pricing.id,
-                    pricing_version=pricing.pricing_version,
-                )
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "runtime_run_usage_cost_write_failed",
-                extra={"metadata": {"run_id": run.run_id}},
-                exc_info=True,
-            )
-        # B7 — apply observed spend against active budgets. Idempotent on
-        # run_id; reservations from preflight are consumed in the same
-        # call so the reaper skips them.
+        usage_record = metrics.to_usage_record(
+            run, completed_at=completed_at, status=status
+        )
+        run_result = await self.usage_recorder.record_run(
+            usage_record, pricing_at=completed_at
+        )
+        for call_record in metrics.model_call_usage_records(run, trace_id=run.trace_id):
+            await self.usage_recorder.record_call(call_record, pricing_at=completed_at)
+        # B7 — apply observed spend against active budgets. Idempotent
+        # on ``run_id``; reservations from preflight are consumed in the
+        # same call so the reaper skips them. ``cost_micro_usd`` is
+        # ``None`` whenever the recorder couldn't stamp it (pricing
+        # miss or write failure) — same semantic as pre-01c's local
+        # variable, now flowed via a typed return.
         await self._charge_budgets(
             run,
-            observed_micro_usd=cost_micro_usd_observed,
-            observed_tokens=observed_tokens,
+            observed_micro_usd=run_result.cost_micro_usd,
+            observed_tokens=usage_record.total_tokens,
             reservations=budget_reservations,
         )
-
-    async def _record_per_call_usage(
-        self,
-        run: RunRecord,
-        *,
-        metrics: AssistantRunMetrics,
-    ) -> None:
-        """Best-effort write of per-LLM-call usage rows (B2).
-
-        Reconciliation invariant: ``sum(model_call_usage rows for run_id)``
-        equals ``runtime_run_usage`` for that run. The records are built
-        from the same accumulator that produced the run-level row, so the
-        invariant holds by construction.
-
-        Cost stamping for per-call rows is best-effort: each row gets
-        priced against the same pricing snapshot as the run-level row.
-        Failures here never break the run lifecycle.
-        """
-
-        try:
-            records = metrics.model_call_usage_records(run, trace_id=run.trace_id)
-            if not records:
-                return
-            for record in records:
-                await self.persistence.record_model_call_usage(record)
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "runtime_model_call_usage_write_failed",
-                extra={"metadata": {"run_id": run.run_id}},
-                exc_info=True,
-            )
-            return
-        # Cost stamp per call.
-        try:
-            pricing = await self.pricing_catalog.lookup(
-                provider=run.model_provider,
-                model_name=run.model_name,
-                region="global",
-                at=datetime.now(timezone.utc),
-            )
-            if pricing is None:
-                return
-            for record in records:
-                cost_micro_usd = CostCalculator.compute(
-                    input_tokens=record.input_tokens,
-                    output_tokens=record.output_tokens,
-                    cached_input_tokens=record.cached_input_tokens,
-                    pricing=pricing,
-                )
-                await self.persistence.update_model_call_usage_cost(
-                    usage_id=record.id,
-                    cost_micro_usd=cost_micro_usd,
-                    pricing_id=pricing.id,
-                    pricing_version=pricing.pricing_version,
-                )
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "runtime_model_call_usage_cost_write_failed",
-                extra={"metadata": {"run_id": run.run_id}},
-                exc_info=True,
-            )
 
     async def _messages_for_run(
         self,
@@ -929,10 +844,6 @@ class RuntimeRunHandler:
                 conversation_id=command.conversation_id,
                 current_run_id=command.run_id,
             ),
-            # PR 3.3 — flip the factory's tool-registration switch from
-            # the worker's loaded settings. Defaults to ``False`` so a
-            # deployment that hasn't opted in never sees the tool.
-            "mcp_discovery_enabled": self.settings.mcp.discovery_enabled,
         }
         if self.draft_store is not None:
             # PR 1.3.5 — construct a DraftBackend per run so the agent's
@@ -1433,7 +1344,6 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
-            batch_enabled=self.settings.execution.batch_source_ingestion,
         )
 
     async def _bind_conversation_ordinal_allocator(
@@ -1504,8 +1414,8 @@ class RuntimeRunHandler:
         run: RunRecord,
         runtime_context: AgentRuntimeContext,
         dependencies: RuntimeDependencies,
-    ) -> McpDiscoveryService | None:
-        """Build a per-run :class:`McpDiscoveryService`, or ``None`` when off.
+    ) -> McpDiscoveryService:
+        """Build a per-run :class:`McpDiscoveryService`.
 
         The service mirrors the citation ledger: bound to the worker run
         once, exposed through a class-method (``offer``) so the
@@ -1515,11 +1425,6 @@ class RuntimeRunHandler:
         ``auth_url`` / ``expires_at`` fields the blocking gate emits.
         """
 
-        if not dependencies.mcp_discovery_enabled:
-            return None
-        # The auth session creator is a per-provider capability on the
-        # MCP registry (same lookup as the blocking ``auth_mcp`` tool
-        # uses in :func:`agent_runtime.execution.factory._auth_session_creator`).
         auth_session_creator = None
         for provider in getattr(dependencies.mcp_registry, "providers", ()):
             if callable(getattr(provider, "create_auth_session", None)):

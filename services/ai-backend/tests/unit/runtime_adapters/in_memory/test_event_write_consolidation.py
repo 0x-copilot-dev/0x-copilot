@@ -1,9 +1,10 @@
-"""P4 — Stage 1 cursor consolidation tests for the in-memory adapter.
+"""Cursor consolidation tests for the in-memory adapter.
 
 The Postgres adapter is exercised by integration tests that need a live
 database; these unit tests pin the contract that both adapters must honor
-(parity), the producer's auto-detection of the adapter mode, and the H3
-monotonic guard on ``set_run_latest_sequence``.
+(parity): ``append_event`` advances the run cursor in-line, the producer
+does NOT issue a redundant ``set_run_latest_sequence`` call, and the H3
+monotonic guard on ``set_run_latest_sequence`` prevents rewinds.
 """
 
 from __future__ import annotations
@@ -98,31 +99,10 @@ class _FixturesMixin:
 
 
 class TestInMemoryConsolidatedAppend(_FixturesMixin):
-    """``append_event`` advances the run cursor when consolidation is enabled."""
+    """``append_event`` advances the run cursor in-line."""
 
-    async def test_default_constructor_does_not_consolidate(self) -> None:
-        """Existing tests + callers that use the bare constructor see the
-        pre-P4 behavior — ``append_event`` does not touch ``latest_sequence_no``.
-        """
-
+    async def test_append_advances_cursor(self) -> None:
         store = InMemoryRuntimeApiStore()
-        assert store.consolidates_cursor_writes is False
-
-        self._seed_run(store)
-        envelope = await store.append_event(self._draft())
-
-        assert envelope.sequence_no == 1
-        run = await store.get_run(org_id=self.ORG_ID, run_id=self.RUN_ID)
-        assert run is not None
-        # ``RunRecord.latest_sequence_no`` defaults to 0 (the sentinel for
-        # "no events yet"); pre-P4 ``append_event`` doesn't touch it.
-        assert run.latest_sequence_no == 0
-
-    async def test_consolidated_constructor_advances_cursor(self) -> None:
-        """With ``consolidated_writes=True`` the run cursor advances in-line."""
-
-        store = InMemoryRuntimeApiStore(consolidated_writes=True)
-        assert store.consolidates_cursor_writes is True
 
         self._seed_run(store)
         envelope = await store.append_event(self._draft())
@@ -132,20 +112,18 @@ class TestInMemoryConsolidatedAppend(_FixturesMixin):
         assert run is not None
         assert run.latest_sequence_no == 1
 
-    async def test_consolidated_append_no_op_for_unknown_run(self) -> None:
+    async def test_append_no_op_for_unknown_run(self) -> None:
         """Appending for a run with no ``agent_runs`` row records the event
         but does not crash on the missing ``self.runs`` key.
         """
 
-        store = InMemoryRuntimeApiStore(consolidated_writes=True)
+        store = InMemoryRuntimeApiStore()
 
         envelope = await store.append_event(
             self._draft(run_id="ghost_run", conversation_id="ghost_conv")
         )
 
         assert envelope.sequence_no == 1
-        # Event lands in events_by_run (matches pre-P4 in-memory behavior so
-        # legacy tests that append without a seeded run still pass).
         assert len(store.events_by_run["ghost_run"]) == 1
 
 
@@ -191,43 +169,15 @@ class TestInMemorySetLatestSequenceMonotonic(_FixturesMixin):
 
 
 class TestProducerSkipsRedundantCursorCall(_FixturesMixin):
-    """The producer auto-detects the adapter's mode and acts accordingly."""
+    """The producer never issues a redundant cursor write; the adapter
+    advances the cursor in-line."""
 
-    async def test_producer_calls_when_adapter_does_not_consolidate(self) -> None:
-        """Pre-P4 path: producer issues its own ``set_run_latest_sequence``."""
-
+    async def test_producer_does_not_call_set_latest_sequence(self) -> None:
         store = InMemoryRuntimeApiStore()
         producer = RuntimeEventProducer(persistence=store, event_store=store)
-        assert producer._consolidated_writes is False
-
-        run = self._seed_run(store)
-        envelope = await producer.append_api_event(
-            run=run,
-            source=StreamEventSource.MODEL,
-            event_type=RuntimeApiEventType.MODEL_DELTA,
-            payload={"delta": "hi"},
-        )
-
-        assert envelope.sequence_no == 1
-        run_after = await store.get_run(org_id=self.ORG_ID, run_id=self.RUN_ID)
-        assert run_after is not None
-        # Cursor was advanced by the producer's separate call.
-        assert run_after.latest_sequence_no == 1
-
-    async def test_producer_skips_when_adapter_consolidates(self) -> None:
-        """P4 path: producer skips the redundant cursor call; adapter's
-        in-line update is the sole source of cursor advancement."""
-
-        store = InMemoryRuntimeApiStore(consolidated_writes=True)
-        producer = RuntimeEventProducer(persistence=store, event_store=store)
-        assert producer._consolidated_writes is True
 
         run = self._seed_run(store)
 
-        # Wrap set_run_latest_sequence to count calls — must stay zero from
-        # the producer side. The adapter's append_event drives the in-line
-        # update via the same instance method, so we count to detect double
-        # invocation.
         original = store.set_run_latest_sequence
         call_count = 0
 
@@ -246,19 +196,19 @@ class TestProducerSkipsRedundantCursorCall(_FixturesMixin):
         )
 
         assert envelope.sequence_no == 1
-        # In-memory adapter's append_event calls self.set_run_latest_sequence
-        # in-line when consolidated, so we expect exactly one call total
-        # (from the adapter, NOT from the producer).
+        # Adapter's append_event calls self.set_run_latest_sequence in-line,
+        # so we expect exactly one call total (from the adapter, NOT from
+        # the producer).
         assert call_count == 1
 
         run_after = await store.get_run(org_id=self.ORG_ID, run_id=self.RUN_ID)
         assert run_after is not None
         assert run_after.latest_sequence_no == 1
 
-    async def test_producer_consolidated_path_invokes_callback(self) -> None:
-        """``on_event_appended`` is invoked regardless of consolidation mode."""
+    async def test_producer_invokes_callback(self) -> None:
+        """``on_event_appended`` is invoked on append."""
 
-        store = InMemoryRuntimeApiStore(consolidated_writes=True)
+        store = InMemoryRuntimeApiStore()
         notifications: list[str] = []
         producer = RuntimeEventProducer(
             persistence=store,
@@ -284,7 +234,7 @@ class TestConsolidatedConcurrentAppends(_FixturesMixin):
     async def test_concurrent_appends_assign_unique_sequence_numbers(
         self,
     ) -> None:
-        store = InMemoryRuntimeApiStore(consolidated_writes=True)
+        store = InMemoryRuntimeApiStore()
         self._seed_run(store)
 
         N = 50
@@ -318,60 +268,3 @@ class TestConsolidatedConcurrentAppends(_FixturesMixin):
         run = await store.get_run(org_id=self.ORG_ID, run_id=self.RUN_ID)
         assert run is not None
         assert run.latest_sequence_no == max(targets)
-
-
-class TestSettingsFlagWiring:
-    """End-to-end: settings flag flows through the adapter factory and the
-    producer auto-detects via the adapter."""
-
-    def test_default_settings_default_consolidation_on(self) -> None:
-        from agent_runtime.settings import RuntimeSettings
-
-        settings = RuntimeSettings.load(
-            environ={
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            }
-        )
-        assert settings.execution.consolidated_event_writes is True
-
-    def test_explicit_false_rolls_back(self) -> None:
-        from agent_runtime.settings import RuntimeSettings
-
-        settings = RuntimeSettings.load(
-            environ={
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                "RUNTIME_EVENT_WRITE_CONSOLIDATED": "false",
-            }
-        )
-        assert settings.execution.consolidated_event_writes is False
-
-    def test_factory_threads_flag_into_in_memory_store(self) -> None:
-        from agent_runtime.settings import RuntimeSettings
-        from runtime_adapters.factory import RuntimeAdapterFactory
-
-        settings = RuntimeSettings.load(
-            environ={
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                "RUNTIME_STORE_BACKEND": "in_memory",
-            }
-        )
-        ports = RuntimeAdapterFactory.from_settings(settings)
-        assert ports.event_store.consolidates_cursor_writes is True
-
-    def test_factory_threads_rollback_flag(self) -> None:
-        from agent_runtime.settings import RuntimeSettings
-        from runtime_adapters.factory import RuntimeAdapterFactory
-
-        settings = RuntimeSettings.load(
-            environ={
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-                "RUNTIME_STORE_BACKEND": "in_memory",
-                "RUNTIME_EVENT_WRITE_CONSOLIDATED": "false",
-            }
-        )
-        ports = RuntimeAdapterFactory.from_settings(settings)
-        assert ports.event_store.consolidates_cursor_writes is False

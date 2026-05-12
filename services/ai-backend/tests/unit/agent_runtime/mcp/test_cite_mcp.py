@@ -97,8 +97,6 @@ def _run_record() -> RunRecord:
 class CitationProjectorFixtureMixin:
     def _bind_ledger(
         self,
-        *,
-        batch_enabled: bool = False,
     ) -> tuple[CitationLedger, _RecordingEventStore, InMemoryCitationStore, object]:
         store = InMemoryCitationStore()
         events = _RecordingEventStore()
@@ -111,7 +109,6 @@ class CitationProjectorFixtureMixin:
             store=store,
             producer=producer,
             source=StreamEventSource.TOOL,
-            batch_enabled=batch_enabled,
         )
         token = CitationLedger.bind_for_run(ledger)
         return ledger, events, store, token
@@ -174,7 +171,7 @@ class TestProjectorContentBlocks(CitationProjectorFixtureMixin):
 
 
 class TestProjectorResultsList(CitationProjectorFixtureMixin):
-    def test_generic_results_list_emits_one_per_entry(self) -> None:
+    def test_generic_results_list_emits_one_batched_event(self) -> None:
         _, events, store, token = self._bind_ledger()
         try:
             asyncio.run(
@@ -203,7 +200,9 @@ class TestProjectorResultsList(CitationProjectorFixtureMixin):
             CitationLedger.unbind(token)
         assert len(store.rows) == 2
         assert [row.ordinal for row in store.rows] == [1, 2]
-        assert len(events.drafts) == 2
+        # One sources_ingested event carries N citations (batch path).
+        assert len(events.drafts) == 1
+        assert events.drafts[0].event_type.value == "sources_ingested"
 
 
 class TestProjectorSingleResource(CitationProjectorFixtureMixin):
@@ -274,17 +273,12 @@ class TestProjectorDegradation(CitationProjectorFixtureMixin):
         assert store.rows == ()
 
 
-# P7 PR2 — gated batched ingestion. The projector picks register_many
-# when the active ledger has batch_enabled=True; behavior is otherwise
-# identical to the legacy per-source loop (same ordinals, same store
-# rows, same idempotency).
-
-
 class TestProjectorBatched(CitationProjectorFixtureMixin):
-    """Confirm RUNTIME_BATCH_SOURCE_INGESTION switches to a single event."""
+    """Projector always calls ``register_many`` — one sources_ingested
+    event per projector invocation regardless of batch size."""
 
     def test_multi_result_emits_one_sources_ingested_event(self) -> None:
-        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        _, events, store, token = self._bind_ledger()
         try:
             asyncio.run(
                 CitationProjectingMcpMiddleware.project(
@@ -316,7 +310,7 @@ class TestProjectorBatched(CitationProjectorFixtureMixin):
         assert [c["ordinal"] for c in citations] == [1, 2, 3]
 
     def test_single_source_still_uses_batched_event_under_flag(self) -> None:
-        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        _, events, store, token = self._bind_ledger()
         try:
             asyncio.run(
                 CitationProjectingMcpMiddleware.project(
@@ -344,7 +338,7 @@ class TestProjectorBatched(CitationProjectorFixtureMixin):
         assert events.drafts[0].event_type.value == "sources_ingested"
 
     def test_unrecognized_shape_emits_no_event_under_flag(self) -> None:
-        _, events, store, token = self._bind_ledger(batch_enabled=True)
+        _, events, store, token = self._bind_ledger()
         try:
             asyncio.run(
                 CitationProjectingMcpMiddleware.project(
@@ -360,7 +354,7 @@ class TestProjectorBatched(CitationProjectorFixtureMixin):
         assert events.drafts == []
 
     def test_tool_call_id_attached_to_every_batched_source(self) -> None:
-        _, _, store, token = self._bind_ledger(batch_enabled=True)
+        _, _, store, token = self._bind_ledger()
         try:
             asyncio.run(
                 CitationProjectingMcpMiddleware.project(
@@ -389,7 +383,7 @@ class TestProjectorBatched(CitationProjectorFixtureMixin):
         assert all(row.source_tool_call_id == "call_batched_4" for row in store.rows)
 
     def test_per_result_cap_still_applies_under_flag(self) -> None:
-        _, _, store, token = self._bind_ledger(batch_enabled=True)
+        _, _, store, token = self._bind_ledger()
         try:
             asyncio.run(
                 CitationProjectingMcpMiddleware.project(

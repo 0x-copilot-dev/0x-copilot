@@ -83,13 +83,8 @@ class CitationProjector:
         a citation projection failure must not poison a successful
         tool result.
 
-        When the active ledger has :attr:`CitationLedger.batch_enabled`
-        ``True`` (P7 PR2 — gated by ``RUNTIME_BATCH_SOURCE_INGESTION``),
-        the projector emits one ``sources_ingested`` event per tool
-        result via :meth:`CitationLedger.register_many`. Otherwise it
-        falls back to the legacy per-source loop emitting N
-        ``source_ingested`` events. Output (allocated ordinals,
-        idempotency, cap behavior) is identical between the two paths.
+        Emits one ``sources_ingested`` event per tool result via
+        :meth:`CitationLedger.register_many`.
         """
 
         ledger = CitationLedger.active()
@@ -110,11 +105,7 @@ class CitationProjector:
         ]
         if not prepared:
             return
-        if ledger.batch_enabled:
-            await ledger.register_many(prepared)
-            return
-        for source in prepared:
-            await ledger.register(source)
+        await ledger.register_many(prepared)
 
     # --- shape dispatcher --------------------------------------------------
 

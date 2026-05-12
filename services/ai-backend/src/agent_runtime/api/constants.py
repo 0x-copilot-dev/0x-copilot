@@ -116,6 +116,8 @@ class Keys:
         USAGE_RUN = "usage_run"
         USAGE_CONVERSATION = "usage_conversation"
         USAGE_ORG = "usage_org"
+        USAGE_ORG_SUBAGENTS = "usage_org_subagents"
+        USAGE_ORG_PURPOSE = "usage_org_purpose"
         # Budget endpoints (B7)
         BUDGETS_LIST = "budgets_list"
         BUDGETS_CREATE = "budgets_create"

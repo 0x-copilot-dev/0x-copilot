@@ -7,12 +7,12 @@ from collections.abc import AsyncIterator
 
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.api.conversation_query_service import ConversationQueryService
 from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
 )
-from agent_runtime.api.service import RuntimeApiService
 from runtime_api.sse.event_bus import RuntimeEventBus
 
 
@@ -20,14 +20,14 @@ class RuntimeSseAdapter:
     """Adapt replayable runtime event envelopes to Server-Sent Events."""
 
     MEDIA_TYPE = "text/event-stream"
-    TERMINAL_RUN_STATUSES = RuntimeApiService.TERMINAL_RUN_STATUSES
+    TERMINAL_RUN_STATUSES = ConversationQueryService.TERMINAL_RUN_STATUSES
     FALLBACK_POLL_SECONDS = 2.0
 
     @classmethod
     async def stream(
         cls,
         *,
-        service: RuntimeApiService,
+        service: ConversationQueryService,
         org_id: str,
         user_id: str,
         run_id: str,
@@ -73,7 +73,7 @@ class RuntimeSseAdapter:
     async def heartbeat_event(
         cls,
         *,
-        service: RuntimeApiService,
+        service: ConversationQueryService,
         org_id: str,
         user_id: str,
         run_id: str,

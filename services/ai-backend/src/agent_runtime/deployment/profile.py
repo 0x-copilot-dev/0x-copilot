@@ -44,6 +44,13 @@ class DeploymentFeatureToggles(BaseModel):
     require_field_level_encryption: bool
     require_kms_token_vault: bool
     siem_export_required: bool
+    # P12 Step 2/3 — which source the seed_pricing script + refresh loop
+    # consume for the catalog. ``"litellm"`` (default) uses the vendored
+    # LiteLLM data; ``"yaml"`` is the air-gapped fallback that reads the
+    # hand-curated quarterly seeds. Air-gapped deployments override the
+    # default by setting their profile's value to ``"yaml"`` (or running
+    # the script with ``--source yaml``).
+    pricing_primary_source: str
 
 
 class DeploymentProfile(BaseModel):
@@ -75,6 +82,7 @@ class DeploymentProfileLoader:
             "require_field_level_encryption": False,
             "require_kms_token_vault": True,
             "siem_export_required": True,
+            "pricing_primary_source": "litellm",
         },
         "single_tenant_managed": {
             "allow_embedded_provider_keys": True,
@@ -86,6 +94,7 @@ class DeploymentProfileLoader:
             "require_field_level_encryption": True,
             "require_kms_token_vault": True,
             "siem_export_required": True,
+            "pricing_primary_source": "litellm",
         },
         "single_tenant_self_hosted": {
             "allow_embedded_provider_keys": False,
@@ -97,6 +106,7 @@ class DeploymentProfileLoader:
             "require_field_level_encryption": True,
             "require_kms_token_vault": True,
             "siem_export_required": True,
+            "pricing_primary_source": "litellm",
         },
     }
 
@@ -110,6 +120,7 @@ class DeploymentProfileLoader:
         "require_field_level_encryption": False,
         "require_kms_token_vault": False,
         "siem_export_required": False,
+        "pricing_primary_source": "litellm",
     }
 
     @classmethod

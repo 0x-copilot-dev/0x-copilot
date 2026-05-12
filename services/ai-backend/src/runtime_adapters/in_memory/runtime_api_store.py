@@ -32,6 +32,8 @@ from agent_runtime.persistence.records import (
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
     UsageDailyUserRow,
 )
 from runtime_adapters.base import (
@@ -75,17 +77,7 @@ class InMemoryRuntimeApiStore:
     async def migrate(self) -> None:
         """Lifecycle parity with the Postgres adapter — no schema to migrate."""
 
-    def __init__(self, *, consolidated_writes: bool = False) -> None:
-        # P4 — when True, ``append_event`` advances the run's
-        # ``latest_sequence_no`` cursor inside the same call. Mirrors the
-        # Postgres adapter so the pair stays behavior-identical regardless
-        # of which backend is wired in.
-        #
-        # ``consolidates_cursor_writes`` is the public read-only mirror that
-        # ``RuntimeEventProducer`` checks at construction to decide whether
-        # to skip its separate ``set_run_latest_sequence`` call.
-        self._consolidated_writes = consolidated_writes
-        self.consolidates_cursor_writes: bool = consolidated_writes
+    def __init__(self) -> None:
         self.conversations: dict[str, ConversationRecord] = {}
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -121,8 +113,17 @@ class InMemoryRuntimeApiStore:
             tuple[str, str, str, str, str], UsageDailyUserRow
         ] = {}
         self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
+        # Sub-PRD 01d: PK extends with ``model_name`` so a single
+        # connector can split costs across multiple models.
         self.connector_daily_usage: dict[
-            tuple[str, str, str], UsageDailyConnectorRow
+            tuple[str, str, str, str], UsageDailyConnectorRow
+        ] = {}
+        # Sub-PRD 01d: org-scoped subagent + purpose daily rollups.
+        self.subagent_daily_usage: dict[
+            tuple[str, str, str, str, str], UsageDailySubagentRow
+        ] = {}
+        self.purpose_daily_usage: dict[
+            tuple[str, str, str, str, str], UsageDailyPurposeRow
         ] = {}
         # PR 7.2 — minimal test seed for the connector attribution lookup.
         # Production writes the real table via the runtime_events projection;
@@ -1145,8 +1146,33 @@ class InMemoryRuntimeApiStore:
         self.org_daily_usage[key] = row
 
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
-        key = (row.org_id, row.day.isoformat(), row.connector_slug)
+        key = (
+            row.org_id,
+            row.day.isoformat(),
+            row.connector_slug,
+            row.model_name,
+        )
         self.connector_daily_usage[key] = row
+
+    async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        key = (
+            row.org_id,
+            row.day.isoformat(),
+            row.subagent_slug,
+            row.model_provider,
+            row.model_name,
+        )
+        self.subagent_daily_usage[key] = row
+
+    async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        key = (
+            row.org_id,
+            row.day.isoformat(),
+            row.purpose,
+            row.model_provider,
+            row.model_name,
+        )
+        self.purpose_daily_usage[key] = row
 
     async def query_user_daily_usage(
         self,
@@ -1201,6 +1227,44 @@ class InMemoryRuntimeApiStore:
                 (
                     row
                     for row in self.connector_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_subagent_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailySubagentRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.subagent_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_purpose_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyPurposeRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.purpose_daily_usage.values()
                     if row.org_id == org_id and start_day <= row.day <= end_day
                 ),
                 key=lambda r: r.day,
@@ -1715,11 +1779,9 @@ class InMemoryRuntimeApiStore:
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with a monotonically increasing run sequence number.
 
-        P4 (consolidated writes): when ``self._consolidated_writes`` is True
-        the run's ``latest_sequence_no`` cursor is advanced in-line, mirroring
+        The run's ``latest_sequence_no`` cursor is advanced in-line, mirroring
         the Postgres adapter. The H3 monotonic guard inside
-        :meth:`set_run_latest_sequence` keeps the redundant producer call
-        (under rollback) safe.
+        :meth:`set_run_latest_sequence` keeps the cursor advance safe.
         """
 
         events = self.events_by_run.setdefault(event.run_id, [])
@@ -1751,7 +1813,7 @@ class InMemoryRuntimeApiStore:
             metadata=event.metadata,
         )
         events.append(envelope)
-        if self._consolidated_writes and event.run_id in self.runs:
+        if event.run_id in self.runs:
             await self.set_run_latest_sequence(
                 run_id=event.run_id,
                 latest_sequence_no=envelope.sequence_no,

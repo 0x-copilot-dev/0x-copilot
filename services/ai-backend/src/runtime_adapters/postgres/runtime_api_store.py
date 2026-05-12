@@ -5,29 +5,22 @@ Hazard-fix + serialization invariants:
 
 - ``async with self._pool.connection() as conn:`` + ``async with
   conn.transaction():`` for transactional cancellation safety.
-- ``append_event`` has two paths governed by ``self._lock_free_appends``:
-
-  * Legacy (H1 row lock): ``SELECT … FROM agent_runs … FOR UPDATE`` is
-    taken first so concurrent appends per run serialize on the
-    ``agent_runs`` row lock. ``UNIQUE(run_id, sequence_no)`` is the
-    backstop — if it fires under this path, the lock pattern is broken.
-
-  * P16 lock-free: the ``FOR UPDATE`` is dropped; the UNIQUE index
-    (``idx_runtime_events_run_sequence`` from migration 0001) is the
-    primary guard. Concurrent appenders that race to the same
-    ``sequence_no`` lose with ``UniqueViolation`` and retry up to
-    :data:`_AppendEventRetry.MAX_ATTEMPTS` times; sustained contention
-    past the retry budget surfaces :class:`RuntimeEventSequenceConflict`.
-
-- ``append_events_batch`` keeps the H1 row lock independent of P16: its
-  purpose (atomic contiguous-range allocation of N sequence_nos) is not
-  served by the per-event retry shape and is out of scope for P16.
+- ``append_event`` is lock-free: it does not take ``FOR UPDATE`` on
+  ``agent_runs``. The ``UNIQUE(run_id, sequence_no)`` index
+  (``idx_runtime_events_run_sequence`` from migration 0001) is the
+  primary guard. Concurrent appenders that race to the same
+  ``sequence_no`` lose with ``UniqueViolation`` and retry up to
+  :data:`_AppendEventRetry.MAX_ATTEMPTS` times; sustained contention
+  past the retry budget surfaces :class:`RuntimeEventSequenceConflict`.
+- ``append_events_batch`` keeps the ``agent_runs`` row lock: its purpose
+  (atomic contiguous-range allocation of N sequence_nos) is different
+  from the per-event retry shape.
 - ``create_approval_request`` uses ``INSERT … ON CONFLICT (id) DO NOTHING``
   followed by a fallback ``SELECT`` (H2). No check-then-insert race.
 - ``set_run_latest_sequence`` is monotonic: ``UPDATE … WHERE id = $1 AND
   latest_sequence_no < $2``. Out-of-order writes never rewind the cursor (H3).
   The consolidated UPDATE inside ``append_event`` carries the same guard so
-  P16 retries can never rewind the cursor either.
+  retries can never rewind the cursor either.
 """
 
 from __future__ import annotations
@@ -89,6 +82,8 @@ from agent_runtime.persistence.records import (
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
     UsageDailyUserRow,
 )
 from agent_runtime.persistence.schema.migrate import MigrationRunner
@@ -377,28 +372,13 @@ class PostgresRuntimeApiStore:
         field_encryption: FieldEncryption | None = None,
         replica_pool: AsyncConnectionPool | None = None,
         replica_database_url: str | None = None,
-        consolidated_writes: bool = False,
         notify_after_append: bool = False,
         notify_channel: str = "runtime_events_v1",
-        lock_free_appends: bool = False,
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
         self.database_url = database_url
         self._role = role
-        # P4 — when True, ``append_event`` folds the
-        # ``agent_runs.latest_sequence_no`` UPDATE into the same transaction
-        # as the ``runtime_events`` INSERT (saves one connection + one
-        # BEGIN/COMMIT). The H3 monotonic guard
-        # (``latest_sequence_no IS NULL OR latest_sequence_no < new``)
-        # mirrors the logic in :meth:`set_run_latest_sequence` so out-of-order
-        # writes never rewind the cursor.
-        #
-        # ``consolidates_cursor_writes`` is the public read-only mirror that
-        # ``RuntimeEventProducer`` checks at construction to decide whether
-        # to skip its separate ``set_run_latest_sequence`` call.
-        self._consolidated_writes = consolidated_writes
-        self.consolidates_cursor_writes: bool = consolidated_writes
         # P2 — when True, every successful ``append_event`` /
         # ``append_events_batch`` fires ``NOTIFY <channel>, '<run_id>:<seq>'``
         # so cross-process listeners (the SSE adapter in the API process)
@@ -408,19 +388,6 @@ class PostgresRuntimeApiStore:
         # in-memory event-bus path is unaffected.
         self._notify_after_append = notify_after_append
         self._notify_channel = notify_channel
-        # P16 — when True, ``append_event`` drops the per-run
-        # ``SELECT ... FOR UPDATE`` on ``agent_runs`` and instead relies on
-        # the ``UNIQUE(run_id, sequence_no)`` index (migration 0001:
-        # ``idx_runtime_events_run_sequence``) as the source of truth for
-        # monotonicity. The rare cancel-mid-stream race surfaces as a
-        # ``UniqueViolation`` on this index; the adapter retries up to
-        # ``_AppendEventRetry.MAX_ATTEMPTS`` times before raising
-        # :class:`RuntimeEventSequenceConflict`. The H3 monotonic guard on
-        # ``set_run_latest_sequence`` (and on the consolidated UPDATE) is
-        # unaffected. ``append_events_batch`` is out of scope and keeps
-        # its row lock — its purpose (atomic contiguous-range allocation)
-        # is different.
-        self._lock_free_appends = lock_free_appends
         # C7 phase 1: ``field_encryption`` defaults to ``NullFieldEncryption``
         # so writes stay v0 (plaintext) until an operator flips
         # ``RUNTIME_FIELD_ENCRYPTION=envelope_v1``. The injection point is
@@ -2405,17 +2372,17 @@ class PostgresRuntimeApiStore:
             await conn.execute(
                 """
                 INSERT INTO runtime_usage_daily_connector (
-                    org_id, day, connector_slug, runs_count,
+                    org_id, day, connector_slug, model_name, runs_count,
                     distinct_users, input_tokens, output_tokens,
                     cached_input_tokens, total_tokens, cost_micro_usd,
                     refreshed_at
                 ) VALUES (
-                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
                     %s
                 )
-                ON CONFLICT (org_id, day, connector_slug)
+                ON CONFLICT (org_id, day, connector_slug, model_name)
                 DO UPDATE SET
                     runs_count = EXCLUDED.runs_count,
                     distinct_users = EXCLUDED.distinct_users,
@@ -2430,11 +2397,118 @@ class PostgresRuntimeApiStore:
                     row.org_id,
                     row.day.date(),
                     row.connector_slug,
+                    row.model_name,
                     row.runs_count,
                     row.distinct_users,
                     row.input_tokens,
                     row.output_tokens,
                     row.cached_input_tokens,
+                    row.total_tokens,
+                    row.cost_micro_usd,
+                    row.refreshed_at,
+                ),
+            )
+
+    async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        async with self._tenant_connection(org_id=row.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_usage_daily_subagent (
+                    org_id, day, subagent_slug, model_provider, model_name,
+                    call_count,
+                    input_tokens, output_tokens, cached_input_tokens,
+                    cache_creation_input_tokens, reasoning_tokens,
+                    audio_input_tokens, audio_output_tokens,
+                    total_tokens, cost_micro_usd, refreshed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s
+                )
+                ON CONFLICT (org_id, day, subagent_slug, model_provider, model_name)
+                DO UPDATE SET
+                    call_count = EXCLUDED.call_count,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    cache_creation_input_tokens = EXCLUDED.cache_creation_input_tokens,
+                    reasoning_tokens = EXCLUDED.reasoning_tokens,
+                    audio_input_tokens = EXCLUDED.audio_input_tokens,
+                    audio_output_tokens = EXCLUDED.audio_output_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cost_micro_usd = EXCLUDED.cost_micro_usd,
+                    refreshed_at = EXCLUDED.refreshed_at
+                """,
+                (
+                    row.org_id,
+                    row.day.date(),
+                    row.subagent_slug,
+                    row.model_provider,
+                    row.model_name,
+                    row.call_count,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.cached_input_tokens,
+                    row.cache_creation_input_tokens,
+                    row.reasoning_tokens,
+                    row.audio_input_tokens,
+                    row.audio_output_tokens,
+                    row.total_tokens,
+                    row.cost_micro_usd,
+                    row.refreshed_at,
+                ),
+            )
+
+    async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        async with self._tenant_connection(org_id=row.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_usage_daily_purpose (
+                    org_id, day, purpose, model_provider, model_name,
+                    call_count,
+                    input_tokens, output_tokens, cached_input_tokens,
+                    cache_creation_input_tokens, reasoning_tokens,
+                    audio_input_tokens, audio_output_tokens,
+                    total_tokens, cost_micro_usd, refreshed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s
+                )
+                ON CONFLICT (org_id, day, purpose, model_provider, model_name)
+                DO UPDATE SET
+                    call_count = EXCLUDED.call_count,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    cache_creation_input_tokens = EXCLUDED.cache_creation_input_tokens,
+                    reasoning_tokens = EXCLUDED.reasoning_tokens,
+                    audio_input_tokens = EXCLUDED.audio_input_tokens,
+                    audio_output_tokens = EXCLUDED.audio_output_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cost_micro_usd = EXCLUDED.cost_micro_usd,
+                    refreshed_at = EXCLUDED.refreshed_at
+                """,
+                (
+                    row.org_id,
+                    row.day.date(),
+                    row.purpose,
+                    row.model_provider,
+                    row.model_name,
+                    row.call_count,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.cached_input_tokens,
+                    row.cache_creation_input_tokens,
+                    row.reasoning_tokens,
+                    row.audio_input_tokens,
+                    row.audio_output_tokens,
                     row.total_tokens,
                     row.cost_micro_usd,
                     row.refreshed_at,
@@ -2505,6 +2579,48 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._connector_daily_row(r) for r in rows)
+
+    @reader
+    async def query_subagent_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailySubagentRow]:
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_usage_daily_subagent
+                 WHERE org_id = %s
+                   AND day BETWEEN %s AND %s
+                 ORDER BY day DESC
+                """,
+                (org_id, start_day.date(), end_day.date()),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._subagent_daily_row(r) for r in rows)
+
+    @reader
+    async def query_purpose_daily_usage(
+        self,
+        *,
+        org_id: str,
+        start_day: datetime,
+        end_day: datetime,
+    ) -> Sequence[UsageDailyPurposeRow]:
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_usage_daily_purpose
+                 WHERE org_id = %s
+                   AND day BETWEEN %s AND %s
+                 ORDER BY day DESC
+                """,
+                (org_id, start_day.date(), end_day.date()),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._purpose_daily_row(r) for r in rows)
 
     async def query_model_call_usage_for_range(
         self,
@@ -3688,11 +3804,66 @@ class PostgresRuntimeApiStore:
             org_id=str(row["org_id"]),
             day=cls._coerce_date_to_datetime(row["day"]),
             connector_slug=str(row.get("connector_slug") or ""),
+            model_name=str(row.get("model_name") or ""),
             runs_count=int(row.get("runs_count") or 0),
             distinct_users=int(row.get("distinct_users") or 0),
             input_tokens=int(row.get("input_tokens") or 0),
             output_tokens=int(row.get("output_tokens") or 0),
             cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            refreshed_at=cls._coerce_datetime(row["refreshed_at"]),
+        )
+
+    @classmethod
+    def _subagent_daily_row(cls, row: dict[str, object]) -> UsageDailySubagentRow:
+        return UsageDailySubagentRow(
+            org_id=str(row["org_id"]),
+            day=cls._coerce_date_to_datetime(row["day"]),
+            subagent_slug=str(row.get("subagent_slug") or ""),
+            model_provider=str(row.get("model_provider") or ""),
+            model_name=str(row.get("model_name") or ""),
+            call_count=int(row.get("call_count") or 0),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            cache_creation_input_tokens=int(
+                row.get("cache_creation_input_tokens") or 0
+            ),
+            reasoning_tokens=int(row.get("reasoning_tokens") or 0),
+            audio_input_tokens=int(row.get("audio_input_tokens") or 0),
+            audio_output_tokens=int(row.get("audio_output_tokens") or 0),
+            total_tokens=int(row.get("total_tokens") or 0),
+            cost_micro_usd=(
+                int(row["cost_micro_usd"])
+                if row.get("cost_micro_usd") is not None
+                else None
+            ),
+            refreshed_at=cls._coerce_datetime(row["refreshed_at"]),
+        )
+
+    @classmethod
+    def _purpose_daily_row(cls, row: dict[str, object]) -> UsageDailyPurposeRow:
+        return UsageDailyPurposeRow(
+            org_id=str(row["org_id"]),
+            day=cls._coerce_date_to_datetime(row["day"]),
+            purpose=str(row.get("purpose") or "main"),
+            model_provider=str(row.get("model_provider") or ""),
+            model_name=str(row.get("model_name") or ""),
+            call_count=int(row.get("call_count") or 0),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            cache_creation_input_tokens=int(
+                row.get("cache_creation_input_tokens") or 0
+            ),
+            reasoning_tokens=int(row.get("reasoning_tokens") or 0),
+            audio_input_tokens=int(row.get("audio_input_tokens") or 0),
+            audio_output_tokens=int(row.get("audio_output_tokens") or 0),
             total_tokens=int(row.get("total_tokens") or 0),
             cost_micro_usd=(
                 int(row["cost_micro_usd"])
@@ -3721,41 +3892,28 @@ class PostgresRuntimeApiStore:
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number.
 
-        Two write paths share one body (:meth:`_append_event_once`):
+        Lock-free: a concurrent appender that races to the same
+        ``sequence_no`` loses with ``UniqueViolation`` and we retry up to
+        :data:`_AppendEventRetry.MAX_ATTEMPTS` times. The common case is
+        one INSERT with no lock acquire/release per event; the rare
+        cancel-mid-stream race costs one retry on the loser.
 
-        * **Legacy (H1 row lock).** Concurrent appenders serialize on
-          ``SELECT … FOR UPDATE`` on ``agent_runs(run_id)``. Inside the
-          lock we read ``MAX(sequence_no)+1`` from ``runtime_events`` and
-          INSERT, so the next appender sees the freshly committed row.
-          The ``UNIQUE(run_id, sequence_no)`` index is the backstop.
+        Consolidated writes: ``agent_runs.latest_sequence_no`` advances
+        inside the same transaction as the event INSERT. The H3
+        monotonic guard prevents rewinds even under retry.
+        ``RuntimeEventProducer`` therefore skips its separate
+        ``set_run_latest_sequence`` call.
 
-        * **P16 lock-free.** When ``self._lock_free_appends`` is True the
-          ``FOR UPDATE`` is dropped. The UNIQUE index is the only guard;
-          a concurrent appender that races to the same ``sequence_no``
-          loses with ``UniqueViolation`` and we retry up to
-          :data:`_AppendEventRetry.MAX_ATTEMPTS` times. The common case
-          is one INSERT with no lock acquire/release per event; the rare
-          cancel-mid-stream race costs one retry on the loser.
-
-        P4 (consolidated writes): both paths advance
-        ``agent_runs.latest_sequence_no`` inside the same transaction
-        when ``self._consolidated_writes`` is True. The H3 monotonic
-        guard prevents rewinds even under retry. ``RuntimeEventProducer``
-        therefore skips its separate ``set_run_latest_sequence`` call.
-
-        P2 (NOTIFY): both paths fire ``NOTIFY <channel>, '<run_id>:<seq>'``
-        when ``self._notify_after_append`` is True. The NOTIFY rides
-        inside the same transaction as the INSERT, so a rolled-back
-        attempt produces no NOTIFY.
+        P2 (NOTIFY): fires ``NOTIFY <channel>, '<run_id>:<seq>'`` when
+        ``self._notify_after_append`` is True. The NOTIFY rides inside
+        the same transaction as the INSERT, so a rolled-back attempt
+        produces no NOTIFY.
         """
-
-        if not self._lock_free_appends:
-            return await self._append_event_once(event, take_row_lock=True)
 
         last_exc: psycopg_errors.UniqueViolation | None = None
         for attempt in range(_AppendEventRetry.MAX_ATTEMPTS):
             try:
-                return await self._append_event_once(event, take_row_lock=False)
+                return await self._append_event_once(event)
             except psycopg_errors.UniqueViolation as exc:
                 if not self._is_event_sequence_conflict(exc):
                     raise
@@ -3773,24 +3931,15 @@ class PostgresRuntimeApiStore:
     async def _append_event_once(
         self,
         event: RuntimeEventDraft,
-        *,
-        take_row_lock: bool,
     ) -> RuntimeEventEnvelope:
-        """One attempt at appending an event. See :meth:`append_event`.
-
-        ``take_row_lock=True`` acquires the legacy H1 ``FOR UPDATE`` lock
-        on ``agent_runs(run_id)``. ``False`` skips the lock and relies on
-        the UNIQUE index + retry path in the caller.
-        """
+        """One attempt at appending an event. See :meth:`append_event`."""
 
         async with self._tenant_connection(org_id=event.org_id) as conn:
             async with conn.transaction():
-                run_lookup_sql = (
-                    "SELECT org_id FROM agent_runs WHERE id = %s FOR UPDATE"
-                    if take_row_lock
-                    else "SELECT org_id FROM agent_runs WHERE id = %s"
+                cur = await conn.execute(
+                    "SELECT org_id FROM agent_runs WHERE id = %s",
+                    (event.run_id,),
                 )
-                cur = await conn.execute(run_lookup_sql, (event.run_id,))
                 run = await cur.fetchone()
                 cur = await conn.execute(
                     """
@@ -3895,30 +4044,26 @@ class PostgresRuntimeApiStore:
                         version,
                     ),
                 )
-                if self._consolidated_writes:
-                    # P4 — fold the cursor advance into the same transaction.
-                    # Monotonic guard mirrors set_run_latest_sequence (H3) so
-                    # the producer's redundant call (if it still fires under
-                    # rollback) is a no-op and never rewinds. Under the P16
-                    # lock-free path the guard also protects against a peer
-                    # that has already advanced the cursor between our
-                    # MAX(sequence_no) read and our INSERT.
-                    await conn.execute(
-                        """
-                        UPDATE agent_runs
-                           SET latest_sequence_no = %s
-                         WHERE id = %s
-                           AND (
-                               latest_sequence_no IS NULL
-                               OR latest_sequence_no < %s
-                           )
-                        """,
-                        (
-                            envelope.sequence_no,
-                            envelope.run_id,
-                            envelope.sequence_no,
-                        ),
-                    )
+                # Fold the cursor advance into the same transaction.
+                # Monotonic guard mirrors set_run_latest_sequence (H3) so
+                # a peer that has already advanced the cursor between our
+                # MAX(sequence_no) read and our INSERT cannot rewind it.
+                await conn.execute(
+                    """
+                    UPDATE agent_runs
+                       SET latest_sequence_no = %s
+                     WHERE id = %s
+                       AND (
+                           latest_sequence_no IS NULL
+                           OR latest_sequence_no < %s
+                       )
+                    """,
+                    (
+                        envelope.sequence_no,
+                        envelope.run_id,
+                        envelope.sequence_no,
+                    ),
+                )
                 if self._notify_after_append:
                     # P2 — fire NOTIFY inside the same transaction; if the
                     # INSERT rolls back the NOTIFY is silently discarded
@@ -3972,16 +4117,15 @@ class PostgresRuntimeApiStore:
         sequence numbers.
 
         One transaction holds:
-          * ``SELECT … FOR UPDATE`` on ``agent_runs`` (the H1 row lock —
-            same semantics as :meth:`append_event`).
+          * ``SELECT … FOR UPDATE`` on ``agent_runs`` (row lock — keeps
+            contiguous-range allocation atomic across concurrent batches).
           * One ``SELECT MAX(sequence_no) + 1`` to allocate the starting
             sequence number; subsequent envelopes claim ``start, start+1,
             …, start+N-1`` without re-querying.
           * One multi-row ``INSERT`` of N events (one round-trip to
             Postgres regardless of batch size).
-          * When ``consolidates_cursor_writes`` is True, one final
-            ``UPDATE agent_runs.latest_sequence_no`` with the H3 monotonic
-            guard — same shape as :meth:`append_event`'s consolidated path.
+          * One final ``UPDATE agent_runs.latest_sequence_no`` with the
+            H3 monotonic guard.
 
         Empty input returns ``()`` without opening a connection. Per-event
         encryption + envelope building still runs in Python (the codec
@@ -4114,26 +4258,24 @@ class PostgresRuntimeApiStore:
                     """,
                     flat_params,
                 )
-                if self._consolidated_writes:
-                    last_sequence = envelopes[-1].sequence_no
-                    await conn.execute(
-                        """
-                        UPDATE agent_runs
-                           SET latest_sequence_no = %s
-                         WHERE id = %s
-                           AND (
-                               latest_sequence_no IS NULL
-                               OR latest_sequence_no < %s
-                           )
-                        """,
-                        (last_sequence, first.run_id, last_sequence),
-                    )
+                last_sequence = envelopes[-1].sequence_no
+                await conn.execute(
+                    """
+                    UPDATE agent_runs
+                       SET latest_sequence_no = %s
+                     WHERE id = %s
+                       AND (
+                           latest_sequence_no IS NULL
+                           OR latest_sequence_no < %s
+                       )
+                    """,
+                    (last_sequence, first.run_id, last_sequence),
+                )
                 if self._notify_after_append:
                     # P2 — one NOTIFY per batch. The payload carries the
                     # *highest* sequence number; SSE adapters always
                     # ``replay_events(after_sequence=N)`` so they pick up
                     # everything in the batch in one round-trip.
-                    last_sequence = envelopes[-1].sequence_no
                     await conn.execute(
                         f"NOTIFY {self._notify_channel}, %s",
                         (f"{first.run_id}:{last_sequence}",),

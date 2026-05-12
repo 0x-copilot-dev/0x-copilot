@@ -62,19 +62,6 @@ class RuntimeEventProducer:
         self.lifecycle_ledger: LifecycleLedger = (
             lifecycle_ledger if lifecycle_ledger is not None else LifecycleLedger()
         )
-        # P4 — auto-detect whether the event store advances the run cursor
-        # inside its own transaction. Adapters opt in via a public
-        # ``consolidates_cursor_writes`` attribute set from
-        # ``RuntimeExecutionSettings.consolidated_event_writes``. When True,
-        # the producer skips the separate ``set_run_latest_sequence`` round-
-        # trip after each append. Reading from the event store (not a
-        # constructor flag) keeps producer/adapter agreement automatic — a
-        # mismatch where the producer skips but the adapter never updates
-        # would leave the cursor stuck, so the source of truth must be the
-        # adapter that actually runs the UPDATE.
-        self._consolidated_writes = bool(
-            getattr(event_store, "consolidates_cursor_writes", False)
-        )
 
     async def append_api_event(
         self,
@@ -140,11 +127,6 @@ class RuntimeEventProducer:
             parent_task_id=parent_task_id,
             subagent_id=subagent_id,
         )
-        if not self._consolidated_writes:
-            await self.persistence.set_run_latest_sequence(
-                run_id=run.run_id,
-                latest_sequence_no=envelope.sequence_no,
-            )
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)
         return envelope
@@ -228,11 +210,6 @@ class RuntimeEventProducer:
             parent_task_id=draft.parent_task_id,
             subagent_id=getattr(draft, "subagent_id", None),
         )
-        if not self._consolidated_writes:
-            await self.persistence.set_run_latest_sequence(
-                run_id=run.run_id,
-                latest_sequence_no=envelope.sequence_no,
-            )
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)
         return envelope
@@ -398,11 +375,6 @@ class RuntimeEventProducer:
                 payload=draft.payload,
                 parent_task_id=draft.parent_task_id,
                 subagent_id=getattr(draft, "subagent_id", None),
-            )
-        if not self._consolidated_writes and envelopes:
-            await self.persistence.set_run_latest_sequence(
-                run_id=run.run_id,
-                latest_sequence_no=envelopes[-1].sequence_no,
             )
         if self._on_event_appended is not None:
             self._on_event_appended(run.run_id)

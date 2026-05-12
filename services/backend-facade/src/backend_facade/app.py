@@ -1120,6 +1120,39 @@ def create_app(
             identity=identity,
         )
 
+    # Sub-PRD 01d — org-scoped subagent + purpose breakdowns. Same
+    # admin-or-auditor scope as /v1/usage/org (enforced on the
+    # ai-backend side).
+    @app.get("/v1/usage/org/subagents")
+    async def usage_org_subagents(
+        request: Request,
+        period: str = Query("month"),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/usage/org/subagents",
+            target="ai_backend",
+            params=identity.scoped_params({"period": period}),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/org/purpose")
+    async def usage_org_purpose(
+        request: Request,
+        period: str = Query("month"),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/usage/org/purpose",
+            target="ai_backend",
+            params=identity.scoped_params({"period": period}),
+            identity=identity,
+        )
+
     # ------------------------------------------------------------------
     # Budgets (B7). Admin endpoints are gated by the same
     # FacadeAuthenticator path used elsewhere; the ``admin:budgets``

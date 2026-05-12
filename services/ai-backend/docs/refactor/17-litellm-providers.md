@@ -1,11 +1,54 @@
 # Refactor PRD — LiteLLM provider streaming (P20 / Phase 5)
 
-**Status:** Draft — pre-investigation
+**Status:** Revised 2026-05-11 — **original framing invalidated by verification spike; recommend withdrawal.** See [spike report](spikes/phase-5-verification.md#p20--litellm-providers--verified-evidence).
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §3](../architecture/refactor-audit.md#3-library-replacements) (provider stream adapters row)
 **Roadmap slot:** [P20](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Pre-requisite:** verification spike (see §2) — without it the recommendation is unsafe.
-**Risk:** High — touches the hot path of every model turn.
+**Related (shipped):** [`01-pricing-from-litellm.md`](01-pricing-from-litellm.md) (P12) brought LiteLLM in as the pricing source.
+
+---
+
+## Verified result (2026-05-11)
+
+**The original PRD asked the wrong question.** The files named `*_stream_adapter.py` in [`execution/providers/`](../../src/agent_runtime/execution/providers/) are **not** provider streaming adapters. They are **citation extractors** that consume LangChain `AIMessageChunk` objects produced by the actual streaming layer (`langchain_anthropic.ChatAnthropic`, `langchain_openai.ChatOpenAI`, `langchain_google_genai.ChatGoogleGenerativeAI`) and extract provider-native citation primitives.
+
+LiteLLM is **not currently imported** anywhere in the provider streaming path. The "replace 3 custom adapters with LiteLLM" framing presumes a redundancy that does not exist in the code.
+
+### The actual LiteLLM-substrate question
+
+The real, distinct question — not the one the original PRD analyzed — is: **should the underlying LLM call use LiteLLM's `acompletion` instead of the LangChain provider wrappers?** This is genuinely open, with three sub-questions:
+
+1. **Citation extraction compatibility.** LiteLLM normalizes chunks across providers. LangChain preserves provider-specific content-block structure that the citation extractors depend on. If LiteLLM strips this structure, the citation extraction path breaks. _Likely outcome: break._
+2. **Usage metadata fidelity vs LangChain wrappers.** Both produce usage objects; LiteLLM normalizes more aggressively. Whether normalization loses or gains fidelity is provider-by-provider.
+3. **Operational value-add.** LiteLLM's real wins are provider routing (e.g. Anthropic primary / OpenAI fallback), region-aware load balancing, and standardized usage. Is any of this an actual operational need today? Searching the codebase and shipped PRDs for "fallback" / "multi-region routing" / "provider failover" turns up nothing.
+
+### Recommended disposition
+
+**Withdraw P20.** Without an operational driver for provider routing or fallback, swapping the substrate buys nothing, costs the citation extraction path, and creates a Phase 5 commitment for what is at best a lateral move.
+
+If a future requirement (multi-region routing, mixed-provider load balancing, automatic failover) materializes, open a new PRD scoped to **substrate evaluation, not adapter replacement**. The citation extractors stay regardless.
+
+---
+
+_The remainder of this PRD documents the pre-spike framing for archival reference only._
+
+---
+
+---
+
+## Retraction-risk disclaimer
+
+This PRD was drafted from architecture diagrams without reading the source. Two diagram-derived Phase 4 PRDs were already retracted after code review ([`11-citations-consolidation.md`](11-citations-consolidation.md), [`12-worker-stream-cleanup.md`](12-worker-stream-cleanup.md)). One Phase 5 PRD was superseded ([`15-pg-partman-retention.md`](15-pg-partman-retention.md)). The shipped P12 LiteLLM PRD itself had to be substantially corrected against code.
+
+**The most likely outcome of this PRD's verification spike (§2) is NOT "full replacement."** It is more likely:
+
+- **Hybrid.** LiteLLM covers some surfaces (basic streaming, common kwargs); custom adapters retained for provider-specific reasoning streams (Anthropic thinking_mode, OpenAI Responses summary modes, Gemini grounding metadata) where LiteLLM coverage is incomplete or trails the provider releases.
+- **Partial.** One of the three providers migrates cleanly; the other two stay custom.
+- **Withdrawn.** Verification finds the custom adapters carry behavior LiteLLM cannot represent at all (e.g. Anthropic citations API beta, OpenAI Responses tool-call envelope quirks). PRD is withdrawn; provider adapters stay.
+
+Treat the spike (§2.1, §2.2) as the gate. The "full replacement" scope in §3 is a hypothesis only.
+
+---
 
 ---
 

@@ -102,6 +102,13 @@ export function chatItemsToThreadMessages(
 ): ChatThreadMessage[] {
   return items.map((item): ChatThreadMessage => {
     if (item.kind === "message") {
+      // PR 3.1 — surface runId on the assistant message so
+      // <MessageSourcesStrip /> can read this run's citations from
+      // CitationsProvider (per-run registry).
+      const metadata =
+        item.role === "assistant" && item.runId
+          ? mergeMetadata(item.metadata, { custom: { runId: item.runId } })
+          : item.metadata;
       return {
         id: item.id,
         role: item.role,

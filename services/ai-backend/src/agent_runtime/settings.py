@@ -41,11 +41,6 @@ class _EnvFields:
     WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
     START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
     ALLOW_EMPTY_CAPABILITIES = "RUNTIME_ALLOW_EMPTY_CAPABILITIES"
-    # P4 — collapses ``append_event`` + ``set_run_latest_sequence`` into one
-    # transaction (adapter folds the cursor UPDATE into the same tx; producer
-    # skips its separate call). Default ``true``; flip ``false`` for full
-    # rollback to the pre-P4 two-transaction path.
-    EVENT_WRITE_CONSOLIDATED = "RUNTIME_EVENT_WRITE_CONSOLIDATED"
     # P4 Stage 2 — worker-side ``MODEL_DELTA`` coalesce window (ms). When
     # > 0, the streaming executor accumulates chunks for the window and
     # flushes them via ``append_events_batch`` (one DB round-trip per
@@ -60,28 +55,10 @@ class _EnvFields:
     # switches to ``LISTEN/NOTIFY`` so the worker's append wakes SSE
     # adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
-    # P7 PR2 — switches the citation projector from a per-source
-    # ``ledger.register`` loop to one ``ledger.register_many`` call per
-    # tool result. Behavioral effect: emits a single ``sources_ingested``
-    # event with N citations instead of N ``source_ingested`` events.
-    # Wire shape was validated end-to-end in PR1 (FE reducers handle
-    # both); this flag defaults ``false`` so the rollout can be flipped
-    # in staging first. Off → legacy per-source path.
-    BATCH_SOURCE_INGESTION = "RUNTIME_BATCH_SOURCE_INGESTION"
-    # P16 — drop the per-run ``agent_runs`` row lock from
-    # ``PostgresRuntimeApiStore.append_event``. When on, the adapter
-    # relies on the ``UNIQUE(run_id, sequence_no)`` index and retries on
-    # ``UniqueViolation``. Default ``false`` so P16 ships dark; flip on
-    # per environment after staging validation. No effect on in-memory.
-    LOCK_FREE_APPENDS = "RUNTIME_LOCK_FREE_APPENDS"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
-    # PR 3.3 — non-blocking MCP discovery feature flag. Default off;
-    # when on, the ``suggest_mcp_connector`` tool is registered in the
-    # toolkit and the worker binds the discovery service per run.
-    MCP_DISCOVERY_ENABLED = "RUNTIME_MCP_DISCOVERY_ENABLED"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
     SKILLS_CACHE_TTL_SECONDS = "SKILLS_CACHE_TTL_SECONDS"
     OPENAI_API_KEY = "OPENAI_API_KEY"
@@ -133,13 +110,6 @@ class RuntimeExecutionSettings(RuntimeContract):
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
     allow_empty_capabilities: bool = False
-    # P4 — when True the postgres + in-memory adapters fold the
-    # ``agent_runs.latest_sequence_no`` cursor UPDATE into the same
-    # transaction as the ``runtime_events`` INSERT, and
-    # ``RuntimeEventProducer`` skips its separate ``set_run_latest_sequence``
-    # call. The H3 monotonic guard (``latest_sequence_no < new``) still
-    # holds: even if the producer's redundant call did fire it would no-op.
-    consolidated_event_writes: bool = True
     # P4 Stage 2 — coalesce window (ms) for worker-side ``MODEL_DELTA``
     # batching. ``0`` disables coalescing (default — Stage 2 ships dark).
     # Recommended ``50`` once measured on staging.
@@ -152,20 +122,6 @@ class RuntimeExecutionSettings(RuntimeContract):
     # process default; ``postgres`` enables Postgres ``LISTEN/NOTIFY`` so
     # cross-process worker → API SSE wakeups are delivered in milliseconds.
     event_bus_backend: str = "in_memory"
-    # P7 PR2 — toggle the citation projector to call
-    # ``CitationLedger.register_many`` (one ``sources_ingested`` event
-    # per tool result) instead of looping ``register`` (N
-    # ``source_ingested`` events). Default ``False`` so PR2 ships dark;
-    # flip to ``True`` per environment after staging validation.
-    batch_source_ingestion: bool = False
-    # P16 — drop the ``agent_runs`` row lock from
-    # ``PostgresRuntimeApiStore.append_event``. With this flag the adapter
-    # relies on ``UNIQUE(run_id, sequence_no)`` as the source of truth and
-    # retries on ``UniqueViolation`` instead of serializing on
-    # ``SELECT ... FOR UPDATE``. Default ``False`` (ships dark); flip per
-    # environment after staging validation against the H1 concurrency
-    # property test. Has no effect on the in-memory adapter.
-    lock_free_appends: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -180,10 +136,6 @@ class RuntimeMcpSettings(RuntimeContract):
 
     backend_registry_url: str | None = None
     auth_redirect_uri: str = "http://127.0.0.1:5173/mcp/oauth/callback"
-    # PR 3.3 — non-blocking discovery (``suggest_mcp_connector`` tool +
-    # per-run McpDiscoveryService). Off by default; flip on per env so a
-    # bad rollout never paints a card without an audit trail.
-    discovery_enabled: bool = False
 
 
 class RuntimeSkillSettings(RuntimeContract):
@@ -343,17 +295,9 @@ class RuntimeSettings(BaseSettings):
                     v, E.ALLOW_EMPTY_CAPABILITIES, "false"
                 ).lower()
                 in _truthy,
-                consolidated_event_writes=_s(
-                    v, E.EVENT_WRITE_CONSOLIDATED, "true"
-                ).lower()
-                in _truthy,
                 delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "in_memory").lower(),
-                batch_source_ingestion=_s(v, E.BATCH_SOURCE_INGESTION, "false").lower()
-                in _truthy,
-                lock_free_appends=_s(v, E.LOCK_FREE_APPENDS, "false").lower()
-                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
@@ -366,17 +310,6 @@ class RuntimeSettings(BaseSettings):
                     E.MCP_AUTH_REDIRECT_URI,
                     "http://127.0.0.1:5173/mcp/oauth/callback",
                 ),
-                # PR 4.4.7 — flip default ON. The discovery tool +
-                # progressive-discovery flow is the agent's primary path
-                # for "user asks about an integration that isn't
-                # connected yet". With this off, the agent has nothing
-                # to call and falls back to text prose or worse,
-                # ``auth_mcp`` against an uninstalled server (which
-                # fails). Operators can still set
-                # ``RUNTIME_MCP_DISCOVERY_ENABLED=false`` to turn it
-                # off — the env var is the kill switch.
-                discovery_enabled=_s(v, E.MCP_DISCOVERY_ENABLED, "true").lower()
-                in _truthy,
             ),
             skills=RuntimeSkillSettings(
                 backend_registry_url=_o(v, E.SKILLS_BACKEND_REGISTRY_URL),

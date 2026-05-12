@@ -917,11 +917,62 @@ export interface UsageConversationRow {
  */
 export interface UsageConnectorRow {
   connector_slug: string;
+  /**
+   * Sub-PRD 01d: model split inside a connector. Empty string for
+   * pre-01d rows (no model dimension on the connector rollup before
+   * the migration) and for aggregated by-slug views that collapse
+   * the model dimension. Frontend renders empty as "(no model)".
+   */
+  model_name?: string;
   input: number;
   output: number;
   cached_input: number;
   total: number;
   runs_count: number;
+  cost_micro_usd: number | null;
+}
+
+/**
+ * Sub-PRD 01d — one row of the org-scoped subagent breakdown
+ * (`GET /v1/usage/org/subagents`). `subagent_slug` is the empty
+ * string for orchestrator-scope LLM calls (mirrors the connector
+ * rollup's "(unattributed)" pattern).
+ */
+export interface UsageSubagentRow {
+  subagent_slug: string;
+  model_provider: string;
+  model_name: string;
+  call_count: number;
+  input: number;
+  output: number;
+  cached_input: number;
+  cache_creation_input: number;
+  reasoning: number;
+  audio_input: number;
+  audio_output: number;
+  total: number;
+  cost_micro_usd: number | null;
+}
+
+/**
+ * Sub-PRD 01d — one row of the org-scoped purpose breakdown
+ * (`GET /v1/usage/org/purpose`). `purpose` is one of the
+ * `Purpose` StrEnum string values: `main`, `tool_planning`,
+ * `tool_interpretation`, `subagent_work`, `context_compression`.
+ */
+export interface UsagePurposeRow {
+  purpose: string;
+  model_provider: string;
+  model_name: string;
+  call_count: number;
+  input: number;
+  output: number;
+  cached_input: number;
+  cache_creation_input: number;
+  reasoning: number;
+  audio_input: number;
+  audio_output: number;
+  total: number;
   cost_micro_usd: number | null;
 }
 
@@ -948,6 +999,29 @@ export interface UsageOrgResponse {
   by_model: UsageModelRow[];
   by_user: UsageConversationRow[];
   by_connector: UsageConnectorRow[];
+  cold_start_fallback: boolean;
+}
+
+/**
+ * Sub-PRD 01d — response for `GET /v1/usage/org/subagents`.
+ * Admin-only (same auth scope as `/v1/usage/org`). Rows sorted by
+ * cost desc.
+ */
+export interface UsageOrgSubagentsResponse {
+  period: UsagePeriodWindow;
+  currency: "USD";
+  rows: UsageSubagentRow[];
+  cold_start_fallback: boolean;
+}
+
+/**
+ * Sub-PRD 01d — response for `GET /v1/usage/org/purpose`.
+ * Admin-only. Rows sorted by cost desc.
+ */
+export interface UsageOrgPurposeResponse {
+  period: UsagePeriodWindow;
+  currency: "USD";
+  rows: UsagePurposeRow[];
   cold_start_fallback: boolean;
 }
 

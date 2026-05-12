@@ -206,8 +206,7 @@ class TestSettingsBackendSelection:
         self,
     ) -> None:
         # In-memory store doesn't have the notify_after_append flag;
-        # the factory should not pass it (in-mem path only takes
-        # consolidated_writes).
+        # the factory should not pass it.
         from agent_runtime.settings import RuntimeSettings
         from runtime_adapters.factory import RuntimeAdapterFactory
 

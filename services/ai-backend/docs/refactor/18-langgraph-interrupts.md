@@ -1,11 +1,58 @@
-# Refactor PRD — LangGraph human-in-the-loop interrupts (P21 / Phase 5)
+# Refactor PRD — LangGraph human-in-the-loop interrupts (P21 / Phase 5) — **RETRACTED**
 
-**Status:** Draft — pre-investigation
+**Status:** RETRACTED 2026-05-11 after verification spike. See [spike report](spikes/phase-5-verification.md#p21--langgraph-interrupts--verified-evidence).
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §3](../architecture/refactor-audit.md#3-library-replacements) (custom approval lifecycle row)
 **Roadmap slot:** [P21](00-roadmap.md#phase-5--major-library-swaps--structural-shifts)
-**Hard pre-requisite:** [P17 LangGraph Checkpointer](14-langgraph-checkpointer.md). Interrupts without checkpointer durability are not safe.
-**Risk:** High — approvals are a critical path. The flow in [f8](../architecture/f8-mcp-auth.puml) is load-bearing and complex.
+
+---
+
+## Why retracted
+
+The original PRD's stated goal — _"Replace the bespoke approval-interrupt mechanism with LangGraph's `interrupt()` primitive"_ — describes work that has **already shipped**.
+
+Verification evidence:
+
+- **`langgraph.types.interrupt` is in production today** in two paths:
+  - [`agent_runtime/capabilities/mcp/middleware/auth_mcp.py:11`](../../src/agent_runtime/capabilities/mcp/middleware/auth_mcp.py) — `interrupt_handler: Callable[[dict[str, Any]], object] = langgraph_interrupt` (the default handler).
+  - [`agent_runtime/capabilities/tools/builtin/ask_a_question.py:10`](../../src/agent_runtime/capabilities/tools/builtin/ask_a_question.py).
+- **`astream_runtime_resume`** in [`agent_runtime/execution/runtime.py`](../../src/agent_runtime/execution/runtime.py) uses `Command(resume=resume)` — full LangGraph-native resume path.
+- [`runtime_worker/handlers/approval.py`](../../src/runtime_worker/handlers/approval.py) imports `astream_runtime_resume` directly.
+- `action_interrupt_events = {APPROVAL_REQUESTED, MCP_AUTH_REQUIRED}` in [`runtime_worker/streaming_executor.py`](../../src/runtime_worker/streaming_executor.py) is **not** a competing interrupt mechanism. It is the worker-side event-type recognition that tells the streaming executor "the graph paused; emit `AWAITING_APPROVAL` status and stop draining." That's integration glue between LangGraph's pause and the worker's status projection — not duplication.
+
+The team migrated to LangGraph interrupts before this PRD was drafted. The PRD was a diagram-era misreading.
+
+## Adjacent open question (not P21's scope)
+
+The current `runtime_checkpointer()` defaults to `InMemorySaver`. If a worker dies while a graph is paused mid-interrupt, the LangGraph view of where the graph paused is lost — though the approval row in Postgres survives.
+
+The genuine product question is: **do we need durable graph state to survive worker restart, given that approval rows are already durable?** If yes, swap `InMemorySaver` → `langgraph.checkpoint.postgres.PostgresSaver` (separate small PR, surfaces in the [P17 spike findings](spikes/phase-5-verification.md#revised-p17-plan) as well). If no, the current implementation is correct.
+
+Open that decision separately. It's not a refactor — it's a product call.
+
+---
+
+_The original pre-spike PRD content follows for archival reference only._
+
+---
+
+---
+
+## Retraction-risk disclaimer
+
+This PRD was drafted from architecture diagrams without reading the source. Two diagram-derived Phase 4 PRDs were retracted after code review ([`11-citations-consolidation.md`](11-citations-consolidation.md), [`12-worker-stream-cleanup.md`](12-worker-stream-cleanup.md)). Notably: the P15 retraction found that `ApprovalRecognisers` — which this PRD's §1 lists as a target for deletion — is **not** a stream pattern matcher. It's a synchronous tool-args projector for approval card param rows. It is well-designed; nothing to delete.
+
+That single finding already invalidates one of this PRD's premises. The rest of the approval lifecycle (`StreamingExecutor.action_interrupt_events`, the approval row as durable rendezvous, the `APPROVAL_RESOLVED` queue command) may equally be well-designed and not warrant replacement.
+
+**Realistic outcomes for this PRD after verification spike (§2):**
+
+- **Withdrawn.** Custom interrupt mechanism is well-fitted to the multi-fire + cross-process-resume requirements; LangGraph's `interrupt()` is for inline same-process cases and doesn't actually match the durable-rendezvous shape this codebase needs.
+- **Partial.** Use LangGraph `interrupt()` for a narrow case (single-shot approval where resume happens in the same worker process), keep custom path for token-rotation + cross-process resume.
+- **Full replacement.** Only if §2 confirms every load-bearing behavior survives.
+
+The §2 verification matrix is the gate. Do not bias the spike toward replacement.
+
+---
 
 ---
 

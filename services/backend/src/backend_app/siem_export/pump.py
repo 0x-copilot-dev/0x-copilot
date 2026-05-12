@@ -44,7 +44,6 @@ _LOGGER = logging.getLogger("backend.siem_export.pump")
 class SiemExportPumpEnv:
     INTERVAL_SECONDS = "SIEM_PUMP_INTERVAL_SECONDS"
     BATCH_SIZE = "SIEM_PUMP_BATCH_SIZE"
-    ENABLED = "SIEM_PUMP_ENABLED"
     AI_BACKEND_BASE_URL = "AI_BACKEND_INTERNAL_BASE_URL"
     SERVICE_TOKEN = "ENTERPRISE_SERVICE_TOKEN"
 
@@ -72,13 +71,6 @@ class SiemExportPumpEnv:
             return int(raw)
         except ValueError:
             return default
-
-    @classmethod
-    def env_bool(cls, name: str, default: bool) -> bool:
-        raw = os.environ.get(name)
-        if raw is None or raw.strip() == "":
-            return default
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ import asyncio
 
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
+from agent_runtime.pricing import PricingRefreshLoop, PricingRefreshLoopEnv
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.loop import RuntimeWorker
@@ -43,6 +44,7 @@ class RuntimeWorkerEntrypoint:
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         statement_collector: DbStatementMetricsCollector | None = None
+        pricing_refresh_loop: PricingRefreshLoop | None = None
         try:
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
@@ -122,10 +124,31 @@ class RuntimeWorkerEntrypoint:
                     "db_statement_metrics_collector_started",
                     metadata={"interval_seconds": statement_collector._interval},
                 )
+            # P12 Step 3 — opt-in (default off). When enabled the worker
+            # re-ingests LiteLLM pricing on a daily cadence and diffs
+            # against the active rows; ``PRICING_REFRESH_AUTO_APPLY=true``
+            # promotes diffs into writes (off by default — log-only).
+            if PricingRefreshLoopEnv.env_bool(
+                PricingRefreshLoopEnv.ENABLED, default=False
+            ):
+                pricing_refresh_loop = PricingRefreshLoop(
+                    persistence=async_ports.persistence,
+                )
+                await pricing_refresh_loop.start()
+                logger.info(
+                    "pricing_refresh_loop_started",
+                    metadata={
+                        "interval_seconds": pricing_refresh_loop._interval,
+                        "auto_apply": pricing_refresh_loop._auto_apply,
+                        "sanity_threshold": str(pricing_refresh_loop._sanity_threshold),
+                    },
+                )
             await worker.run_forever(
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
+            if pricing_refresh_loop is not None:
+                await pricing_refresh_loop.stop()
             if statement_collector is not None:
                 await statement_collector.stop()
             if retention_loop is not None:

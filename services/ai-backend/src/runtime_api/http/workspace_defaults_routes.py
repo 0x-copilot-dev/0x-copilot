@@ -58,9 +58,9 @@ class WorkspaceDefaultsRoutes:
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return await RuntimeApiRoutes.service(request).get_workspace_defaults(
-            org_id=org_id
-        )
+        return await RuntimeApiRoutes.workspace_coordinator(
+            request
+        ).get_workspace_defaults(org_id=org_id)
 
     @classmethod
     async def put_defaults(
@@ -79,7 +79,9 @@ class WorkspaceDefaultsRoutes:
                 status.HTTP_403_FORBIDDEN,
                 "workspace defaults require admin scope",
             )
-        return await RuntimeApiRoutes.service(request).update_workspace_defaults(
+        return await RuntimeApiRoutes.workspace_coordinator(
+            request
+        ).update_workspace_defaults(
             org_id=org_id,
             actor_user_id=user_id,
             request=payload,
@@ -101,7 +103,9 @@ class ConversationLifecycleRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return await RuntimeApiRoutes.service(request).update_conversation(
+        return await RuntimeApiRoutes.conversation_coordinator(
+            request
+        ).update_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -120,7 +124,7 @@ class ConversationLifecycleRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        await RuntimeApiRoutes.service(request).delete_conversation(
+        await RuntimeApiRoutes.conversation_coordinator(request).delete_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -139,7 +143,9 @@ class ConversationLifecycleRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        return await RuntimeApiRoutes.service(request).restore_conversation(
+        return await RuntimeApiRoutes.conversation_coordinator(
+            request
+        ).restore_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,

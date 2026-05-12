@@ -16,9 +16,14 @@ from enterprise_service_contracts.scopes import (
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.constants import Keys
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.conversation_query_service import ConversationQueryService
+from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.api.service import RuntimeApiService
 from agent_runtime.api.usage_service import UsageQueryService
+from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
@@ -61,9 +66,13 @@ from runtime_api.schemas.usage import (
     UsageDailyRow,
     UsageMeResponse,
     UsageModelRow,
+    UsageOrgPurposeResponse,
     UsageOrgResponse,
+    UsageOrgSubagentsResponse,
     UsagePeriodWindow,
+    UsagePurposeRow,
     UsageRunRow,
+    UsageSubagentRow,
     UsageTotals,
 )
 from agent_runtime.budgets.period import BudgetPeriodCalculator
@@ -93,7 +102,7 @@ class RuntimeApiRoutes:
             payload = payload.model_copy(
                 update={"org_id": identity.org_id, "user_id": identity.user_id}
             )
-        return await cls.service(request).create_conversation(payload)
+        return await cls.conversation_coordinator(request).create_conversation(payload)
 
     @classmethod
     async def list_conversations(
@@ -106,7 +115,7 @@ class RuntimeApiRoutes:
         include_deleted: bool = False,
     ) -> ConversationListResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).list_conversations(
+        return await cls.cqs(request).list_conversations(
             org_id=org_id,
             user_id=user_id,
             limit=limit,
@@ -123,7 +132,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).get_conversation(
+        return await cls.cqs(request).get_conversation(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -140,7 +149,7 @@ class RuntimeApiRoutes:
         include_deleted: bool = False,
     ) -> MessageListResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).list_messages(
+        return await cls.cqs(request).list_messages(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -157,7 +166,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationContextResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).get_conversation_context(
+        return await cls.cqs(request).get_conversation_context(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -181,7 +190,9 @@ class RuntimeApiRoutes:
         allow_admin_override = (
             identity is not None and ADMIN_USERS in identity.permission_scopes
         )
-        return await cls.service(request).update_conversation_connectors(
+        return await cls.conversation_coordinator(
+            request
+        ).update_conversation_connectors(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -198,7 +209,7 @@ class RuntimeApiRoutes:
     ) -> ModelCatalogResponse:
         # list_models is pure in-memory (no port calls) — keep sync.
         cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.service(request).list_models()
+        return cls.cqs(request).list_models()
 
     @classmethod
     async def create_run(
@@ -221,7 +232,7 @@ class RuntimeApiRoutes:
                     ),
                 }
             )
-        return await cls.service(request).create_run(payload)
+        return await cls.run_coordinator(request).create_run(payload)
 
     @classmethod
     async def get_run(
@@ -232,7 +243,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> RunStatusResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).get_run(
+        return await cls.cqs(request).get_run(
             org_id=org_id, user_id=user_id, run_id=run_id
         )
 
@@ -246,7 +257,7 @@ class RuntimeApiRoutes:
         after_sequence: int = Query(0, ge=0),
     ) -> RuntimeEventReplayResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).replay_events(
+        return await cls.cqs(request).replay_events(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
@@ -269,7 +280,7 @@ class RuntimeApiRoutes:
         )
         return StreamingResponse(
             RuntimeSseAdapter.stream(
-                service=cls.service(request),
+                service=cls.cqs(request),
                 org_id=org_id,
                 user_id=user_id,
                 run_id=run_id,
@@ -291,7 +302,7 @@ class RuntimeApiRoutes:
     ) -> CancelRunResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         payload = payload.model_copy(update={"requested_by_user_id": user_id})
-        return await cls.service(request).cancel_run(
+        return await cls.run_coordinator(request).cancel_run(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
@@ -327,7 +338,7 @@ class RuntimeApiRoutes:
                 status.HTTP_400_BAD_REQUEST,
                 "Unsupported status filter for assigned approvals.",
             ) from exc
-        return await cls.service(request).list_assigned_approvals(
+        return await cls.approval_coordinator(request).list_assigned_approvals(
             org_id=org_id,
             user_id=user_id,
             status_filter=status_value,
@@ -381,7 +392,7 @@ class RuntimeApiRoutes:
             )
         if org_id is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id is required")
-        return await cls.service(request).record_approval_decision(
+        return await cls.approval_coordinator(request).record_approval_decision(
             org_id=org_id,
             approval_id=approval_id,
             request=payload,
@@ -398,7 +409,7 @@ class RuntimeApiRoutes:
         """PR 4.4.6.4 — record an undo request within the 60s window."""
 
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).request_approval_undo(
+        return await cls.approval_coordinator(request).request_approval_undo(
             org_id=org_id,
             approval_id=approval_id,
             decided_by_user_id=user_id,
@@ -413,13 +424,33 @@ class RuntimeApiRoutes:
         reason: str | None = Query(None),
     ) -> HistoryDeletionResponse:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.service(request).delete_user_history(
+        return await cls.conversation_coordinator(request).delete_user_history(
             org_id=org_id, user_id=user_id, reason=reason
         )
 
     @classmethod
+    def run_coordinator(cls, request: Request) -> RunCoordinator:
+        return request.app.state.run_coordinator
+
+    @classmethod
+    def approval_coordinator(cls, request: Request) -> ApprovalCoordinator:
+        return request.app.state.approval_coordinator
+
+    @classmethod
+    def conversation_coordinator(cls, request: Request) -> ConversationCoordinator:
+        return request.app.state.conversation_coordinator
+
+    @classmethod
+    def cqs(cls, request: Request) -> ConversationQueryService:
+        return request.app.state.conversation_query_service
+
+    @classmethod
+    def workspace_coordinator(cls, request: Request) -> WorkspaceCoordinator:
+        return request.app.state.workspace_coordinator
+
+    @classmethod
     def service(cls, request: Request) -> RuntimeApiService:
-        """Return the configured application service."""
+        """Return the legacy service (used by usage/budget routes that access .persistence directly)."""
 
         return request.app.state.runtime_api_service
 
@@ -1103,6 +1134,10 @@ class UsageApiRoutes:
 
     @classmethod
     def _connector_rows_from_rollup(cls, rollup_rows) -> tuple[UsageConnectorRow, ...]:  # type: ignore[no-untyped-def]
+        # The rollup table is keyed on (org, day, slug, model_name) after
+        # 01d. The /org by_connector axis collapses model_name so the
+        # existing FE contract is unchanged; the new /org/subagents and
+        # /org/purpose endpoints expose the model dimension instead.
         per_connector: dict[str, dict[str, int | None]] = defaultdict(
             lambda: {
                 "input": 0,
@@ -1129,6 +1164,154 @@ class UsageApiRoutes:
         return tuple(
             UsageConnectorRow(connector_slug=slug, **bucket)  # type: ignore[arg-type]
             for slug, bucket in sorted(per_connector.items())
+        )
+
+    @classmethod
+    async def usage_org_subagents(
+        cls,
+        request: Request,
+        period: Literal["today", "7d", "30d", "month"] = Query("month"),
+        org_id: str | None = Query(None, min_length=1),
+    ) -> UsageOrgSubagentsResponse:
+        """Sub-PRD 01d — org-scoped per-subagent breakdown.
+
+        Reads from the rollup table first; falls back to live
+        per-call scan + ``rollup_subagent_rows`` within the
+        cold-start cap when the rollup is empty.
+        """
+
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id="__org_admin__"
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        rollup_rows = await persistence.query_subagent_daily_usage(
+            org_id=org_id, start_day=start, end_day=end
+        )
+        cold_start = False
+        if rollup_rows:
+            rows = cls._subagent_rows_from_rollup(rollup_rows)
+        else:
+            cold_start = True
+            call_rows = await persistence.query_model_call_usage_for_range(
+                org_id=org_id,
+                start=cls._cap_cold_start(start, end),
+                end=end,
+            )
+            synthesized = UsageQueryService.rollup_subagent_rows(
+                call_rows, refreshed_at=datetime.now(timezone.utc)
+            )
+            rows = cls._subagent_rows_from_rollup(synthesized)
+        return UsageOrgSubagentsResponse(
+            period=UsagePeriodWindow(start=start, end=end),
+            rows=rows,
+            cold_start_fallback=cold_start,
+        )
+
+    @classmethod
+    async def usage_org_purpose(
+        cls,
+        request: Request,
+        period: Literal["today", "7d", "30d", "month"] = Query("month"),
+        org_id: str | None = Query(None, min_length=1),
+    ) -> UsageOrgPurposeResponse:
+        """Sub-PRD 01d — org-scoped per-purpose breakdown.
+
+        Same posture as ``usage_org_subagents``: rollup-first with a
+        live-scan cold-start fallback bounded by the standard
+        ``_COLD_START_CAP_DAYS`` window.
+        """
+
+        org_id, _ = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id="__org_admin__"
+        )
+        start, end = UsageQueryService.parse_period(period)
+        persistence = cls._persistence(request)
+        rollup_rows = await persistence.query_purpose_daily_usage(
+            org_id=org_id, start_day=start, end_day=end
+        )
+        cold_start = False
+        if rollup_rows:
+            rows = cls._purpose_rows_from_rollup(rollup_rows)
+        else:
+            cold_start = True
+            call_rows = await persistence.query_model_call_usage_for_range(
+                org_id=org_id,
+                start=cls._cap_cold_start(start, end),
+                end=end,
+            )
+            synthesized = UsageQueryService.rollup_purpose_rows(
+                call_rows, refreshed_at=datetime.now(timezone.utc)
+            )
+            rows = cls._purpose_rows_from_rollup(synthesized)
+        return UsageOrgPurposeResponse(
+            period=UsagePeriodWindow(start=start, end=end),
+            rows=rows,
+            cold_start_fallback=cold_start,
+        )
+
+    @classmethod
+    def _subagent_rows_from_rollup(cls, rollup_rows) -> tuple[UsageSubagentRow, ...]:  # type: ignore[no-untyped-def]
+        """Project rollup records to wire rows, sorted by cost desc."""
+
+        wire_rows = tuple(
+            UsageSubagentRow(
+                subagent_slug=row.subagent_slug,
+                model_provider=row.model_provider,
+                model_name=row.model_name,
+                call_count=int(row.call_count),
+                input=int(row.input_tokens),
+                output=int(row.output_tokens),
+                cached_input=int(row.cached_input_tokens),
+                cache_creation_input=int(row.cache_creation_input_tokens),
+                reasoning=int(row.reasoning_tokens),
+                audio_input=int(row.audio_input_tokens),
+                audio_output=int(row.audio_output_tokens),
+                total=int(row.total_tokens),
+                cost_micro_usd=row.cost_micro_usd,
+            )
+            for row in rollup_rows
+        )
+        return tuple(
+            sorted(
+                wire_rows,
+                key=lambda r: (
+                    -(r.cost_micro_usd if r.cost_micro_usd is not None else 0),
+                    -r.total,
+                    r.subagent_slug,
+                ),
+            )
+        )
+
+    @classmethod
+    def _purpose_rows_from_rollup(cls, rollup_rows) -> tuple[UsagePurposeRow, ...]:  # type: ignore[no-untyped-def]
+        wire_rows = tuple(
+            UsagePurposeRow(
+                purpose=row.purpose,
+                model_provider=row.model_provider,
+                model_name=row.model_name,
+                call_count=int(row.call_count),
+                input=int(row.input_tokens),
+                output=int(row.output_tokens),
+                cached_input=int(row.cached_input_tokens),
+                cache_creation_input=int(row.cache_creation_input_tokens),
+                reasoning=int(row.reasoning_tokens),
+                audio_input=int(row.audio_input_tokens),
+                audio_output=int(row.audio_output_tokens),
+                total=int(row.total_tokens),
+                cost_micro_usd=row.cost_micro_usd,
+            )
+            for row in rollup_rows
+        )
+        return tuple(
+            sorted(
+                wire_rows,
+                key=lambda r: (
+                    -(r.cost_micro_usd if r.cost_micro_usd is not None else 0),
+                    -r.total,
+                    r.purpose,
+                ),
+            )
         )
 
 
@@ -1182,6 +1365,24 @@ class UsageApiRouter:
             # Org-wide usage = audit:read OR admin:users (auditors and
             # admins both legitimately query this; employees never do).
             # The router-level RUNTIME_USE check above also applies.
+            dependencies=[Depends(RequireAnyScope(AUDIT_READ, "admin:users"))],
+        )
+        # Sub-PRD 01d — org-scoped subagent + purpose breakdowns.
+        # Same auth scope as ``/org``: auditors and admins only.
+        router.add_api_route(
+            "/org/subagents",
+            UsageApiRoutes.usage_org_subagents,
+            methods=["GET"],
+            response_model=UsageOrgSubagentsResponse,
+            name=Keys.RouteName.USAGE_ORG_SUBAGENTS,
+            dependencies=[Depends(RequireAnyScope(AUDIT_READ, "admin:users"))],
+        )
+        router.add_api_route(
+            "/org/purpose",
+            UsageApiRoutes.usage_org_purpose,
+            methods=["GET"],
+            response_model=UsageOrgPurposeResponse,
+            name=Keys.RouteName.USAGE_ORG_PURPOSE,
             dependencies=[Depends(RequireAnyScope(AUDIT_READ, "admin:users"))],
         )
         return router

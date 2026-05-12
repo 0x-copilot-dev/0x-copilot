@@ -237,6 +237,53 @@ class UsageRollupLoop:
                             "org_id": row.org_id,
                             "day": row.day.date().isoformat(),
                             "connector_slug": row.connector_slug,
+                            "model_name": row.model_name,
+                        }
+                    },
+                    exc_info=True,
+                )
+
+        # Sub-PRD 01d — subagent rollup. Reads from the same per-call
+        # scan; aggregates org × day × subagent_slug × model. Reuses
+        # the connector loop's ``call_rows`` so we don't double-scan.
+        subagent_rows = UsageQueryService.rollup_subagent_rows(
+            call_rows,
+            refreshed_at=refreshed_at,
+        )
+        for row in subagent_rows:
+            try:
+                await self._persistence.upsert_subagent_daily_usage(row)
+            except Exception:
+                _LOGGER.warning(
+                    "usage_rollup_subagent_upsert_failed",
+                    extra={
+                        "metadata": {
+                            "org_id": row.org_id,
+                            "day": row.day.date().isoformat(),
+                            "subagent_slug": row.subagent_slug,
+                            "model_name": row.model_name,
+                        }
+                    },
+                    exc_info=True,
+                )
+
+        # Sub-PRD 01d — purpose rollup. Same call_rows scan.
+        purpose_rows = UsageQueryService.rollup_purpose_rows(
+            call_rows,
+            refreshed_at=refreshed_at,
+        )
+        for row in purpose_rows:
+            try:
+                await self._persistence.upsert_purpose_daily_usage(row)
+            except Exception:
+                _LOGGER.warning(
+                    "usage_rollup_purpose_upsert_failed",
+                    extra={
+                        "metadata": {
+                            "org_id": row.org_id,
+                            "day": row.day.date().isoformat(),
+                            "purpose": row.purpose,
+                            "model_name": row.model_name,
                         }
                     },
                     exc_info=True,

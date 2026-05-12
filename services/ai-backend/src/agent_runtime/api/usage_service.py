@@ -20,6 +20,8 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
     UsageDailyUserRow,
 )
 from runtime_api.schemas.conversations import (
@@ -139,25 +141,28 @@ class UsageQueryService:
         run_user_lookup: Mapping[str, str],
         refreshed_at: datetime,
     ) -> tuple[UsageDailyConnectorRow, ...]:
-        """Aggregate per-LLM-call rows into per-org-per-connector-per-day
-        rollups (PR 7.2).
+        """Aggregate per-LLM-call rows into per-org-per-connector-per-day-per-model
+        rollups (PR 7.2 + Sub-PRD 01d).
 
         ``run_user_lookup`` maps ``run_id -> user_id`` for the rows in
         scope so the rollup can compute ``distinct_users`` without
         denormalising user_id onto every per-call row. ``connector_slug``
         coalesces ``None`` to the empty string for the "(unattributed)"
         bucket — the natural-key PK does not allow ``NULL``.
+
+        Sub-PRD 01d: bucket key extends with ``model_name`` so reports
+        can split a connector's cost across multiple models.
         """
 
         buckets: dict[
-            tuple[str, date, str],
+            tuple[str, date, str, str],
             _ConnectorRollupBucket,
         ] = defaultdict(_ConnectorRollupBucket)
-        run_counts: dict[tuple[str, date, str], set[str]] = defaultdict(set)
+        run_counts: dict[tuple[str, date, str, str], set[str]] = defaultdict(set)
         for row in rows:
             day = row.created_at.date()
             slug = row.connector_slug or ""
-            key = (row.org_id, day, slug)
+            key = (row.org_id, day, slug, row.model_name)
             buckets[key].add(row, run_id=row.run_id)
             run_counts[key].add(row.run_id)
         result: list[UsageDailyConnectorRow] = []
@@ -172,11 +177,95 @@ class UsageQueryService:
                     org_id=key[0],
                     day=key[1],
                     connector_slug=key[2],
+                    model_name=key[3],
                     distinct_users=len(user_ids),
                     refreshed_at=refreshed_at,
                 )
             )
         return tuple(result)
+
+    @classmethod
+    def rollup_subagent_rows(
+        cls,
+        rows: Iterable[RuntimeModelCallUsageRecord],
+        *,
+        refreshed_at: datetime,
+    ) -> tuple[UsageDailySubagentRow, ...]:
+        """Aggregate per-LLM-call rows into per-org-per-subagent-per-model-per-day
+        rollups (Sub-PRD 01d).
+
+        Org-scoped (no ``user_id`` JOIN). ``subagent_slug`` coalesces
+        ``None`` to the empty string for the orchestrator-scope bucket
+        — matches the connector rollup's "(unattributed)" pattern.
+        Every captured token kind is summed.
+        """
+
+        buckets: dict[
+            tuple[str, date, str, str, str],
+            _SubagentRollupBucket,
+        ] = defaultdict(_SubagentRollupBucket)
+        for row in rows:
+            day = row.created_at.date()
+            slug = row.subagent_id or ""
+            key = (
+                row.org_id,
+                day,
+                slug,
+                row.model_provider,
+                row.model_name,
+            )
+            buckets[key].add(row)
+        return tuple(
+            bucket.to_subagent_row(
+                org_id=key[0],
+                day=key[1],
+                subagent_slug=key[2],
+                model_provider=key[3],
+                model_name=key[4],
+                refreshed_at=refreshed_at,
+            )
+            for key, bucket in buckets.items()
+        )
+
+    @classmethod
+    def rollup_purpose_rows(
+        cls,
+        rows: Iterable[RuntimeModelCallUsageRecord],
+        *,
+        refreshed_at: datetime,
+    ) -> tuple[UsageDailyPurposeRow, ...]:
+        """Aggregate per-LLM-call rows into per-org-per-purpose-per-model-per-day
+        rollups (Sub-PRD 01d).
+
+        ``purpose`` defaults to ``'main'`` on records that pre-date 01b
+        (the column default). Every captured token kind is summed.
+        """
+
+        buckets: dict[
+            tuple[str, date, str, str, str],
+            _PurposeRollupBucket,
+        ] = defaultdict(_PurposeRollupBucket)
+        for row in rows:
+            day = row.created_at.date()
+            key = (
+                row.org_id,
+                day,
+                row.purpose,
+                row.model_provider,
+                row.model_name,
+            )
+            buckets[key].add(row)
+        return tuple(
+            bucket.to_purpose_row(
+                org_id=key[0],
+                day=key[1],
+                purpose=key[2],
+                model_provider=key[3],
+                model_name=key[4],
+                refreshed_at=refreshed_at,
+            )
+            for key, bucket in buckets.items()
+        )
 
     @classmethod
     def rollup_org_rows(
@@ -438,6 +527,7 @@ class _ConnectorRollupBucket:
         org_id: str,
         day: date,
         connector_slug: str,
+        model_name: str,
         distinct_users: int,
         refreshed_at: datetime,
     ) -> UsageDailyConnectorRow:
@@ -445,11 +535,114 @@ class _ConnectorRollupBucket:
             org_id=org_id,
             day=datetime.combine(day, time.min, tzinfo=timezone.utc),
             connector_slug=connector_slug,
+            model_name=model_name,
             runs_count=len(self._run_ids),
             distinct_users=distinct_users,
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             cached_input_tokens=self.cached_input_tokens,
+            total_tokens=self.total_tokens,
+            cost_micro_usd=self.cost_micro_usd,
+            refreshed_at=refreshed_at,
+        )
+
+
+class _DimensionRollupBucket:
+    """Accumulator for per-LLM-call rollups keyed on any single
+    dimension (subagent slug or purpose). Sub-PRD 01d.
+
+    Mirrors ``_ConnectorRollupBucket`` but sums every captured token
+    kind (01a's reasoning / cache_creation / audio kinds included) and
+    counts LLM calls rather than distinct runs. ``call_count`` is the
+    natural unit for "average cost per call" reports.
+    """
+
+    def __init__(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cached_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self.reasoning_tokens = 0
+        self.audio_input_tokens = 0
+        self.audio_output_tokens = 0
+        self.total_tokens = 0
+        self.call_count = 0
+        self.cost_micro_usd: int | None = None
+
+    def add(self, row: RuntimeModelCallUsageRecord) -> None:
+        self.input_tokens += row.input_tokens
+        self.output_tokens += row.output_tokens
+        self.cached_input_tokens += row.cached_input_tokens
+        self.cache_creation_input_tokens += row.cache_creation_input_tokens
+        self.reasoning_tokens += row.reasoning_tokens
+        self.audio_input_tokens += row.audio_input_tokens
+        self.audio_output_tokens += row.audio_output_tokens
+        self.total_tokens += row.total_tokens
+        self.call_count += 1
+        if row.cost_micro_usd is not None:
+            self.cost_micro_usd = (self.cost_micro_usd or 0) + row.cost_micro_usd
+
+
+class _SubagentRollupBucket(_DimensionRollupBucket):
+    """Per-subagent rollup bucket. Sub-PRD 01d."""
+
+    def to_subagent_row(
+        self,
+        *,
+        org_id: str,
+        day: date,
+        subagent_slug: str,
+        model_provider: str,
+        model_name: str,
+        refreshed_at: datetime,
+    ) -> UsageDailySubagentRow:
+        return UsageDailySubagentRow(
+            org_id=org_id,
+            day=datetime.combine(day, time.min, tzinfo=timezone.utc),
+            subagent_slug=subagent_slug,
+            model_provider=model_provider,
+            model_name=model_name,
+            call_count=self.call_count,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            audio_input_tokens=self.audio_input_tokens,
+            audio_output_tokens=self.audio_output_tokens,
+            total_tokens=self.total_tokens,
+            cost_micro_usd=self.cost_micro_usd,
+            refreshed_at=refreshed_at,
+        )
+
+
+class _PurposeRollupBucket(_DimensionRollupBucket):
+    """Per-purpose rollup bucket. Sub-PRD 01d."""
+
+    def to_purpose_row(
+        self,
+        *,
+        org_id: str,
+        day: date,
+        purpose: str,
+        model_provider: str,
+        model_name: str,
+        refreshed_at: datetime,
+    ) -> UsageDailyPurposeRow:
+        return UsageDailyPurposeRow(
+            org_id=org_id,
+            day=datetime.combine(day, time.min, tzinfo=timezone.utc),
+            purpose=purpose,
+            model_provider=model_provider,
+            model_name=model_name,
+            call_count=self.call_count,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            audio_input_tokens=self.audio_input_tokens,
+            audio_output_tokens=self.audio_output_tokens,
             total_tokens=self.total_tokens,
             cost_micro_usd=self.cost_micro_usd,
             refreshed_at=refreshed_at,

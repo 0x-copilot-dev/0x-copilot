@@ -1,8 +1,6 @@
 """Citation ledger — single seam for tool, provider, and replay paths.
 
 PR 1.1 (design at ``docs/new-design/01-citations-live-registry.md``).
-P7 added :meth:`register_many` for batch ingestion paths (the MCP
-projector primarily); see ``docs/refactor/06-citation-batching.md``.
 
 Tools, the Anthropic stream adapter, and the OpenAI Responses adapter all
 funnel through :meth:`CitationLedger.register` (single source) or
@@ -96,22 +94,12 @@ class CitationLedger:
         producer: "RuntimeEventProducer",
         source: "StreamEventSource",
         per_run_max: int = _Limits.PER_RUN_MAX,
-        batch_enabled: bool = False,
     ) -> None:
         self._run = run
         self._store = store
         self._producer = producer
         self._source = source
         self._per_run_max = per_run_max
-        # P7 PR2 — when True, callers that batch multiple sources per
-        # ingestion (notably :class:`CitationProjector`) should prefer
-        # :meth:`register_many` over a per-source :meth:`register` loop.
-        # The two paths share ``_register_internal`` so the flag only
-        # changes the wire shape (one ``sources_ingested`` event vs N
-        # ``source_ingested`` events) and the DB round-trip count.
-        # Defaults ``False`` so PR2 ships dark; the worker flips it via
-        # ``RUNTIME_BATCH_SOURCE_INGESTION``.
-        self._batch_enabled = batch_enabled
         # (connector, doc_id) -> CitationRecord. Ordinals fall out of insertion
         # order, so the dict's preserved insertion order IS the canonical
         # ordering of the run's citations.
@@ -120,12 +108,6 @@ class CitationLedger:
     @property
     def run_id(self) -> str:
         return self._run.run_id
-
-    @property
-    def batch_enabled(self) -> bool:
-        """Whether callers should prefer :meth:`register_many` over a loop."""
-
-        return self._batch_enabled
 
     def sealed_payloads(self) -> list[dict[str, object]]:
         """Snapshot the current registry for ``final_response.citations``."""

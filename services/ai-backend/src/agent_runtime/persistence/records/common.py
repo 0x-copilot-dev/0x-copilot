@@ -69,40 +69,6 @@ class PersistenceApprovalStatus(StrEnum):
     FORWARDED = "forwarded"
 
 
-class RuntimeMemoryScopeType(StrEnum):
-    """Persisted memory namespaces."""
-
-    USER = "user"
-    ORGANIZATION = "organization"
-    ASSISTANT = "assistant"
-    CONVERSATION = "conversation"
-
-
-class PayloadKind(StrEnum):
-    """Classes of large payloads stored by reference."""
-
-    TOOL_RESULT = "tool_result"
-    CONTEXT = "context"
-    ARTIFACT = "artifact"
-    CHECKPOINT = "checkpoint"
-
-
-class PayloadStorageBackend(StrEnum):
-    """Storage backends for offloaded payload blobs."""
-
-    POSTGRES = "postgres"
-    OBJECT_STORAGE = "object_storage"
-    LOCAL_FILE = "local_file"
-
-
-class PayloadRedactionState(StrEnum):
-    """How payload content was prepared before storage."""
-
-    REDACTED = "redacted"
-    TRUNCATED = "truncated"
-    OFFLOADED = "offloaded"
-
-
 class AuditActorType(StrEnum):
     """Actors that can write runtime audit records."""
 

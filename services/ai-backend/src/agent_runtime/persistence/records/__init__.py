@@ -13,7 +13,6 @@ from agent_runtime.persistence.records.budgets import (
     BudgetWithState,
     ChargeOutcome,
 )
-from agent_runtime.persistence.records.checkpoints import CheckpointRecord
 from agent_runtime.persistence.records.citations import CitationRecord
 from agent_runtime.persistence.records.drafts import (
     DraftPath,
@@ -26,23 +25,17 @@ from agent_runtime.persistence.records.common import (
     AuditActorType,
     AuditOutcome,
     OutboxStatus,
-    PayloadKind,
-    PayloadRedactionState,
-    PayloadStorageBackend,
     PersistenceApprovalStatus,
     PersistenceValueNormalizer,
-    RuntimeMemoryScopeType,
     ToolInvocationStatus,
     ToolSideEffectClass,
 )
-from agent_runtime.persistence.records.memory import MemoryItemRecord, MemoryScopeRecord
 from agent_runtime.persistence.records.outbox import (
     ConsumerCursorRecord,
     OutboxEventRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
 )
-from agent_runtime.persistence.records.payloads import ContextPayloadRecord
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
     RetentionPolicyRecord,
@@ -67,6 +60,8 @@ from agent_runtime.persistence.records.telemetry import (
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
     UsageDailyUserRow,
 )
 from agent_runtime.persistence.records.tool_budgets import (
@@ -89,13 +84,9 @@ PERSISTENCE_TABLE_RECORDS = (
     SubagentResultRecord,
     ToolInvocationRecord,
     PersistenceApprovalRequestRecord,
-    MemoryScopeRecord,
-    MemoryItemRecord,
-    ContextPayloadRecord,
     CompressionEventRecord,
     CapabilitySnapshotRecord,
     AuditLogRecord,
-    CheckpointRecord,
     CitationRecord,
     DraftRecord,
     ToolOrdinalBindingRecord,
@@ -108,10 +99,6 @@ __all__ = [
     "ToolSideEffectClass",
     "ApprovalRiskClass",
     "PersistenceApprovalStatus",
-    "RuntimeMemoryScopeType",
-    "PayloadKind",
-    "PayloadStorageBackend",
-    "PayloadRedactionState",
     "AuditActorType",
     "AuditOutcome",
     "PersistenceValueNormalizer",
@@ -123,9 +110,6 @@ __all__ = [
     "SubagentResultRecord",
     "ToolInvocationRecord",
     "PersistenceApprovalRequestRecord",
-    "MemoryScopeRecord",
-    "MemoryItemRecord",
-    "ContextPayloadRecord",
     "CompressionEventRecord",
     "CapabilitySnapshotRecord",
     "ModelPricingRecord",
@@ -134,9 +118,10 @@ __all__ = [
     "UsageConversationAggregateRecord",
     "UsageDailyConnectorRow",
     "UsageDailyOrgRow",
+    "UsageDailyPurposeRow",
+    "UsageDailySubagentRow",
     "UsageDailyUserRow",
     "AuditLogRecord",
-    "CheckpointRecord",
     "CitationRecord",
     "DraftPath",
     "DraftRecord",
