@@ -91,7 +91,7 @@ class TestDraftBackendWrite:
 
         await backend.awrite(_path(), "# Aurora\n\nLaunch announcement.")
 
-        record = store.latest(org_id="org_acme", draft_id=_draft_id())
+        record = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert record is not None
         assert record.version == 1
         assert record.title == "Aurora"
@@ -105,7 +105,7 @@ class TestDraftBackendWrite:
         await backend.awrite(_path(), "# Aurora\nv1")
         await backend.awrite(_path(), "# Aurora\nv2")
 
-        record = store.latest(org_id="org_acme", draft_id=_draft_id())
+        record = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert record is not None
         assert record.version == 2
 
@@ -139,7 +139,7 @@ class TestDraftBackendEdit:
 
         assert result.error is None
         assert result.occurrences == 1
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert "Launch announcement v2." in latest.content_text
         assert latest.version == 2
@@ -176,7 +176,7 @@ class TestDraftBackendEdit:
 
         assert result.error is None
         assert result.occurrences == 3
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert latest.content_text.count("bar") == 3
 

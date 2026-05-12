@@ -1,11 +1,8 @@
-"""Conversation lifecycle coordinator (P22 / PR 4).
+"""Conversation lifecycle coordinator — write side of the CQRS-lite split.
 
-Owns conversation write operations: ``create_conversation``,
-``update_conversation``, ``update_conversation_connectors``,
-``delete_conversation``, ``restore_conversation``, ``delete_user_history``.
-
-Read paths live on :class:`ConversationQueryService` per the CQRS-lite split
-in PRD §3.
+Owns all conversation mutations: create, update, connector-scope patch, soft
+delete, restore, and bulk user-history deletion. Read paths live on
+:class:`ConversationQueryService` to keep query and command concerns separate.
 """
 
 from __future__ import annotations
@@ -38,7 +35,12 @@ def _conversation_lifecycle_audit_metadata(
     after: ConversationRecord,
     fields_set: frozenset[str] | set[str],
 ) -> dict[str, object]:
-    """Build before/after/diff metadata for a lifecycle PATCH (PR 1.6)."""
+    """Build a structured before/after/diff blob for a conversation PATCH audit row.
+
+    Only fields present in ``fields_set`` (i.e., explicitly sent by the caller)
+    are compared, so a partial update doesn't bloat the audit log with unchanged
+    fields reporting no diff.
+    """
 
     diff_keys: list[str] = []
     before_blob: dict[str, object] = {}
@@ -71,7 +73,12 @@ def _connector_scope_audit_metadata(
     patch: dict[str, tuple[str, ...] | None],
     after: dict[str, tuple[str, ...] | None],
 ) -> dict[str, object]:
-    """Build the audit metadata blob for a per-chat connector scope change."""
+    """Build the audit metadata blob for a per-chat connector scope change.
+
+    Only connectors mentioned in the patch appear in before/after so audit
+    consumers can reconstruct exactly what the caller changed without
+    diffing the entire scope map.
+    """
 
     def _to_json(
         value: dict[str, tuple[str, ...] | None],
@@ -90,14 +97,18 @@ def _connector_scope_audit_metadata(
 
 
 class ConversationCoordinator:
-    """Coordinate conversation lifecycle write commands."""
+    """Service layer for conversation lifecycle mutations with integrated audit logging.
+
+    Depends on ``RunCoordinator`` (as an ``object`` to avoid a circular import)
+    for cancelling active runs when a conversation is deleted.
+    """
 
     def __init__(
         self,
         *,
         persistence: PersistencePort,
         settings: RuntimeSettings,
-        run_coordinator: object,  # RunCoordinator — avoid circular import
+        run_coordinator: object,  # RunCoordinator — typed as object to break import cycle
     ) -> None:
         self._persistence = persistence
         self._settings = settings
@@ -106,7 +117,11 @@ class ConversationCoordinator:
     async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationResponse:
-        """Create or idempotently return a conversation."""
+        """Create a conversation and seed workspace default connectors if none are set.
+
+        Idempotent when the request carries an idempotency key: a duplicate call
+        returns the existing record rather than inserting a new row.
+        """
 
         conversation = await self._persistence.create_conversation(request)
         seeded = await self._seed_default_connectors_if_needed(
@@ -133,7 +148,13 @@ class ConversationCoordinator:
         request: UpdateConversationRequest,
         allow_admin_override: bool = False,
     ) -> ConversationResponse:
-        """Public ``PATCH /v1/agent/conversations/{id}``."""
+        """Apply a partial update (title, folder, archived) to the conversation.
+
+        When ``allow_admin_override`` is set and the conversation belongs to a
+        different user, the admin path is taken and the audit row records the
+        override. Caller must pass only fields that are explicitly set in the
+        request body; unset fields are ignored by the store.
+        """
 
         before, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
@@ -195,7 +216,11 @@ class ConversationCoordinator:
         request: UpdateConversationConnectorsRequest,
         allow_admin_override: bool = False,
     ) -> ConversationConnectorScopesResponse:
-        """Merge-patch the chat's connector scope override + emit an audit row."""
+        """Merge-patch the conversation's per-chat connector scope overrides.
+
+        Only connectors included in the request are modified; others keep their
+        current value. ``None`` in the patch removes the override for that connector.
+        """
 
         before, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
@@ -251,7 +276,11 @@ class ConversationCoordinator:
         conversation_id: str,
         allow_admin_override: bool = False,
     ) -> None:
-        """Public ``DELETE /v1/agent/conversations/{id}``."""
+        """Soft-delete a conversation, cancelling any active run first.
+
+        Soft delete preserves the row for retention-policy sweep; the ``deleted_at``
+        timestamp drives hard-delete scheduling via ``_resolve_conversation_retention_until``.
+        """
 
         conversation, is_admin_override = await self._conversation_for_owner_or_admin(
             org_id=org_id,
@@ -308,7 +337,7 @@ class ConversationCoordinator:
         conversation_id: str,
         allow_admin_override: bool = False,
     ) -> ConversationResponse:
-        """Public ``POST /v1/agent/conversations/{id}/restore``."""
+        """Restore a soft-deleted conversation back to active status."""
 
         now = datetime.now(timezone.utc)
         owner_user_id = user_id
@@ -369,7 +398,12 @@ class ConversationCoordinator:
         user_id: str,
         reason: str | None = None,
     ) -> HistoryDeletionResponse:
-        """Delete user-visible conversation history and persist deletion evidence."""
+        """Bulk-delete all conversation history for a user and record evidence.
+
+        The store archiving/tombstoning is delegated to persistence; this method
+        appends the audit row so deletion is traceable regardless of which code
+        path triggered it.
+        """
 
         result = await self._persistence.delete_user_history(
             org_id=org_id, user_id=user_id, reason=reason
@@ -404,6 +438,7 @@ class ConversationCoordinator:
         user_id: str,
         conversation_id: str,
     ):
+        """Return the conversation or raise 404 if it is outside the caller's scope."""
         conv = await self._persistence.get_conversation(
             org_id=org_id,
             user_id=user_id,
@@ -426,12 +461,18 @@ class ConversationCoordinator:
         conversation_id: str,
         allow_admin_override: bool,
     ) -> tuple[ConversationRecord, bool]:
+        """Resolve the conversation for owner access or, if permitted, admin override.
+
+        Returns ``(record, is_admin_override)`` so callers can attach override
+        evidence to their audit rows.
+        """
         conversation = await self._persistence.get_conversation(
             org_id=org_id,
             user_id=actor_user_id,
             conversation_id=conversation_id,
         )
         if conversation is not None:
+            # Fast path: actor is the owner.
             return conversation, False
         if not allow_admin_override:
             raise RuntimeApiError(
@@ -440,6 +481,7 @@ class ConversationCoordinator:
                 http_status=status.HTTP_404_NOT_FOUND,
                 retryable=False,
             )
+        # Slow path: org-wide lookup without user filter for admin actors.
         admin_view = await self._persistence.get_conversation_for_org(
             org_id=org_id,
             conversation_id=conversation_id,
@@ -460,6 +502,10 @@ class ConversationCoordinator:
         user_id: str,
         conversation_id: str,
     ) -> None:
+        """Best-effort cancel of any active run before the conversation is deleted.
+
+        No-op when the conversation has no active run.
+        """
         active_run = await self._persistence.get_active_run_for_conversation(
             org_id=org_id, conversation_id=conversation_id
         )
@@ -478,6 +524,11 @@ class ConversationCoordinator:
     async def _seed_default_connectors_if_needed(
         self, *, conversation: ConversationRecord
     ) -> ConversationRecord:
+        """Apply workspace default connectors to a newly created conversation.
+
+        Skipped when the conversation already has explicit connector assignments,
+        or when the workspace has no defaults configured.
+        """
         if conversation.enabled_connectors:
             return conversation
         defaults = await self._workspace_defaults().get_record(
@@ -496,6 +547,10 @@ class ConversationCoordinator:
         return updated or conversation
 
     def _workspace_defaults(self):
+        """Return a ``WorkspaceDefaultsService`` instance bound to this coordinator's deps.
+
+        Imported lazily to avoid a module-level circular dependency.
+        """
         from agent_runtime.api.workspace_defaults_service import (
             WorkspaceDefaultsService,
         )
@@ -514,6 +569,13 @@ class ConversationCoordinator:
         assistant_id: str,
         deleted_at: datetime,
     ) -> datetime | None:
+        """Compute the hard-delete deadline for a soft-deleted conversation.
+
+        Returns ``None`` when no retention policy applies, meaning the store
+        may hard-delete immediately (or rely on its own default sweep).
+        Imports are deferred to keep the module-load cost low for code paths
+        that never touch retention.
+        """
         from datetime import timedelta
 
         from agent_runtime.persistence.records.retention import RetentionKind

@@ -1,0 +1,95 @@
+@startuml f9-usage-metrics
+title Flow 9 — Usage / token metrics queries
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "Frontend\n(chat /context ;\nUsage page)" as fe
+participant "backend-facade" as facade
+participant "RuntimeApiRoutes\n(runtime_api/http/routes.py)" as r
+participant "ConversationContextBuilder\n(agent_runtime/api/usage_service.py)" as ccb
+participant "UsageQueryService\n(agent_runtime/api/usage_service.py)" as uqs
+participant "PersistencePort\n(RuntimeModelCallUsageRecord,\nRuntimeRunUsageRecord,\nCompressionEventRecord,\nModelPricingRecord)" as p
+participant "UsageRollupLoop\n(runtime_worker/usage_rollup_loop.py)" as roll
+
+note over u, roll
+  Two distinct query surfaces:
+   • /context — server-computed token headroom for the active conversation.
+   • /v1/usage/* — rolled-up token + cost rows for the Usage page.
+  All numbers come from telemetry rows written by the worker during runs.
+  Nothing is recomputed from raw events.
+  Pricing changes do NOT retroactively rewrite history.
+end note
+
+== Surface 1 — In-chat /context ==
+
+u -> fe : type "/context" in the active conversation
+fe -> facade : GET /v1/agent/conversations/{id}/context
+facade -> r : forwarded
+r -> ccb : ConversationContextBuilder.build(\n   org_id, user_id, conversation_id)
+
+ccb -> p : fetch latest run's RuntimeModelCallUsageRecord rows,\nCompressionEventRecord rows,\nactive ModelPricingRecord
+p --> ccb : telemetry tuple
+
+ccb -> ccb : sum input + output tokens across all model calls,\nfold compression events,\ncompute headroom_pct = (max_input - used) / max_input * 100\ncollapse subagent rows to supervisor for breakdown
+ccb --> r : ConversationContextResponse {\n  context_window,\n  used_tokens,\n  available_tokens,\n  headroom_pct,\n  compression_events[],\n  per_subagent_breakdown[]\n}
+r --> facade : 200 + JSON
+facade --> fe : same
+fe -->> u : headroom pill: "12 345 / 200 000 (94% free)"
+
+note right of ccb
+  ConversationContextBuilder is stateless and pure.
+  It never calls the LLM. Subagent rows are collapsed
+  to the supervisor before per-task breakdowns are reported.
+end note
+
+== Surface 2 — Usage page (per-user) ==
+
+u -> fe : open Usage page (week selector)
+fe -> facade : GET /v1/usage/me?period=2026-W18
+facade -> uqs : list_user_usage(org_id, user_id, period)
+uqs -> uqs : parse_period → days_between
+uqs -> p : SELECT RuntimeRunUsageRecord\n  WHERE org_id, user_id, date IN window
+p --> uqs : rows
+uqs -> uqs : _RollupBucket per day → rollup_user_rows
+uqs --> facade : UsageResponse {days[], totals}
+facade --> fe : per-day series + grand totals
+
+opt Per-connector breakdown
+  fe -> facade : GET /v1/usage/me/connectors?period=...
+  facade -> uqs : list_user_connector_usage(...)
+  uqs -> p : SELECT RuntimeModelCallUsageRecord\n  WHERE connector attribution
+  uqs --> facade : ConnectorUsageRow[]\n(one bucket per connector,\nincludes "no_connector" bucket)
+  facade --> fe : connector breakdown
+end
+
+opt Org-wide (admin only; RBAC checked)
+  fe -> facade : GET /v1/usage/org?period=...
+  facade -> uqs : list_org_usage(org_id, period, caller_role=admin)
+  uqs -> p : rollup_org_rows
+  uqs --> facade : OrgUsageRow[]
+  facade --> fe : org-level chart
+end
+
+== Where the rows come from ==
+
+note over roll, p
+  RuntimeModelCallUsageRecord rows are written by
+  AssistantRunMetrics + PostgresUsageRecorder at
+  run completion for each MODEL_CALL_COMPLETED chunk
+  (fields: input_tokens, output_tokens, cached_input_tokens,
+  reasoning_tokens, connector_slug, purpose).
+
+  UsageRollupLoop runs on RUNTIME_USAGE_ROLLUP_INTERVAL_SECONDS
+  interval: aggregates per-call rows → daily RuntimeRunUsageRecord.
+  CostCalculator converts tokens to micro-USD using the
+  ModelPricingRecord active at write time. Pricing changes
+  do NOT retroactively alter existing history rows.
+end note
+
+roll -> p : rollup recent un-aggregated model_call rows\n(idempotent: already-aggregated rows skipped)
+
+@enduml

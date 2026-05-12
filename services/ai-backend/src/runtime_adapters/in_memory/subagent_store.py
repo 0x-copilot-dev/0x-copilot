@@ -210,7 +210,7 @@ class InMemorySubagentStore:
         # ``InMemoryRuntimeApiStore`` or its async wrapper's ``.underlying``.
         self._store = store
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self,
         *,
         org_id: str,

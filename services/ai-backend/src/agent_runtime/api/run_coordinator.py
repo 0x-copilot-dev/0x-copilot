@@ -1,8 +1,8 @@
-"""Run lifecycle coordinator (P22 / PR 4).
+"""Run lifecycle coordinator — API-side source of truth for run-state transitions.
 
-Owns: ``create_run``, ``cancel_run``. Single source of truth for run-state
-transitions on the API side. The worker uses persistence ports directly and
-does not depend on this coordinator.
+Owns ``create_run`` and ``cancel_run``. The runtime worker uses persistence ports
+directly and never depends on this coordinator, keeping the worker path free of
+API-layer concerns.
 """
 
 from __future__ import annotations
@@ -50,7 +50,12 @@ from runtime_api.schemas import (
 
 
 class RunCoordinator:
-    """Coordinate run lifecycle commands."""
+    """Service layer that persists, enqueues, and cancels agent runs.
+
+    Resolves workspace/user context (model, policies, connector suggestions)
+    concurrently at run-create time to minimise latency. All public methods
+    raise ``RuntimeApiError`` on invalid input or missing scope.
+    """
 
     TERMINAL_RUN_STATUSES = frozenset(
         {
@@ -85,7 +90,14 @@ class RunCoordinator:
         )
 
     async def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
-        """Persist a queued run and enqueue worker execution without invoking runtime inline."""
+        """Create a persisted, queued run and return its stream/events URLs.
+
+        Conversation connector scopes and the workspace default model are applied
+        before the runtime context is sealed, so the worker sees a fully resolved
+        context without further lookups. Workspace overrides, user policies, and
+        connector suggestions are fetched concurrently to keep the create-run
+        latency tight.
+        """
 
         conversation_for_scope = await self._conversation_for_scope_when_known(
             request=request
@@ -127,12 +139,11 @@ class RunCoordinator:
         user_policies_json: dict[str, object],
         suggested_connectors: tuple[CatalogSuggestionCard, ...],
     ) -> CreateRunResponse:
-        """Seal runtime context and persist + enqueue the run.
+        """Seal the runtime context, persist the run, and enqueue the worker command.
 
-        Separated from ``create_run`` so that ``RuntimeApiService`` can
-        orchestrate the ``asyncio.gather`` using its own ``_resolve_*``
-        methods (which tests patch via ``patch.object(service, ...)``)
-        and then delegate the rest of the work here.
+        Separated from ``create_run`` so tests can patch the individual
+        ``_resolve_*`` methods on the service instance and then delegate the
+        write + enqueue step here without re-implementing the logic.
         """
 
         request = self._request_with_runtime_context(
@@ -162,6 +173,8 @@ class RunCoordinator:
             request=request,
             conversation=conversation,
         )
+        # ``created=False`` means an idempotent replay; skip re-enqueuing
+        # to avoid a duplicate worker pickup for the same run_id.
         if created:
             await self._persistence.write_audit_log(
                 event_type="run_created",
@@ -212,7 +225,12 @@ class RunCoordinator:
         run_id: str,
         request: CancelRunRequest,
     ) -> CancelRunResponse:
-        """Persist a best-effort cancellation request and enqueue a worker command."""
+        """Record a cancellation request and enqueue the worker cancel command.
+
+        Idempotent: already-terminal or already-cancelling runs return their
+        current state without re-enqueuing. Cancellation is best-effort — the
+        worker may have already completed by the time the command is consumed.
+        """
 
         run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
         if request.requested_by_user_id != user_id:
@@ -223,6 +241,7 @@ class RunCoordinator:
                 retryable=False,
                 correlation_id=run.trace_id,
             )
+        # Already done — return current state; nothing to enqueue.
         if run.status in self.TERMINAL_RUN_STATUSES:
             return CancelRunResponse(
                 run_id=run.run_id,
@@ -230,6 +249,8 @@ class RunCoordinator:
                 cancel_requested_at=run.cancelled_at,
                 latest_sequence_no=run.latest_sequence_no,
             )
+        # Skip status update and event emission when already in CANCELLING
+        # to avoid duplicate events on concurrent cancel requests.
         if run.status != AgentRunStatus.CANCELLING:
             run = await self._persistence.update_run_status(
                 run_id=run.run_id,
@@ -244,6 +265,7 @@ class RunCoordinator:
                     Keys.Payload.REASON: request.reason,
                 },
             )
+            # Re-fetch to get the updated sequence_no after the status write.
             refreshed = await self._persistence.get_run(
                 org_id=org_id, run_id=run.run_id
             )
@@ -288,6 +310,7 @@ class RunCoordinator:
         user_id: str,
         conversation_id: str,
     ):
+        """Return the conversation or raise 404 when outside the caller's scope."""
         conv = await self._persistence.get_conversation(
             org_id=org_id,
             user_id=user_id,
@@ -305,6 +328,11 @@ class RunCoordinator:
     async def _conversation_for_scope_when_known(
         self, *, request: CreateRunRequest
     ) -> ConversationRecord | None:
+        """Prefetch the conversation early when org_id and user_id are available.
+
+        Returns ``None`` for anonymous or partially-formed requests; the conversation
+        is resolved later in ``_persist_and_enqueue`` in those cases.
+        """
         if request.org_id is None or request.user_id is None:
             return None
         return await self._conversation_for_scope(
@@ -317,8 +345,16 @@ class RunCoordinator:
     def _apply_conversation_scope_fallback(
         *, request: CreateRunRequest, conversation: ConversationRecord
     ) -> CreateRunRequest:
+        """Merge connector scopes and paused-connectors from the conversation into the request.
+
+        When the caller provided explicit connector scopes, those win; the conversation
+        may still contribute paused connectors that the caller omitted. When the caller
+        provided no scopes at all, the conversation's persisted scope is used as a fallback
+        so the user's per-chat customisation is honoured without re-sending it on each run.
+        """
         paused = conversation.paused_connectors()
         if request.request_context.connector_scopes:
+            # Caller specified scopes — only inject paused if they missed it.
             if not paused:
                 return request
             new_context = request.request_context.model_copy(
@@ -339,6 +375,12 @@ class RunCoordinator:
     async def _apply_workspace_default_model(
         self, *, request: CreateRunRequest
     ) -> CreateRunRequest:
+        """Fill in workspace default model when the request doesn't specify one fully.
+
+        A fully-specified model (both provider and model_name present) always wins;
+        the workspace default only applies when either field is missing. Individual
+        fields like temperature and reasoning from the request are preserved.
+        """
         if request.org_id is None:
             return request
         if request.model is not None and (
@@ -379,6 +421,7 @@ class RunCoordinator:
     async def _resolve_user_policies(
         self, *, org_id: str, user_id: str
     ) -> dict[str, object]:
+        """Fetch the per-(org, user) policy snapshot from the backend."""
         return await self._user_policies_resolver.resolve(
             org_id=org_id, user_id=user_id
         )
@@ -390,6 +433,7 @@ class RunCoordinator:
         user_id: str,
         paused_connectors: tuple[str, ...],
     ) -> tuple[CatalogSuggestionCard, ...]:
+        """Fetch connector suggestion cards, excluding explicitly paused connectors."""
         return await self._suggestible_connectors_resolver.resolve(
             org_id=org_id,
             user_id=user_id,
@@ -399,10 +443,17 @@ class RunCoordinator:
     async def _resolve_workspace_behavior_overrides(
         self, *, org_id: str
     ) -> dict[str, object]:
+        """Return workspace behavior overrides as a JSON-serialisable dict.
+
+        ``training_data_opt_out=False`` is stripped so consumers treat an absent
+        key identically to an explicit ``False`` — the default is never opt-out.
+        """
         record = await self._workspace_defaults().get_record(org_id=org_id)
         if record is None:
             return {}
         blob = record.behavior_overrides.model_dump(mode="json", exclude_none=True)
+        # Strip the default (False) to keep the contract minimal; consumers
+        # that see no key treat it as the deployment default.
         if blob.get("training_data_opt_out") is False:
             blob.pop("training_data_opt_out", None)
         return blob
@@ -415,6 +466,12 @@ class RunCoordinator:
         user_policies_json: dict[str, object] | None = None,
         suggested_connectors: tuple[CatalogSuggestionCard, ...] = (),
     ) -> CreateRunRequest:
+        """Build a sealed ``AgentRuntimeContext`` and attach it to the request.
+
+        Collects trace metadata from all enrichment sources (quotes, attachments,
+        branching, regeneration) into a single dict so the worker doesn't need to
+        reassemble it from the request.
+        """
         try:
             model = request.model
             model_config = self._model_resolver.resolve(
@@ -505,6 +562,13 @@ class RunCoordinator:
         current_run_id: str,
         user_message: MessageRecord,
     ) -> tuple[str, ...]:
+        """Walk the parent-message chain and collect ancestor run IDs in chronological order.
+
+        The chain is used by the worker to load prior LangGraph checkpoints for
+        context continuity. Walking stops at the first message not found in the
+        local 200-record window — deep threads that exceed this limit lose context
+        beyond that boundary, which is an accepted trade-off for response latency.
+        """
         records = await self._persistence.list_messages(
             org_id=org_id,
             conversation_id=conversation_id,
@@ -523,6 +587,7 @@ class RunCoordinator:
                 seen.add(run_id)
                 ordered.append(run_id)
             cursor = record.parent_message_id
+        # Walk collected run IDs oldest-first so the worker can replay in order.
         return tuple(reversed(ordered))
 
     @classmethod
@@ -533,6 +598,7 @@ class RunCoordinator:
         user_message_id: str,
         prior_run_ids: tuple[str, ...] = (),
     ) -> CreateRunResponse:
+        """Assemble the HTTP response from a persisted run record."""
         return CreateRunResponse(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
@@ -548,6 +614,7 @@ class RunCoordinator:
     async def _run_for_scope(
         self, *, org_id: str, user_id: str, run_id: str
     ) -> RunRecord:
+        """Return the run or raise 404 when absent or owned by a different user."""
         run = await self._persistence.get_run(org_id=org_id, run_id=run_id)
         if run is None or run.user_id != user_id:
             raise RuntimeApiError(
@@ -559,6 +626,10 @@ class RunCoordinator:
         return run
 
     def _workspace_defaults(self):
+        """Return a ``WorkspaceDefaultsService`` bound to this coordinator's deps.
+
+        Lazily imported to avoid a module-level circular dependency.
+        """
         from agent_runtime.api.workspace_defaults_service import (
             WorkspaceDefaultsService,
         )

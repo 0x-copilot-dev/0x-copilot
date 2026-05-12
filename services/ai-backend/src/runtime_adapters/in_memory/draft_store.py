@@ -22,7 +22,7 @@ class InMemoryDraftStore:
         # (org_id, draft_id) → list of DraftRecord ordered by version asc.
         self.versions: dict[tuple[str, str], list[DraftRecord]] = {}
 
-    def insert_version(self, record: DraftRecord) -> DraftRecord:
+    async def insert_version(self, record: DraftRecord) -> DraftRecord:
         with self._lock:
             key = (record.org_id, record.draft_id)
             history = self.versions.setdefault(key, [])
@@ -36,12 +36,12 @@ class InMemoryDraftStore:
             history.append(record)
             return record
 
-    def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
+    async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
         with self._lock:
             history = self.versions.get((org_id, draft_id))
             return history[-1] if history else None
 
-    def get_version(
+    async def get_version(
         self,
         *,
         org_id: str,
@@ -55,7 +55,7 @@ class InMemoryDraftStore:
                     return record
             return None
 
-    def latest_for_conversation(
+    async def latest_for_conversation(
         self,
         *,
         org_id: str,
@@ -73,7 +73,7 @@ class InMemoryDraftStore:
             results.sort(key=lambda record: record.created_at)
             return tuple(results)
 
-    def expect_status(
+    async def expect_status(
         self,
         *,
         org_id: str,
@@ -82,7 +82,7 @@ class InMemoryDraftStore:
         expected_status: DraftStatus | None = None,
     ) -> DraftRecord:
         with self._lock:
-            latest = self.latest(org_id=org_id, draft_id=draft_id)
+            latest = await self.latest(org_id=org_id, draft_id=draft_id)
             if latest is None:
                 raise KeyError(draft_id)
             if latest.version != expected_version:

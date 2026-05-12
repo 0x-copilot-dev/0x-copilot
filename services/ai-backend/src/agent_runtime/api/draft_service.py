@@ -1,40 +1,7 @@
-"""Application service for the Workspace-pane draft artifact (PR 1.3 + 1.3.5).
-
-Reads / writes / sends / discards drafts on top of :class:`DraftStorePort`.
-
-Live ``DRAFT_UPDATED`` events come from two paths:
-
-- the agent harness (:class:`DraftBackend` → :class:`RuntimeEventProducer`)
-  for ``write_file`` / ``edit_file`` calls, tied to the agent's run;
-- the API itself for user-driven ``send`` (PR 1.3.5): the send writes the
-  status transition to a host run, persists the approval, and emits an
-  ``APPROVAL_REQUESTED`` event the FE picks up by opening the host run's
-  stream.
-
-User-driven PATCH and DISCARD return the persisted draft synchronously; live
-event emission for those paths stays out of scope (other clients pick up the
-change on the next ``list``).
-
-Send flow (PR 1.3.5):
-
-1. Validate ``expected_version`` (optimistic conflict).
-2. ``CapabilityAuthGate.check`` — reject 409 ``connector_auth_required`` /
-   400 ``invalid_target_connector`` BEFORE any DB write.
-3. Resolve the host run: prefer the draft's own ``run_id`` (the run that
-   produced it); else fall back to the latest run on the conversation;
-   else 409 ``no_host_run`` (rare PATCH-only edge case).
-4. Insert ``runtime_drafts`` v+1 status=send_pending_approval.
-5. Insert ``runtime_approval_requests`` row keyed to host run with
-   ``approval_kind="action"`` and ``metadata.kind="draft_send"`` carrying
-   draft id, version, target, summary, body preview.
-6. Emit ``APPROVAL_REQUESTED`` on host run's stream.
-7. Audit ``draft.send.proposed``.
-8. Return ``{draft, run_id, approval_id}`` — both ids are real.
-"""
+"""Application service for draft artifact lifecycle: list, patch, send, and discard."""
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -90,7 +57,7 @@ _BODY_PREVIEW_MAX_CHARS = 400
 
 
 class DraftService:
-    """Coordinate draft list / patch / send / discard against the store + audit."""
+    """Orchestrates draft reads and writes against the store, approval system, and audit log."""
 
     def __init__(
         self,
@@ -110,10 +77,9 @@ class DraftService:
     async def list_for_conversation(
         self, *, org_id: str, conversation_id: str
     ) -> DraftListResponse:
-        records = await _maybe_await(
-            self._store.latest_for_conversation(
-                org_id=org_id, conversation_id=conversation_id
-            )
+        """Return all current draft versions for a conversation."""
+        records = await self._store.latest_for_conversation(
+            org_id=org_id, conversation_id=conversation_id
         )
         return DraftListResponse(drafts=tuple(_to_draft(record) for record in records))
 
@@ -124,6 +90,7 @@ class DraftService:
         draft_id: str,
         version: int | None = None,
     ) -> Draft:
+        """Return a specific draft version, or the latest version when ``version`` is omitted."""
         record = await self._load(org_id=org_id, draft_id=draft_id, version=version)
         return _to_draft(record)
 
@@ -137,6 +104,7 @@ class DraftService:
         draft_id: str,
         request: DraftPatchRequest,
     ) -> Draft:
+        """Apply a user edit to an existing draft; raises 409 on version conflict or terminal state."""
         latest = await self._expect(
             org_id=org_id,
             draft_id=draft_id,
@@ -152,7 +120,7 @@ class DraftService:
             title_override=request.title,
             status=DraftStatus.DRAFT,
         )
-        persisted = await _maybe_await(self._store.insert_version(next_record))
+        persisted = await self._store.insert_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -169,6 +137,7 @@ class DraftService:
         draft_id: str,
         request: DraftSendRequest,
     ) -> DraftSendResponse:
+        """Initiate a draft send: auth-gate check → insert v+1 → approval row → event."""
         latest = await self._expect(
             org_id=org_id,
             draft_id=draft_id,
@@ -200,7 +169,7 @@ class DraftService:
             target_metadata=dict(request.target_metadata or {}),
             status=DraftStatus.SEND_PENDING_APPROVAL,
         )
-        persisted = await _maybe_await(self._store.insert_version(next_record))
+        persisted = await self._store.insert_version(next_record)
 
         # 4. Persist the approval row keyed to the host run.
         approval = await self._create_approval(
@@ -247,6 +216,7 @@ class DraftService:
         draft_id: str,
         request: DraftDiscardRequest,
     ) -> Draft:
+        """Mark a draft as discarded; raises 409 if already sent (sent is irreversible)."""
         latest = await self._expect(
             org_id=org_id,
             draft_id=draft_id,
@@ -261,7 +231,7 @@ class DraftService:
             content_text=latest.content_text,
             status=DraftStatus.DISCARDED,
         )
-        persisted = await _maybe_await(self._store.insert_version(next_record))
+        persisted = await self._store.insert_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -280,9 +250,9 @@ class DraftService:
         user_id: str,
         conversation_id: str,
     ) -> None:
+        """Verify connector auth state before any write; raises on non-authenticated outcomes."""
         if self._auth_gate is None:
-            # Legacy / unconfigured deployments — degrade open. The PR 1.3.5
-            # PRD calls for fail-closed; configure the gate at app boot.
+            # Legacy / unconfigured deployments — degrade open; configure the gate at app boot.
             return
         runtime_context = _RuntimeContextStub(
             org_id=org_id, user_id=user_id, conversation_id=conversation_id
@@ -327,6 +297,7 @@ class DraftService:
         conversation_id: str,
         draft: DraftRecord,
     ) -> str:
+        """Find the run to anchor the approval card on; raises 409 if no run exists."""
         # 1. Prefer the run that produced this draft (when present).
         if draft.run_id:
             return draft.run_id
@@ -334,12 +305,10 @@ class DraftService:
         list_messages = getattr(self._persistence, "list_messages", None)
         if list_messages is not None:
             try:
-                messages = await _maybe_await(
-                    list_messages(
-                        org_id=org_id,
-                        conversation_id=conversation_id,
-                        limit=50,
-                    )
+                messages = await list_messages(
+                    org_id=org_id,
+                    conversation_id=conversation_id,
+                    limit=50,
                 )
             except Exception:
                 messages = ()
@@ -364,6 +333,7 @@ class DraftService:
         draft: DraftRecord,
         request: DraftSendRequest,
     ) -> ApprovalRequestRecord:
+        """Persist an approval request row and return it (no-op when persistence is absent)."""
         record = ApprovalRequestRecord(
             run_id=host_run_id,
             conversation_id=draft.conversation_id,
@@ -385,7 +355,7 @@ class DraftService:
         create = getattr(self._persistence, "create_approval_request", None)
         if create is None:
             return record
-        return await _maybe_await(create(record=record))
+        return await create(record=record)
 
     async def _emit_approval_requested(
         self,
@@ -395,12 +365,13 @@ class DraftService:
         approval: ApprovalRequestRecord,
         draft: DraftRecord,
     ) -> None:
+        """Append an APPROVAL_REQUESTED event to the host run's stream (best-effort)."""
         if self._event_producer is None or self._persistence is None:
             return
         get_run = getattr(self._persistence, "get_run", None)
         if get_run is None:
             return
-        run = await _maybe_await(get_run(org_id=org_id, run_id=host_run_id))
+        run = await get_run(org_id=org_id, run_id=host_run_id)
         if run is None:
             return
         append = getattr(self._event_producer, "append_api_event", None)
@@ -418,15 +389,13 @@ class DraftService:
             "body_preview": approval.metadata.get("body_preview"),
             Keys.Field.STATUS: ApiValues.Status.WAITING,
         }
-        await _maybe_await(
-            append(
-                run=run,
-                source=StreamEventSource.RUNTIME,
-                event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
-                payload=payload,
-                summary=str(payload.get(Keys.Field.SUMMARY) or "Send draft"),
-                status=ApiValues.Status.WAITING,
-            )
+        await append(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+            payload=payload,
+            summary=str(payload.get(Keys.Field.SUMMARY) or "Send draft"),
+            status=ApiValues.Status.WAITING,
         )
 
     async def _load(
@@ -436,16 +405,13 @@ class DraftService:
         draft_id: str,
         version: int | None,
     ) -> DraftRecord:
+        """Fetch a draft by version or latest; raises 404 when absent."""
         if version is not None:
-            record = await _maybe_await(
-                self._store.get_version(
-                    org_id=org_id, draft_id=draft_id, version=version
-                )
+            record = await self._store.get_version(
+                org_id=org_id, draft_id=draft_id, version=version
             )
         else:
-            record = await _maybe_await(
-                self._store.latest(org_id=org_id, draft_id=draft_id)
-            )
+            record = await self._store.latest(org_id=org_id, draft_id=draft_id)
         if record is None:
             raise RuntimeApiError(
                 code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
@@ -461,13 +427,12 @@ class DraftService:
         draft_id: str,
         expected_version: int,
     ) -> DraftRecord:
+        """Fetch the draft at the expected version; raises 404/409 on miss or conflict."""
         try:
-            return await _maybe_await(
-                self._store.expect_status(
-                    org_id=org_id,
-                    draft_id=draft_id,
-                    expected_version=expected_version,
-                )
+            return await self._store.expect_status(
+                org_id=org_id,
+                draft_id=draft_id,
+                expected_version=expected_version,
             )
         except KeyError as exc:
             raise RuntimeApiError(
@@ -488,6 +453,7 @@ class DraftService:
 
     @staticmethod
     def _immutable_status_error(current: DraftStatus) -> RuntimeApiError:
+        """Build a 409 error indicating the draft is in a final, non-writable state."""
         return RuntimeApiError(
             code=RuntimeErrorCode.VALIDATION_ERROR,
             safe_message=_DRAFT_STATUS_IMMUTABLE,
@@ -507,6 +473,7 @@ class DraftService:
         target_connector: str | object = _UNSET,  # type: ignore[assignment]
         target_metadata: dict[str, object] | None = None,
     ) -> DraftRecord:
+        """Build the next immutable version record, inheriting unchanged fields from previous."""
         # ``target_connector`` uses a sentinel so callers can explicitly clear
         # it (pass ``None``) versus inherit the previous value (omit).
         if target_connector is _UNSET:
@@ -544,6 +511,7 @@ class DraftService:
         record: DraftRecord,
         extra_metadata: dict[str, object] | None = None,
     ) -> None:
+        """Write an audit log row for a draft mutation; silent no-op when persistence is absent."""
         if self._persistence is None:
             return
         write_audit = getattr(self._persistence, "write_audit_log", None)
@@ -559,19 +527,14 @@ class DraftService:
         }
         if extra_metadata:
             metadata.update(extra_metadata)
-        await _maybe_await(write_audit(event_type=event_type, record=metadata))
+        await write_audit(event_type=event_type, record=metadata)
 
 
 # -- module-level helpers -----------------------------------------------------
 
 
 class _RuntimeContextStub:
-    """Minimal duck-typed stand-in for :class:`AgentRuntimeContext`.
-
-    The auth gate's registries only read identity fields; we don't pay the
-    cost of constructing a fully-validated AgentRuntimeContext for every
-    POST /send.
-    """
+    """Minimal identity carrier satisfying the auth gate's duck-type contract without full context construction."""
 
     __slots__ = ("org_id", "user_id", "conversation_id", "permission_scopes")
 
@@ -582,13 +545,8 @@ class _RuntimeContextStub:
         self.permission_scopes = frozenset()
 
 
-async def _maybe_await(value: object) -> object:
-    if asyncio.iscoroutine(value):
-        return await value
-    return value
-
-
 def _title_for(content: str, *, fallback: str = "") -> str:
+    """Extract a display title from markdown content: first ``# `` heading, then first non-blank line."""
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
@@ -601,6 +559,7 @@ def _title_for(content: str, *, fallback: str = "") -> str:
 
 
 def _sections_for(content: str) -> list[DraftSection]:
+    """Parse markdown into heading/body pairs; headingless content becomes a section with an empty heading."""
     sections: list[DraftSection] = []
     current_heading = ""
     current_body: list[str] = []
@@ -628,12 +587,14 @@ def _sections_for(content: str) -> list[DraftSection]:
 
 
 def _approval_summary(draft: DraftRecord, request: DraftSendRequest) -> str:
+    """Build the human-readable approval card summary line."""
     title = (draft.title or "").strip() or "Untitled draft"
     target = (request.target_connector or "").strip() or "connector"
     return f"Send {title} to {target}"
 
 
 def _to_draft(record: DraftRecord) -> Draft:
+    """Project a persisted ``DraftRecord`` into the public ``Draft`` wire shape."""
     return Draft(
         draft_id=record.draft_id,
         version=record.version,

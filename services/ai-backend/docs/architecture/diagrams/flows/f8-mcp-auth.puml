@@ -1,0 +1,114 @@
+@startuml f8-mcp-auth
+title Flow 8 — Calling an unauthenticated MCP tool, authenticating in-chat
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "Frontend\n(chat UI)" as fe
+participant "RuntimeApiRoutes + Service" as svc
+participant "RuntimeRunHandler +\nStreamingExecutor" as exec
+participant "Deep Agents graph\n(LangGraph)" as graph
+participant "LLM provider" as llm
+participant "CallMcpTool +\nMcpPermissionPolicy\n(capabilities/mcp/middleware/call_tool.py)" as call_mw
+participant "AuthMcpTool\n(capabilities/mcp/middleware/auth_mcp.py)" as auth_mw
+participant "backend\n(/internal/v1/mcp/.../auth/start,\ntoken vault, OAuth callback)" as backend
+participant "MCP server OAuth IdP" as mcp_idp
+participant "RuntimeEventProducer → EventStore" as ep
+participant "PersistencePort\n(approval row)" as p
+participant "RuntimeQueuePort" as q
+participant "RuntimeApprovalHandler\n(runtime_worker/handlers/approval.py)" as h_appr
+
+note over u, h_appr
+  Pre-condition: server is installed (flow 7) but auth_state=NONE.
+  Model selects a tool on it during a normal turn.
+  StreamingExecutor checks action_interrupt_events;
+  MCP_AUTH_REQUIRED is one of them.
+end note
+
+== Run starts — model picks unauthenticated tool ==
+
+u -> fe : "find my recent Linear tickets"
+fe -> svc : POST /v1/agent/runs
+svc -> exec : (worker claims, run starts)
+exec -> graph : drive stream via astream_runtime()
+graph -> llm : invoke(messages + tools)
+llm -->> graph : tool_call(linear_search, args)
+graph -> call_mw : CallMcpTool.call_tool(linear_search, args)
+
+== Permission policy detects auth_state=NONE ==
+
+call_mw -> call_mw : McpPermissionPolicy.is_tool_authorized?\n→ auth_state=NONE → route to AuthMcpTool
+
+call_mw -> auth_mw : AuthMcpTool.ainvoke({server_name="linear"})
+auth_mw -> backend : POST /internal/v1/mcp/servers/linear/auth/start
+backend --> auth_mw : McpAuthSession {auth_url, session_id, expires_at}
+
+auth_mw -> p : PersistencePort.create_approval_request(\n   kind=mcp_auth,\n   status=PENDING,\n   payload={server_id, auth_url, session_id})
+auth_mw -> ep : append_api_event(MCP_AUTH_REQUIRED)\n  payload={approval_id, auth_url, server_name,\n   display_name, expires_at}\n  visibility=USER, activity_kind=mcp_auth
+
+auth_mw -> auth_mw : langgraph_interrupt(payload)\n→ graph suspends, checkpoint saved
+note right of exec
+  StreamingExecutor catches GraphInterrupt.
+  Sets result.action_interrupted=True.
+  RuntimeRunHandler sees action_interrupted=True
+  → update_run_status(AWAITING_APPROVAL).
+  Does NOT call queue.mark_complete().
+end note
+
+exec -> svc : update run to AWAITING_APPROVAL
+svc -->> u : (SSE) MCP_AUTH_REQUIRED event\n→ "Connect Linear to continue" card
+
+== User authenticates in a popup ==
+
+u -> fe : click "Connect"
+fe -> backend : open auth_url (OAuth popup)
+backend -> mcp_idp : OAuth authorize redirect
+mcp_idp -> u : login + consent screen
+u -> mcp_idp : approve
+mcp_idp -> backend : OAuth callback (authorization_code)
+backend -> mcp_idp : exchange code → tokens
+mcp_idp --> backend : {access_token, refresh_token}
+backend -> backend : TokenVault.put(server_id, encrypted tokens)
+backend -> backend : update ServerRecord auth_state=VALID
+backend --> fe : success page (popup closes)
+
+== Frontend submits approval decision ==
+
+fe -> svc : POST /v1/approvals/{approval_id}/decision\n{decision=APPROVE}
+svc -> p : update_approval_status(APPROVED)
+svc -> ep : append_api_event(APPROVAL_RESOLVED)
+svc -> q : RuntimeQueuePort.enqueue_approval_resolved(\n   RuntimeApprovalResolvedCommand)
+svc --> fe : 202 Accepted
+
+== Worker resumes via ApprovalHandler ==
+
+h_appr -> q : claim_next → ApprovalResolvedCommand
+h_appr -> p : load run + approval row
+h_appr -> exec : re-run StreamingExecutor\nwith astream_runtime_resume() (loads checkpoint)
+exec -> graph : continue stream from interrupt point
+graph -> llm : (model retries or is told "auth now valid")
+llm -->> graph : tool_call(linear_search, args)
+graph -> call_mw : CallMcpTool.call_tool(linear_search)
+call_mw -> call_mw : McpPermissionPolicy → auth_state=VALID ✓
+call_mw -> backend : RPC call_tool(linear_search, args)
+backend -> mcp_idp : authenticated request
+mcp_idp --> backend : {tickets: […]}
+backend --> call_mw : tool result
+exec -> ep : TOOL_CALL_STARTED + TOOL_RESULT
+exec -> ep : MODEL_DELTA → FINAL_RESPONSE → RUN_COMPLETED
+ep ->> svc : notifies SSE
+svc -->> u : answer with citations
+
+note over auth_mw, backend
+  Token rotation + expiry owned by backend's token vault.
+  If tokens expire mid-run, the same MCP_AUTH_REQUIRED →
+  APPROVAL_RESOLVED loop fires again.
+  The approval row is the durable rendezvous between the
+  user's click and the worker's resume — survives worker
+  restarts and SSE disconnects.
+end note
+
+@enduml

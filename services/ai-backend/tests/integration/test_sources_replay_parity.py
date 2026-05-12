@@ -190,14 +190,16 @@ def _projection_from_events(
     return out
 
 
-def _projection_from_store(
+async def _projection_from_store(
     store: InMemoryCitationStore,
     *,
     org_id: str,
     conversation_id: str,
 ) -> dict[str, dict[str, object]]:
     """Direct read from the persisted store — what archived loads return."""
-    rows = store.list_for_conversation(org_id=org_id, conversation_id=conversation_id)
+    rows = await store.list_for_conversation(
+        org_id=org_id, conversation_id=conversation_id
+    )
     return {
         row.citation_id: {
             "citation_id": row.citation_id,
@@ -236,7 +238,7 @@ class TestSourcesReplayParity:
         await ledger.register(_NOTION)
 
         from_events = _projection_from_events(events)
-        from_store = _projection_from_store(
+        from_store = await _projection_from_store(
             store,
             org_id=run.org_id,
             conversation_id=run.conversation_id,

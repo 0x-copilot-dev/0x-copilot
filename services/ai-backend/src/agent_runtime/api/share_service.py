@@ -1,14 +1,4 @@
-"""Conversation sharing service (PR 6.1).
-
-Owns the create / list / update / revoke + recipient-view orchestration
-for ``conversation_shares``. Implements :class:`ShareSnapshotPort` so
-PR 6.2's fork service can resolve a share via the same path the recipient
-view uses (single source of truth for token lookup + revocation /
-expiry / cross-org gating).
-
-Streaming impact: zero. No new event types, no projection change. The
-recipient view is a snapshot read built from existing readers.
-"""
+"""Conversation share lifecycle: create, list, update, revoke, and recipient snapshot view."""
 
 from __future__ import annotations
 
@@ -56,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 class _Errors:
-    """Stable safe-message strings surfaced through ``RuntimeApiError``."""
+    """User-facing error message constants for share operations."""
 
     NOT_OWNER_OR_ADMIN = "Only the conversation owner or a workspace admin can share."
     SHARE_NOT_FOUND = "Share was not found, has been revoked, or has expired."
@@ -68,7 +58,7 @@ class _Errors:
 
 
 class _AuditActions:
-    """``runtime_audit_log.action`` constants — six new for PR 6.1."""
+    """Audit log action strings for share create/update/revoke and view events."""
 
     SHARE_CREATED = "conversation.share.created"
     SHARE_UPDATED = "conversation.share.updated"
@@ -80,7 +70,7 @@ class _AuditActions:
 
 
 class _ShareLimits:
-    """Read budgets for the recipient view."""
+    """Upper bounds on rows fetched when building the recipient snapshot view."""
 
     MESSAGES = 500
     EVENTS_PER_RUN = 1000
@@ -93,7 +83,7 @@ class _ShareLimits:
 
 
 class _ViewDenyReason:
-    """Stable codes recorded with ``conversation.share.view_denied``."""
+    """Reason codes written to the ``view_denied`` audit row to explain why access was refused."""
 
     REVOKED = "revoked"
     EXPIRED = "expired"
@@ -103,11 +93,10 @@ class _ViewDenyReason:
 
 
 class ShareService:
-    """Coordinate conversation share lifecycle + recipient view.
+    """Manages conversation share lifecycle and the read-only recipient snapshot view.
 
-    Implements :class:`ShareSnapshotPort` so PR 6.2's fork service shares
-    one token-resolution path with the recipient view (single source of
-    truth for revocation / expiry / cross-org gating).
+    Also implements the ``ShareSnapshotPort`` token-resolution contract so the fork service
+    and the recipient view share a single revocation/expiry/cross-org gate.
     """
 
     _ADMIN_SCOPE = "admin:users"
@@ -156,6 +145,7 @@ class ShareService:
         conversation_id: str,
         request: CreateShareRequest,
     ) -> CreateShareResponse:
+        """Create a share record, optionally minting a bearer token, and return the response."""
         await self._assert_owner_or_admin(
             org_id=org_id,
             user_id=user_id,
@@ -244,6 +234,7 @@ class ShareService:
         conversation_id: str,
         include_revoked: bool = False,
     ) -> ListSharesResponse:
+        """List all shares for a conversation, enforcing owner-or-admin access."""
         await self._assert_owner_or_admin(
             org_id=org_id,
             user_id=user_id,
@@ -272,6 +263,7 @@ class ShareService:
         share_id: str,
         request: UpdateShareRequest,
     ) -> ConversationShare:
+        """Update share settings and/or recipient list; audits before/after diff."""
         existing = await self._store.get_by_id(org_id=org_id, share_id=share_id)
         if existing is None:
             raise self._share_not_found()
@@ -356,6 +348,7 @@ class ShareService:
         permission_scopes: tuple[str, ...],
         share_id: str,
     ) -> None:
+        """Permanently revoke a share; idempotent if already revoked."""
         existing = await self._store.get_by_id(org_id=org_id, share_id=share_id)
         if existing is None:
             raise self._share_not_found()
@@ -395,6 +388,7 @@ class ShareService:
         viewer_org_id: str,
         viewer_user_id: str,
     ) -> RecipientPreview:
+        """Return whether the viewer can access the share, without loading conversation data."""
         share = await self._resolve_token(share_token)
         if share is None:
             raise self._share_not_found()
@@ -416,6 +410,7 @@ class ShareService:
         viewer_org_id: str,
         viewer_user_id: str,
     ) -> SharedConversationView:
+        """Build the full snapshot view for an authorized recipient, applying source/draft redaction when configured."""
         share = await self._resolve_token(share_token)
         if share is None:
             raise self._share_not_found()
@@ -485,9 +480,7 @@ class ShareService:
     # ------------------------------------------------------------------
 
     async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:
-        """Return the active snapshot for a token. ``None`` for unknown /
-        revoked / expired — fork service maps those uniformly to 404.
-        """
+        """Return the active snapshot for a token, or ``None`` if missing, revoked, or expired."""
 
         share = await self._resolve_token(share_token)
         if share is None:

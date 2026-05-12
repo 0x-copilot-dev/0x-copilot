@@ -17,8 +17,6 @@ an adapter concern. It does **not** authorize — the route layer enforces
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Sequence
 
 from agent_runtime.persistence.ports import SourceStorePort, SubagentStorePort
 from agent_runtime.persistence.records import (
@@ -81,13 +79,11 @@ class WorkspaceFeedService:
         limit: int,
     ) -> SubagentListResponse:
         capped = max(1, min(limit, _WorkspaceLimits.SUBAGENTS_MAX))
-        snapshots = await _maybe_await(
-            self._subagents.list_for_conversation(
-                org_id=org_id,
-                conversation_id=conversation_id,
-                running_only=status_filter is SubagentStatusFilter.RUNNING,
-                limit=capped,
-            )
+        snapshots = await self._subagents.list_for_conversation(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            running_only=status_filter is SubagentStatusFilter.RUNNING,
+            limit=capped,
         )
         truncated = len(snapshots) >= capped
         entries = tuple(self._to_entry(snapshot) for snapshot in snapshots)
@@ -106,13 +102,11 @@ class WorkspaceFeedService:
         limit: int,
     ) -> SourceListResponse:
         capped = max(1, min(limit, _WorkspaceLimits.SOURCES_MAX))
-        rows = await _maybe_await(
-            self._sources.aggregate_for_conversation(
-                org_id=org_id,
-                conversation_id=conversation_id,
-                run_id=run_id,
-                limit=capped,
-            )
+        rows = await self._sources.aggregate_for_conversation(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            limit=capped,
         )
         truncated = len(rows) >= capped
         entries = tuple(self._to_source_entry(row) for row in rows)
@@ -166,14 +160,6 @@ class WorkspaceFeedService:
             citation_count=row.citation_count,
             last_cited_at=row.last_cited_at,
         )
-
-
-async def _maybe_await(
-    value: object,
-) -> Sequence[SubagentSnapshot] | Sequence[SourceAggregate]:
-    if asyncio.iscoroutine(value):
-        return await value  # type: ignore[no-any-return]
-    return value  # type: ignore[return-value]
 
 
 # Re-export for convenience — callers usually only need the lifecycle enum

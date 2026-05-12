@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
@@ -546,9 +545,7 @@ class RuntimeApprovalHandler:
         draft_id = str(metadata.get("draft_id", ""))
         if not draft_id:
             return
-        latest = await self._maybe_await(
-            self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
-        )
+        latest = await self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
         if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
             # State changed since the approval was posted (e.g. a
             # concurrent discard); skip the transition.
@@ -568,9 +565,7 @@ class RuntimeApprovalHandler:
             decided_by_user_id=decided_by_user_id or run.user_id,
             status=terminal_status,
         )
-        persisted = await self._maybe_await(
-            self._draft_store.insert_version(next_record)
-        )
+        persisted = await self._draft_store.insert_version(next_record)
         await self._emit_draft_updated(run=run, record=persisted)
         await self._write_draft_audit(
             run=run,
@@ -596,12 +591,6 @@ class RuntimeApprovalHandler:
             reason=TerminationReason.NORMAL_COMPLETION,
             summary="Run completed",
         )
-
-    @staticmethod
-    async def _maybe_await(value: object) -> object:
-        if asyncio.iscoroutine(value):
-            return await value
-        return value
 
     @staticmethod
     def _next_draft_version(
@@ -672,4 +661,4 @@ class RuntimeApprovalHandler:
         }
         if extra_metadata:
             metadata.update({k: v for k, v in extra_metadata.items() if v is not None})
-        await self._maybe_await(write_audit(event_type=action, record=metadata))
+        await write_audit(event_type=action, record=metadata)

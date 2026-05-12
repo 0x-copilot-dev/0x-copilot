@@ -1,0 +1,112 @@
+@startuml f6-thinking
+title Flow 6 — Reasoning / "thinking" model turn
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "RuntimeApiRoutes + Service" as svc
+participant "RuntimeRunHandler\n(runtime_worker/handlers/run.py)" as h
+participant "acreate_agent_runtime\n(execution/factory.py)" as factory
+participant "provider_kwargs\n(execution/provider_kwargs.py)" as pkw
+participant "Provider stream adapter\n(anthropic_stream_adapter.py /\nopenai_responses_stream_adapter.py)" as adp
+participant "LLM provider" as llm
+participant "StreamingExecutor +\nStreamOrchestrator\n(stream_events.py / stream_parts.py)" as exec
+participant "RuntimeEventProducer → SSE" as ep
+participant "BudgetCharger +\nCostCalculator" as charger
+
+note over u, charger
+  Pre-condition: workspace + user policy enable reasoning.
+  ModelReasoningConfig {thinking_mode, display, summary, budget_tokens}
+  resolved from workspace ModelConfig.
+  Anthropic: thinking_mode {ENABLED, ADAPTIVE} + display {OMITTED, SUMMARIZED}
+  OpenAI: summary {AUTO, CONCISE, DETAILED}
+  Gemini: no native reasoning stream.
+end note
+
+== Run setup ==
+
+u -> svc : POST /v1/agent/runs {message, model_profile}
+svc -> h : (worker claims) handle(RuntimeRunCommand)
+h -> factory : acreate_agent_runtime(context, deps)
+factory -> pkw : workspace_model_kwargs(context)\n+ user_policy_model_kwargs(context)
+pkw --> factory : provider kwargs:\n  Anthropic: {thinking: {type: "enabled", budget_tokens: N}}\n  OpenAI: {reasoning: {effort: "high", summary: "auto"}}\n  Gemini: {reasoning_effort: "medium"}
+factory -> adp : init provider stream adapter with reasoning kwargs
+
+== Model call begins ==
+
+h -> exec : StreamingExecutor.run(harness, run, metrics)
+exec -> ep : append_api_event(MODEL_CALL_STARTED)\npayload={model, reasoning_config}
+ep ->> ep : SSE notify (UI shows "thinking…")
+exec -> adp : astream(messages, tools)
+adp -> llm : streaming API request
+
+== Reasoning stream (provider-specific) ==
+
+alt Anthropic thinking_mode in {ENABLED, ADAPTIVE}
+  loop thinking_delta blocks
+    llm -->> adp : thinking_delta chunk
+    adp -->> exec : reasoning chunk
+    exec -> ep : append_api_event(REASONING_SUMMARY_DELTA)\nactivity_kind=REASONING
+    ep ->> ep : SSE notify
+  end
+  llm -->> adp : end_thinking
+  exec -> ep : append_api_event(REASONING_SUMMARY)\nfull accumulated reasoning text
+
+  note right of ep
+    display=OMITTED: no REASONING_SUMMARY_*
+    events emitted to client; tokens still bill.
+    display is a UI hint, not a billing switch.
+  end note
+
+else OpenAI Responses API
+  loop reasoning_summary parts
+    llm -->> adp : reasoning_summary chunk
+    adp -->> exec : reasoning chunk
+    exec -> ep : REASONING_SUMMARY_DELTA
+  end
+  exec -> ep : REASONING_SUMMARY (part closed)
+
+else Gemini
+  note right of adp
+    No native reasoning summary stream.
+    Grounding citations captured by
+    CitationStreamPipeline (see flow 5).
+    No REASONING_SUMMARY_* events fire.
+  end note
+end
+
+== Visible answer stream ==
+
+loop visible text deltas
+  llm -->> adp : content chunk
+  adp -->> exec : MODEL_DELTA chunk
+  exec -> ep : append_api_event(MODEL_DELTA)\nactivity_kind=MESSAGE
+  ep ->> ep : SSE notify
+end
+
+note over exec
+  If the model emits a tool_call mid-stream,
+  the executor handles it (see flow 2),
+  then loops back into a new model call which
+  may emit its own REASONING_SUMMARY_* chunks.
+end note
+
+== Final response + telemetry ==
+
+llm -->> adp : final aggregated message\n+ usage_metadata:\n  {input_tokens, output_tokens,\n   reasoning_tokens, cached_input_tokens}
+adp -->> exec : final chunk + usage
+exec -> ep : FINAL_RESPONSE
+exec -> ep : MODEL_CALL_COMPLETED\npayload={usage: {input, output, reasoning, cached_input}}
+ep ->> ep : SSE notify
+exec -> ep : RUN_COMPLETED
+
+== Post-run charging ==
+
+h -> charger : BudgetCharger.charge_run(run_id, usage_records)
+charger -> charger : CostCalculator.compute(\n   usage, ModelPricingCatalog)\nuses reasoning_per_1m_micro_usd\nif provider bills reasoning separately;\ninteger micro-USD + banker's rounding
+charger -> charger : PersistencePort.charge_budget(CAS retry)
+
+@enduml

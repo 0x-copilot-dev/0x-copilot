@@ -1,0 +1,83 @@
+@startuml f4-cancel
+title Flow 4 — Run cancellation
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "backend-facade" as facade
+participant "RuntimeApiRoutes" as r
+participant "RuntimeApiService\n(agent_runtime/api/service.py)" as svc
+participant "PersistencePort +\nRuntimeQueuePort" as q
+participant "RuntimeRunHandler\n(running the active run)" as h_run
+participant "RuntimeWorkerLoop" as wkr
+participant "RuntimeCancelHandler\n(runtime_worker/handlers/cancel.py)" as h_cancel
+participant "RunTerminationCoordinator\n(agent_runtime/api/run_termination.py)" as term
+participant "RuntimeEventProducer" as ep
+participant "EventStorePort" as es
+participant "RuntimeEventBus + SSE" as sse
+
+note over h_run, sse
+  Pre-condition: run is RUNNING. Worker is executing
+  the LangGraph stream. User is receiving MODEL_DELTAs.
+end note
+
+== Cancel request ==
+
+u -> facade : POST /v1/agent/runs/{run_id}/cancel\n{reason: "user_requested"}
+facade -> r : forwarded
+r -> svc : RuntimeApiService.cancel_run(org_id, user_id, run_id, reason)
+svc -> q : RuntimeQueuePort.enqueue_cancel(RuntimeCancelCommand)
+svc -> ep : append_api_event(RUN_CANCELLING)\n(advisory; cancel not yet applied)
+ep -> es : sequence_no++
+ep ->> sse : notify_sync
+svc --> r : 202 Accepted
+r --> u : 202 Accepted
+
+== Worker claims the cancel command ==
+
+wkr -> q : claim_next(worker_id, lock_expires_at)
+q --> wkr : RuntimeWorkerClaim\n{command_type=RUN_CANCEL_REQUESTED}
+wkr -> h_cancel : RuntimeCancelHandler.handle(RuntimeCancelCommand)
+
+h_cancel -> h_cancel : validate user ownership\n(run.user_id == command.requested_by_user_id)
+h_cancel -> q : with_optimistic_retry(\n   PersistencePort.update_run_status(\n   run_id, CANCELLED))
+h_cancel -> term : RunTerminationCoordinator.terminate(\n   run, CANCELLED, reason=CANCELLED,\n   summary="Run cancelled")
+term -> ep : append_api_event(RUN_CANCELLED)
+ep -> es : sequence_no++
+ep ->> sse : notify_sync
+
+== Active run handler exits cooperatively ==
+
+note over h_run
+  RuntimeRunHandler drives the LangGraph
+  astream() loop. On the next loop iteration
+  it checks run status (cooperative cancel).
+  A MODEL_DELTA chunk in-flight may still
+  arrive before the check — this is acceptable.
+  CANCELLED is the terminal state of record.
+end note
+
+h_run -> q : PersistencePort.get_run → status=CANCELLED → exit loop
+h_run -> q : RuntimeQueuePort.mark_complete(\n   original RUN_REQUESTED claim)
+
+== SSE client sees terminal status ==
+
+sse -> svc : replay_events(after_sequence=N)
+svc --> sse : [RUN_CANCELLING, RUN_CANCELLED]\nrun_status=CANCELLED
+sse -->> u : SSE frames
+sse -> sse : CANCELLED in TERMINAL_RUN_STATUSES\n→ unsubscribe(run_id), return
+sse -->> u : (stream closes)
+
+h_cancel -> q : RuntimeQueuePort.mark_complete(cancel claim)
+
+note over wkr, h_cancel
+  Dispatcher routes by command_type:
+   RUN_REQUESTED        → RuntimeRunHandler
+   RUN_CANCEL_REQUESTED → RuntimeCancelHandler
+   APPROVAL_RESOLVED    → RuntimeApprovalHandler
+end note
+
+@enduml

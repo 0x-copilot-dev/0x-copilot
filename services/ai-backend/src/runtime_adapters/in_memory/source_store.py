@@ -20,7 +20,7 @@ class _CitationReader(Protocol):
     file is robust to PR 1.1's evolving API surface.
     """
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self, *, org_id: str, conversation_id: str
     ) -> Sequence[CitationRecord]: ...
 
@@ -80,7 +80,7 @@ class InMemorySourceStore:
     def __init__(self, citations: _CitationReader) -> None:
         self._citations = citations
 
-    def aggregate_for_conversation(
+    async def aggregate_for_conversation(
         self,
         *,
         org_id: str,
@@ -89,7 +89,7 @@ class InMemorySourceStore:
         limit: int,
     ) -> Sequence[SourceAggregate]:
         rows = tuple(
-            self._citations.list_for_conversation(
+            await self._citations.list_for_conversation(
                 org_id=org_id, conversation_id=conversation_id
             )
         )

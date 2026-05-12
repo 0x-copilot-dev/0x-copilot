@@ -207,9 +207,7 @@ class DraftBackend(BackendProtocol):
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return EditResult(error=_Errors.INVALID_PATH)
-        latest = await _await_maybe(
-            self._store.latest(org_id=self._org_id, draft_id=draft_id)
-        )
+        latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
         if latest is None:
             return EditResult(error=_Errors.FILE_NOT_FOUND)
         if not latest.content_text:
@@ -250,9 +248,7 @@ class DraftBackend(BackendProtocol):
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return ReadResult(error=_Errors.INVALID_PATH)
-        latest = await _await_maybe(
-            self._store.latest(org_id=self._org_id, draft_id=draft_id)
-        )
+        latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
         if latest is None:
             return ReadResult(error=_Errors.FILE_NOT_FOUND)
         return ReadResult(
@@ -272,10 +268,8 @@ class DraftBackend(BackendProtocol):
             # Drafts are flat. Anything below ``/drafts/`` is a single file
             # path; ``/drafts/foo/`` is not a thing.
             return LsResult(entries=[])
-        records = await _await_maybe(
-            self._store.latest_for_conversation(
-                org_id=self._org_id, conversation_id=self._conversation_id
-            )
+        records = await self._store.latest_for_conversation(
+            org_id=self._org_id, conversation_id=self._conversation_id
         )
         entries: list[FileInfo] = [
             cast(
@@ -305,10 +299,8 @@ class DraftBackend(BackendProtocol):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
-        records = await _await_maybe(
-            self._store.latest_for_conversation(
-                org_id=self._org_id, conversation_id=self._conversation_id
-            )
+        records = await self._store.latest_for_conversation(
+            org_id=self._org_id, conversation_id=self._conversation_id
         )
         matches: list[GrepMatch] = []
         for record in records:
@@ -355,9 +347,7 @@ class DraftBackend(BackendProtocol):
         status: DraftStatus,
     ) -> DraftRecord:
         async with self._lock_for(draft_id):
-            latest = await _await_maybe(
-                self._store.latest(org_id=self._org_id, draft_id=draft_id)
-            )
+            latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
             next_version = (latest.version + 1) if latest is not None else 1
             citation_ids = latest.citation_ids if latest is not None else ()
             target_connector = latest.target_connector if latest is not None else None
@@ -377,7 +367,7 @@ class DraftBackend(BackendProtocol):
                 status=status,
                 created_at=datetime.now(timezone.utc),
             )
-            persisted = await _await_maybe(self._store.insert_version(record))
+            persisted = await self._store.insert_version(record)
         if self._emit is not None:
             await self._emit(persisted)
         return persisted
@@ -413,14 +403,6 @@ def _run_sync(awaitable: Awaitable[Any]) -> Any:
             asyncio.ensure_future(awaitable), loop
         ).result()
     return loop.run_until_complete(awaitable)
-
-
-async def _await_maybe(value: Any) -> Any:
-    """Allow store ports to be either sync or async — match deepagents."""
-
-    if asyncio.iscoroutine(value):
-        return await value
-    return value
 
 
 # -- event emitter factory ----------------------------------------------------

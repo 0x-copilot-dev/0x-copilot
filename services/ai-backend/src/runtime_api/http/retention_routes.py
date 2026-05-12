@@ -20,6 +20,7 @@ from agent_runtime.api.constants import Keys
 from agent_runtime.persistence.records.retention import (
     RetentionKind,
     RetentionPolicyRecord,
+    RetentionScope,
 )
 from agent_runtime.retention import (
     DEPLOYMENT_DEFAULT_TTL_SECONDS,
@@ -128,6 +129,13 @@ class RetentionAdminRoutes:
         )
         persistence = request.app.state.runtime_persistence
         persisted = await persistence.upsert_retention_policy(record)
+        await persistence.recompute_retention_until_for_policy(
+            org_id=org_id,
+            kind=record.kind,
+            scope=record.scope,
+            resource_id=record.resource_id,
+            ttl_seconds=record.ttl_seconds,
+        )
         return cls._to_view(persisted)
 
     @classmethod
@@ -142,12 +150,30 @@ class RetentionAdminRoutes:
             request, org_id=org_id, user_id=user_id
         )
         persistence = request.app.state.runtime_persistence
+        # Snapshot policies before deletion so we can resolve the fallback
+        # TTL for rows that were stamped by the now-deleted policy.
+        policies_before = await persistence.list_retention_policies(org_id=org_id)
+        policy = next((p for p in policies_before if p.id == policy_id), None)
         await persistence.delete_retention_policy(org_id=org_id, policy_id=policy_id)
+        if policy is not None:
+            remaining = tuple(p for p in policies_before if p.id != policy_id)
+            resolver = RetentionPolicyResolver(
+                org_id=org_id,
+                policies=remaining,
+                deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
+            )
+            fallback = resolver.resolve(kind=policy.kind)
+            await persistence.recompute_retention_until_for_policy(
+                org_id=org_id,
+                kind=policy.kind,
+                scope=policy.scope,
+                resource_id=policy.resource_id,
+                ttl_seconds=fallback.ttl_seconds,
+            )
         return {"status": "deleted"}
 
     @staticmethod
     def _validate_resource_id(payload: RetentionPolicyUpsertRequest) -> None:
-        from agent_runtime.persistence.records.retention import RetentionScope
 
         if payload.scope is RetentionScope.ORG and payload.resource_id is not None:
             raise HTTPException(

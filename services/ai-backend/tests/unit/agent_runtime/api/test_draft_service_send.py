@@ -95,7 +95,7 @@ class _MinimalRun:
 class TestDraftServiceSend:
     async def test_authenticated_send_creates_approval_and_emits_event(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(_record(version=1, run_id="run_existing"))
         gate = _StubAuthGate(CapabilityAuthOutcome.AUTHENTICATED)
         persistence = _StubPersistence(run_record=_MinimalRun())
         producer = _CaptureEventProducer()
@@ -145,7 +145,7 @@ class TestDraftServiceSend:
 
     async def test_not_authenticated_returns_409_no_db_write(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(_record(version=1, run_id="run_existing"))
         gate = _StubAuthGate(CapabilityAuthOutcome.NOT_AUTHENTICATED)
         persistence = _StubPersistence(run_record=_MinimalRun())
         producer = _CaptureEventProducer()
@@ -179,7 +179,7 @@ class TestDraftServiceSend:
 
     async def test_unknown_capability_returns_400(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(_record(version=1, run_id="run_existing"))
         service = DraftService(
             store=store,
             persistence=_StubPersistence(run_record=_MinimalRun()),
@@ -204,7 +204,7 @@ class TestDraftServiceSend:
 
     async def test_workspace_disabled_returns_403(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(_record(version=1, run_id="run_existing"))
         service = DraftService(
             store=store,
             persistence=_StubPersistence(run_record=_MinimalRun()),
@@ -231,7 +231,7 @@ class TestDraftServiceSend:
         store = InMemoryDraftStore()
         # Draft has no run_id (PATCH-created) and persistence has no messages.
         record = _record(version=1, run_id=None)
-        store.insert_version(record)
+        await store.insert_version(record)
         service = DraftService(
             store=store,
             persistence=_StubPersistence(run_record=None),
@@ -256,7 +256,7 @@ class TestDraftServiceSend:
 
     async def test_immutable_status_blocks_send(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(
+        await store.insert_version(
             _record(version=1, run_id="run_existing", status=DraftStatus.SENT)
         )
         service = DraftService(

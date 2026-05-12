@@ -1,4 +1,8 @@
-"""Constants and public messages for the FastAPI runtime API."""
+"""Stable string constants, display messages, and compiled validators for the runtime API.
+
+Centralises every key, status value, route name, and client-visible message so callers
+never inline bare string literals. Changes to wire-level names are made here once.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +10,11 @@ import re
 
 
 class Keys:
-    """Stable keys used by API contracts, stores, and transport adapters."""
+    """Namespaced string keys for API contracts, stores, events, and transport adapters."""
 
     class Field:
+        """Payload and record field names used across persistence, events, and HTTP responses."""
+
         AFTER_SEQUENCE = "after_sequence"
         API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
@@ -78,6 +84,8 @@ class Keys:
         VISIBILITY = "visibility"
 
     class Payload:
+        """Top-level keys used specifically within event payload dicts."""
+
         DELTA = "delta"
         DISPLAY_TITLE = "display_title"
         MESSAGE = "message"
@@ -85,12 +93,16 @@ class Keys:
         SUMMARY = "summary"
 
     class Query:
+        """Query-string parameter names for list and stream endpoints."""
+
         AFTER_SEQUENCE = "after_sequence"
         LIMIT = "limit"
         ORG_ID = "org_id"
         USER_ID = "user_id"
 
     class RouteName:
+        """FastAPI route ``name=`` values used for URL reverse-lookup."""
+
         APPROVAL_DECISION = "approval_decision"
         # PR 4.4.6.4 — undo within the 60s reversibility window.
         APPROVAL_UNDO = "approval_undo"
@@ -161,7 +173,7 @@ class Keys:
 
 
 class Values:
-    """Stable public values for the API layer."""
+    """Stable scalar values and nested enumerations for the API layer."""
 
     EVENT_PROTOCOL_VERSION = 1
     SCHEMA_VERSION = 1
@@ -181,6 +193,8 @@ class Values:
     MAX_ASSIGNED_APPROVAL_LIMIT = 200
 
     class Status:
+        """Wire-level status label strings emitted in event payloads."""
+
         ANSWERED = "answered"
         CANCELLED = "cancelled"
         COMPLETED = "completed"
@@ -197,6 +211,8 @@ class Values:
         WAITING = "waiting"
 
     class Tool:
+        """Tool name strings as seen in event payloads and capability registrations."""
+
         ASK_A_QUESTION = "ask_a_question"
         GREP = "grep"
         READ_FILE = "read_file"
@@ -212,26 +228,36 @@ class Values:
         WRITE_TODOS = "write_todos"
 
     class ApprovalKind:
+        """Approval kind discriminators stored in ``ApprovalRequestRecord.metadata``."""
+
         ACTION = "action"
         ASK_A_QUESTION = "ask_a_question"
         MCP_AUTH = "mcp_auth"
         MCP_TOOL = "mcp_tool"
 
     class VirtualPath:
+        """Virtual filesystem path prefixes for oversized payloads stored by-reference."""
+
         LARGE_TOOL_RESULTS_PREFIX = "/large_tool_results/"
 
 
 class Patterns:
-    """Compiled validators for API IDs and slugs."""
+    """Pre-compiled regular expressions for validating API IDs and slugs."""
 
     ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class Messages:
-    """Centralized safe messages returned to API clients."""
+    """Centralised safe messages returned to API clients, audit rows, and event payloads.
+
+    All strings here are considered public — they may appear in HTTP response bodies
+    or structured logs visible to operators. Never embed internal detail.
+    """
 
     class Error:
+        """User-facing error strings for HTTP 4xx responses."""
+
         APPROVAL_NOT_FOUND = "Approval request was not found for this scope."
         # PR 1.4 — forwarding-target validation. Messages are deliberately
         # generic and do not reveal whether the target user exists in
@@ -258,6 +284,8 @@ class Messages:
         UNKNOWN_MODEL_NAME = "Default model name is not in the catalog."
 
     class Audit:
+        """Action-name strings written to audit log rows."""
+
         # PR 1.4 — append-only audit action for the forward link. The
         # parent's final outcome is still ``approval_decision_recorded``
         # (the existing action). ``approval.forward`` records the act of
@@ -307,6 +335,8 @@ class Messages:
         WORKSPACE_DELETE_ATTEMPT = "workspace.delete_attempt"
 
     class Event:
+        """Human-readable messages and title factories for runtime stream events."""
+
         APPROVAL_RESOLVED = "Approval decision was recorded."
         APPROVAL_FORWARDED = "Approval forwarded for sign-off."
         FINAL_RESPONSE = "Final response"
@@ -323,32 +353,39 @@ class Messages:
 
         @classmethod
         def subagent_title(cls, subagent_name: str) -> str:
+            """Return the display title for a subagent lifecycle event."""
             return f"{subagent_name} subagent"
 
         @classmethod
         def tool_completed_title(cls, tool_name: str) -> str:
+            """Return the display title for a completed tool call."""
             return f"{tool_name} completed"
 
         @classmethod
         def tool_result_title(cls, tool_name: str) -> str:
+            """Return the display title for a tool result event."""
             return f"{tool_name} result"
 
         @classmethod
         def tool_running_title(cls, tool_name: str) -> str:
+            """Return the display title while a tool call is in flight."""
             return f"{tool_name} running"
 
         @classmethod
         def tool_started_title(cls, tool_name: str) -> str:
+            """Return the display title at the moment a tool call begins."""
             return f"Calling {tool_name}"
 
         @classmethod
         def source_cited_title(cls, title: str) -> str:
+            """Return the display title for a single cited source."""
             return f"Cited {title}"
 
         SOURCE_INGESTED = "Cited a source"
 
         @classmethod
         def sources_cited_title(cls, count: int) -> str:
+            """Return the pluralised display title for a multi-source citation event."""
             if count == 1:
                 return "Cited 1 source"
             return f"Cited {count} sources"
@@ -357,26 +394,34 @@ class Messages:
 
         @classmethod
         def citation_made_title(cls, ordinal: int) -> str:
-            # PR 1.1-rev2 — model-declared citation pointer. Display title
-            # used by `_display_title_for(CITATION_MADE)`; the chip resolves
-            # to the cited tool invocation in the FE registry.
+            """Return the display title for a model-declared citation pointer.
+
+            The ordinal maps to a specific tool-call invocation; the frontend
+            resolves the chip to that tool call in its event registry.
+            """
             return f"Cited tool call #{ordinal}"
 
         CITATION_MADE = "Cited a tool call"
 
     class Validation:
+        """Field-level validation error message factories for Pydantic validators."""
+
         @classmethod
         def id_contains_unsupported_characters(cls, field_name: str) -> str:
+            """Return an error for an ID field that fails the ``Patterns.ID`` check."""
             return f"{field_name} contains unsupported characters"
 
         @classmethod
         def nonempty_string(cls, field_name: str) -> str:
+            """Return an error for an empty string where a non-empty value is required."""
             return f"{field_name} must not be empty"
 
         @classmethod
         def stable_slug(cls, field_name: str) -> str:
+            """Return an error for a field that must match ``Patterns.SLUG``."""
             return f"{field_name} must be a stable slug"
 
         @classmethod
         def string_required(cls, field_name: str) -> str:
+            """Return an error when a field's value must be a string but is not."""
             return f"{field_name} must be a string"

@@ -29,6 +29,11 @@ class RetentionKind(StrEnum):
     CONTEXT_PAYLOADS = "context_payloads"
     CHECKPOINTS = "checkpoints"
     MEMORY_ITEMS = "memory_items"
+    # Phase 5: second-pass hard-delete after grace period.
+    # Never appear in retention_policies rows — sweep-only internal kinds.
+    MESSAGES_TOMBSTONED = "messages_tombstoned"
+    EVENTS_TOMBSTONED = "events_tombstoned"
+    MEMORY_ITEMS_TOMBSTONED = "memory_items_tombstoned"
 
 
 class RetentionPolicyRecord(RuntimeContract):

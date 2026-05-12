@@ -14,6 +14,10 @@ from agent_runtime.observability.db_statement_metrics import (
     DbStatementMetricsCollector,
     DbStatementMetricsCollectorEnv,
 )
+from runtime_worker.jobs.retention_backfill import (
+    RetentionBackfillJob,
+    RetentionBackfillJobEnv,
+)
 from runtime_worker.jobs.retention_sweeper import (
     RetentionSweeperLoop,
     RetentionSweeperLoopEnv,
@@ -142,6 +146,20 @@ class RuntimeWorkerEntrypoint:
                         "auto_apply": pricing_refresh_loop._auto_apply,
                         "sanity_threshold": str(pricing_refresh_loop._sanity_threshold),
                     },
+                )
+            # C8 Phase 2 — opt-in (default off). Stamps ``retention_until``
+            # on existing rows that pre-date migration 0030. Runs once at
+            # startup and completes before the main loop begins.
+            if RetentionBackfillJobEnv.env_bool(
+                RetentionBackfillJobEnv.ENABLED, default=False
+            ):
+                backfill_job = RetentionBackfillJob(
+                    persistence=async_ports.persistence,
+                )
+                backfill_counts = await backfill_job.run()
+                logger.info(
+                    "retention_backfill_complete",
+                    metadata={"rows_stamped": sum(backfill_counts.values())},
                 )
             await worker.run_forever(
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,

@@ -1,10 +1,9 @@
-"""Read-only projection over conversations, messages, runs, and events (P22 / PR 4).
+"""Read-only projection over conversations, messages, runs, and events.
 
-Owns: ``list_models``, ``get_conversation``, ``list_conversations``,
-``list_messages``, ``get_conversation_context``, ``get_run``, ``replay_events``.
-
-Called by HTTP routes and the SSE adapter (``replay_events``). Never mutates.
-Returns typed Pydantic responses.
+Provides the query side of the CQRS-lite split: ``list_models``,
+``get_conversation``, ``list_conversations``, ``list_messages``,
+``get_conversation_context``, ``get_run``, and ``replay_events``. Never mutates
+state; returns typed Pydantic responses for HTTP routes and the SSE adapter.
 """
 
 from __future__ import annotations
@@ -32,6 +31,12 @@ from starlette import status
 
 
 def _display_model_name(model_name: str) -> str:
+    """Convert a slug-style model name to a human-readable label.
+
+    "gpt" is forced to uppercase; everything else is title-cased. Underscores
+    are normalised to hyphens before splitting so ``claude_opus`` and
+    ``claude-opus`` produce identical output.
+    """
     parts = model_name.replace("_", "-").split("-")
     return " ".join(
         part.upper() if part in {"gpt"} else part.capitalize() for part in parts
@@ -39,7 +44,11 @@ def _display_model_name(model_name: str) -> str:
 
 
 class ConversationQueryService:
-    """Read-only projection across conversation, message, run, and event records."""
+    """Read-only projection that assembles typed responses from persistence and event stores.
+
+    Scope enforcement is enforced on every public method: records outside the
+    caller's (org_id, user_id) scope raise a 404 rather than leaking data.
+    """
 
     TERMINAL_RUN_STATUSES = frozenset(
         {
@@ -65,7 +74,13 @@ class ConversationQueryService:
         self._pricing_catalog = ModelPricingCatalog(persistence)
 
     def list_models(self) -> ModelCatalogResponse:
-        """Return selectable chat models and credential availability."""
+        """Return the model catalog with credential-availability flags per provider.
+
+        The catalog is assembled in-process from ``RuntimeSettings``; the
+        ``configured`` flags reflect whether the provider API key is present at
+        startup. Duplicate model IDs are collapsed (last definition wins) to
+        guard against accidental double-registration of the default model.
+        """
 
         default = self._settings.default_model
         configured = {
@@ -120,6 +135,9 @@ class ConversationQueryService:
                 supports_attachments=True,
             ),
         ]
+        # Deduplicate by id — the default model may coincide with one of the
+        # hardcoded entries, and inserting it first means the hardcoded richer
+        # metadata (supports_attachments etc.) wins in the final dict.
         unique_models = {model.id: model for model in models}
         return ModelCatalogResponse(
             default_model_id=default.model_name,
@@ -151,7 +169,11 @@ class ConversationQueryService:
         include_archived: bool = False,
         include_deleted: bool = False,
     ) -> ConversationListResponse:
-        """Return scoped conversation metadata newest first."""
+        """Return scoped conversations newest-first, enriched with each one's active run.
+
+        ``has_more`` is derived from whether the store returned a full page, so
+        callers must re-request with a cursor (not implemented yet) when it is True.
+        """
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
         records = await self._persistence.list_conversations(
@@ -180,7 +202,7 @@ class ConversationQueryService:
         limit: int = Values.DEFAULT_MESSAGE_LIMIT,
         include_deleted: bool = False,
     ) -> MessageListResponse:
-        """Return ordered conversation history after validating caller scope."""
+        """Return ordered message history, gated on a successful conversation scope check."""
 
         await self._conversation_for_scope(
             org_id=org_id,
@@ -207,7 +229,11 @@ class ConversationQueryService:
         user_id: str,
         conversation_id: str,
     ) -> ConversationContextResponse:
-        """Return the per-conversation context-window view (B5)."""
+        """Return a context-window summary for the conversation's most recent run.
+
+        When no run exists yet, returns a default-model placeholder so the UI
+        can render context-budget progress even before the first message.
+        """
 
         await self._conversation_for_scope(
             org_id=org_id,
@@ -271,7 +297,12 @@ class ConversationQueryService:
         run_id: str,
         after_sequence: int,
     ) -> RuntimeEventReplayResponse:
-        """Return persisted events after a client sequence checkpoint."""
+        """Return events persisted after ``after_sequence`` for SSE reconnect replay.
+
+        ``latest_sequence_no`` is derived from the fetched batch when possible,
+        otherwise from a dedicated store query — keeping the field accurate even
+        when the batch is empty.
+        """
 
         run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
         events = tuple(
@@ -281,6 +312,8 @@ class ConversationQueryService:
                 after_sequence=after_sequence,
             )
         )
+        # Prefer the max from the fetched slice; fall back to the store query
+        # only when the batch is empty so we avoid a second round-trip on the hot path.
         latest_sequence_no = max(
             (event.sequence_no for event in events),
             default=await self._event_store.get_latest_sequence(run_id=run_id),
@@ -304,6 +337,7 @@ class ConversationQueryService:
         user_id: str,
         conversation_id: str,
     ):
+        """Return the conversation or raise 404 if it falls outside the caller's scope."""
         conv = await self._persistence.get_conversation(
             org_id=org_id,
             user_id=user_id,
@@ -324,6 +358,7 @@ class ConversationQueryService:
         *,
         org_id: str,
     ) -> ConversationResponse:
+        """Attach the active run status to a conversation response, if one exists."""
         active = await self._persistence.get_active_run_for_conversation(
             org_id=org_id,
             conversation_id=response.conversation_id,
@@ -331,6 +366,7 @@ class ConversationQueryService:
         if active is None:
             return response
         return response.with_latest_run(
+            # Guard against enum vs. string representation in older store adapters.
             status=active.status.value
             if hasattr(active.status, "value")
             else str(active.status),
@@ -338,6 +374,7 @@ class ConversationQueryService:
         )
 
     async def _run_for_scope(self, *, org_id: str, user_id: str, run_id: str):
+        """Return the run or raise 404 when it is absent or belongs to another user."""
         run = await self._persistence.get_run(org_id=org_id, run_id=run_id)
         if run is None or run.user_id != user_id:
             raise RuntimeApiError(
@@ -349,6 +386,10 @@ class ConversationQueryService:
         return run
 
     def _workspace_defaults(self):
+        """Return a ``WorkspaceDefaultsService`` bound to this service's deps.
+
+        Lazily imported to avoid a circular dependency at module load time.
+        """
         from agent_runtime.api.workspace_defaults_service import (
             WorkspaceDefaultsService,
         )

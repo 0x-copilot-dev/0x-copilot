@@ -92,17 +92,17 @@ class DraftStorePort(Protocol):
     largest ``version`` for a given ``(org_id, draft_id)``.
     """
 
-    def insert_version(self, record: DraftRecord) -> DraftRecord:
+    async def insert_version(self, record: DraftRecord) -> DraftRecord:
         """Persist one new draft version. ``version`` must be ``latest+1``.
 
         Raises :class:`OptimisticConflict` if a row with that
         ``(org_id, draft_id, version)`` already exists.
         """
 
-    def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
+    async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
         """Return the most recent version of a draft, or ``None`` if missing."""
 
-    def get_version(
+    async def get_version(
         self,
         *,
         org_id: str,
@@ -111,7 +111,7 @@ class DraftStorePort(Protocol):
     ) -> DraftRecord | None:
         """Return one specific version by ``(org_id, draft_id, version)``."""
 
-    def latest_for_conversation(
+    async def latest_for_conversation(
         self,
         *,
         org_id: str,
@@ -119,7 +119,7 @@ class DraftStorePort(Protocol):
     ) -> Sequence[DraftRecord]:
         """Return the latest version of every draft in a conversation."""
 
-    def expect_status(
+    async def expect_status(
         self,
         *,
         org_id: str,
@@ -145,7 +145,7 @@ class SubagentStorePort(Protocol):
     breaking this read path.
     """
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self,
         *,
         org_id: str,
@@ -163,7 +163,7 @@ class SubagentStorePort(Protocol):
 class SourceStorePort(Protocol):
     """Read-only aggregate of ``runtime_citations`` rows by unique source doc."""
 
-    def aggregate_for_conversation(
+    async def aggregate_for_conversation(
         self,
         *,
         org_id: str,
@@ -200,14 +200,16 @@ class CitationStorePort(Protocol):
         ordinal binding map stays consistent.
         """
 
-    def list_for_run(self, *, org_id: str, run_id: str) -> Sequence[CitationRecord]:
+    async def list_for_run(
+        self, *, org_id: str, run_id: str
+    ) -> Sequence[CitationRecord]:
         """Return citations for one run in ``ordinal`` order.
 
         Used to seal ``final_response.citations`` and to rebuild the
         registry on resume after a worker crash.
         """
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self,
         *,
         org_id: str,

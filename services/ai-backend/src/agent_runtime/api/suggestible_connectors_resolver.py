@@ -1,18 +1,10 @@
-"""Run-start resolver for catalog connectors the agent may suggest.
+"""Run-start resolver for catalog connectors the agent may proactively suggest.
 
-Calls backend's ``/internal/v1/me/suggestible-connectors`` once when
-``RunService.create_run`` is composing the ``AgentRuntimeContext``,
-and packs the response into
-``AgentRuntimeContext.suggested_connectors`` so the system prompt
-template (in ``execution.factory``) and the discovery service
-(``api.mcp_discovery_service``) read from the same frozen snapshot
-for the lifetime of the run.
-
-Mirrors the ``UserPoliciesResolver`` shape so the wiring is grep-able
-and the dev-mode "no service token configured" fallback behaves
-identically — empty tuple when the trusted-backend lane isn't set up,
-deployment continues with no agent suggestions rather than failing
-the run.
+Fetches ``/internal/v1/me/suggestible-connectors`` once at run-create time and
+packs the result into ``AgentRuntimeContext.suggested_connectors`` so the system
+prompt template and discovery service read from the same frozen snapshot for the
+lifetime of the run. Falls back to an empty tuple when the backend lane is not
+configured so run-start is never blocked on connector availability.
 """
 
 from __future__ import annotations
@@ -29,16 +21,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _Env:
+    """Environment variable names for backend URL and service token."""
+
     BACKEND_BASE_URL = "BACKEND_BASE_URL"
-    # PR 4.4.7 — ai-backend dev startup historically only set
-    # ``MCP_BACKEND_REGISTRY_URL``; ``BACKEND_BASE_URL`` was reserved for
-    # production. Accept the dev var as a fallback so progressive
-    # discovery works in ``make dev`` without a Makefile change.
+    # Accepted as a fallback so ``make dev`` works without needing BACKEND_BASE_URL;
+    # MCP_BACKEND_REGISTRY_URL was historically the dev-only var name.
     BACKEND_BASE_URL_FALLBACK = "MCP_BACKEND_REGISTRY_URL"
     SERVICE_TOKEN = "ENTERPRISE_SERVICE_TOKEN"
 
 
 class _Headers:
+    """Service-to-service header names for the trusted backend lane."""
+
     SERVICE_TOKEN = "x-enterprise-service-token"
     ORG = "x-enterprise-org-id"
     USER = "x-enterprise-user-id"
@@ -49,11 +43,11 @@ _FETCH_TIMEOUT_SECONDS = 5.0
 
 @runtime_checkable
 class SuggestibleConnectorsResolver(Protocol):
-    """Resolve the suggestible-connectors snapshot at run start.
+    """Port for fetching the per-run suggestible-connector snapshot.
 
-    Implementations MUST return an empty tuple (not raise) when the
-    backend lane is not configured or the fetch fails — the runtime
-    falls back to "no suggestions" rather than refusing the run.
+    Implementations must return an empty tuple (never raise) when the
+    backend lane is unavailable so run-start degrades gracefully to "no
+    suggestions" rather than failing.
     """
 
     async def resolve(
@@ -67,11 +61,13 @@ class SuggestibleConnectorsResolver(Protocol):
 
 
 class HttpSuggestibleConnectorsResolver:
-    """Production resolver: GET backend's suggestible-connectors route.
+    """Production resolver that GETs the backend's suggestible-connectors endpoint.
 
-    Same lifecycle as ``HttpUserPoliciesResolver`` — injected long-lived
-    ``httpx.AsyncClient``, swallow network errors, log them, return
-    empty tuple. Run-start must not be a single point of failure.
+    Network errors are swallowed and logged; the empty-tuple fallback means
+    run-start is never a single point of failure. Pass an explicit
+    ``http_client`` for connection reuse in production; omit it to get a
+    per-call short-lived client (the default for dev and tests using
+    ``httpx.MockTransport``).
     """
 
     def __init__(
@@ -81,12 +77,8 @@ class HttpSuggestibleConnectorsResolver:
         backend_url: str,
         service_token: str,
     ) -> None:
-        # ``http_client=None`` means "create a short-lived client per
-        # resolve". The default RuntimeApiAppFactory wiring uses this
-        # path to avoid threading a long-lived client through every
-        # service constructor (mirrors the membership resolver's
-        # ``_httpx_membership_fetcher``). Tests inject an explicit
-        # client backed by ``httpx.MockTransport``.
+        # When http_client is None, resolve() creates a short-lived client per call
+        # to avoid threading a long-lived client through every constructor.
         self._client = http_client
         self._backend_url = backend_url.rstrip("/")
         self._service_token = service_token
@@ -98,6 +90,7 @@ class HttpSuggestibleConnectorsResolver:
         user_id: str,
         exclude_paused: Iterable[str],
     ) -> tuple[CatalogSuggestionCard, ...]:
+        """Fetch and validate suggestible connector cards, returning empty on any failure."""
         excluded = ",".join(piece for piece in exclude_paused if piece)
         params = {
             "org_id": org_id,
@@ -179,18 +172,18 @@ class HttpSuggestibleConnectorsResolver:
                     )
                 )
             except Exception:
-                # Backend should be the source of truth on shape; an
-                # individual malformed row gets dropped rather than
-                # poisoning the rest of the snapshot.
+                # Drop individual malformed rows rather than poisoning the whole
+                # snapshot — the backend is the authoritative source on shape.
                 continue
         return tuple(cards)
 
 
 class NullSuggestibleConnectorsResolver:
-    """Resolver that always returns empty. Used when the trusted-backend
-    lane isn't configured (dev / single-process / tests). Consumers
-    treat empty as "no suggestions surfaced this run", which is the
-    safe default."""
+    """No-op resolver that always returns an empty tuple.
+
+    Used when the trusted-backend lane is not configured. Consumers treat
+    an empty tuple as "no suggestions this run", which is the safe default.
+    """
 
     async def resolve(
         self,
@@ -203,17 +196,13 @@ class NullSuggestibleConnectorsResolver:
 
 
 class SuggestibleConnectorsResolverFactory:
-    """Pick a resolver based on env. Mirrors
-    ``UserPoliciesResolverFactory`` so the two run-start fetches are
-    wired identically.
+    """Select the appropriate resolver from environment configuration.
 
-    ``http_client`` is optional — when omitted the factory still wires
-    a working ``HttpSuggestibleConnectorsResolver`` whose ``resolve``
-    creates a per-call short-lived ``httpx.AsyncClient``. That matches
-    the ``HttpWorkspaceMembershipResolver`` lifecycle (per-call client)
-    so callers don't have to plumb a long-lived client through service
-    construction. Pass an explicit ``http_client`` only for tests or
-    advanced production wiring that wants connection reuse.
+    When ``BACKEND_BASE_URL`` (or the dev fallback) and ``ENTERPRISE_SERVICE_TOKEN``
+    are set, returns an ``HttpSuggestibleConnectorsResolver``; otherwise returns a
+    ``NullSuggestibleConnectorsResolver``. Pass an explicit ``http_client`` only for
+    tests or production wiring that needs connection reuse — omitting it lets
+    ``resolve`` create per-call clients, which is the default for dev.
     """
 
     @classmethod
@@ -222,6 +211,7 @@ class SuggestibleConnectorsResolverFactory:
         *,
         http_client: httpx.AsyncClient | None = None,
     ) -> SuggestibleConnectorsResolver:
+        """Return the best available resolver given the current environment."""
         backend_url = (
             os.environ.get(_Env.BACKEND_BASE_URL, "").strip()
             or os.environ.get(_Env.BACKEND_BASE_URL_FALLBACK, "").strip()

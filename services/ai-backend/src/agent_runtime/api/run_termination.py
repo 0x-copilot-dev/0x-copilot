@@ -1,20 +1,11 @@
-"""Single chokepoint for ending a run.
+"""Single chokepoint for safely ending a run.
 
-Replaces the scattered ``append_event(RUN_FAILED|RUN_CANCELLED|RUN_COMPLETED)``
-calls across the worker handlers. Every termination path goes through
-:meth:`RunTerminationCoordinator.terminate`, which:
-
-  1. Drains the per-run :class:`LifecycleLedger`, synthesizing a terminal
-     event for every still-open subagent / tool call / model call so the
-     frontend never sees a "stuck running" lifecycle.
-  2. Emits the run's own terminal event (``RUN_FAILED`` /
-     ``RUN_CANCELLED`` / ``RUN_COMPLETED``).
-  3. Surfaces an observability metric for any open lifecycles seen at
-     termination — should be ``0`` on the green path.
-
-Reconciliation is best-effort: a per-entry emission failure is logged
-and skipped so one stuck child cannot block its siblings or the
-run-level terminal event.
+Every termination path flows through :meth:`RunTerminationCoordinator.terminate`,
+which drains the :class:`LifecycleLedger` (synthesising a ``*_COMPLETED`` event
+for every open subagent/tool/model call) and then emits the run's own terminal
+event. Reconciliation is best-effort: a failure on a single synthesised event is
+logged and skipped so one stuck entry cannot block its siblings or the run-level
+terminal event.
 """
 
 from __future__ import annotations
@@ -41,7 +32,7 @@ _LOGGER = logging.getLogger("agent_runtime.api.run_termination")
 
 
 class TerminationReason(StrEnum):
-    """Why a run is ending. Carried in the terminal event payload."""
+    """Reason a run reached a terminal state, carried in the run-level event payload."""
 
     NORMAL_COMPLETION = "normal_completion"
     TOOL_FATAL_ERROR = "tool_fatal_error"
@@ -72,7 +63,7 @@ _RUN_EVENT_TYPES: dict[AgentRunStatus, RuntimeApiEventType] = {
 
 
 class RunTerminationCoordinator:
-    """End a run safely: drain the ledger, then emit the run terminal event."""
+    """Coordinator that closes a run cleanly by draining the lifecycle ledger before the terminal event."""
 
     def __init__(self, *, event_producer: RuntimeEventProducer) -> None:
         self._event_producer = event_producer
@@ -116,6 +107,12 @@ class RunTerminationCoordinator:
         terminal_status: AgentRunStatus,
         reason: TerminationReason,
     ) -> None:
+        """Emit a synthesised terminal event for every still-open lifecycle entry.
+
+        A non-zero open count on the green path indicates a producer bug (a
+        ``*_started`` event with no matching ``*_completed``). The log entry
+        surfaces it for debugging without blocking the run from terminating.
+        """
         ledger = self._event_producer.lifecycle_ledger
         open_entries = await ledger.open_entries()
         if not open_entries:
@@ -161,20 +158,24 @@ class RunTerminationCoordinator:
         terminal_status: AgentRunStatus,
         reason: TerminationReason,
     ) -> None:
-        """Build and emit the matching ``*_COMPLETED`` event for a leaked entry."""
+        """Build and emit the matching ``*_COMPLETED`` event for a leaked lifecycle entry.
+
+        Identifying fields from the original payload snapshot are carried forward;
+        ``status`` is overwritten with the synthesised value so consumers can tell
+        apart natural completions from forced-close ones via the ``synthesized`` flag.
+        """
 
         event_type = _TERMINAL_EVENT_TYPES[entry.kind]
         snapshot = dict(entry.payload_snapshot)
-        # Carry forward identifying fields (tool_name, subagent_name, etc.)
-        # plus mark the synthesized event clearly so consumers can tell it
-        # apart from a producer-emitted natural completion.
         payload: dict[str, Any] = {
+            # Preserve all identifying fields (tool_name, subagent_name, etc.)
+            # but discard the original ``status`` — we overwrite it below.
             **{k: v for k, v in snapshot.items() if k not in ("status",)},
             "status": _SYNTHESIZED_STATUS_FOR_TERMINAL[terminal_status],
             "reason": reason.value,
             "synthesized": True,
         }
-        # Ensure the entity id is always present in the synthesized payload.
+        # Guarantee the entity id key is present even if the snapshot was sparse.
         id_field = _LIFECYCLE_ID_FIELD[entry.kind]
         payload.setdefault(id_field, entry.entity_id)
         await self._event_producer.append_api_event(
@@ -198,11 +199,18 @@ class RunTerminationCoordinator:
         extra_payload: Mapping[str, Any] | None,
         extra_metadata: Mapping[str, Any] | None,
     ) -> None:
+        """Emit the run-level terminal event (``RUN_COMPLETED``, ``RUN_FAILED``, or ``RUN_CANCELLED``).
+
+        Errors here are logged but not re-raised: the run row is already in a terminal
+        state; a missing event is a gap in the SSE stream, not a data-integrity failure.
+        """
         event_type = _RUN_EVENT_TYPES[terminal_status]
         payload: dict[str, Any] = {
             "status": event_type.value,
             "reason": reason.value,
         }
+        # Include the exception class name so the frontend/observability layer can
+        # categorise failures without receiving internal stack trace detail.
         if cause is not None:
             payload["error_class"] = type(cause).__name__
         if extra_payload:

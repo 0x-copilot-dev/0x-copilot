@@ -1,0 +1,83 @@
+@startuml f2-multi-turn-tool
+title Flow 2 — Multi-turn with built-in tool call
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User" as u
+participant "RuntimeRunHandler\n(runtime_worker/handlers/run.py)" as h
+participant "StreamingExecutor\n(runtime_worker/streaming_executor.py)" as exec
+participant "StreamOrchestrator\n(runtime_worker/stream_events.py)" as orch
+participant "Deep Agents graph\n(LangGraph compiled)" as graph
+participant "LLM provider" as llm
+participant "ToolBudgetMiddleware\n(capabilities/tool_budget_middleware.py)" as bud
+participant "ToolLoader\n(capabilities/tools/loader.py)" as t
+participant "Built-in tool\n(e.g. ask_a_question)" as tool
+participant "RuntimeEventProducer\n(agent_runtime/api/events.py)" as ep
+participant "EventStorePort + EventBus → SSE" as sse
+participant "BudgetCharger\n(agent_runtime/budgets/charger.py)" as charger
+
+note over h, sse
+  Pre-condition: run started via Flow 1.
+  sequence_no increments monotonically.
+  Every event flows: ep → es → bus → SSE → user.
+end note
+
+== Turn 1 — model emits tool call ==
+
+exec -> graph : drive stream via astream_runtime()
+graph -> llm : invoke(messages + tool_schemas)
+llm -->> graph : assistant message with tool_call {name, args, tool_call_id}
+
+graph -> bud : ToolBudgetMiddleware.pre_call()\n→ decrements ToolBudgetGuard counter
+bud --> graph : ok (or BudgetExceeded if cap reached)
+
+graph -> t : ToolLoader.load_tool(card_name, context)
+t -> t : ToolPermissionChecker.is_card_authorized(card, context)
+t --> graph : async callable (built-in tool instance)
+
+exec -> orch : StreamOrchestrator processes TOOL_CALL chunk
+orch -> ep : append_api_event(TOOL_CALL_STARTED)\nsource=TOOL, payload={name, args, tool_call_id}
+ep ->> sse : notify → user sees "Running tool…"
+
+graph -> tool : tool.ainvoke(args)
+tool --> graph : dict result
+
+exec -> orch : StreamOrchestrator processes TOOL_RESULT chunk
+orch -> ep : append_api_event(TOOL_RESULT)\nsource=TOOL, payload={tool_call_id, result}
+ep ->> sse : notify → user sees tool completed
+
+== Turn 2 — model consumes result and answers ==
+
+graph -> llm : new turn (tool result appended to messages)
+loop streaming deltas
+  llm -->> graph : text chunk
+  exec -> orch : StreamOrchestrator.process_chunk
+  orch -> ep : append_api_event(MODEL_DELTA)
+  ep ->> sse : notify
+end
+
+llm -->> graph : final message + usage_metadata
+exec -> ep : append_api_event(FINAL_RESPONSE)
+exec -> ep : append_api_event(RUN_COMPLETED)
+ep ->> sse : notify
+
+== Post-run charging ==
+
+h -> charger : BudgetCharger.charge_run(\n   run_id, AssistantRunMetrics.usage_records)
+charger -> charger : CostCalculator.compute(\n   usage, ModelPricingCatalog)
+charger -> charger : PersistencePort.charge_budget(\n   CAS retry via with_optimistic_retry)
+
+h -> h : RuntimeQueuePort.mark_complete(claim)
+
+note over bud, charger
+  ToolBudgetMiddleware short-circuits any tool call past
+  the per-run cap (default 5). BudgetExceeded is caught
+  by StreamOrchestrator → emits BUDGET_WARNING event
+  with a safe user-facing message; run continues to completion.
+  BudgetCharger applies actual observed usage idempotently.
+end note
+
+@enduml

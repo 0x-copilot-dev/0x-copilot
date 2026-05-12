@@ -1,13 +1,9 @@
-"""Workspace admin coordinator (P22 / PR 4).
+"""Workspace admin coordinator — controller-facing surface for workspace-level operations.
 
-Owns: ``get_workspace_defaults``, ``update_workspace_defaults``,
-``request_workspace_export``, ``record_workspace_delete_attempt``.
-
-These operations affect a workspace as a whole rather than a single
-conversation or run. The existing :class:`WorkspaceDefaultsService` continues
-to be the underlying domain service; this coordinator is the
-controller-facing surface that the legacy ``RuntimeApiService`` previously
-provided.
+Owns ``get_workspace_defaults``, ``update_workspace_defaults``,
+``request_workspace_export``, and ``record_workspace_delete_attempt``. Delegates
+domain logic to :class:`WorkspaceDefaultsService` and appends detailed audit rows
+for every state-changing operation.
 """
 
 from __future__ import annotations
@@ -27,7 +23,7 @@ from starlette import status
 
 
 class WorkspaceCoordinator:
-    """Coordinate workspace-level admin operations."""
+    """Service layer for workspace admin writes: defaults, export queuing, and delete auditing."""
 
     def __init__(
         self,
@@ -41,8 +37,7 @@ class WorkspaceCoordinator:
         self._model_resolver = model_resolver
 
     async def get_workspace_defaults(self, *, org_id: str) -> WorkspaceDefaultsResponse:
-        """Public ``GET /v1/agent/workspace/defaults``."""
-
+        """Return the current workspace defaults for the given org."""
         return await self._workspace_defaults().get(org_id=org_id)
 
     async def update_workspace_defaults(
@@ -52,7 +47,12 @@ class WorkspaceCoordinator:
         actor_user_id: str,
         request: UpdateWorkspaceDefaultsRequest,
     ) -> WorkspaceDefaultsResponse:
-        """Public ``PUT /v1/agent/workspace/defaults``."""
+        """Validate and persist workspace default updates, emitting granular audit rows.
+
+        Behavior-overrides and training-opt-out changes each get their own audit row
+        in addition to the top-level defaults-update row so compliance queries can
+        find them by action name without parsing JSONB diffs.
+        """
 
         self._validate_workspace_default_model(request)
         before_record = await self._workspace_defaults().get_record(org_id=org_id)
@@ -72,6 +72,8 @@ class WorkspaceCoordinator:
                 "metadata": audit_metadata,
             },
         )
+        # Emit a dedicated audit row for behavior-overrides changes so
+        # compliance dashboards can filter by action name alone.
         if "behavior_overrides" in audit_metadata.get("diff_keys", []):
             await self._persistence.write_audit_log(
                 event_type=Messages.Audit.WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE,
@@ -119,7 +121,12 @@ class WorkspaceCoordinator:
         org_id: str,
         actor_user_id: str,
     ) -> dict[str, str]:
-        """Audit a queued workspace export (v1 stub)."""
+        """Queue a workspace export request and return its export_id.
+
+        This is a v1 stub: the audit row and 202 ship now; the actual export
+        pipeline lands in a follow-up. The export_id is stored in the audit row
+        so it can be correlated with the eventual pipeline output.
+        """
 
         from uuid import uuid4
 
@@ -148,7 +155,12 @@ class WorkspaceCoordinator:
         actor_user_id: str,
         typed_confirmation_correct: bool,
     ) -> None:
-        """Audit a delete-all-data attempt (v1 stub; route returns 501)."""
+        """Record a workspace delete attempt in the audit log without executing the delete.
+
+        The route returns 501; this method exists so the typed-confirmation answer
+        is auditable even when the capability is not yet implemented. A forensic
+        reader can see who asked and whether they answered the confirm gate correctly.
+        """
 
         await self._persistence.write_audit_log(
             event_type=Messages.Audit.WORKSPACE_DELETE_ATTEMPT,
@@ -169,6 +181,10 @@ class WorkspaceCoordinator:
     # ------------------------------------------------------------------
 
     def _workspace_defaults(self):
+        """Return a ``WorkspaceDefaultsService`` bound to this coordinator's deps.
+
+        Lazily imported to prevent a circular dependency at module load time.
+        """
         from agent_runtime.api.workspace_defaults_service import (
             WorkspaceDefaultsService,
         )
@@ -181,12 +197,12 @@ class WorkspaceCoordinator:
     def _validate_workspace_default_model(
         self, request: UpdateWorkspaceDefaultsRequest
     ) -> None:
-        """Reject unknown providers / model names with typed 422s.
+        """Raise 422 when the requested default model provider or name is not in the catalog.
 
         Provider validation reuses ``ModelConfigResolver._normalize_provider``
-        (the same alias table the run path enforces). Model-name validation
-        reuses the known catalog set so the admin default stays within the
-        set the FE picker exposes.
+        (the same alias table the run path enforces). Model-name validation is done
+        against the same hardcoded catalog ``list_models`` exposes so the admin
+        default stays within the set the frontend picker shows.
         """
 
         try:
@@ -198,8 +214,8 @@ class WorkspaceCoordinator:
                 http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 retryable=False,
             ) from exc
-        # Build the catalog inline (mirrors ConversationQueryService.list_models)
-        # to avoid a circular import dependency.
+        # Build the catalog inline rather than calling ConversationQueryService.list_models
+        # to avoid a circular import between the two coordinator modules.
         from agent_runtime.api.conversation_query_service import _display_model_name
         from runtime_api.schemas import ModelCatalogItem
 
@@ -259,6 +275,8 @@ class WorkspaceCoordinator:
         unique_models = {model.id: model for model in models}
         catalog_ids = set(unique_models.keys())
         catalog_names = {m.model_name for m in unique_models.values()}
+        # Accept both the canonical id and the model_name so callers using
+        # either form of the identifier pass validation.
         if (
             request.default_model.model_name not in catalog_ids
             and request.default_model.model_name not in catalog_names

@@ -30,7 +30,7 @@ import os
 import random
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 from psycopg import errors as psycopg_errors
@@ -88,6 +88,10 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from agent_runtime.persistence.schema.migrate import MigrationRunner
+from agent_runtime.retention import (
+    DEPLOYMENT_DEFAULT_TTL_SECONDS,
+    RetentionPolicyResolver,
+)
 from runtime_adapters.base import (
     RuntimeAdapterHelpers,
     StatusTransition,
@@ -3319,29 +3323,55 @@ class PostgresRuntimeApiStore:
         kind: RetentionKind,
         ttl_seconds: int,
         dry_run: bool = False,
+        chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
-        # Per-kind SQL — one method instead of five separate handler
-        # files to keep the audit-readable surface narrow. Tombstone vs.
-        # hard-delete strategy is per the C8 spec; legal-hold filter
-        # uses the active-only index from migration 0001.
-        if kind is RetentionKind.MESSAGES:
-            return await self._sweep_messages(
-                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
-            )
-        if kind is RetentionKind.EVENTS:
-            return await self._sweep_events(
-                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
-            )
-        if kind is RetentionKind.CONTEXT_PAYLOADS:
-            return await self._sweep_context_payloads(org_id=org_id, dry_run=dry_run)
-        if kind is RetentionKind.CHECKPOINTS:
-            return await self._sweep_checkpoints(
-                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
-            )
-        if kind is RetentionKind.MEMORY_ITEMS:
-            return await self._sweep_memory_items(
-                org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
-            )
+        # chunk_size > 0 → Phase 4 retention_until-based chunked CTE.
+        # chunk_size == 0 → legacy created_at+ttl unbounded SQL (flag=false).
+        if chunk_size > 0:
+            if kind is RetentionKind.MESSAGES:
+                return await self._sweep_messages_chunked(
+                    org_id=org_id, chunk_size=chunk_size, dry_run=dry_run
+                )
+            if kind is RetentionKind.EVENTS:
+                return await self._sweep_events_chunked(
+                    org_id=org_id, chunk_size=chunk_size, dry_run=dry_run
+                )
+            if kind is RetentionKind.CONTEXT_PAYLOADS:
+                return await self._sweep_context_payloads_chunked(
+                    org_id=org_id, chunk_size=chunk_size, dry_run=dry_run
+                )
+            if kind is RetentionKind.CHECKPOINTS:
+                return await self._sweep_checkpoints_chunked(
+                    org_id=org_id,
+                    ttl_seconds=ttl_seconds,
+                    chunk_size=chunk_size,
+                    dry_run=dry_run,
+                )
+            if kind is RetentionKind.MEMORY_ITEMS:
+                return await self._sweep_memory_items_chunked(
+                    org_id=org_id, chunk_size=chunk_size, dry_run=dry_run
+                )
+        else:
+            if kind is RetentionKind.MESSAGES:
+                return await self._sweep_messages(
+                    org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+                )
+            if kind is RetentionKind.EVENTS:
+                return await self._sweep_events(
+                    org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+                )
+            if kind is RetentionKind.CONTEXT_PAYLOADS:
+                return await self._sweep_context_payloads(
+                    org_id=org_id, dry_run=dry_run
+                )
+            if kind is RetentionKind.CHECKPOINTS:
+                return await self._sweep_checkpoints(
+                    org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+                )
+            if kind is RetentionKind.MEMORY_ITEMS:
+                return await self._sweep_memory_items(
+                    org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
+                )
         raise ValueError(f"unknown retention kind: {kind!r}")
 
     async def _sweep_messages(
@@ -3503,6 +3533,315 @@ class PostgresRuntimeApiStore:
         if tally_field == "tombstoned":
             return outcome.model_copy(update={"tombstoned": affected})
         return outcome.model_copy(update={"deleted": affected})
+
+    # ------------------------------------------------------------------
+    # Phase 4 — chunked retention_until-based sweep methods
+    #
+    # Each uses a CTE to select up to ``chunk_size`` due rows, then
+    # UPDATEs (or DELETEs) them in one statement.  FOR UPDATE SKIP LOCKED
+    # prevents two concurrent worker processes from racing on the same
+    # rows.  Dry-run wraps in force_rollback so the count is accurate
+    # without committing.
+    # ------------------------------------------------------------------
+
+    async def _execute_sweep_chunked(
+        self,
+        *,
+        sql: str,
+        org_id: str,
+        kind: RetentionKind,
+        chunk_size: int,
+        dry_run: bool,
+        tally_field: str,
+        extra_params: dict | None = None,
+    ) -> RetentionSweepOutcome:
+        params: dict = {"org_id": org_id, "chunk_size": chunk_size}
+        if extra_params:
+            params.update(extra_params)
+        async with self._tenant_connection(org_id=org_id) as conn:
+            if dry_run:
+                async with conn.transaction(force_rollback=True):
+                    async with conn.cursor() as cur:
+                        await cur.execute(sql, params)
+                        affected = cur.rowcount
+            else:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql, params)
+                    affected = cur.rowcount
+        outcome = RetentionSweepOutcome(org_id=org_id, kind=kind)
+        if tally_field == "tombstoned":
+            return outcome.model_copy(update={"tombstoned": affected})
+        return outcome.model_copy(update={"deleted": affected})
+
+    async def _sweep_messages_chunked(
+        self, *, org_id: str, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            WITH due AS (
+                SELECT id FROM agent_messages
+                 WHERE org_id = %(org_id)s
+                   AND status <> 'deleted'
+                   AND retention_until IS NOT NULL
+                   AND retention_until < NOW()
+                   AND conversation_id NOT IN (
+                       SELECT resource_id
+                         FROM runtime_legal_holds
+                        WHERE org_id = %(org_id)s
+                          AND scope IN ('conversation','user','org')
+                          AND released_at IS NULL
+                   )
+                 ORDER BY retention_until
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE agent_messages
+               SET status = 'deleted',
+                   content_text = '[deleted by retention policy]',
+                   content_json = '[]'::jsonb,
+                   metadata_json = '{}'::jsonb,
+                   deleted_at = NOW()
+              FROM due
+             WHERE agent_messages.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MESSAGES,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def _sweep_events_chunked(
+        self, *, org_id: str, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            WITH due AS (
+                SELECT id FROM runtime_events
+                 WHERE org_id = %(org_id)s
+                   AND retention_until IS NOT NULL
+                   AND retention_until < NOW()
+                   AND run_id NOT IN (
+                       SELECT resource_id
+                         FROM runtime_legal_holds
+                        WHERE org_id = %(org_id)s
+                          AND released_at IS NULL
+                   )
+                 ORDER BY retention_until
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE runtime_events
+               SET payload_json_redacted = '{}'::jsonb,
+                   metadata_json_redacted = jsonb_build_object('retention_purged', true)
+              FROM due
+             WHERE runtime_events.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.EVENTS,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def _sweep_context_payloads_chunked(
+        self, *, org_id: str, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            WITH due AS (
+                SELECT id FROM runtime_context_payloads
+                 WHERE org_id = %(org_id)s
+                   AND retention_until IS NOT NULL
+                   AND retention_until < NOW()
+                 ORDER BY retention_until
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM runtime_context_payloads
+             USING due
+             WHERE runtime_context_payloads.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.CONTEXT_PAYLOADS,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="deleted",
+        )
+
+    async def _sweep_checkpoints_chunked(
+        self, *, org_id: str, ttl_seconds: int, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # CHECKPOINTS keeps its bespoke keep-N logic; gains chunking via LIMIT.
+        sql = """
+            WITH due AS (
+                SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY thread_id, checkpoint_namespace
+                               ORDER BY checkpoint_version DESC
+                           ) AS rn,
+                           created_at
+                      FROM runtime_checkpoints
+                     WHERE org_id = %(org_id)s
+                ) ranked
+                WHERE rn > 10
+                  AND created_at < NOW() - make_interval(secs => %(ttl)s)
+                LIMIT %(chunk_size)s
+            )
+            DELETE FROM runtime_checkpoints
+             WHERE id IN (SELECT id FROM due)
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.CHECKPOINTS,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="deleted",
+            extra_params={"ttl": ttl_seconds},
+        )
+
+    async def _sweep_memory_items_chunked(
+        self, *, org_id: str, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        sql = """
+            WITH due AS (
+                SELECT id FROM runtime_memory_items
+                 WHERE org_id = %(org_id)s
+                   AND deleted_at IS NULL
+                   AND retention_until IS NOT NULL
+                   AND retention_until < NOW()
+                 ORDER BY retention_until
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE runtime_memory_items
+               SET deleted_at = NOW(),
+                   content_summary = '[deleted by retention policy]'
+              FROM due
+             WHERE runtime_memory_items.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MEMORY_ITEMS,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="tombstoned",
+        )
+
+    async def backfill_retention_until(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        chunk_size: int,
+    ) -> int:
+        table = {
+            RetentionKind.MESSAGES: "agent_messages",
+            RetentionKind.EVENTS: "runtime_events",
+            RetentionKind.MEMORY_ITEMS: "runtime_memory_items",
+        }.get(kind)
+        if table is None:
+            return 0
+        # CTE-based chunked update: select up to chunk_size unset rows in id
+        # order, update their retention_until in one statement, return count.
+        # SKIP LOCKED avoids contention if multiple worker processes ever run
+        # the backfill concurrently (shouldn't happen in practice).
+        sql = f"""
+            WITH batch AS (
+                SELECT id FROM {table}
+                 WHERE org_id = %(org_id)s
+                   AND retention_until IS NULL
+                 ORDER BY id
+                 LIMIT %(chunk_size)s
+                   FOR UPDATE SKIP LOCKED
+            )
+            UPDATE {table}
+               SET retention_until = created_at + make_interval(secs => %(ttl_seconds)s)
+              FROM batch
+             WHERE {table}.id = batch.id
+        """
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql,
+                    {
+                        "org_id": org_id,
+                        "chunk_size": chunk_size,
+                        "ttl_seconds": ttl_seconds,
+                    },
+                )
+                return cur.rowcount
+
+    async def recompute_retention_until_for_policy(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        scope: RetentionScope,
+        resource_id: str | None,
+        ttl_seconds: int | None,
+    ) -> int:
+        table = {
+            RetentionKind.MESSAGES: "agent_messages",
+            RetentionKind.EVENTS: "runtime_events",
+            RetentionKind.MEMORY_ITEMS: "runtime_memory_items",
+        }.get(kind)
+        if table is None:
+            return 0
+
+        set_expr = (
+            "created_at + make_interval(secs => %(ttl_seconds)s)"
+            if ttl_seconds is not None
+            else "NULL"
+        )
+
+        if scope is RetentionScope.CONVERSATION:
+            # Narrow update: only rows in this specific conversation.
+            sql = f"""
+                UPDATE {table}
+                   SET retention_until = {set_expr}
+                 WHERE org_id = %(org_id)s
+                   AND conversation_id = %(resource_id)s
+            """
+        else:
+            # ORG-scope: update all rows EXCEPT those already covered by
+            # a more-specific CONVERSATION-scope policy for their conversation.
+            sql = f"""
+                UPDATE {table}
+                   SET retention_until = {set_expr}
+                 WHERE org_id = %(org_id)s
+                   AND (
+                       conversation_id IS NULL
+                       OR conversation_id NOT IN (
+                           SELECT DISTINCT resource_id
+                             FROM retention_policies
+                            WHERE org_id = %(org_id)s
+                              AND scope = 'CONVERSATION'
+                              AND kind = %(kind)s
+                              AND resource_id IS NOT NULL
+                       )
+                   )
+            """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql,
+                    {
+                        "org_id": org_id,
+                        "kind": kind.value,
+                        "resource_id": resource_id,
+                        "ttl_seconds": ttl_seconds,
+                    },
+                )
+                return cur.rowcount
 
     async def insert_retention_deletion_evidence(
         self, record: RetentionDeletionEvidenceRecord
@@ -4049,6 +4388,13 @@ class PostgresRuntimeApiStore:
                     column=_Columns.METADATA_JSON_REDACTED,
                     org_id=event_org_id,
                 )
+                retention_until = await self._resolve_retention_until(
+                    conn,
+                    org_id=event_org_id,
+                    kind=RetentionKind.EVENTS,
+                    conversation_id=envelope.conversation_id,
+                    created_at=envelope.created_at,
+                )
                 await conn.execute(
                     """
                     INSERT INTO runtime_events (
@@ -4057,11 +4403,11 @@ class PostgresRuntimeApiStore:
                         parent_task_id, task_id, subagent_id, display_title, summary, status,
                         trace_id, payload_json_redacted, metadata_json_redacted, visibility,
                         redaction_state, activity_kind, presentation_json, created_at,
-                        encryption_version
+                        encryption_version, retention_until
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -4091,6 +4437,7 @@ class PostgresRuntimeApiStore:
                         Jsonb(envelope.presentation),
                         envelope.created_at,
                         version,
+                        retention_until,
                     ),
                 )
                 # Fold the cursor advance into the same transaction.
@@ -4209,6 +4556,21 @@ class PostgresRuntimeApiStore:
                 start_sequence = int(start_row[_Columns.NEXT_SEQUENCE])
                 event_org_id = str(run[_Columns.ORG_ID])
                 version = self._codec.write_version
+                # Resolve retention TTL once per batch — all events share
+                # the same (org, kind, conversation). We fetch ttl_seconds
+                # directly so each row can compute its own expiry from its
+                # own created_at without another policy query.
+                _retention_sample = await self._resolve_retention_until(
+                    conn,
+                    org_id=event_org_id,
+                    kind=RetentionKind.EVENTS,
+                    conversation_id=first.conversation_id,
+                    created_at=first.created_at,
+                )
+                _event_ttl_seconds: int | None = None
+                if _retention_sample is not None:
+                    _event_ttl_delta = _retention_sample - first.created_at
+                    _event_ttl_seconds = int(_event_ttl_delta.total_seconds())
 
                 envelopes: list[RuntimeEventEnvelope] = []
                 rows: list[tuple[object, ...]] = []
@@ -4255,6 +4617,11 @@ class PostgresRuntimeApiStore:
                         column=_Columns.METADATA_JSON_REDACTED,
                         org_id=event_org_id,
                     )
+                    row_retention_until = (
+                        envelope.created_at + timedelta(seconds=_event_ttl_seconds)
+                        if _event_ttl_seconds is not None
+                        else None
+                    )
                     envelopes.append(envelope)
                     rows.append(
                         (
@@ -4284,6 +4651,7 @@ class PostgresRuntimeApiStore:
                             Jsonb(envelope.presentation),
                             envelope.created_at,
                             version,
+                            row_retention_until,
                         )
                     )
 
@@ -4301,7 +4669,8 @@ class PostgresRuntimeApiStore:
                         display_title, summary, status, trace_id,
                         payload_json_redacted, metadata_json_redacted,
                         visibility, redaction_state, activity_kind,
-                        presentation_json, created_at, encryption_version
+                        presentation_json, created_at, encryption_version,
+                        retention_until
                     )
                     VALUES {values_clause}
                     """,
@@ -4712,6 +5081,43 @@ class PostgresRuntimeApiStore:
             created_at=row[_Columns.CREATED_AT],
         )
 
+    async def _resolve_retention_until(
+        self,
+        conn: psycopg.AsyncConnection,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        conversation_id: str | None,
+        created_at: datetime,
+    ) -> datetime | None:
+        """Resolve the effective TTL for (org, kind, conversation) and return the expiry.
+
+        Queries the policies table within the current connection (no extra
+        round-trip when called inside a transaction), builds the resolver,
+        and returns ``created_at + ttl_seconds`` or ``None`` when no policy
+        and no deployment default applies.
+        """
+        cur = await conn.execute(
+            """
+            SELECT id, org_id, scope, resource_id, kind, ttl_seconds,
+                   created_by_user_id, created_at, updated_at
+              FROM retention_policies
+             WHERE org_id = %s AND kind = %s
+            """,
+            (org_id, kind.value),
+        )
+        rows = await cur.fetchall()
+        policies = tuple(self._retention_policy(r) for r in rows)
+        resolver = RetentionPolicyResolver(
+            org_id=org_id,
+            policies=policies,
+            deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
+        )
+        resolved = resolver.resolve(kind=kind, conversation_id=conversation_id)
+        if resolved.ttl_seconds is None:
+            return None
+        return created_at + timedelta(seconds=resolved.ttl_seconds)
+
     async def _insert_message(
         self, conn: psycopg.AsyncConnection, message: MessageRecord
     ) -> None:
@@ -4737,17 +5143,25 @@ class PostgresRuntimeApiStore:
             column=_Columns.METADATA_JSON,
             org_id=message.org_id,
         )
+        retention_until = await self._resolve_retention_until(
+            conn,
+            org_id=message.org_id,
+            kind=RetentionKind.MESSAGES,
+            conversation_id=message.conversation_id,
+            created_at=message.created_at,
+        )
         await conn.execute(
             """
             INSERT INTO agent_messages (
                 id, conversation_id, org_id, run_id, role, content_text, content_format,
                 content_json, attachments_json, quote_json, metadata_json,
                 parent_message_id, source_message_id, branch_id, token_count, trace_id,
-                status, created_at, edited_at, deleted_at, encryption_version
+                status, created_at, edited_at, deleted_at, encryption_version,
+                retention_until
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s
+                %s, %s, %s, %s, %s
             )
             """,
             (
@@ -4772,6 +5186,7 @@ class PostgresRuntimeApiStore:
                 message.edited_at,
                 message.deleted_at,
                 version,
+                retention_until,
             ),
         )
 

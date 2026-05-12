@@ -236,20 +236,20 @@ class TestCitationLedger(CitationLedgerFixtureMixin):
             CitationLedger.unbind(token_obj)
         assert token == "[c1]"
 
-    def test_in_memory_store_lists_for_run_in_ordinal_order(self) -> None:
+    async def test_in_memory_store_lists_for_run_in_ordinal_order(self) -> None:
         ledger, _, store = self._build()
 
-        asyncio.run(ledger.register(_NOTION_DOC))
-        asyncio.run(ledger.register(_DRIVE_DOC))
+        await ledger.register(_NOTION_DOC)
+        await ledger.register(_DRIVE_DOC)
 
-        rows = store.list_for_run(org_id="org_cite", run_id="run_cite")
+        rows = await store.list_for_run(org_id="org_cite", run_id="run_cite")
         assert [row.ordinal for row in rows] == [1, 2]
 
-    def test_in_memory_store_lists_for_conversation(self) -> None:
+    async def test_in_memory_store_lists_for_conversation(self) -> None:
         ledger, _, store = self._build()
-        asyncio.run(ledger.register(_NOTION_DOC))
+        await ledger.register(_NOTION_DOC)
 
-        rows = store.list_for_conversation(
+        rows = await store.list_for_conversation(
             org_id="org_cite",
             conversation_id="conv_cite",
         )

@@ -33,7 +33,7 @@ class _StubSubagentStore:
         self.last_running_only: bool | None = None
         self.last_limit: int | None = None
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self,
         *,
         org_id: str,
@@ -52,7 +52,7 @@ class _StubSourceStore:
         self.last_run_id: str | None = None
         self.last_limit: int | None = None
 
-    def aggregate_for_conversation(
+    async def aggregate_for_conversation(
         self,
         *,
         org_id: str,

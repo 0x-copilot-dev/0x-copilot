@@ -111,14 +111,14 @@ def _at(seconds: int) -> datetime:
 
 
 class TestInMemorySubagentStore:
-    def test_returns_empty_when_no_events(self, store: _StubStore) -> None:
+    async def test_returns_empty_when_no_events(self, store: _StubStore) -> None:
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert result == ()
 
-    def test_projects_started_progress_completed_into_one_snapshot(
+    async def test_projects_started_progress_completed_into_one_snapshot(
         self, store: _StubStore
     ) -> None:
         store.events_by_run[_RUN].extend(
@@ -152,7 +152,7 @@ class TestInMemorySubagentStore:
             ]
         )
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert len(result) == 1
@@ -168,7 +168,7 @@ class TestInMemorySubagentStore:
             "Glean leads on legacy search; we lead on agentic action."
         )
 
-    def test_running_only_filters_completed(self, store: _StubStore) -> None:
+    async def test_running_only_filters_completed(self, store: _StubStore) -> None:
         store.events_by_run[_RUN].extend(
             [
                 _RuntimeStubs.subagent_event(
@@ -195,16 +195,16 @@ class TestInMemorySubagentStore:
             ]
         )
         adapter = InMemorySubagentStore(store)
-        all_snapshots = adapter.list_for_conversation(
+        all_snapshots = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
-        running_only = adapter.list_for_conversation(
+        running_only = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=True, limit=10
         )
         assert {s.task_id for s in all_snapshots} == {"task_done", "task_running"}
         assert {s.task_id for s in running_only} == {"task_running"}
 
-    def test_recency_orders_most_recent_first(self, store: _StubStore) -> None:
+    async def test_recency_orders_most_recent_first(self, store: _StubStore) -> None:
         store.events_by_run[_RUN].extend(
             [
                 _RuntimeStubs.subagent_event(
@@ -238,12 +238,12 @@ class TestInMemorySubagentStore:
             ]
         )
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert [s.task_id for s in result] == ["late", "early"]
 
-    def test_does_not_leak_across_conversations(self, store: _StubStore) -> None:
+    async def test_does_not_leak_across_conversations(self, store: _StubStore) -> None:
         store.events_by_run[_RUN_OTHER].append(
             _RuntimeStubs.subagent_event(
                 run_id=_RUN_OTHER,
@@ -254,12 +254,12 @@ class TestInMemorySubagentStore:
             )
         )
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert result == ()
 
-    def test_rolls_up_token_usage_per_task(self, store: _StubStore) -> None:
+    async def test_rolls_up_token_usage_per_task(self, store: _StubStore) -> None:
         # PR 1.5 AC-2 — `runtime_model_call_usage` rows under one task fold
         # into one SubagentTokenUsage on the snapshot.
         store.events_by_run[_RUN].extend(
@@ -338,7 +338,7 @@ class TestInMemorySubagentStore:
             ]
         )
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         by_task = {s.task_id: s for s in result}
@@ -350,7 +350,7 @@ class TestInMemorySubagentStore:
         assert rolled.total_tokens == 600
         assert by_task["task_no_calls"].token_usage is None
 
-    def test_status_cancelled_propagates(self, store: _StubStore) -> None:
+    async def test_status_cancelled_propagates(self, store: _StubStore) -> None:
         store.events_by_run[_RUN].extend(
             [
                 _RuntimeStubs.subagent_event(
@@ -371,7 +371,7 @@ class TestInMemorySubagentStore:
             ]
         )
         adapter = InMemorySubagentStore(store)
-        result = adapter.list_for_conversation(
+        result = await adapter.list_for_conversation(
             org_id=_ORG, conversation_id=_CONV, running_only=False, limit=10
         )
         assert result[0].status is SubagentLifecycleStatus.CANCELLED
@@ -423,7 +423,7 @@ class TestInMemorySourceStore:
             ]
         )
         adapter = InMemorySourceStore(citations)
-        result = adapter.aggregate_for_conversation(
+        result = await adapter.aggregate_for_conversation(
             org_id=_ORG, conversation_id=_CONV, run_id=None, limit=10
         )
         # ``doc_positioning`` cited twice ranks above ``doc_brand`` cited once.
@@ -448,7 +448,7 @@ class TestInMemorySourceStore:
             ]
         )
         adapter = InMemorySourceStore(citations)
-        result = adapter.aggregate_for_conversation(
+        result = await adapter.aggregate_for_conversation(
             org_id=_ORG, conversation_id=_CONV, run_id=_RUN, limit=10
         )
         assert {row.source_doc_id for row in result} == {"doc_positioning"}
@@ -457,7 +457,7 @@ class TestInMemorySourceStore:
         citations = InMemoryCitationStore()
         await citations.insert_many_or_get([self._citation(ordinal=1)])
         adapter = InMemorySourceStore(citations)
-        result = adapter.aggregate_for_conversation(
+        result = await adapter.aggregate_for_conversation(
             org_id="org_other", conversation_id=_CONV, run_id=None, limit=10
         )
         assert result == ()

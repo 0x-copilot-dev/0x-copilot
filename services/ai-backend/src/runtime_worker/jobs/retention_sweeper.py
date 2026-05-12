@@ -5,16 +5,21 @@ Runs alongside the runtime worker (similar lifecycle as
 (default 600) it:
 
   1. ``list_retention_orgs()`` — distinct org_ids in the affected tables.
-  2. Per org: load policies, build a ``RetentionPolicyResolver``.
-  3. For each kind, resolve org-scope TTL (most-specific within the org;
-     conversation/user-scope policies still bite when the per-row
-     handler reaches them via the WHERE clauses).
-  4. ``sweep_retention_kind(...)`` — adapter-side SQL (per-kind strategy).
+  2. Per org: load policies, build a ``RetentionPolicyResolver``
+     (Phase 4: used only for CHECKPOINTS; other kinds read ``retention_until``).
+  3. For each kind, dispatch to ``sweep_retention_kind()``.
+  4. Phase 4 (``RETENTION_SWEEP_USE_RETENTION_UNTIL=true``, default on):
+     loop until the adapter returns 0 rows for the chunk; resolver is
+     bypassed for all kinds except CHECKPOINTS (which still needs ttl).
   5. Emit per-tenant tally to OTel + write ``runtime_deletion_evidence``
      row on every non-empty outcome (Phase 1).
 
 Disabled by default (``RETENTION_SWEEP_ENABLED=true`` to opt in) so
 existing deployments don't start tombstoning rows on upgrade.
+
+Phase 4 flag: ``RETENTION_SWEEP_USE_RETENTION_UNTIL`` (default ``true``).
+Set to ``false`` for one release to fall back to the legacy
+``created_at + ttl < NOW()`` unbounded sweep during a cautious rollout.
 """
 
 from __future__ import annotations
@@ -46,8 +51,18 @@ class RetentionSweeperLoopEnv:
     INTERVAL_SECONDS = "RETENTION_SWEEP_INTERVAL_SECONDS"
     ENABLED = "RETENTION_SWEEP_ENABLED"
     DRY_RUN = "RETENTION_SWEEP_DRY_RUN"
+    # Phase 4: switch sweep SQL to retention_until-based chunked CTE.
+    USE_RETENTION_UNTIL = "RETENTION_SWEEP_USE_RETENTION_UNTIL"
+    # Rows per chunk per (org, kind) call. 0 disables chunking (legacy path).
+    CHUNK_SIZE = "RETENTION_SWEEP_CHUNK"
+    # Phase 5: grace period before hard-deleting tombstoned rows.
+    # 0 (default) = skip the second-pass hard-delete entirely (safe default).
+    GRACE_DAYS_MESSAGES = "RETENTION_TOMBSTONE_GRACE_DAYS_MESSAGES"
+    GRACE_DAYS_EVENTS = "RETENTION_TOMBSTONE_GRACE_DAYS_EVENTS"
+    GRACE_DAYS_MEMORY_ITEMS = "RETENTION_TOMBSTONE_GRACE_DAYS_MEMORY_ITEMS"
 
     DEFAULT_INTERVAL_SECONDS = 600.0
+    DEFAULT_CHUNK_SIZE = 500
 
     @classmethod
     def env_float(cls, name: str, default: float) -> float:
@@ -66,6 +81,17 @@ class RetentionSweeperLoopEnv:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+    @classmethod
+    def env_int(cls, name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None or raw.strip() == "":
+            return default
+        try:
+            v = int(raw)
+            return v if v > 0 else default
+        except ValueError:
+            return default
+
 
 class RetentionSweeperLoop:
     """Periodic per-tenant retention sweep."""
@@ -76,6 +102,12 @@ class RetentionSweeperLoop:
         RetentionKind.MESSAGES,
         RetentionKind.EVENTS,
         RetentionKind.MEMORY_ITEMS,
+        # Phase 5: second-pass hard-delete after grace period.
+        # Run AFTER the first-pass tombstones so rows have status='deleted'
+        # before the hard-delete query looks for them.
+        RetentionKind.MESSAGES_TOMBSTONED,
+        RetentionKind.EVENTS_TOMBSTONED,
+        RetentionKind.MEMORY_ITEMS_TOMBSTONED,
     )
 
     def __init__(
@@ -85,6 +117,11 @@ class RetentionSweeperLoop:
         interval_seconds: float | None = None,
         dry_run: bool | None = None,
         metrics: RetentionMetrics | None = None,
+        use_retention_until: bool | None = None,
+        chunk_size: int | None = None,
+        grace_days_messages: int | None = None,
+        grace_days_events: int | None = None,
+        grace_days_memory_items: int | None = None,
     ) -> None:
         self._persistence = persistence
         self._interval = (
@@ -102,6 +139,44 @@ class RetentionSweeperLoop:
                 RetentionSweeperLoopEnv.DRY_RUN, False
             )
         )
+        self._use_retention_until = (
+            use_retention_until
+            if use_retention_until is not None
+            else RetentionSweeperLoopEnv.env_bool(
+                RetentionSweeperLoopEnv.USE_RETENTION_UNTIL, True
+            )
+        )
+        self._chunk_size = (
+            chunk_size
+            if chunk_size is not None
+            else RetentionSweeperLoopEnv.env_int(
+                RetentionSweeperLoopEnv.CHUNK_SIZE,
+                RetentionSweeperLoopEnv.DEFAULT_CHUNK_SIZE,
+            )
+        )
+        self._grace_days: dict[RetentionKind, int] = {
+            RetentionKind.MESSAGES_TOMBSTONED: (
+                grace_days_messages
+                if grace_days_messages is not None
+                else RetentionSweeperLoopEnv.env_int(
+                    RetentionSweeperLoopEnv.GRACE_DAYS_MESSAGES, 0
+                )
+            ),
+            RetentionKind.EVENTS_TOMBSTONED: (
+                grace_days_events
+                if grace_days_events is not None
+                else RetentionSweeperLoopEnv.env_int(
+                    RetentionSweeperLoopEnv.GRACE_DAYS_EVENTS, 0
+                )
+            ),
+            RetentionKind.MEMORY_ITEMS_TOMBSTONED: (
+                grace_days_memory_items
+                if grace_days_memory_items is not None
+                else RetentionSweeperLoopEnv.env_int(
+                    RetentionSweeperLoopEnv.GRACE_DAYS_MEMORY_ITEMS, 0
+                )
+            ),
+        }
         self._metrics = metrics if metrics is not None else RetentionMetrics()
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -147,51 +222,136 @@ class RetentionSweeperLoop:
                 deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
             )
             for kind in self._SWEEP_KINDS:
-                resolved = resolver.resolve(kind=kind)
-                # ``context_payloads`` is driven by the schema's
-                # ``retention_until`` column rather than a TTL — the
-                # adapter ignores ttl for that kind, so we still call it
-                # even when resolved.ttl_seconds is None.
-                if (
-                    resolved.ttl_seconds is None
-                    and kind is not RetentionKind.CONTEXT_PAYLOADS
-                ):
-                    continue
-                t0 = time.monotonic()
-                try:
-                    outcome = await self._persistence.sweep_retention_kind(
-                        org_id=org_id,
-                        kind=kind,
-                        ttl_seconds=resolved.ttl_seconds or 0,
-                        dry_run=self._dry_run,
+                if self._use_retention_until:
+                    outcome = await self._sweep_kind_chunked(
+                        org_id=org_id, kind=kind, resolver=resolver
                     )
-                except Exception:
-                    _LOGGER.warning(
-                        "retention_sweep_kind_failed",
-                        extra={"metadata": {"org_id": org_id, "kind": kind.value}},
-                        exc_info=True,
+                else:
+                    outcome = await self._sweep_kind_legacy(
+                        org_id=org_id, kind=kind, resolver=resolver
                     )
-                    continue
-                elapsed = time.monotonic() - t0
-                self._metrics.record_sweep_duration(
-                    kind=kind.value, elapsed_seconds=elapsed
-                )
-                _LOGGER.info(
-                    "retention_swept",
-                    extra={
-                        "metadata": {
-                            "org_id": org_id,
-                            "kind": kind.value,
-                            "tombstoned": outcome.tombstoned,
-                            "deleted": outcome.deleted,
-                            "skipped_legal_hold": outcome.skipped_legal_hold,
-                            "dry_run": self._dry_run,
-                        }
-                    },
-                )
-                await self._record_metrics_and_evidence(outcome)
-                outcomes.append(outcome)
+                if outcome is not None:
+                    outcomes.append(outcome)
         return tuple(outcomes)
+
+    async def _sweep_kind_chunked(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        resolver: RetentionPolicyResolver,
+    ) -> RetentionSweepOutcome | None:
+        """Phase 4 path: retention_until-driven, loop until 0 rows per chunk.
+
+        CHECKPOINTS still resolves ttl_seconds (its keep-N logic is not
+        expressible via retention_until). All other kinds are column-driven
+        and do not touch the resolver.
+
+        Dry-run: executes one chunk in a force-rollback transaction and
+        returns immediately — looping would re-see the same rows every time.
+        """
+        ttl_seconds = 0
+        if kind is RetentionKind.CHECKPOINTS:
+            resolved = resolver.resolve(kind=kind)
+            if resolved.ttl_seconds is None:
+                return None
+            ttl_seconds = resolved.ttl_seconds
+
+        total = RetentionSweepOutcome(org_id=org_id, kind=kind)
+        t0 = time.monotonic()
+        while True:
+            try:
+                chunk = await self._persistence.sweep_retention_kind(
+                    org_id=org_id,
+                    kind=kind,
+                    ttl_seconds=ttl_seconds,
+                    dry_run=self._dry_run,
+                    chunk_size=self._chunk_size,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "retention_sweep_kind_failed",
+                    extra={"metadata": {"org_id": org_id, "kind": kind.value}},
+                    exc_info=True,
+                )
+                break
+            total = total.model_copy(
+                update={
+                    "tombstoned": total.tombstoned + chunk.tombstoned,
+                    "deleted": total.deleted + chunk.deleted,
+                    "skipped_legal_hold": (
+                        total.skipped_legal_hold + chunk.skipped_legal_hold
+                    ),
+                }
+            )
+            # Dry-run: one chunk only (force-rollback means rows never
+            # disappear, so looping would never converge).
+            if self._dry_run or chunk.tombstoned + chunk.deleted == 0:
+                break
+
+        elapsed = time.monotonic() - t0
+        self._metrics.record_sweep_duration(kind=kind.value, elapsed_seconds=elapsed)
+        _LOGGER.info(
+            "retention_swept",
+            extra={
+                "metadata": {
+                    "org_id": org_id,
+                    "kind": kind.value,
+                    "tombstoned": total.tombstoned,
+                    "deleted": total.deleted,
+                    "skipped_legal_hold": total.skipped_legal_hold,
+                    "dry_run": self._dry_run,
+                }
+            },
+        )
+        await self._record_metrics_and_evidence(total)
+        return total
+
+    async def _sweep_kind_legacy(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        resolver: RetentionPolicyResolver,
+    ) -> RetentionSweepOutcome | None:
+        """Pre-Phase-4 path: single-pass created_at+ttl sweep (flag=false)."""
+
+        resolved = resolver.resolve(kind=kind)
+        if resolved.ttl_seconds is None and kind is not RetentionKind.CONTEXT_PAYLOADS:
+            return None
+        t0 = time.monotonic()
+        try:
+            outcome = await self._persistence.sweep_retention_kind(
+                org_id=org_id,
+                kind=kind,
+                ttl_seconds=resolved.ttl_seconds or 0,
+                dry_run=self._dry_run,
+                chunk_size=0,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "retention_sweep_kind_failed",
+                extra={"metadata": {"org_id": org_id, "kind": kind.value}},
+                exc_info=True,
+            )
+            return None
+        elapsed = time.monotonic() - t0
+        self._metrics.record_sweep_duration(kind=kind.value, elapsed_seconds=elapsed)
+        _LOGGER.info(
+            "retention_swept",
+            extra={
+                "metadata": {
+                    "org_id": org_id,
+                    "kind": kind.value,
+                    "tombstoned": outcome.tombstoned,
+                    "deleted": outcome.deleted,
+                    "skipped_legal_hold": outcome.skipped_legal_hold,
+                    "dry_run": self._dry_run,
+                }
+            },
+        )
+        await self._record_metrics_and_evidence(outcome)
+        return outcome
 
     async def _record_metrics_and_evidence(
         self, outcome: RetentionSweepOutcome
@@ -218,8 +378,6 @@ class RetentionSweeperLoop:
                 count=outcome.deleted,
                 dry_run=self._dry_run,
             )
-        # Write an evidence row whenever any rows were affected (or skipped
-        # due to legal hold) — even on dry-run so the table is queryable.
         if outcome.tombstoned or outcome.deleted or outcome.skipped_legal_hold:
             evidence = RetentionDeletionEvidenceRecord(
                 org_id=outcome.org_id,

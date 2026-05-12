@@ -23,6 +23,7 @@ from agent_runtime.persistence.records import (
     RetentionDeletionEvidenceRecord,
     RetentionKind,
     RetentionPolicyRecord,
+    RetentionScope,
     RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
@@ -730,19 +731,21 @@ class PersistencePort(Protocol):
         kind: RetentionKind,
         ttl_seconds: int,
         dry_run: bool = False,
+        chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
         """Apply the per-kind retention strategy for one tenant.
 
         Per kind:
 
           - ``messages`` / ``events`` / ``memory_items``: tombstone (status
-            flip / blank content) for rows older than ttl. Hard delete after
-            a 30d grace; today the implementation only tombstones.
+            flip / blank content). Phase 4+: driven by ``retention_until <
+            NOW()`` with a chunked CTE when ``chunk_size > 0``. Legacy:
+            ``created_at + ttl < NOW()`` unbounded when ``chunk_size == 0``.
           - ``context_payloads``: hard delete where ``retention_until <
-            now()`` (the column already exists in the schema and is
-            authoritative) — the resolver's ttl is treated as a fallback.
+            now()`` (column-authoritative). Chunked when ``chunk_size > 0``.
           - ``checkpoints``: keep the latest N per ``(thread_id, namespace)``
-            (default 10) plus anything inside the ttl window.
+            (default 10) plus anything inside the ttl window. Always
+            ``ttl_seconds``-based; gains chunking when ``chunk_size > 0``.
 
         Resources covered by an active ``runtime_legal_holds`` row are
         skipped and counted in ``skipped_legal_hold``.
@@ -756,6 +759,54 @@ class PersistencePort(Protocol):
         Called by the sweeper after each non-empty outcome so compliance
         reviewers can answer "what was swept, when" without parsing logs.
         Dry-run sweeps also write evidence rows (tagged ``dry_run=True``).
+        """
+
+    async def backfill_retention_until(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        ttl_seconds: int,
+        chunk_size: int,
+    ) -> int:
+        """Stamp ``retention_until`` on up to ``chunk_size`` unset rows.
+
+        Returns the number of rows updated. The caller loops until the
+        return value is 0 (all unset rows for this org × kind have been
+        filled). Idempotent: rows with ``retention_until`` already set
+        are never touched.
+
+        Phase 2 backfill — stamped value is
+        ``created_at + ttl_seconds * INTERVAL '1 second'``.
+        Only applies to MESSAGES, EVENTS, MEMORY_ITEMS; CONTEXT_PAYLOADS
+        is already column-driven; CHECKPOINTS is structural.
+        """
+
+    async def recompute_retention_until_for_policy(
+        self,
+        *,
+        org_id: str,
+        kind: RetentionKind,
+        scope: RetentionScope,
+        resource_id: str | None,
+        ttl_seconds: int | None,
+    ) -> int:
+        """Bulk-update ``retention_until`` for rows covered by a changed policy.
+
+        Called by the HTTP route after a policy upsert or delete so that
+        existing rows reflect the new TTL without waiting for the backfill
+        job. ``ttl_seconds=None`` clears the column (policy deleted with no
+        fallback — row keeps its position in the sweep backlog until
+        re-stamped or the sweeper's current expression runs).
+
+        Scope-aware:
+          - ``ORG``: all rows for the org × kind that are NOT covered by a
+            more-specific ``CONVERSATION``-scope policy are updated.
+          - ``CONVERSATION``: only rows belonging to ``resource_id``
+            (the conversation_id) are updated.
+
+        Returns the total number of rows updated across all affected tables.
+        Only applies to MESSAGES, EVENTS, MEMORY_ITEMS.
         """
 
 

@@ -1,6 +1,6 @@
 # Refactor PRD — Split `RuntimeApiService` (Phase 6 / P22)
 
-**Status:** Draft
+**Status:** PRs 1–4 shipped + PR 5 partial (2026-05-12) — see §0 for the open follow-up
 **Author:** architecture audit, May 2026
 **Tracks:** [refactor-audit §2.7](../architecture/refactor-audit.md#27-runtimeapiservice-at-24k-loc), [roadmap P22](00-roadmap.md#phase-6--coordinator-split-do-last)
 
@@ -14,7 +14,15 @@ This PRD splits it into **five focused coordinators that share zero state** plus
 
 The migration is **composition-first, big-bang-last**: callers move one method at a time behind a thin re-export shim, with `RuntimeApiService` reduced to a 3-line delegator before the file is deleted.
 
-**PR 1 shipped 2026-05-11.** Five coordinator shim files added under `agent_runtime/api/`, each forwarding to the legacy service. All coordinators constructed in `runtime_api/app.py` lifespan and stored on `app.state.*_coordinator` / `app.state.conversation_query_service` for PR 2 to migrate routes to. `test_import_boundaries` tightened to use word-boundary regex (the substring check produced a false positive against the legitimate new `agent_runtime.api.approval_coordinator` module). 1667 unit tests pass.
+**PRs 1–4 shipped + PR 5 partial (2026-05-12).** `RuntimeApiService` survives as a 520-LOC delegating shell; all implementation lives in the five coordinators. 1705 unit tests pass.
+
+- **PR 1 (2026-05-11):** Five coordinator shim files added under `agent_runtime/api/` (`run_coordinator.py`, `approval_coordinator.py`, `conversation_coordinator.py`, `conversation_query_service.py`, `workspace_coordinator.py`), each forwarding to legacy `RuntimeApiService`. Constructed in `runtime_api/app.py` and exposed on `app.state.*`. `test_import_boundaries` tightened to word-boundary regex. 1667 unit tests pass.
+- **PR 2 (2026-05-12):** All HTTP routes migrated — `routes.py`, `workspace_defaults_routes.py`, `workspace_data_routes.py` now call coordinators from `app.state` instead of `cls.service(request).<method>`. `RuntimeSseAdapter` updated to take `ConversationQueryService` (which now owns `TERMINAL_RUN_STATUSES`). 1667 unit tests pass.
+- **PR 3 (no-op):** Worker never imported `RuntimeApiService` — confirmed by grep.
+- **PR 4 (2026-05-12):** Implementation inversion. All method bodies moved from `RuntimeApiService` into the 5 coordinators. `RuntimeApiService.__init__` delegates all public methods via 1-line forwarders. `delete_conversation` injects `RunCoordinator` for the cancel-on-delete path. 1677 unit tests pass.
+- **PR 5 partial (2026-05-12):** Deleted class-level constants (`TERMINAL_RUN_STATUSES`, `APPROVAL_FORWARD_MAX_CHAIN_DEPTH`, `APPROVAL_FORWARDABLE_KINDS`) and module-level helpers (`_conversation_lifecycle_audit_metadata`, `_display_model_name`, `_connector_scope_audit_metadata`) — all now live on their respective coordinators. Migrated `RuntimeApiRoutes.service(request).persistence` callsites in `routes.py` and `retention_routes.py` to `request.app.state.runtime_persistence` (dedicated `app.state` slot). Removed `service()` accessor from `RuntimeApiRoutes`. 1705 unit tests pass.
+
+**Open follow-up — PR 5 final.** [§5 PR 5](#pr-5--delete-the-legacy-class) specifies _"Delete `RuntimeApiService` from `agent_runtime/api/service.py`. Delete the file."_ [`src/agent_runtime/api/service.py`](../../src/agent_runtime/api/service.py) is now a 520-LOC delegating shell — `class RuntimeApiService` is still defined, every public method is a 1-line forward into a coordinator. To complete PR 5 as written: migrate the test fixtures and `runtime_api/app.py` callsites that still construct `RuntimeApiService`, rename trace spans (`tracer.start_as_current_span("RuntimeApiService.foo")` → `"<NewCoordinator>.<method>"`), then delete the file. Alternative: formally scope PR 5 down to "thin delegator" and update §5 / §10.
 
 ---
 

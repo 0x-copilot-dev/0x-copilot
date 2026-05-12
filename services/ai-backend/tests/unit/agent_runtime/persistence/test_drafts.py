@@ -97,31 +97,33 @@ class TestInMemoryDraftStore:
     async def test_insert_and_latest(self) -> None:
         store = InMemoryDraftStore()
         record = _record(version=1)
-        store.insert_version(record)
-        assert store.latest(org_id=record.org_id, draft_id=record.draft_id) == record
+        await store.insert_version(record)
+        assert (
+            await store.latest(org_id=record.org_id, draft_id=record.draft_id) == record
+        )
 
     async def test_unique_per_org_draft_version(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=1))
         with pytest.raises(OptimisticConflict) as exc:
-            store.insert_version(_record(version=1))
+            await store.insert_version(_record(version=1))
         assert exc.value.expected_version == 1
         assert exc.value.actual_version == 1
 
     async def test_versions_monotone(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
-        store.insert_version(_record(version=2, content_text="edited"))
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        await store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=2, content_text="edited"))
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert latest.version == 2
         assert latest.content_text == "edited"
 
     async def test_latest_for_conversation_scoped_to_org(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(org_id="org_a", conversation_id="conv_a"))
-        store.insert_version(_record(org_id="org_b", conversation_id="conv_a"))
-        a_drafts = store.latest_for_conversation(
+        await store.insert_version(_record(org_id="org_a", conversation_id="conv_a"))
+        await store.insert_version(_record(org_id="org_b", conversation_id="conv_a"))
+        a_drafts = await store.latest_for_conversation(
             org_id="org_a", conversation_id="conv_a"
         )
         assert len(a_drafts) == 1
@@ -129,17 +131,17 @@ class TestInMemoryDraftStore:
 
     async def test_expect_status_raises_on_version_drift(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
-        store.insert_version(_record(version=2))
+        await store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=2))
         with pytest.raises(OptimisticConflict):
-            store.expect_status(
+            await store.expect_status(
                 org_id="org_acme", draft_id=_draft_id(), expected_version=1
             )
 
     async def test_expect_status_unknown_raises_keyerror(self) -> None:
         store = InMemoryDraftStore()
         with pytest.raises(KeyError):
-            store.expect_status(
+            await store.expect_status(
                 org_id="org_acme", draft_id=_draft_id(), expected_version=1
             )
 
@@ -147,8 +149,8 @@ class TestInMemoryDraftStore:
 class TestDraftService:
     async def test_list_returns_latest_per_draft_id(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
-        store.insert_version(_record(version=2, content_text="v2"))
+        await store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=2, content_text="v2"))
         service = DraftService(store=store)
 
         result = await service.list_for_conversation(
@@ -160,8 +162,8 @@ class TestDraftService:
 
     async def test_get_returns_latest_when_version_omitted(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
-        store.insert_version(_record(version=2, content_text="v2"))
+        await store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=2, content_text="v2"))
         service = DraftService(store=store)
 
         draft = await service.get(org_id="org_acme", draft_id=_draft_id())
@@ -169,8 +171,8 @@ class TestDraftService:
 
     async def test_get_specific_version(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, content_text="v1"))
-        store.insert_version(_record(version=2, content_text="v2"))
+        await store.insert_version(_record(version=1, content_text="v1"))
+        await store.insert_version(_record(version=2, content_text="v2"))
         service = DraftService(store=store)
 
         draft = await service.get(org_id="org_acme", draft_id=_draft_id(), version=1)
@@ -184,7 +186,7 @@ class TestDraftService:
 
     async def test_patch_inserts_new_version(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, content_text="v1"))
+        await store.insert_version(_record(version=1, content_text="v1"))
         service = DraftService(store=store)
 
         result = await service.patch(
@@ -199,8 +201,8 @@ class TestDraftService:
 
     async def test_patch_version_conflict_raises_409(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
-        store.insert_version(_record(version=2))
+        await store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=2))
         service = DraftService(store=store)
 
         with pytest.raises(RuntimeApiError) as exc:
@@ -214,7 +216,7 @@ class TestDraftService:
 
     async def test_patch_refuses_sent_drafts(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, status=DraftStatus.SENT))
+        await store.insert_version(_record(version=1, status=DraftStatus.SENT))
         service = DraftService(store=store)
 
         with pytest.raises(RuntimeApiError) as exc:
@@ -228,7 +230,7 @@ class TestDraftService:
 
     async def test_send_transitions_to_pending_approval(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=1))
         service = DraftService(store=store)
 
         result = await service.send(
@@ -256,11 +258,11 @@ class TestDraftService:
         audit_calls: list[tuple[str, dict]] = []
 
         class StubPersistence:
-            def write_audit_log(self, *, event_type: str, record: dict) -> None:
+            async def write_audit_log(self, *, event_type: str, record: dict) -> None:
                 audit_calls.append((event_type, record))
 
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=1))
         service = DraftService(store=store, persistence=StubPersistence())
 
         await service.send(
@@ -278,7 +280,7 @@ class TestDraftService:
 
     async def test_discard_transitions_to_discarded(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1))
+        await store.insert_version(_record(version=1))
         service = DraftService(store=store)
 
         result = await service.discard(
@@ -291,7 +293,7 @@ class TestDraftService:
 
     async def test_cross_org_returns_404(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(org_id="org_a"))
+        await store.insert_version(_record(org_id="org_a"))
         service = DraftService(store=store)
 
         with pytest.raises(RuntimeApiError) as exc:

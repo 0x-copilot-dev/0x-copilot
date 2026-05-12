@@ -48,6 +48,7 @@ class _FakePersistence:
         kind: RetentionKind,
         ttl_seconds: int,
         dry_run: bool = False,
+        chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
         self.sweep_calls.append(
             {
@@ -55,13 +56,28 @@ class _FakePersistence:
                 "kind": kind,
                 "ttl_seconds": ttl_seconds,
                 "dry_run": dry_run,
+                "chunk_size": chunk_size,
             }
         )
+        # Track calls per (org, kind) so the Phase 4 chunked loop terminates.
+        key = f"{org_id}:{kind.value}"
+        if not hasattr(self, "_call_counts"):
+            self._call_counts: dict[str, int] = {}
+        n = self._call_counts.get(key, 0)
+        self._call_counts[key] = n + 1
+
         if self._sweep_outcome is not None:
-            return self._sweep_outcome.model_copy(
-                update={"org_id": org_id, "kind": kind}
-            )
-        return RetentionSweepOutcome(org_id=org_id, kind=kind, tombstoned=1)
+            # Return the configured outcome on the first call; return zero
+            # on the second so the Phase 4 loop terminates.
+            if n == 0:
+                return self._sweep_outcome.model_copy(
+                    update={"org_id": org_id, "kind": kind}
+                )
+            return RetentionSweepOutcome(org_id=org_id, kind=kind)
+
+        # Default: tombstoned=1 on first call, 0 on second → loop terminates.
+        tombstoned = 1 if n == 0 else 0
+        return RetentionSweepOutcome(org_id=org_id, kind=kind, tombstoned=tombstoned)
 
     async def insert_retention_deletion_evidence(
         self, record: RetentionDeletionEvidenceRecord
@@ -102,11 +118,12 @@ class TestRetentionSweeperLoop:
         assert ("org_b", RetentionKind.MESSAGES) in org_kinds
         assert ("org_a", RetentionKind.EVENTS) in org_kinds
         assert ("org_a", RetentionKind.CONTEXT_PAYLOADS) in org_kinds
-        # Defaults skip checkpoints/memory_items (TTL=None and not the
-        # column-driven kind).
+        # Phase 4: MEMORY_ITEMS is column-driven (retention_until), so it is
+        # always swept — same as CONTEXT_PAYLOADS. CHECKPOINTS still needs
+        # a TTL policy; with no policy and no default it is skipped.
         assert ("org_a", RetentionKind.CHECKPOINTS) not in org_kinds
-        assert ("org_a", RetentionKind.MEMORY_ITEMS) not in org_kinds
-        assert len(outcomes) >= 6  # 2 orgs × 3 kinds
+        assert ("org_a", RetentionKind.MEMORY_ITEMS) in org_kinds
+        assert len(outcomes) >= 8  # 2 orgs × 4 column-driven kinds
 
     @pytest.mark.asyncio
     async def test_per_org_policy_overrides_default(self) -> None:
@@ -129,8 +146,10 @@ class TestRetentionSweeperLoop:
             for call in persistence.sweep_calls
             if call["kind"] is RetentionKind.MESSAGES
         ]
-        assert len(messages_calls) == 1
-        assert messages_calls[0]["ttl_seconds"] == 3600
+        # Phase 4: resolver is not consulted for MESSAGES (column-driven).
+        # Loop calls the adapter until 0 rows returned, so ≥ 1 call.
+        assert len(messages_calls) >= 1
+        assert messages_calls[0]["chunk_size"] > 0  # Phase 4 chunked path
 
     @pytest.mark.asyncio
     async def test_dry_run_propagates_to_adapter(self) -> None:

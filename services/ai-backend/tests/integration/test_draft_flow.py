@@ -202,7 +202,7 @@ class TestDraftFlow:
 
         assert result.error is None
         # One version persisted; tenant identity bound from the run handler.
-        latest = store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+        latest = await store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
         assert latest is not None
         assert latest.version == 1
         assert latest.status is DraftStatus.DRAFT
@@ -222,7 +222,7 @@ class TestDraftFlow:
         edit = await backend.aedit(_DRAFT_PATH, "v1 body", "v2 body — refined")
         assert edit.error is None
 
-        latest = store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+        latest = await store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
         assert latest is not None
         assert latest.version == 2
         # Both writes streamed an event projection.
@@ -297,7 +297,7 @@ class TestDraftSend:
             decided_by_user_id="user_marcus",
         )
 
-        latest = store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+        latest = await store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.SENT
@@ -347,7 +347,7 @@ class TestDraftSend:
             decided_by_user_id="user_marcus",
         )
 
-        latest = store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+        latest = await store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.DRAFT
@@ -390,7 +390,7 @@ class TestDraftSendUnauth:
         assert exc.value.details.get("mcp_server_id") == "srv_slack"
 
         # No DB write; no approval row; no event; no audit. Draft stays at v1.
-        latest_before = store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+        latest_before = await store.latest(org_id=_ORG, draft_id=_DRAFT_ID)
         assert latest_before is not None
         assert latest_before.version == 1
         assert persistence.approvals == []

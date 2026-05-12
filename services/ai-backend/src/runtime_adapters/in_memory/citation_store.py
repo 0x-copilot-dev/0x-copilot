@@ -47,7 +47,7 @@ class InMemoryCitationStore:
                 persisted.append(record)
             return tuple(persisted)
 
-    def list_for_run(
+    async def list_for_run(
         self,
         *,
         org_id: str,
@@ -65,7 +65,7 @@ class InMemoryCitationStore:
                 )
             )
 
-    def list_for_conversation(
+    async def list_for_conversation(
         self,
         *,
         org_id: str,

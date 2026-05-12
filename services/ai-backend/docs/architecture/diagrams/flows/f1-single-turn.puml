@@ -1,0 +1,110 @@
+@startuml f1-single-turn
+title Flow 1 — Single-turn message (no tools)
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User\n(browser)" as u
+participant "backend-facade\n:8200" as facade
+participant "RuntimeApiRoutes\n(runtime_api/http/routes.py)" as r
+participant "RuntimeApiService\n(agent_runtime/api/service.py)" as svc
+participant "PersistencePort +\nRuntimeQueuePort\n(runtime_adapters/)" as q
+participant "RuntimeWorkerLoop\n(runtime_worker/loop.py)" as wkr
+participant "RuntimeRunHandler\n(runtime_worker/handlers/run.py)" as h
+participant "acreate_agent_runtime\n(agent_runtime/execution/factory.py)" as factory
+participant "StreamingExecutor\n(runtime_worker/streaming_executor.py)" as exec
+participant "StreamOrchestrator\n(runtime_worker/stream_events.py)" as orch
+participant "LLM provider\n(Anthropic / OpenAI / Gemini)" as llm
+participant "RuntimeEventProducer\n(agent_runtime/api/events.py)" as ep
+participant "EventStorePort" as es
+participant "RuntimeEventBus\n(runtime_api/sse/event_bus.py)" as bus
+participant "RuntimeSseAdapter\n(runtime_api/sse/adapter.py)" as sse
+
+== Phase 1 — Enqueue ==
+
+u -> facade : POST /v1/agent/runs\n{message, model_profile, conversation_id?}
+facade -> r : forwarded (auth headers added)
+r -> svc : RuntimeApiService.create_run(CreateRunRequest)
+svc -> q : PersistencePort.create_run_with_user_message()\n→ atomic: ConversationRecord + MessageRecord(USER) + RunRecord(QUEUED)
+svc -> q : RuntimeQueuePort.enqueue_run(RuntimeRunCommand)
+svc --> r : RunRecord {run_id, conversation_id, status=QUEUED}
+r --> facade : 202 Accepted + {run_id, conversation_id}
+facade --> u : 202 Accepted
+
+== Phase 2 — SSE connection ==
+
+u -> facade : GET /v1/agent/runs/{run_id}/stream\n?after_sequence=0&follow=true
+facade -> r : forwarded
+r -> sse : RuntimeSseAdapter.stream(\n   service, org_id, user_id,\n   run_id, after_sequence=0, follow=true,\n   event_bus=runtime_event_bus)
+
+== Phase 3 — Worker picks up the run ==
+
+wkr -> q : RuntimeQueuePort.claim_next(worker_id, lock_expires_at)
+q --> wkr : RuntimeWorkerClaim {command_type=RUN_REQUESTED, command=RuntimeRunCommand}
+wkr -> h : RuntimeRunHandler.handle(command)
+
+h -> ep : append_api_event(RUN_STARTED)\nsource=WORKER
+ep -> es : EventStorePort.append_event → sequence_no=1
+ep -> q : set_run_latest_sequence(run_id, 1)
+ep ->> bus : notify_sync(run_id)
+
+bus -->> sse : wake from wait()
+sse -> svc : service.replay_events(after_sequence=0)
+svc --> sse : [envelope#1 RUN_STARTED], run_status=RUNNING
+sse -->> u : event: runtime_event\nid: 1\ndata: {…RUN_STARTED…}
+
+== Phase 4 — Factory + execution ==
+
+h -> factory : acreate_agent_runtime(AgentRuntimeContext, RuntimeDependencies)
+factory -> factory : load tool registry, MCP servers (HTTP→backend),\nskills, memory backend
+factory --> h : RuntimeHarness {compiled LangGraph + deps}
+
+h -> exec : StreamingExecutor.run(harness, run, metrics)
+exec -> llm : provider adapter astream(messages)
+
+== Phase 5 — Streaming chunks ==
+
+loop streaming chunks
+  llm -->> exec : text delta chunk
+  exec -> orch : StreamOrchestrator.process_chunk(chunk)
+  orch -> ep : append_api_event(MODEL_DELTA)\nsource=WORKER, payload={delta}
+  ep -> es : append → sequence_no++
+  ep -> q : set_run_latest_sequence
+  ep ->> bus : notify_sync(run_id)
+  bus -->> sse : wake
+  sse -> svc : replay_events(after_sequence=latest)
+  svc --> sse : [envelope#N MODEL_DELTA]
+  sse -->> u : SSE frame (id: N)
+end
+
+== Phase 6 — Final response + completion ==
+
+llm -->> exec : final aggregated message + usage_metadata
+exec -> ep : append_api_event(FINAL_RESPONSE)\npayload={message_id, content, citations=[]}
+ep -> es : sequence_no++
+ep ->> bus : notify_sync
+
+exec -> ep : append_api_event(RUN_COMPLETED)
+ep -> es : sequence_no++
+ep ->> bus : notify_sync
+
+sse -> svc : replay_events(after_sequence=N)
+svc --> sse : [FINAL_RESPONSE, RUN_COMPLETED]\nrun_status=COMPLETED
+
+note right of sse
+  run_status in TERMINAL_RUN_STATUSES
+  → event_bus.unsubscribe(run_id)
+  → return (stream closes naturally)
+end note
+
+sse -->> u : final SSE frames
+sse -> bus : unsubscribe(run_id)
+
+== Phase 7 — Post-run charging ==
+
+h -> h : BudgetCharger.charge_run(\n   run_id, AssistantRunMetrics.usage_records)
+h -> q : RuntimeQueuePort.mark_complete(claim)
+
+@enduml

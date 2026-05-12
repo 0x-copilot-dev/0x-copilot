@@ -98,8 +98,8 @@ def _handler(
 class TestDraftSendResolution:
     async def test_approve_transitions_to_sent_and_audits_completed(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
-        store.insert_version(
+        await store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(
             _record(
                 version=2,
                 run_id="run_1",
@@ -123,7 +123,7 @@ class TestDraftSendResolution:
             decided_by_user_id="user_marcus",
         )
 
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.SENT
@@ -139,8 +139,8 @@ class TestDraftSendResolution:
 
     async def test_reject_reverts_to_draft_and_audits_rejected(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
-        store.insert_version(
+        await store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(
             _record(
                 version=2,
                 run_id="run_1",
@@ -159,7 +159,7 @@ class TestDraftSendResolution:
             decided_by_user_id="user_marcus",
         )
 
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.DRAFT
@@ -169,7 +169,7 @@ class TestDraftSendResolution:
 
     async def test_skips_when_status_is_not_pending(self) -> None:
         store = InMemoryDraftStore()
-        store.insert_version(_record(version=1, run_id="run_existing"))
+        await store.insert_version(_record(version=1, run_id="run_existing"))
         # Status is plain DRAFT — no pending approval to resolve.
         handler, persistence = _handler(store)
         handler.event_producer.append_api_event = (  # type: ignore[assignment]
@@ -183,7 +183,7 @@ class TestDraftSendResolution:
             decided_by_user_id="user_marcus",
         )
 
-        latest = store.latest(org_id="org_acme", draft_id=_draft_id())
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
         assert latest is not None
         assert latest.version == 1
         # No state mutation; no audit.

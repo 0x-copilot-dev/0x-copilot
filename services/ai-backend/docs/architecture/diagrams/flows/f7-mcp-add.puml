@@ -1,0 +1,99 @@
+@startuml f7-mcp-add
+title Flow 7 — Adding an MCP server (JSON / catalog / custom UI)
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User\n(admin or member)" as u
+participant "Frontend\n(Settings / Catalog /\nin-chat suggest card)" as fe
+participant "backend-facade" as facade
+participant "backend\n(MCP registry, OAuth,\ntoken vault)" as backend
+participant "Persistent registry\n(server rows + scopes)" as breg
+participant "RuntimeApiService\n(agent_runtime/api/service.py)" as svc
+participant "DynamicMcpRegistry\n(capabilities/mcp/registry.py)" as mreg
+participant "SuggestibleConnectorsResolver\n(api/suggestible_connectors_resolver.py)" as sugg
+participant "McpDiscoveryService\n(api/mcp_discovery_service.py)" as disc
+
+note over u, disc
+  ai-backend never owns the MCP registry — it is read-only here.
+  Three install paths (A/B/C) all converge on the same registry row
+  in backend. The connector is visible in the next run without a
+  worker restart because acreate_agent_runtime re-queries backend
+  on every run.
+end note
+
+== Path A — JSON config (operator / GitOps) ==
+
+u -> backend : POST /internal/v1/mcp/servers\n{server_id, endpoint, auth_type, scopes, …}
+backend -> breg : upsert ServerRecord\n(auth_state=NONE or VALID for api_key)
+backend --> u : 201 Created
+
+== Path B — Catalog install (most common) ==
+
+u -> fe : Settings → Connectors → Catalog → click "Connect Linear"
+fe -> facade : POST /v1/connectors/install {server_id, scopes}
+facade -> backend : same
+backend -> backend : DCR (dynamic client registration if server supports it)
+backend -> breg : insert ServerRecord (auth_state=NONE)
+backend --> fe : {install_id, auth_start_url}
+
+note right of backend
+  Install ≠ authenticated. The server row exists,
+  tool list can be enumerated, but auth_state=NONE.
+  Real OAuth happens in flow 8 (MCP auth).
+end note
+
+opt auto-auth (api_key servers)
+  fe -> facade : follow auth_start_url (if applicable)
+  facade -> backend : OAuth dance → TokenVault.put()
+  backend -> breg : update auth_state=VALID
+end
+
+== Path C — Custom add via UI (advanced) ==
+
+u -> fe : Settings → Add custom MCP\n{name, url, auth_type, client_id, client_secret, scope}
+fe -> facade : POST /v1/connectors/custom
+facade -> backend : same
+backend -> backend : validate descriptor (MCP discovery probe)
+backend -> breg : insert ServerRecord\n(auth_state=NONE if oauth, VALID if api_key)
+backend --> fe : 201 + optional auth_start_url
+
+== ai-backend reflects the change at next run ==
+
+u -> facade : POST /v1/agent/runs (any message)
+facade -> svc : create_run(…)
+svc -> svc : (worker claims run)
+svc -> mreg : DynamicMcpRegistry.list_available_servers(context)
+mreg -> backend : GET /internal/v1/mcp/servers\n(filter: org_id + user scopes)
+backend -> breg : query ServerRecord[]
+backend --> mreg : ServerRecord[] + auth_state per server
+mreg -> mreg : McpPermissionPolicy.is_server_card_visible\n(filter by scope, org, auth policy)
+mreg --> svc : visible McpServerCard[]
+note right of mreg
+  The newly installed server is in the list.
+  System prompt now includes its tool card.
+  No cache to flush; no worker restart needed.
+end note
+
+== Catalog suggestion mid-chat ==
+
+note over disc
+  If the user asks "can you connect to Linear?" before installing,
+  McpDiscoveryService is bound for the run. The model can call
+  the suggest_mcp_connector built-in tool. This synthesises a
+  CatalogSuggestionCard and emits an inline offer the user can
+  accept — which routes to Path B above.
+end note
+
+u -> facade : "can you connect to Linear?"
+facade -> svc : create_run(…)
+disc -> sugg : list_suggestible_uninstalled(context)
+sugg -> backend : GET /internal/v1/mcp/catalog
+backend --> sugg : CatalogSuggestionCard[]
+disc -> ep : (emits inline offer event via RuntimeEventProducer)
+u -> fe : click "Connect" on inline card
+fe -> facade : POST /v1/connectors/install (Path B)
+
+@enduml

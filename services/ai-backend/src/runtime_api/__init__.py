@@ -1,3 +1,3 @@
-"""Deployable FastAPI surface for the agent runtime service."""
+"""FastAPI application package for the agent runtime HTTP and SSE service."""
 
 __all__: list[str] = []

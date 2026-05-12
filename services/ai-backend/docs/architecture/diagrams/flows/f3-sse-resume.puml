@@ -1,0 +1,84 @@
+@startuml f3-sse-resume
+title Flow 3 — SSE resume after disconnect
+
+!theme plain
+skinparam shadowing false
+skinparam ArrowColor #5B6770
+skinparam sequenceMessageAlign center
+
+actor "User\n(browser)" as u
+participant "backend-facade" as facade
+participant "RuntimeApiRoutes" as r
+participant "RuntimeSseAdapter\n(runtime_api/sse/adapter.py)" as sse
+participant "ConversationQueryService\n(agent_runtime/api/)" as svc
+participant "EventStorePort" as es
+participant "RuntimeEventBus" as bus
+participant "Worker (background)" as wkr
+
+note over u, wkr
+  Pre-condition: a run is in progress.
+  The client received events up to sequence_no=42.
+  Network drop disconnects the open SSE connection.
+end note
+
+== Reconnection ==
+
+u -> facade : GET /v1/agent/runs/{run_id}/stream\n?after_sequence=42&follow=true
+facade -> r : forwarded
+r -> sse : RuntimeSseAdapter.stream(\n   service, org_id, user_id,\n   run_id, after_sequence=42,\n   follow=true,\n   event_bus=runtime_event_bus)
+
+== Gap-fill replay ==
+
+sse -> svc : service.replay_events(after_sequence=42)
+svc -> es : EventStorePort.list_events_after(run_id, 42, visibility=USER)
+es --> svc : [envelope#43, #44, #45]
+svc --> sse : RuntimeEventReplayResponse(\n   events=[#43,#44,#45],\n   latest_sequence_no=45,\n   run_status=RUNNING)
+
+loop for each replayed event
+  sse -> sse : latest_sequence = max(latest, e.sequence_no)
+  sse -->> u : event: runtime_event\nid: <seq>\ndata: <json>
+end
+
+note right of sse
+  run_status=RUNNING → not in TERMINAL_RUN_STATUSES
+  follow=true → enter the wait loop
+end note
+
+== Steady-state tailing ==
+
+loop until terminal status
+  sse -> bus : await RuntimeEventBus.wait(run_id,\ntimeout=FALLBACK_POLL_SECONDS=2.0)
+
+  alt push notification arrives first
+    wkr ->> bus : notify_sync(run_id)\n(after appending event to EventStore)
+    bus -->> sse : wake
+  else timeout (no events for 2.0s)
+    bus -->> sse : timeout (fallback poll)
+  end
+
+  sse -> svc : service.replay_events(after_sequence=latest_sequence)
+  svc --> sse : new envelopes (or empty list if timeout was spurious)
+  loop yield new events
+    sse -->> u : SSE frame (id: <seq>)
+  end
+end
+
+== Terminal status — stream closes ==
+
+wkr ->> bus : notify_sync(run_id)\n(after appending RUN_COMPLETED)
+bus -->> sse : wake
+sse -> svc : service.replay_events(after_sequence=N)
+svc --> sse : [envelope#M RUN_COMPLETED]\nrun_status=COMPLETED
+sse -->> u : final SSE frame
+sse -> bus : event_bus.unsubscribe(run_id)
+sse -->> u : (stream closes)
+
+note over sse, u
+  follow=false path (used by replay-only endpoint):
+  yields all available events, then emits one synthetic
+  HEARTBEAT envelope (sequence_no=max(1, latest+1),
+  metadata.transient=true), then closes.
+  The HEARTBEAT signals "up to date" without blocking.
+end note
+
+@enduml

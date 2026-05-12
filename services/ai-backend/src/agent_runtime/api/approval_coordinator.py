@@ -1,12 +1,9 @@
-"""Approval lifecycle coordinator (P22 / PR 4).
+"""Approval lifecycle coordinator — single source of truth for approval-state transitions.
 
-Owns: ``list_assigned_approvals`` (inbox read), ``record_approval_decision``,
-``request_approval_undo``. Single source of truth for approval-state
-transitions.
-
-Approvals cover both human-in-the-loop decisions and MCP auth resolution.
-Multi-fire safe — token rotation mid-run fires the same cycle again. Resume
-happens via a separate ``APPROVAL_RESOLVED`` queue command, not inline.
+Handles inbox reads, approve/reject decisions, two-stage forwarding, and
+undo-within-window operations. Multi-fire safe: token rotation mid-run may
+re-enter the same cycle. Resume is enqueued via ``APPROVAL_RESOLVED``, never
+executed inline.
 """
 
 from __future__ import annotations
@@ -55,10 +52,17 @@ from runtime_api.schemas import (
 
 
 class ApprovalCoordinator:
-    """Coordinate approval lifecycle commands and inbox reads."""
+    """Service layer for approval lifecycle: inbox reads, decisions, forwarding, and undo.
 
+    Persists decisions, emits typed events, enqueues worker resume commands,
+    and records audit rows. All public methods raise ``RuntimeApiError`` on
+    invalid state; callers must not catch and swallow those.
+    """
+
+    # Chains longer than this are refused to prevent unbounded delegation trees.
     APPROVAL_FORWARD_MAX_CHAIN_DEPTH = 3
 
+    # Only these kinds support forwarding; question-type approvals resolve inline.
     APPROVAL_FORWARDABLE_KINDS = frozenset(
         {
             Values.ApprovalKind.ACTION,
@@ -95,8 +99,13 @@ class ApprovalCoordinator:
         limit: int,
         cursor: str | None,
     ) -> AssignedApprovalsResponse:
-        """Return the recipient inbox view."""
+        """Return the paginated recipient inbox for the given status filter.
 
+        Enforces the hard cap on page size regardless of the caller-supplied
+        limit so a single request cannot exhaust the store.
+        """
+
+        # Clamp to [1, MAX] so callers can't request an unlimited page.
         bounded = min(
             max(1, limit),
             Values.MAX_ASSIGNED_APPROVAL_LIMIT,
@@ -124,8 +133,14 @@ class ApprovalCoordinator:
 
     @classmethod
     def _record_to_assigned(cls, record: ApprovalRequestRecord) -> AssignedApproval:
+        """Project a raw persistence record onto the inbox response shape.
+
+        Metadata fields are typed defensively — the store may have been
+        written by older code that stored non-string values.
+        """
         approval_kind = record.metadata.get(Keys.Field.APPROVAL_KIND)
         action_summary = record.metadata.get(Keys.Field.ACTION_SUMMARY)
+        # Two naming conventions exist in the wild; prefer the newer one.
         risk_class = record.metadata.get("risk_level") or record.metadata.get(
             "risk_class"
         )
@@ -149,13 +164,21 @@ class ApprovalCoordinator:
 
     @staticmethod
     def _encode_assigned_cursor(created_at: datetime, approval_id: str) -> str:
+        """Encode a (created_at, approval_id) pair as a URL-safe base64 cursor token."""
         raw = f"{created_at.isoformat()}|{approval_id}".encode()
+        # Strip trailing "=" padding so the token is safe to embed in query strings.
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
     @staticmethod
     def _decode_assigned_cursor(cursor: str | None) -> tuple[datetime, str] | None:
+        """Decode a cursor token produced by ``_encode_assigned_cursor``.
+
+        Returns ``None`` on any malformed input so a corrupted or truncated
+        cursor silently starts from the beginning rather than raising 500.
+        """
         if cursor is None:
             return None
+        # Restore the base64 padding that was stripped at encode time.
         padding = "=" * (-len(cursor) % 4)
         try:
             raw = base64.urlsafe_b64decode(cursor + padding).decode()
@@ -171,7 +194,11 @@ class ApprovalCoordinator:
         approval_id: str,
         request: ApprovalDecisionRequest,
     ) -> ApprovalDecisionResponse:
-        """Persist an approval decision and enqueue the worker resume command."""
+        """Persist an approval decision, emit a typed event, and enqueue the worker resume.
+
+        Forwarded decisions are delegated to ``_decide_forwarded`` because
+        they create a child row rather than resolving the approval directly.
+        """
 
         approval = await self._persistence.get_approval_request(
             org_id=org_id, approval_id=approval_id
@@ -183,6 +210,7 @@ class ApprovalCoordinator:
                 http_status=status.HTTP_404_NOT_FOUND,
                 retryable=False,
             )
+        # Scope check: only the assigned user may resolve their own approval.
         if approval.user_id != request.decided_by_user_id:
             raise RuntimeApiError(
                 RuntimeErrorCode.PERMISSION_DENIED,
@@ -195,6 +223,7 @@ class ApprovalCoordinator:
                 approval=approval,
                 request=request,
             )
+        # Map the decision enum to the persistence status; both share string values.
         status_value = (
             ApprovalStatus.APPROVED
             if request.decision.value == ApprovalStatus.APPROVED.value
@@ -270,6 +299,11 @@ class ApprovalCoordinator:
         approval: ApprovalRequestRecord,
         record: ApprovalDecisionRecord,
     ) -> datetime | None:
+        """Return the undo deadline only when the approval is approved AND reversible.
+
+        Rejected decisions are irreversible by design; the metadata flag lets
+        per-action type registrations opt specific actions into reversibility.
+        """
         if record.status is not ApprovalStatus.APPROVED:
             return None
         if approval.metadata.get("reversible") != "yes":
@@ -283,7 +317,12 @@ class ApprovalCoordinator:
         approval_id: str,
         decided_by_user_id: str,
     ) -> ApprovalUndoResponse:
-        """Record the user's intent to undo an approved + reversible action."""
+        """Record undo intent for an approved, reversible action within the time window.
+
+        Does not roll back the action — emits an ``APPROVAL_UNDO_REQUESTED`` event
+        so a downstream worker (or human operator) can act on it. Raises 410 when
+        the undo window has already closed.
+        """
 
         approval = await self._persistence.get_approval_request(
             org_id=org_id, approval_id=approval_id
@@ -378,6 +417,11 @@ class ApprovalCoordinator:
 
     @staticmethod
     def _decision_decided_at(*, approval: ApprovalRequestRecord) -> datetime | None:
+        """Extract the ISO-8601 ``decided_at`` timestamp stored in approval metadata.
+
+        Returns ``None`` when the field is absent or unparseable rather than
+        letting a stale or malformed value propagate to the undo-window check.
+        """
         raw = approval.metadata.get("decided_at")
         if not isinstance(raw, str):
             return None
@@ -442,6 +486,9 @@ class ApprovalCoordinator:
             )
         except RuntimeError as exc:
             message = str(exc)
+            # The store raises a RuntimeError with a sentinel token when a
+            # concurrent decision already claimed the approval between our
+            # guard check and the write. Surface as 409 rather than 500.
             if "no_longer_pending" in message or "not_pending" in message:
                 raise RuntimeApiError(
                     RuntimeErrorCode.VALIDATION_ERROR,
@@ -526,6 +573,7 @@ class ApprovalCoordinator:
                 },
             },
         )
+        # Fire notification off the request thread — never block forward on delivery.
         asyncio.create_task(
             self._notifications.notify_approval_assigned(
                 approval=child,
@@ -551,6 +599,11 @@ class ApprovalCoordinator:
         approval: ApprovalRequestRecord,
         target: ApprovalForwardTarget,
     ) -> None:
+        """Validate all preconditions for forwarding before touching the store.
+
+        Checks ordering: status → kind → chain depth → target membership.
+        Each failure records an observability metric for dashboard visibility.
+        """
         if approval.status is not ApprovalStatus.PENDING:
             self._approval_metrics.record_forward_invalid(
                 reason=ForwardInvalidReason.NOT_PENDING
@@ -610,6 +663,7 @@ class ApprovalCoordinator:
 
     @classmethod
     def _chain_depth(cls, *, approval: ApprovalRequestRecord) -> int:
+        """Return the forwarding chain depth stored on the approval record."""
         return approval.chain_depth
 
     @classmethod
@@ -619,6 +673,12 @@ class ApprovalCoordinator:
         approval_kind: object,
         record_status: str,
     ) -> str:
+        """Translate a persistence status to the wire label for a given kind.
+
+        ``ASK_A_QUESTION`` approvals use "answered"/"skipped" instead of
+        "approved"/"rejected" so the frontend can render the correct copy
+        without inspecting the approval kind itself.
+        """
         if approval_kind == Values.ApprovalKind.ASK_A_QUESTION:
             if record_status == ApprovalStatus.APPROVED.value:
                 return Values.Status.ANSWERED
@@ -628,6 +688,7 @@ class ApprovalCoordinator:
     async def _run_for_scope(
         self, *, org_id: str, user_id: str, run_id: str
     ) -> RunRecord:
+        """Fetch the run and assert it belongs to ``user_id`` within ``org_id``."""
         run = await self._persistence.get_run(org_id=org_id, run_id=run_id)
         if run is None or run.user_id != user_id:
             raise RuntimeApiError(

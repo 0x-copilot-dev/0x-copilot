@@ -1,28 +1,13 @@
-"""Notification dispatcher (PR 1.4.1).
+"""Notification dispatcher port and implementations for approval and share events.
 
-Two-stage approval forwarding (PR 1.4) creates a child approval row
-addressed to a second workspace user. Without a notification, that user
-has no signal — they'd have to open the conversation themselves to see
-the assigned card. This module owns the "tell the recipient something
-happened" port plus its default and production implementations.
+Owns the "tell the recipient something happened" port. The production
+``InboxAndEmailNotificationDispatcher`` fans out over three channels:
+inbox SSE bus (desktop), email via the backend's email endpoint, and Slack DM
+(when a ``SlackDispatcherPort`` adapter is injected).
 
-Anti-pattern check: this is *not* a parallel notification system. The
-production composite dispatcher fans out through the channels we already
-have:
-
-  1. The per-user inbox SSE bus (in-process; defined in
-     ``runtime_api.sse.inbox_bus``) for connected clients.
-  2. The services/backend ``/internal/v1/notifications/email`` endpoint
-     (the same path MFA uses) for the email channel.
-
-Slack DM and desktop push are W4.1; they'll add new call sites against
-this same port without changing its contract.
-
-Dispatch fires fire-and-forget from ``RuntimeApiService._decide_forwarded``
-*after* the persistence transaction commits, off the request thread via
-``asyncio.create_task``. Failures log a structured warning but do not
-roll back the forward — the chain re-converges at the next sweeper tick
-if the recipient never sees the notification.
+Dispatch is fire-and-forget: callers invoke these methods via
+``asyncio.create_task`` after the persistence transaction commits so a
+notification failure never blocks or rolls back the underlying write.
 """
 
 from __future__ import annotations
@@ -53,17 +38,22 @@ logger = logging.getLogger(__name__)
 NotificationEvent = Literal[
     "mention", "approval_needed", "run_finished", "weekly_digest"
 ]
-"""Event types the matrix is keyed by. Mirrors ``NotificationEvent`` in
-``packages/api-types/src/index.ts``. Adding a new event here is the
-schema-side of the change; the FE matrix gains a row in lockstep."""
+"""Event types that key the per-user notification preference matrix.
+
+Must stay in sync with the frontend's ``NotificationEvent`` type in
+``packages/api-types/src/index.ts``; adding a new event here requires
+the frontend matrix to gain a matching row.
+"""
 
 NotificationChannel = Literal["email", "slack", "desktop"]
-"""Delivery channels. ``desktop`` maps to the in-product inbox-bus push
-(the closest match for "live in-product notification"); ``email`` rides
-the existing email endpoint; ``slack`` is reserved for the W4.1 Slack DM
-adapter (no-op until that lands)."""
+"""Delivery channels for notification events.
+
+``desktop`` maps to the in-product inbox SSE bus; ``email`` to the backend
+email endpoint; ``slack`` to the Slack DM adapter (no-op until wired).
+"""
 
 NotificationMatrix = dict[NotificationEvent, dict[NotificationChannel, bool]]
+"""Sparse preference matrix: ``{event: {channel: enabled}}``."""
 
 
 # Deployment-default matrix — must stay in sync with the FE at
@@ -80,16 +70,11 @@ _DEFAULT_MATRIX: Final[NotificationMatrix] = {
 
 @runtime_checkable
 class UserPreferenceFetcher(Protocol):
-    """Resolve a user's notification matrix.
+    """Port for fetching a user's notification preference matrix.
 
-    Called fire-and-forget on the dispatch path. Implementations MUST NOT
-    raise; on transient backend failure return ``None`` so the caller
-    falls back to deployment defaults (the safer choice for a "should I
-    notify?" check — silence is not a regression).
-
-    Production injects an HTTP client that hits the backend's
-    ``/internal/v1/me/preferences`` endpoint with the recipient's
-    ``user_id`` + ``org_id``. Tests inject ``InMemoryUserPreferenceFetcher``.
+    Implementations must never raise; return ``None`` on transient backend
+    failures so the caller falls back to deployment defaults. Silence is
+    the safe default — missing preferences should not block notifications.
     """
 
     async def fetch_notification_matrix(
@@ -101,9 +86,10 @@ class UserPreferenceFetcher(Protocol):
 
 
 class _DefaultsOnlyUserPreferenceFetcher:
-    """Fetcher that always returns ``None`` so the caller uses the
-    deployment defaults. Used when no real fetcher is wired (dev /
-    tests / deployments that haven't shipped the matrix yet)."""
+    """No-op fetcher that always returns ``None``, causing callers to use deployment defaults.
+
+    Used when no HTTP fetcher is wired at construction time.
+    """
 
     async def fetch_notification_matrix(
         self,
@@ -115,8 +101,11 @@ class _DefaultsOnlyUserPreferenceFetcher:
 
 
 class InMemoryUserPreferenceFetcher:
-    """Deterministic fetcher for tests. Wraps a ``{user_id: matrix}``
-    map and returns ``None`` for unknown users (= use defaults)."""
+    """Test fetcher backed by an explicit ``{user_id: matrix}`` map.
+
+    Returns ``None`` for unknown users, which triggers deployment-default
+    fallback in the dispatcher — the same behaviour as a first-time user.
+    """
 
     def __init__(
         self,
@@ -125,6 +114,7 @@ class InMemoryUserPreferenceFetcher:
         self._by_user: dict[str, NotificationMatrix] = dict(matrices or {})
 
     def set(self, user_id: str, matrix: NotificationMatrix) -> None:
+        """Register or overwrite a user's notification matrix."""
         self._by_user[user_id] = matrix
 
     async def fetch_notification_matrix(
@@ -133,6 +123,7 @@ class InMemoryUserPreferenceFetcher:
         user_id: str,
         org_id: str,
     ) -> NotificationMatrix | None:
+        """Return the matrix for ``user_id``, or ``None`` if not configured."""
         return self._by_user.get(user_id)
 
 
@@ -142,17 +133,11 @@ def _channel_allowed(
     event: NotificationEvent,
     channel: NotificationChannel,
 ) -> bool:
-    """Return ``True`` if the (event, channel) cell is enabled in the
-    user's matrix. Falls back to the deployment defaults when the user
-    has no row, or when the row is missing the cell (forward compat with
-    deploys that ship a partial matrix).
+    """Return ``True`` if the (event, channel) cell permits delivery.
 
-    Reasoning by example:
-    - User opted out of email for ``approval_needed`` → return ``False``.
-    - User has no preferences row → use ``_DEFAULT_MATRIX`` → ``True``
-      for email + desktop (the FE's documented default).
-    - User row is missing the new event ``share_forked`` → fall through
-      to the default for whatever event we map it to.
+    Falls back to ``_DEFAULT_MATRIX`` when the user has no preferences row, or
+    when the row is missing a cell — forwards-compatible with deployments that
+    ship a partial matrix before the FE adds a new row.
     """
 
     if matrix is not None:
@@ -165,12 +150,10 @@ def _channel_allowed(
 
 @runtime_checkable
 class NotificationDispatcher(Protocol):
-    """Inform the recipient that an approval is assigned to them, or
-    that an approval they're tracking has resolved.
+    """Port for delivering approval assignment and resolution notifications to recipients.
 
-    Both methods are best-effort. Implementations MUST NOT raise; they
-    must catch and log internally so the request handler that fires this
-    via ``asyncio.create_task`` doesn't propagate noise.
+    All methods are best-effort: implementations must catch and log exceptions
+    internally so failures never propagate to the ``asyncio.create_task`` caller.
     """
 
     async def notify_approval_assigned(
@@ -188,9 +171,6 @@ class NotificationDispatcher(Protocol):
         decided_by_user_id: str,
     ) -> None: ...
 
-    # PR 6.2 — fired (best-effort, off the request thread) after a
-    # recipient forks a shared conversation. Default to a no-op so
-    # impls that don't care about share fan-out don't have to override.
     async def notify_share_forked(
         self,
         *,
@@ -201,12 +181,10 @@ class NotificationDispatcher(Protocol):
 
 
 class LoggingNotificationDispatcher:
-    """Default dispatcher: structured logs only.
+    """Structured-log-only dispatcher used in dev, tests, and as a fallback.
 
-    Used in dev + tests + as a graceful fallback when the production
-    dispatcher's dependencies aren't wired. Operationally meaningful in
-    development: tail the logs and you see the same events the inbox SSE
-    push would have emitted.
+    Emits the same event metadata the inbox SSE push would carry so operators
+    can tail logs and observe what notifications would have been sent.
     """
 
     async def notify_approval_assigned(
@@ -274,11 +252,12 @@ class LoggingNotificationDispatcher:
 # as a constructor arg so the SSE bus stays loosely coupled — no import
 # cycle between agent_runtime.api and runtime_api.sse.
 InboxPublish = Callable[[ApprovalRequestRecord, str, str], Awaitable[None]]
-"""Signature: (approval, event_type, actor_user_id) -> awaitable[None].
+"""Callable type for in-process inbox SSE bus push: ``(approval, event_type, actor_user_id)``.
 
-``event_type`` is ``"approval_assigned"`` or ``"approval_resolved"``.
-``actor_user_id`` is the workspace user whose action triggered the event
-(forwarder for assigned, decider for resolved).
+``event_type`` is ``"approval_assigned"`` or ``"approval_resolved"``;
+``actor_user_id`` is the forwarder (assigned) or decider (resolved).
+Injected at construction to break the import cycle between
+``agent_runtime.api`` and ``runtime_api.sse``.
 """
 
 
@@ -309,16 +288,11 @@ class _Env:
 
 @runtime_checkable
 class SlackDispatcherPort(Protocol):
-    """Send a Slack DM for a notification event.
+    """Port for sending a Slack DM notification.
 
-    Best-effort, fire-and-forget. Implementations MUST NOT raise; they
-    must catch and log internally so the request handler that fires
-    this via ``asyncio.create_task`` doesn't propagate noise.
-
-    ``recipient_user_id`` is the workspace user the notification is
-    addressed to. Resolving that to a Slack user id is the adapter's
-    job (typically via the Slack ``users.lookupByEmail`` API or a
-    persisted workspace-user → slack-user mapping).
+    Best-effort, fire-and-forget — implementations must never raise. Resolving
+    the workspace ``recipient_user_id`` to a Slack user ID is the adapter's
+    responsibility (typically via ``users.lookupByEmail`` or a stored mapping).
     """
 
     async def send_notification(
@@ -334,12 +308,11 @@ class SlackDispatcherPort(Protocol):
 
 
 class LoggingSlackDispatcher:
-    """Default Slack adapter: structured logs only.
+    """Structured-log-only Slack adapter used in dev, tests, and as a fallback.
 
-    Used in dev + tests + as a graceful fallback when the production
-    adapter's dependencies aren't wired. Operators tail the logs and
-    see the same events the real DM would carry, exactly the same
-    pattern ``LoggingEmailDispatcher`` uses for the email channel.
+    Operators see "would-have-sent" log lines with the same metadata the real
+    DM would carry, making it easy to verify notification behaviour without
+    a live Slack app integration.
     """
 
     async def send_notification(
@@ -368,17 +341,12 @@ class LoggingSlackDispatcher:
 
 
 class InboxAndEmailNotificationDispatcher:
-    """Production dispatcher: fans out to the inbox SSE bus + email + Slack.
+    """Production dispatcher that fans out to inbox SSE bus, email, and Slack.
 
-    Each channel is gated on whether the channel's dependencies are
-    wired at construction:
-      * email — dispatch only when an ``HttpPoster`` is injected.
-      * slack — dispatch only when a ``SlackDispatcherPort`` is injected.
-    Inbox is always active.
-
-    Class name is preserved (callers reference it by name across the
-    runtime); the docstring carries the truth that it now handles three
-    channels.
+    Each channel is gated on whether its dependency is injected at construction:
+    inbox is always active; email requires an ``HttpPoster``; Slack requires a
+    ``SlackDispatcherPort``. The notification preference matrix is consulted for
+    every channel before dispatch so per-user opt-outs are honoured.
     """
 
     def __init__(
@@ -401,10 +369,7 @@ class InboxAndEmailNotificationDispatcher:
         self._service_token = service_token or os.environ.get(
             "ENTERPRISE_SERVICE_TOKEN", ""
         )
-        # PR 4.1 follow-up: consult the recipient's notification matrix
-        # before fanning out. Default: a no-op fetcher → deployment
-        # defaults apply, so behavior pre-PR is unchanged for any deploy
-        # that hasn't wired the HTTP fetcher yet.
+        # Defaults-only fetcher keeps existing behaviour when no HTTP fetcher is wired.
         self._preference_fetcher: UserPreferenceFetcher = (
             preference_fetcher or _DefaultsOnlyUserPreferenceFetcher()
         )
@@ -459,9 +424,9 @@ class InboxAndEmailNotificationDispatcher:
         decision: ApprovalDecision,
         decided_by_user_id: str,
     ) -> None:
-        # Resolution maps to ``run_finished`` in the matrix — the
-        # approval thread completing is the user-facing equivalent of a
-        # background run reaching a terminal state.
+        # Map approval resolution to ``run_finished`` — both represent a background
+        # process completing, so the user's "notify me when runs finish" preference
+        # applies without needing a dedicated matrix row.
         matrix = await self._safe_fetch_matrix(
             user_id=approval.user_id, org_id=approval.org_id
         )
@@ -507,12 +472,9 @@ class InboxAndEmailNotificationDispatcher:
         forked_by_user_id: str,
         new_conversation_id: str,
     ) -> None:
-        # Share fork is conceptually a "mention" — someone interacted
-        # with content the user shared, like an @-mention thread reply.
-        # Until the FE matrix gains a dedicated ``share_forked`` row, we
-        # ride the closest existing event so the user's preferences still
-        # apply. Failure here is best-effort logging — the fork already
-        # committed; we never block on the notification path.
+        # Share fork maps to "mention" — someone interacted with shared content,
+        # analogous to an @-reply. Using the nearest existing event type means
+        # user preferences still apply before a dedicated matrix row ships.
         matrix = await self._safe_fetch_matrix(
             user_id=share.created_by_user_id, org_id=share.org_id
         )
@@ -552,9 +514,7 @@ class InboxAndEmailNotificationDispatcher:
     async def _safe_fetch_matrix(
         self, *, user_id: str, org_id: str
     ) -> NotificationMatrix | None:
-        """Wrap the fetcher in a try/except so a misbehaving impl never
-        breaks the dispatch path. Returning ``None`` here is the safe
-        fall-through: deployment defaults apply."""
+        """Fetch the user's matrix, returning ``None`` on any error so deployment defaults apply."""
 
         try:
             return await self._preference_fetcher.fetch_notification_matrix(
@@ -575,6 +535,7 @@ class InboxAndEmailNotificationDispatcher:
         event_type: str,
         actor_user_id: str,
     ) -> None:
+        """Push to the inbox SSE bus, logging and swallowing any failure."""
         try:
             await self._publish_inbox(approval, event_type, actor_user_id)
         except Exception:
@@ -598,13 +559,11 @@ class InboxAndEmailNotificationDispatcher:
         text: str,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        """Mirror of ``_safe_email``: never raise, log on failure.
+        """Invoke the Slack adapter, logging and swallowing any exception.
 
-        The Slack adapter contract already promises non-raising
-        behavior, but defence-in-depth for adapters that misbehave
-        means we wrap once here too — the dispatch path is fired off
-        the request thread via ``asyncio.create_task`` and a stray
-        exception there has nowhere to go.
+        The adapter contract already promises non-raising behaviour, but
+        defence-in-depth wraps it again here because stray exceptions on a
+        ``asyncio.create_task`` call-site have no error handler to catch them.
         """
 
         if self._slack is None:
@@ -637,6 +596,7 @@ class InboxAndEmailNotificationDispatcher:
         actor_user_id: str,
         extra: dict[str, object] | None = None,
     ) -> None:
+        """POST an email notification to the backend endpoint, logging and swallowing failures."""
         if self._post is None:
             return
         url = f"{self._backend_base_url}/internal/v1/notifications/email"

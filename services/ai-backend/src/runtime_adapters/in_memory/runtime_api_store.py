@@ -868,6 +868,7 @@ class InMemoryRuntimeApiStore:
         kind,
         ttl_seconds: int,
         dry_run: bool = False,
+        chunk_size: int = 0,
     ):
         """In-memory retention sweep — no-op stub for dev backends.
 
@@ -891,6 +892,31 @@ class InMemoryRuntimeApiStore:
         """Append a deletion evidence record (test-observable via self.deletion_evidence)."""
 
         self.deletion_evidence.append(record)
+
+    async def backfill_retention_until(
+        self,
+        *,
+        org_id: str,
+        kind,
+        ttl_seconds: int,
+        chunk_size: int,
+    ) -> int:
+        """No-op for in-memory store — it starts fresh, no historical rows to fill."""
+
+        return 0
+
+    async def recompute_retention_until_for_policy(
+        self,
+        *,
+        org_id: str,
+        kind,
+        scope,
+        resource_id,
+        ttl_seconds,
+    ) -> int:
+        """No-op for in-memory store — rows are ephemeral, no recompute needed."""
+
+        return 0
 
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]

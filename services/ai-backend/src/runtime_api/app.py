@@ -1,4 +1,4 @@
-"""FastAPI app composition for the runtime API."""
+"""Factory that assembles and wires the runtime API FastAPI application."""
 
 from __future__ import annotations
 
