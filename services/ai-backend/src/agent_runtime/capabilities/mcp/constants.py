@@ -15,9 +15,13 @@ class Keys:
     """Stable keys used at MCP validation and serialization boundaries."""
 
     class Encoding:
+        """Encoding name constants."""
+
         UTF_8 = "utf-8"
 
     class Field:
+        """JSON field name constants for MCP payloads."""
+
         ACCESS_POLICY = "access_policy"
         ALLOWED_ORG_IDS = "allowed_org_ids"
         ALLOWED_USER_IDS = "allowed_user_ids"
@@ -62,6 +66,8 @@ class Keys:
         WARNINGS = "warnings"
 
     class JsonRpc:
+        """JSON-RPC 2.0 envelope field name constants."""
+
         CAPABILITIES = "capabilities"
         CLIENT_INFO = "clientInfo"
         ERROR = "error"
@@ -74,11 +80,15 @@ class Keys:
         RESULT = "result"
 
     class NativeDescriptor:
+        """camelCase field names used in raw MCP descriptor payloads."""
+
         INPUT_SCHEMA_CAMEL = "inputSchema"
         MIME_TYPE_CAMEL = "mimeType"
         OUTPUT_SCHEMA_CAMEL = "outputSchema"
 
     class Schema:
+        """JSON schema structural key names."""
+
         PROPERTIES = "properties"
         QUERY = "query"
         REQUIRED = "required"
@@ -89,12 +99,16 @@ class Values:
     """Stable string values exposed by MCP contracts and tests."""
 
     class AuthMode:
+        """``auth_mode`` string values."""
+
         API_KEY = "api_key"
         NONE = "none"
         OAUTH2 = "oauth2"
         SERVICE_ACCOUNT = "service_account"
 
     class AuthState:
+        """``auth_state`` string values."""
+
         AUTH_FAILED = "auth_failed"
         AUTH_PENDING = "auth_pending"
         AUTH_SKIPPED = "auth_skipped"
@@ -103,6 +117,8 @@ class Values:
         UNAUTHENTICATED = "unauthenticated"
 
     class ErrorCode:
+        """Load-error code string values."""
+
         AUTH_FAILURE = "auth_failure"
         CONNECTION_FAILED = "connection_failed"
         DUPLICATE_DESCRIPTOR_NAME = "duplicate_descriptor_name"
@@ -121,28 +137,40 @@ class Values:
         UNSUPPORTED_TRANSPORT = "unsupported_transport"
 
     class Health:
+        """Server health string values."""
+
         DEGRADED = "degraded"
         DISABLED = "disabled"
         HEALTHY = "healthy"
         UNAVAILABLE = "unavailable"
 
     class Risk:
+        """Risk level string values."""
+
         CRITICAL = "critical"
         HIGH = "high"
         LOW = "low"
         MEDIUM = "medium"
 
     class SchemaType:
+        """JSON schema ``type`` string values used in MCP descriptors."""
+
         OBJECT = "object"
         STRING = "string"
 
     class JsonRpc:
+        """JSON-RPC protocol version constant."""
+
         VERSION = "2.0"
 
     class JsonRpcError:
+        """JSON-RPC error code numeric constants."""
+
         METHOD_NOT_FOUND = -32601
 
     class JsonRpcMethod:
+        """JSON-RPC method name constants for MCP calls."""
+
         INITIALIZE = "initialize"
         INITIALIZED = "notifications/initialized"
         CALL_TOOL = "tools/call"
@@ -150,36 +178,52 @@ class Values:
         LIST_TOOLS = "tools/list"
 
     class McpClientInfo:
+        """Advertised client identity values sent in the MCP handshake."""
+
         NAME = "enterprise-search-ai-backend"
         PROTOCOL_VERSION = "2025-06-18"
         VERSION = "0.1.0"
 
     class Placeholder:
+        """Fallback name values used when a server descriptor omits required fields."""
+
         RESOURCE_NAME = "mcp_resource"
         TOOL_NAME = "mcp_tool"
 
     class Mime:
+        """MIME type string values."""
+
         OCTET_STREAM = "application/octet-stream"
 
     class Route:
+        """Internal API route templates."""
+
         INTERNAL_MCP_RPC = "/internal/v1/mcp/servers/{server_id}/rpc"
 
     class Transport:
+        """MCP transport string values."""
+
         HTTP = "http"
         SSE = "sse"
         STDIO = "stdio"
 
     class ToolName:
+        """Canonical tool names used by MCP middleware."""
+
         AUTH_MCP = "auth_mcp"
         CALL_MCP_TOOL = "call_mcp_tool"
         LOAD_MCP_SERVER = "load_mcp_server"
 
     class UriScheme:
+        """Allowed resource URI scheme strings."""
+
         HTTPS = "https"
         MCP = "mcp"
         URN = "urn"
 
     class WarningCode:
+        """Non-fatal warning code string values."""
+
         SERVER_DEGRADED = "server_degraded"
 
 
@@ -216,11 +260,15 @@ class Messages:
     """Centralized safe validation and public error messages."""
 
     class Middleware:
+        """Tool description strings for MCP middleware tools."""
+
         AUTH_MCP_TOOL_DESCRIPTION = _AUTH_MCP_TOOL_DESCRIPTION
         CALL_MCP_TOOL_DESCRIPTION = _CALL_MCP_TOOL_DESCRIPTION
         LOAD_MCP_SERVER_TOOL_DESCRIPTION = _LOAD_MCP_SERVER_TOOL_DESCRIPTION
 
     class Registry:
+        """Safe error messages emitted by the MCP registry."""
+
         CARDS_LOAD_FAILED = "MCP server cards could not be loaded."
         DUPLICATE_SERVER_NAME = (
             "Multiple MCP servers are registered with the same name."
@@ -238,6 +286,8 @@ class Messages:
         REQUESTED_TOOL_UNKNOWN = "Requested MCP tool is not available on this server."
 
     class Loader:
+        """Safe error and warning messages emitted by the MCP loader."""
+
         AUTH_FAILED = "MCP server authentication failed."
         CONNECTION_FAILED = "The MCP server could not be reached."
         DESCRIPTORS_INVALID = "The MCP server returned invalid descriptors."
@@ -265,49 +315,62 @@ class Messages:
         UNSUPPORTED_TRANSPORT = "Requested MCP server uses an unsupported transport."
 
     class Validation:
+        """Safe validation error messages and factory methods."""
+
         EXACTLY_ONE_LOAD_OUTCOME = "mcp load result must contain exactly one outcome"
         UNSUPPORTED_RESOURCE_SCHEME = "uri uses an unsupported resource scheme"
 
         @classmethod
         def explicit_permission_scopes(cls, field_name: str) -> str:
+            """Return a validation message for missing explicit permission scopes."""
             return f"{field_name} must contain explicit permission scopes"
 
         @classmethod
         def id_contains_unsupported_characters(cls, field_name: str) -> str:
+            """Return a validation message for IDs with unsupported characters."""
             return f"{field_name} contains unsupported characters"
 
         @classmethod
         def iterable_not_string(cls, field_name: str) -> str:
+            """Return a validation message when a string is passed where an iterable is required."""
             return f"{field_name} must be an iterable, not a string"
 
         @classmethod
         def iterable_required(cls, field_name: str) -> str:
+            """Return a validation message when a non-iterable is passed."""
             return f"{field_name} must be an iterable"
 
         @classmethod
         def json_schema_object(cls, field_name: str) -> str:
+            """Return a validation message for non-dict schema fields."""
             return f"{field_name} must be a JSON schema object"
 
         @classmethod
         def json_serializable(cls, field_name: str) -> str:
+            """Return a validation message for non-JSON-serialisable values."""
             return f"{field_name} must be JSON serializable"
 
         @classmethod
         def nonempty_string(cls, field_name: str) -> str:
+            """Return a validation message for empty or missing strings."""
             return f"{field_name} must not be empty"
 
         @classmethod
         def schema_size_exceeded(cls, field_name: str) -> str:
+            """Return a validation message for schemas that exceed the byte limit."""
             return f"{field_name} exceeds the configured schema size"
 
         @classmethod
         def schema_type_required(cls, field_name: str) -> str:
+            """Return a validation message when a schema is missing a type key."""
             return f"{field_name} must include a JSON schema type"
 
         @classmethod
         def stable_slug(cls, field_name: str) -> str:
+            """Return a validation message for values that are not stable slugs."""
             return f"{field_name} must be a stable slug"
 
         @classmethod
         def string_required(cls, field_name: str) -> str:
+            """Return a validation message for non-string values."""
             return f"{field_name} must be a string"

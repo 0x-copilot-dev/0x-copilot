@@ -51,7 +51,7 @@ from runtime_worker import RuntimeWorker
 
 
 class RuntimeApiAppFactory:
-    """Create a FastAPI app with dependency-inverted runtime API ports."""
+    """Assembles the runtime API FastAPI app from injectable ports and services."""
 
     @classmethod
     def create_app(
@@ -62,6 +62,12 @@ class RuntimeApiAppFactory:
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
     ) -> FastAPI:
+        """Build and return the fully wired FastAPI app.
+
+        All runtime state (coordinators, stores, buses) is attached to
+        ``app.state`` so handlers can retrieve it via ``request.app.state``
+        without module-level singletons or circular imports.
+        """
         if configure_logging_on_create:
             LoggingConfigurator.configure()
         if configure_telemetry_on_create:
@@ -159,6 +165,7 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def default_service(cls, app: FastAPI) -> RuntimeApiService:
+        """Wire the production :class:`RuntimeApiService` from environment settings."""
         settings = RuntimeSettings.load()
         RuntimeSettings.configure_sdk_environment(settings)
         event_bus = cls.default_event_bus(settings)
@@ -585,6 +592,8 @@ class RuntimeApiAppFactory:
 
     @classmethod
     async def stop_in_process_worker(cls, app: FastAPI) -> None:
+        """Cancel and await the in-process worker task if one was started."""
+
         task = getattr(app.state, "runtime_in_process_worker_task", None)
         if task is None:
             return

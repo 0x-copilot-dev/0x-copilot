@@ -48,8 +48,7 @@ USAGE_BUDGET_TABLES = (
 
 
 def _migration_sql(filename: str) -> str:
-    """Read a migration .sql file once at import time."""
-
+    """Read a migration SQL file from the migrations directory at import time."""
     # postgres.py -> schema/ -> persistence/ -> agent_runtime/ -> src/ -> ai-backend/
     migrations_dir = Path(__file__).resolve().parents[4] / "migrations"
     return (migrations_dir / filename).read_text()
@@ -69,19 +68,18 @@ POSTGRES_AGENT_RUNTIME_MIGRATION_SQL = (
 
 
 class PostgresMigration(RuntimeContract):
-    """One deterministic PostgreSQL migration."""
+    """One deterministic PostgreSQL migration identified by ID and raw SQL."""
 
     migration_id: str
     sql: str
 
 
 class PostgresMigrationCatalog:
-    """Migration catalog for CI validation and future PostgreSQL adapters."""
+    """Read-only catalog used by CI validation and legacy adapter callers."""
 
     @classmethod
     def initial_runtime_persistence(cls) -> PostgresMigration:
-        """Return the first migration implementing runtime persistence tables."""
-
+        """Return the combined initial-schema migration (first three SQL files concatenated)."""
         return PostgresMigration(
             migration_id=Values.MIGRATION_ID,
             sql=POSTGRES_AGENT_RUNTIME_MIGRATION_SQL.strip(),
@@ -89,6 +87,5 @@ class PostgresMigrationCatalog:
 
     @classmethod
     def ordered_migrations(cls) -> tuple[PostgresMigration, ...]:
-        """Return migrations in deterministic apply order."""
-
+        """Return all catalog migrations in deterministic forward-apply order."""
         return (cls.initial_runtime_persistence(),)

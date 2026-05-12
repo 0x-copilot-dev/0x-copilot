@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.persistence.constants import Keys
@@ -39,7 +39,7 @@ class ToolInvocationRecord(RuntimeContract):
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.RUN_ID, mode="before")
     @classmethod
-    def _normalize_ids(cls, value: object, info) -> str:
+    def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
         return PersistenceValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.TOOL_NAME)

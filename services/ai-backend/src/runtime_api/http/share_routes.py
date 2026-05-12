@@ -1,4 +1,4 @@
-"""HTTP routes for conversation sharing (PR 6.1).
+"""HTTP routes for the conversation sharing lifecycle.
 
 Six endpoints under ``/v1/agent``:
 
@@ -6,13 +6,11 @@ Six endpoints under ``/v1/agent``:
 - ``GET    /conversations/{conversation_id}/shares`` — list
 - ``PATCH  /shares/{share_id}``                       — update (RFC 7396)
 - ``DELETE /shares/{share_id}``                       — revoke (idempotent)
-- ``GET    /shares/{share_token}``                    — recipient view
-- ``GET    /shares/{share_token}/preview``            — light recipient gate
+- ``GET    /shares/{share_token}``                    — recipient snapshot view
+- ``GET    /shares/{share_token}/preview``            — lightweight recipient gate
 
-The recipient view path uses the same ``Identity`` dependency as every
-other route — anonymous public access is out of scope. The token grants
-access to the share row; the caller must still be a logged-in member of
-the share's org.
+Recipient paths still require ``Identity`` — a token grants access to the
+share row but not to an unauthenticated viewer.
 """
 
 from __future__ import annotations
@@ -35,6 +33,8 @@ from runtime_api.schemas import (
 
 
 class _RouteName:
+    """Route name constants for the sharing surface (for ``url_for`` lookups)."""
+
     CREATE_SHARE = "create_share"
     LIST_SHARES = "list_shares"
     UPDATE_SHARE = "update_share"
@@ -44,7 +44,7 @@ class _RouteName:
 
 
 class ShareRoutes:
-    """Route handlers for conversation sharing endpoints."""
+    """Route handlers for the conversation sharing lifecycle endpoints."""
 
     @classmethod
     async def create_share(
@@ -54,6 +54,7 @@ class ShareRoutes:
         payload: CreateShareRequest,
         identity: Identity,
     ) -> CreateShareResponse:
+        """Create a share for a conversation; token is returned once and not stored in plain text."""
         return await cls._service(request).create_share(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -69,6 +70,7 @@ class ShareRoutes:
         conversation_id: str,
         identity: Identity,
     ) -> ListSharesResponse:
+        """List all non-revoked shares for a conversation, visible to the owner."""
         return await cls._service(request).list_shares(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -84,6 +86,7 @@ class ShareRoutes:
         payload: UpdateShareRequest,
         identity: Identity,
     ) -> ConversationShare:
+        """Apply an RFC 7396 merge-patch to an existing share row."""
         return await cls._service(request).update_share(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -99,6 +102,7 @@ class ShareRoutes:
         share_id: str,
         identity: Identity,
     ) -> Response:
+        """Revoke a share; idempotent — 204 whether or not it was already revoked."""
         await cls._service(request).revoke_share(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -114,6 +118,7 @@ class ShareRoutes:
         share_token: str,
         identity: Identity,
     ) -> SharedConversationView:
+        """Return the full snapshot view for a recipient who holds the share token."""
         return await cls._service(request).get_recipient_view(
             share_token=share_token,
             viewer_org_id=identity.org_id,
@@ -127,6 +132,7 @@ class ShareRoutes:
         share_token: str,
         identity: Identity,
     ) -> RecipientPreview:
+        """Return a lightweight access-check view before the full snapshot read."""
         return await cls._service(request).preview_share(
             share_token=share_token,
             viewer_org_id=identity.org_id,
@@ -135,6 +141,7 @@ class ShareRoutes:
 
     @staticmethod
     def _service(request: Request) -> ShareService:
+        """Return the wired ShareService or raise 503 if not configured."""
         service = getattr(request.app.state, "share_service", None)
         if service is None:
             raise HTTPException(

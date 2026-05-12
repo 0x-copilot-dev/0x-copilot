@@ -1,10 +1,8 @@
-"""Load pricing seeds from YAML files into the catalog (B3).
+"""Load pricing seeds from YAML files into ``ModelPricingRecord`` instances.
 
-Idempotent: re-running the loader closes any prior active row whose
-``effective_from`` is strictly earlier than the seed's, then inserts the
-seed row. If the latest active row already matches the seed
-(``pricing_version`` equal), the loader skips it so re-runs are no-ops
-when nothing changed.
+Stateless: produces records for the caller to upsert via the persistence port.
+Re-runs are idempotent at the upsert layer — existing active rows with the same
+``pricing_version`` are skipped unchanged.
 """
 
 from __future__ import annotations

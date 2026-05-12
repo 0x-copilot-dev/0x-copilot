@@ -1,29 +1,14 @@
-"""Non-blocking MCP discovery seam (PR 3.3).
+"""Per-run MCP discovery seam for surfacing non-blocking Connect/Skip cards.
 
-Mirrors :class:`agent_runtime.capabilities.citations.CitationLedger` in
-shape: per-run service bound to the worker via a :class:`ContextVar`,
-exposed through a class-method (``suggest``) so tools never thread a
-runtime context object through their signatures.
+The service is bound to the worker via a :class:`ContextVar` and exposed through
+a class method so tools never need to thread a runtime context through their
+signatures. On each suggestion it validates server authorization, audits the
+event, and emits a single ``mcp_auth_required`` envelope with discovery metadata
+so the frontend renders the non-blocking card instead of the blocking auth gate.
 
-The service is the *single seam* for surfacing a Connect/Skip card from
-the agent. It does three things:
-
-1. Resolves the requested server against the per-run MCP catalog the
-   harness already trusts. Disabled or unknown servers short-circuit
-   without an event.
-2. Audits the suggestion through the same append-only chain PR 1.4
-   forwarded events use. SIEM exports can correlate
-   ``mcp.discovery.suggested`` rows with the
-   ``approval_decision_recorded`` row that resolves them.
-3. Emits a single ``mcp_auth_required`` event with the optional
-   ``discovery_reason`` + ``expected_value`` payload fields set so the
-   FE renders the non-blocking variant (Connect / Skip) instead of the
-   blocking auth gate.
-
-Idempotency is keyed on ``(run_id, server_id)``: a second call for the
-same pair returns ``already_suggested`` without re-emitting. Already-
-authenticated servers short-circuit before the auth-session creator is
-hit, so the registry cache stays cold for healthy servers.
+Idempotency is keyed on ``(run_id, server_id)``; a second call for the same pair
+returns ``already_suggested`` without re-emitting. Already-authenticated servers
+short-circuit before the auth-session creator is hit.
 """
 
 from __future__ import annotations
@@ -65,15 +50,13 @@ class McpServerLookup(Protocol):
         """Return the per-context catalog already authorized for the run."""
 
 
-# PR 4.4.7 Phase 2 (Slice C) — sentinel surfaced on the
-# ``mcp_auth_required`` payload when the suggestion came from the
-# catalog (uninstalled). The FE reads this and routes the Connect
-# button to the install flow instead of the already-installed-server
-# OAuth path.
+# Surfaced on the ``mcp_auth_required`` payload when the suggestion came from the
+# catalog (uninstalled). The frontend reads this field to route the Connect button
+# to the install flow instead of the already-installed-server OAuth path.
 _CATALOG_SLUG_FIELD = "catalog_slug"
-# PR 4.4.7 follow-up — when False (default), Connect runs a 1-click
-# install + auth chain inline; when True, it opens a credentials form
-# so the user can paste a pre-registered OAuth client first.
+# When False (default), Connect runs a 1-click install + auth chain inline.
+# When True, it opens a credentials form so the user can paste a pre-registered
+# OAuth client first.
 _REQUIRES_PRE_REGISTERED_FIELD = "requires_pre_registered_client"
 
 

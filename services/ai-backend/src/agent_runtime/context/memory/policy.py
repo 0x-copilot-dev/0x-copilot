@@ -17,7 +17,7 @@ from agent_runtime.context.memory.contracts import (
 
 
 class MemoryAccessRequest(RuntimeContract):
-    """Access request bound to a concrete path and actor."""
+    """Validated access request binding a memory path, actor role, and operation."""
 
     path: str
     actor_role: MemoryActorRole
@@ -40,7 +40,7 @@ class MemoryAccessRequest(RuntimeContract):
 
 
 class MemoryPolicyDecision:
-    """Public policy result for read/write authorization."""
+    """Immutable authorization outcome carrying an optional public denial reason."""
 
     def __init__(self, *, allowed: bool, safe_message: str | None = None) -> None:
         self.allowed = allowed
@@ -48,10 +48,14 @@ class MemoryPolicyDecision:
 
     @classmethod
     def allow(cls) -> "MemoryPolicyDecision":
+        """Return an allowed decision with no message."""
+
         return cls(allowed=True)
 
     @classmethod
     def deny(cls, safe_message: str) -> "MemoryPolicyDecision":
+        """Return a denied decision with a public-safe reason string."""
+
         return cls(allowed=False, safe_message=safe_message)
 
 
@@ -131,6 +135,9 @@ class MemoryPolicyAuthorizer:
         snapshot working unchanged.
         """
 
+        # ``memory_writes_allowed=False`` originates from the user's privacy
+        # snapshot. The distinct denial message lets SIEM exports separate
+        # user-toggled refusals from path-policy denials without parsing text.
         if memory_writes_allowed is False and operation is MemoryAccessOperation.WRITE:
             return MemoryPolicyDecision.deny(Messages.Errors.MEMORY_DISABLED_BY_USER)
 
@@ -138,6 +145,7 @@ class MemoryPolicyAuthorizer:
         if policy is None:
             return MemoryPolicyDecision.deny(Messages.Errors.MEMORY_POLICY_DENIED)
 
+        # Select the role set that governs the requested operation.
         allowed_roles = (
             policy.read_roles
             if operation is MemoryAccessOperation.READ
@@ -146,6 +154,7 @@ class MemoryPolicyAuthorizer:
         if actor_role not in allowed_roles:
             return MemoryPolicyDecision.deny(Messages.Errors.MEMORY_POLICY_DENIED)
 
+        # Content-level injection check runs last — only on writes with content.
         if (
             operation is MemoryAccessOperation.WRITE
             and PromptInjectionDetector.is_prompt_injection(content)
@@ -184,8 +193,6 @@ class MemoryPolicyAuthorizer:
         )
 
 
-# P11.4: ``MemoryWriteGuard`` was removed. Its only purpose was the
-# prompt-injection phrase list + ``is_prompt_injection`` classifier,
-# which now lives in :mod:`agent_runtime.context.memory.prompt_injection`.
-# ``MemoryPolicyAuthorizer`` above calls
-# :class:`PromptInjectionDetector` directly.
+# ``MemoryWriteGuard`` was removed. Its prompt-injection logic was extracted
+# into :mod:`agent_runtime.context.memory.prompt_injection` so
+# ``MemoryPolicyAuthorizer`` can call it directly without owning the phrase list.

@@ -23,6 +23,7 @@ class InMemoryDraftStore:
         self.versions: dict[tuple[str, str], list[DraftRecord]] = {}
 
     async def insert_version(self, record: DraftRecord) -> DraftRecord:
+        """Append a new version to the draft's history; raise :class:`OptimisticConflict` on duplicate version."""
         with self._lock:
             key = (record.org_id, record.draft_id)
             history = self.versions.setdefault(key, [])
@@ -37,6 +38,7 @@ class InMemoryDraftStore:
             return record
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
+        """Return the most recent version of a draft, or ``None`` if not found."""
         with self._lock:
             history = self.versions.get((org_id, draft_id))
             return history[-1] if history else None
@@ -48,6 +50,7 @@ class InMemoryDraftStore:
         draft_id: str,
         version: int,
     ) -> DraftRecord | None:
+        """Return a specific version of a draft, or ``None`` if not found."""
         with self._lock:
             history = self.versions.get((org_id, draft_id), [])
             for record in history:
@@ -61,6 +64,7 @@ class InMemoryDraftStore:
         org_id: str,
         conversation_id: str,
     ) -> Sequence[DraftRecord]:
+        """Return the most recent version of every draft in a conversation, ordered by creation time."""
         with self._lock:
             results: list[DraftRecord] = []
             for (record_org_id, _), history in self.versions.items():
@@ -81,6 +85,7 @@ class InMemoryDraftStore:
         expected_version: int,
         expected_status: DraftStatus | None = None,
     ) -> DraftRecord:
+        """Return the draft if its version and status match expectations; raise :class:`OptimisticConflict` otherwise."""
         with self._lock:
             latest = await self.latest(org_id=org_id, draft_id=draft_id)
             if latest is None:

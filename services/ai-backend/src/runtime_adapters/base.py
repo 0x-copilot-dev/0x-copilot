@@ -1,8 +1,4 @@
-"""Shared business logic for runtime API adapter stores.
-
-Extracted from the in-memory and Postgres stores to eliminate duplication
-and ensure consistent behaviour across backends.
-"""
+"""Shared business logic reused by both the in-memory and Postgres runtime adapters."""
 
 from __future__ import annotations
 

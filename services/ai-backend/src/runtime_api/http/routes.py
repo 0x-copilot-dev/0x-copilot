@@ -1,4 +1,4 @@
-"""FastAPI routes for the runtime API."""
+"""Route handler classes and router factories for the runtime API."""
 
 from __future__ import annotations
 
@@ -96,6 +96,7 @@ class RuntimeApiRoutes:
         request: Request,
         payload: CreateConversationRequest,
     ) -> ConversationResponse:
+        """Create or idempotently resume a conversation shell."""
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
             payload = payload.model_copy(
@@ -113,6 +114,7 @@ class RuntimeApiRoutes:
         include_archived: bool = False,
         include_deleted: bool = False,
     ) -> ConversationListResponse:
+        """Return paginated conversations owned by the caller."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).list_conversations(
             org_id=org_id,
@@ -130,6 +132,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
+        """Return one conversation by id, scoped to the caller's tenant."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).get_conversation(
             org_id=org_id,
@@ -147,6 +150,7 @@ class RuntimeApiRoutes:
         limit: int = Query(50, ge=1, le=200),
         include_deleted: bool = False,
     ) -> MessageListResponse:
+        """Return paginated messages for a conversation."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).list_messages(
             org_id=org_id,
@@ -164,6 +168,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationContextResponse:
+        """Return the latest run's token usage and context-window breakdown."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).get_conversation_context(
             org_id=org_id,
@@ -180,8 +185,10 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationConnectorScopesResponse:
+        """Merge-patch the per-chat connector scope map; admins may update on behalf of members."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        # PR 1.2.1 — workspace admin can override on a member's chat. The
+        # Workspace admin can override a member's chat — the audit row records
+        # whether this was an owner self-PATCH or an admin override.
         # ``ADMIN_USERS`` scope is the existing user-admin role; the audit
         # row distinguishes admin overrides from owner self-PATCHes via
         # the ``override_by_admin`` metadata flag.
@@ -206,6 +213,8 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ModelCatalogResponse:
+        """Return the configured model catalog; sync because no I/O is needed."""
+
         # list_models is pure in-memory (no port calls) — keep sync.
         cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return cls.cqs(request).list_models()
@@ -214,6 +223,7 @@ class RuntimeApiRoutes:
     async def create_run(
         cls, request: Request, payload: CreateRunRequest
     ) -> CreateRunResponse:
+        """Enqueue a runtime run for one user message; overrides identity from trusted headers."""
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
             if payload.runtime_context is not None:
@@ -241,6 +251,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> RunStatusResponse:
+        """Return the current status of one run."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).get_run(
             org_id=org_id, user_id=user_id, run_id=run_id
@@ -255,6 +266,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
         after_sequence: int = Query(0, ge=0),
     ) -> RuntimeEventReplayResponse:
+        """Replay persisted events for a run starting after ``after_sequence``."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).replay_events(
             org_id=org_id,
@@ -273,6 +285,7 @@ class RuntimeApiRoutes:
         after_sequence: int = Query(0, ge=0),
         follow: bool = Query(True),
     ) -> StreamingResponse:
+        """Open an SSE stream for a run; resumes from ``after_sequence`` on reconnect."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         event_bus: RuntimeEventBus | None = getattr(
             request.app.state, "runtime_event_bus", None
@@ -299,6 +312,7 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> CancelRunResponse:
+        """Request best-effort cancellation of an in-progress run."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         payload = payload.model_copy(update={"requested_by_user_id": user_id})
         return await cls.run_coordinator(request).cancel_run(
@@ -383,6 +397,7 @@ class RuntimeApiRoutes:
         payload: ApprovalDecisionRequest,
         org_id: str | None = Query(None, min_length=1),
     ) -> ApprovalDecisionResponse:
+        """Record an approve / reject / forward decision for a pending approval."""
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
             org_id = identity.org_id
@@ -422,6 +437,7 @@ class RuntimeApiRoutes:
         user_id: str | None = Query(None, min_length=1),
         reason: str | None = Query(None),
     ) -> HistoryDeletionResponse:
+        """Soft-delete the caller's visible conversation history and emit an audit row."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.conversation_coordinator(request).delete_user_history(
             org_id=org_id, user_id=user_id, reason=reason
@@ -429,22 +445,32 @@ class RuntimeApiRoutes:
 
     @classmethod
     def run_coordinator(cls, request: Request) -> RunCoordinator:
+        """Retrieve the run coordinator from app state."""
+
         return request.app.state.run_coordinator
 
     @classmethod
     def approval_coordinator(cls, request: Request) -> ApprovalCoordinator:
+        """Retrieve the approval coordinator from app state."""
+
         return request.app.state.approval_coordinator
 
     @classmethod
     def conversation_coordinator(cls, request: Request) -> ConversationCoordinator:
+        """Retrieve the conversation coordinator from app state."""
+
         return request.app.state.conversation_coordinator
 
     @classmethod
     def cqs(cls, request: Request) -> ConversationQueryService:
+        """Retrieve the conversation query service from app state."""
+
         return request.app.state.conversation_query_service
 
     @classmethod
     def workspace_coordinator(cls, request: Request) -> WorkspaceCoordinator:
+        """Retrieve the workspace coordinator from app state."""
+
         return request.app.state.workspace_coordinator
 
     @classmethod
@@ -455,8 +481,10 @@ class RuntimeApiRoutes:
         org_id: str | None,
         user_id: str | None,
     ) -> tuple[str, str]:
+        """Return the authoritative (org_id, user_id) pair, preferring trusted headers over query params."""
         identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         if identity is not None:
+            # Service-token path: headers are authoritative; query params are ignored.
             return identity.org_id, identity.user_id
         if org_id is None or user_id is None:
             raise HTTPException(
@@ -466,14 +494,15 @@ class RuntimeApiRoutes:
 
 
 class RuntimeApiRouter:
-    """Build the v1 agent runtime router."""
+    """Build and configure the ``/v1/agent`` FastAPI router."""
 
     @classmethod
     def create_router(cls) -> APIRouter:
-        # A10: every /v1/agent/* route requires the runtime:use scope.
-        # Router-level dependency applies to every route registered
-        # below — admins, employees, and service accounts all carry
-        # runtime:use per the seeded role catalog (0004b).
+        """Return a router with every agent-runtime route registered under ``/v1/agent``."""
+        # Every /v1/agent/* route requires the runtime:use scope. The
+        # router-level dependency covers all routes below; admins,
+        # employees, and service accounts all carry runtime:use per the
+        # seeded role catalog.
         router = APIRouter(
             prefix="/v1/agent",
             tags=["agent-runtime"],
@@ -664,6 +693,7 @@ class UsageApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> UsageMeResponse:
+        """Return the caller's token usage totals, daily rollups, and connector breakdown."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -712,6 +742,7 @@ class UsageApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> tuple[UsageConversationRow, ...]:
+        """Return the caller's top N conversations by token usage over the period."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -746,6 +777,7 @@ class UsageApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> RunUsageBreakdown:
+        """Return per-run token usage joined with per-call breakdown."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -805,6 +837,7 @@ class UsageApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationUsageResponse:
+        """Return per-run and per-connector usage totals for one conversation."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -872,6 +905,7 @@ class UsageApiRoutes:
         period: Literal["today", "7d", "30d", "month"] = Query("month"),
         org_id: str | None = Query(None, min_length=1),
     ) -> UsageOrgResponse:
+        """Return org-wide token usage totals, daily rollups, and connector breakdown (admin only)."""
         # ``user_id`` is unused for the admin org view but the standard
         # scoped_identity helper requires it; pass a placeholder so the
         # facade-derived identity can override.
@@ -915,6 +949,8 @@ class UsageApiRoutes:
 
     @classmethod
     def _persistence(cls, request: Request):  # type: ignore[no-untyped-def]
+        """Retrieve the runtime persistence port from app state."""
+
         return request.app.state.runtime_persistence
 
     @classmethod
@@ -928,12 +964,14 @@ class UsageApiRoutes:
 
     @classmethod
     def _cold_start_user_rollup(cls, run_rows):  # type: ignore[no-untyped-def]
+        """Synthesize user-level rollup rows from raw run rows when the rollup table is empty."""
         return UsageQueryService.rollup_user_rows(
             run_rows, refreshed_at=datetime.now(timezone.utc)
         )
 
     @classmethod
     def _totals_from_rows(cls, rows) -> UsageTotals:  # type: ignore[no-untyped-def]
+        """Aggregate token and cost columns across an iterable of rollup rows into a ``UsageTotals``."""
         input_tokens = sum(r.input_tokens for r in rows)
         output_tokens = sum(r.output_tokens for r in rows)
         cached_input_tokens = sum(r.cached_input_tokens for r in rows)
@@ -951,6 +989,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _rows_by_day(cls, rows) -> tuple[UsageDailyRow, ...]:  # type: ignore[no-untyped-def]
+        """Collapse rollup rows into per-calendar-day buckets sorted ascending by date."""
         per_day: dict[str, dict[str, int | None]] = defaultdict(
             lambda: {
                 "input": 0,
@@ -982,6 +1021,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _rows_by_model(cls, rows) -> tuple[UsageModelRow, ...]:  # type: ignore[no-untyped-def]
+        """Collapse rollup rows into per-(provider, model) buckets sorted by name."""
         per_model: dict[tuple[str, str], dict[str, int | None]] = defaultdict(
             lambda: {
                 "input": 0,
@@ -1013,6 +1053,7 @@ class UsageApiRoutes:
 
     @staticmethod
     def _sum_costs(rows) -> int | None:  # type: ignore[no-untyped-def]
+        """Sum ``cost_micro_usd`` across rows, returning ``None`` when no row carries pricing."""
         total: int | None = None
         for r in rows:
             cost = getattr(r, "cost_micro_usd", None)
@@ -1084,6 +1125,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _connector_rows_from_calls(cls, call_rows) -> tuple[UsageConnectorRow, ...]:  # type: ignore[no-untyped-def]
+        """Build per-connector totals from raw per-call rows (cold-start path)."""
         per_connector: dict[str, dict[str, int | None | set[str]]] = defaultdict(
             lambda: {
                 "input": 0,
@@ -1127,6 +1169,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _connector_rows_from_rollup(cls, rollup_rows) -> tuple[UsageConnectorRow, ...]:  # type: ignore[no-untyped-def]
+        """Build per-connector totals from pre-aggregated rollup rows, collapsing the model dimension."""
         # The rollup table is keyed on (org, day, slug, model_name) after
         # 01d. The /org by_connector axis collapses model_name so the
         # existing FE contract is unchanged; the new /org/subagents and
@@ -1278,6 +1321,7 @@ class UsageApiRoutes:
 
     @classmethod
     def _purpose_rows_from_rollup(cls, rollup_rows) -> tuple[UsagePurposeRow, ...]:  # type: ignore[no-untyped-def]
+        """Project purpose rollup records to wire rows, sorted by cost desc then total tokens."""
         wire_rows = tuple(
             UsagePurposeRow(
                 purpose=row.purpose,
@@ -1313,6 +1357,7 @@ class UsageApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
+        """Assemble and return the ``/v1/usage`` router with per-route admin/auditor guards."""
         # A10: most /v1/usage/* routes only require runtime:use; the
         # ``/org`` route adds an additional admin-or-auditor check
         # below via per-route ``dependencies=``.
@@ -1399,6 +1444,7 @@ class BudgetApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> BudgetListResponse:
+        """Return all budgets configured for the org (admin scope required)."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -1416,6 +1462,7 @@ class BudgetApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> BudgetView:
+        """Create a new budget record, raising 409 on a scope-period duplicate."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -1446,6 +1493,7 @@ class BudgetApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> BudgetView:
+        """Patch mutable budget fields; raises 404 when the budget is not found."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -1474,6 +1522,7 @@ class BudgetApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> dict[str, str]:
+        """Delete a budget by id; idempotent when the budget does not exist."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -1488,6 +1537,7 @@ class BudgetApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> BudgetMeResponse:
+        """Return the caller's applicable budgets with live spend and remaining allowances."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -1535,6 +1585,7 @@ class BudgetApiRoutes:
 
     @staticmethod
     def _to_view(record: BudgetRecord) -> BudgetView:
+        """Map a persisted ``BudgetRecord`` to its API view model."""
         return BudgetView(
             id=record.id,
             org_id=record.org_id,
@@ -1556,6 +1607,7 @@ class BudgetApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
+        """Assemble and return the ``/v1/budgets`` router with per-route admin scopes."""
         # A10: ``runtime:use`` covers the /me self-service route. Admin
         # CRUD adds ``admin:budgets`` per-route.
         router = APIRouter(
@@ -1615,9 +1667,13 @@ class InternalRuntimeApiRoutes:
 
     @classmethod
     def list_system_skills(cls, request: Request) -> SystemSkillListResponse:
-        # Force the service-token check in production. In development this
-        # returns None and the route remains open, mirroring how other v1/agent
-        # routes degrade for local dev without ENTERPRISE_SERVICE_TOKEN.
+        """Return filesystem-shipped system skills visible to the settings UI.
+
+        Performs the service-token check (production) so the route is not
+        reachable without credentials, but remains open in dev where the token
+        is unset — consistent with the rest of the internal namespace.
+        """
+
         RuntimeServiceAuthenticator.trusted_identity_from_request(request)
         return SystemSkillsProjector().list_skills()
 
@@ -1666,6 +1722,7 @@ class InternalRuntimeApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
+        """Assemble and return the ``/internal/v1`` router with service-token–gated routes."""
         router = APIRouter(prefix="/internal/v1", tags=["runtime-internal"])
         router.add_api_route(
             "/skills/system",

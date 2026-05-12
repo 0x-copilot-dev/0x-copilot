@@ -275,10 +275,12 @@ class McpLoader:
         client: McpClient,
         resolution: RegisteredMcpServer,
     ) -> McpConnectionMetadata:
+        """Connect the client and coerce raw connection metadata to a typed record."""
         raw_metadata = await self._call_client(client.connect)
         return McpLoaderHelpers.metadata_from_raw(raw_metadata, resolution)
 
     async def _call_client(self, call: Callable[[], Awaitable[_T]]) -> _T:
+        """Invoke a client coroutine under the configured timeout budget."""
         return await asyncio.wait_for(call(), timeout=self.timeout_seconds)
 
 
@@ -291,6 +293,7 @@ class McpLoaderHelpers:
         raw_metadata: RawMcpConnectionMetadata,
         resolution: RegisteredMcpServer,
     ) -> McpConnectionMetadata:
+        """Coerce raw connection metadata to a typed ``McpConnectionMetadata``."""
         card = resolution.card
         if raw_metadata is None:
             return McpConnectionMetadata(
@@ -304,6 +307,7 @@ class McpLoaderHelpers:
 
     @classmethod
     def coerce_raw_sequence(cls, raw_value: object) -> Sequence[object] | None:
+        """Return ``raw_value`` as a ``Sequence`` or ``None`` if it is not a valid list-like."""
         if isinstance(raw_value, (str, bytes)) or not isinstance(raw_value, Sequence):
             return None
         return raw_value
@@ -313,6 +317,7 @@ class McpLoaderHelpers:
         cls,
         raw_tools: Sequence[object],
     ) -> tuple[McpToolDescriptor, ...] | McpLoadErrorCode:
+        """Validate raw tool entries into typed ``McpToolDescriptor``s; return an error code on failure."""
         try:
             return tuple(
                 raw_tool
@@ -328,6 +333,7 @@ class McpLoaderHelpers:
         cls,
         raw_resources: Sequence[object],
     ) -> tuple[McpResourceDescriptor, ...] | McpLoadErrorCode:
+        """Validate raw resource entries into typed ``McpResourceDescriptor``s; return an error code on failure."""
         try:
             return tuple(
                 raw_resource
@@ -340,6 +346,7 @@ class McpLoaderHelpers:
 
     @classmethod
     def first_duplicate_name(cls, names: Sequence[str]) -> str | None:
+        """Return the lexicographically first duplicate name in ``names``, or ``None``."""
         counts = Counter(names)
         duplicate_names = sorted(name for name, count in counts.items() if count > 1)
         if not duplicate_names:
@@ -352,6 +359,7 @@ class McpLoaderHelpers:
         tools: Sequence[McpToolDescriptor],
         local_tool_names: frozenset[str],
     ) -> str | None:
+        """Return the first tool name that collides with a local tool, or ``None``."""
         collisions = sorted(
             {tool.name for tool in tools}.intersection(local_tool_names)
         )
@@ -363,6 +371,7 @@ class McpLoaderHelpers:
     def result_from_error(
         cls, error: McpLoadError, correlation_id: str
     ) -> McpLoadResult:
+        """Lift a pre-built ``McpLoadError`` into a ``McpLoadResult``."""
         return McpLoadResult.fail(
             error.code,
             error.safe_message,
@@ -373,16 +382,19 @@ class McpLoaderHelpers:
 
     @classmethod
     def validation_failed_for(cls, exc: ValidationError, field_name: str) -> bool:
+        """Return ``True`` when ``exc`` has at least one error located at ``field_name``."""
         return any(error.get("loc", ())[:1] == (field_name,) for error in exc.errors())
 
     @classmethod
     def safe_descriptor_message(cls, code: McpLoadErrorCode) -> str:
+        """Return a safe user-facing message for a descriptor error code."""
         if code == McpLoadErrorCode.MALFORMED_DESCRIPTOR:
             return Messages.Loader.DESCRIPTORS_INVALID
         return Messages.Loader.DESCRIPTORS_LOAD_FAILED
 
     @classmethod
     def safe_server_name(cls, server_name: str) -> str | None:
+        """Normalise ``server_name`` to a slug, or ``None`` if invalid."""
         try:
             return McpValueNormalizer.normalize_slug(
                 server_name, Keys.Field.SERVER_NAME

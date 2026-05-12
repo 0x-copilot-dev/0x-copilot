@@ -104,8 +104,7 @@ class InMemoryRuntimeApiStore:
         self._run_idempotency_fingerprint: dict[
             tuple[str, str, str], tuple[str, str]
         ] = {}
-        # Usage state (B1 / B2 / B3 / B4) -- in-memory only; tests assert
-        # against these dicts directly.
+        # Usage tracking — tests assert against these dicts directly.
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
         self.pricing_rows: list[ModelPricingRecord] = []
@@ -113,46 +112,41 @@ class InMemoryRuntimeApiStore:
             tuple[str, str, str, str, str], UsageDailyUserRow
         ] = {}
         self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
-        # Sub-PRD 01d: PK extends with ``model_name`` so a single
-        # connector can split costs across multiple models.
+        # Keyed by (org_id, day, connector_slug, model_name) so a connector
+        # can split costs across multiple models within the same day.
         self.connector_daily_usage: dict[
             tuple[str, str, str, str], UsageDailyConnectorRow
         ] = {}
-        # Sub-PRD 01d: org-scoped subagent + purpose daily rollups.
+        # Org-scoped subagent + purpose daily rollups.
         self.subagent_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailySubagentRow
         ] = {}
         self.purpose_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailyPurposeRow
         ] = {}
-        # PR 7.2 — minimal test seed for the connector attribution lookup.
-        # Production writes the real table via the runtime_events projection;
+        # Minimal test seed for the connector attribution lookup.
+        # Production writes the real table via runtime_events projection;
         # tests append tuples directly so the lookup can find them.
         # Each entry: (org_id, run_id, connector_slug, completed_at).
         self.tool_invocation_completions: list[tuple[str, str, str, datetime]] = []
-        # Compression events (B5 read-only path; no writer wired yet).
+        # Compression events (read-only; no writer wired in-memory yet).
         self.compression_events: list[CompressionEventRecord] = []
-        # Budgets (B7).
         self.budgets: dict[str, BudgetRecord] = {}
         # Keyed by (budget_id, period_start_isoformat) so the same budget
-        # can have one state row per period and we don't accidentally
-        # blow up old periods on a roll-over.
+        # can have one state row per period without overwriting prior periods.
         self.budget_states: dict[tuple[str, str], BudgetStateRecord] = {}
         self.budget_reservations: dict[str, BudgetReservationRecord] = {}
-        # Retention policies (C8). Keyed by org_id; the per-(scope,
-        # resource_id, kind) uniqueness is enforced at upsert time.
+        # Retention policies keyed by org_id; per-(scope, resource_id, kind)
+        # uniqueness is enforced at upsert time.
         self.retention_policies: dict[str, tuple] = {}
-        # Retention deletion evidence (C8 Phase 1). Ordered list so tests
-        # can assert on insertion order and non-empty / empty behaviour.
+        # Ordered list so tests can assert on insertion order.
         self.deletion_evidence: list = []
-        # Workspace defaults (PR 1.6). Keyed by org_id; one row per org.
+        # Workspace defaults keyed by org_id; one row per org.
         self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
-        # B8 — per-tool call-count + input-token budgets. Mirrors the
-        # ``runtime_tool_budgets`` table. The seed row matches the
-        # migration's ``('seed_default', NULL, '*', 6, 'hard', ...)`` so
-        # in-memory and Postgres deploys behave identically out of the
-        # box. Tests can override by adding rows for a specific
-        # ``(org_id, tool_name)`` pair.
+        # Per-tool call-count + input-token budgets, mirroring the
+        # ``runtime_tool_budgets`` table. The seed row matches the migration's
+        # global default so in-memory and Postgres deploys behave identically.
+        # Tests can override by adding rows for a specific (org_id, tool_name).
         self.tool_budgets: dict[str, ToolBudgetRecord] = {
             "seed_default": ToolBudgetRecord(
                 id="seed_default",
@@ -211,7 +205,7 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         conversation_id: str,
     ) -> ConversationRecord | None:
-        """Return a conversation by org only — admin-override path (PR 1.2.1)."""
+        """Return a conversation scoped by org only, bypassing the user filter."""
 
         conversation = self.conversations.get(conversation_id)
         if conversation is None or conversation.org_id != org_id:
@@ -229,8 +223,8 @@ class InMemoryRuntimeApiStore:
     ) -> Sequence[ConversationRecord]:
         """Return scoped conversations ordered by latest update.
 
-        ``include_deleted`` (PR 1.6) excludes ``deleted_at IS NOT NULL``
-        rows by default; setting True returns the soft-deleted ones.
+        Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default;
+        pass ``include_deleted=True`` to include them.
         """
 
         records = [
@@ -289,10 +283,10 @@ class InMemoryRuntimeApiStore:
     async def insert_forked_conversation(
         self, conversation: ConversationRecord
     ) -> ConversationRecord:
-        """Insert a fork-authored conversation row verbatim (PR 6.2).
+        """Insert a fork-authored conversation row verbatim.
 
-        Bypasses idempotency (forks always mint a new row) and stores
-        every column the caller has set — including the lineage pointers
+        Bypasses idempotency (forks always mint a new row) and stores every
+        column the caller has set — including lineage pointers
         ``parent_conversation_id`` and ``forked_from_share_id`` that the
         standard ``create_conversation`` path drops.
         """
@@ -330,19 +324,21 @@ class InMemoryRuntimeApiStore:
         self.conversations[conversation_id] = updated
         return updated
 
-    # --- PR 1.6: workspace defaults + conversation lifecycle ---------- #
-
     async def get_workspace_defaults(
         self, *, org_id: str
     ) -> WorkspaceDefaultsRecord | None:
+        """Return the workspace defaults row for an org, or ``None`` if absent."""
         return self.workspace_defaults.get(org_id)
 
     async def upsert_workspace_defaults(
         self, *, record: WorkspaceDefaultsRecord
     ) -> WorkspaceDefaultsRecord:
-        # Retention is composed by the service from ``retention_policies``;
-        # adapters never see that field on the persisted record. We strip
-        # it here so the in-memory snapshot mirrors what postgres stores.
+        """Persist workspace defaults, stripping the derived ``retention_days`` field.
+
+        ``retention_days`` is composed at read time from ``retention_policies``; the
+        stored record never carries it so adapters don't diverge from the Postgres path.
+        """
+        # Strip retention_days so the in-memory snapshot mirrors what Postgres stores.
         persisted = record.model_copy(update={"retention_days": None})
         self.workspace_defaults[record.org_id] = persisted
         return persisted
@@ -588,10 +584,9 @@ class InMemoryRuntimeApiStore:
     ) -> RunRecord:
         """Persist latest event sequence for run inspection.
 
-        Mirrors the Postgres adapter's H3 monotonic guard: a smaller-
-        numbered append arriving out of order is a no-op. Without this guard
-        the in-memory adapter could rewind the cursor under async
-        concurrency, diverging from production.
+        A smaller-numbered update arriving out of order is a no-op — the same
+        monotonic guard the Postgres adapter enforces — so the in-memory path
+        stays consistent under async concurrency.
         """
 
         current = self.runs[run_id]
@@ -611,11 +606,8 @@ class InMemoryRuntimeApiStore:
 
         self.approval_decisions[record.approval_id] = record
         request = self.approval_requests[record.approval_id]
-        # PR 4.4.6.4 — round-trip ``decided_at`` on the request metadata
-        # so the undo endpoint can compute the window without needing a
-        # separate get_approval_decision read. The metadata JsonObject
-        # already round-trips through both adapters; this is the
-        # smallest seam for cross-call decision lookup.
+        # Round-trip ``decided_at`` on the request metadata so callers can
+        # compute the undo window without an extra get_approval_decision read.
         merged_metadata = dict(request.metadata)
         merged_metadata["decided_at"] = record.decided_at.isoformat()
         self.approval_requests[record.approval_id] = request.model_copy(
@@ -652,13 +644,12 @@ class InMemoryRuntimeApiStore:
         child: ApprovalRequestRecord,
         now: datetime,
     ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
-        """In-memory atomic parent→FORWARDED + child INSERT (PR 1.4).
+        """Atomically transition the parent to FORWARDED and insert the child approval.
 
-        Mirrors the postgres txn semantics: parent transitions to
-        ``FORWARDED`` and the child row is inserted in one logical step.
-        Idempotent on the child's ``approval_id`` so a retry returns the
-        prior chain unchanged. Also records a decision row for the parent
-        so the existing read-back path observes the resolution.
+        Mirrors Postgres transaction semantics. Idempotent on the child's
+        ``approval_id`` — a retry with the same child id returns the prior chain
+        unchanged. Records a decision row for the parent so callers observing
+        the chain see the transition without a separate read.
         """
 
         from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
@@ -666,18 +657,12 @@ class InMemoryRuntimeApiStore:
         parent = self.approval_requests.get(parent_approval_id)
         if parent is None or parent.org_id != org_id:
             raise KeyError(parent_approval_id)
-        # PR 1.4.1 — mirror postgres' WHERE status='pending' guard so a
-        # concurrent forward (or stale retry) deterministically loses the
-        # race. The service maps RuntimeError("…not_pending") to 409 with
-        # APPROVAL_FORWARD_NOT_PENDING. Without this, the in-memory path
-        # would silently overwrite — tests pass because they're serial,
-        # but production fan-out across two browser tabs would
-        # double-fork.
+        # Mirror Postgres' WHERE status='pending' guard so a concurrent forward
+        # deterministically loses the race. The service maps this RuntimeError
+        # to a 409 APPROVAL_FORWARD_NOT_PENDING response.
         if parent.status is not ApprovalStatus.PENDING:
-            # Idempotent re-post of the SAME forward (parent already
-            # forwarded to the SAME target with the SAME child id) is a
-            # safe no-op — return the prior chain unchanged. Anything
-            # else is a real race; raise.
+            # Re-posting the exact same forward (parent already FORWARDED to the
+            # same target with the same child id) is a safe idempotent no-op.
             existing_child = self.approval_requests.get(child.approval_id)
             if (
                 parent.status is ApprovalStatus.FORWARDED
@@ -706,10 +691,8 @@ class InMemoryRuntimeApiStore:
             update={
                 "metadata": normalized_metadata,
                 "chain_parent_approval_id": parent_approval_id,
-                # PR 1.4.1 Gap #7 — depth is set by the service from the
-                # parent's persisted column; the adapter trusts the
-                # passed value and never recomputes (single-source-of-
-                # truth: the service wraps the cap check around this).
+                # chain_depth is set by the service from the parent's persisted
+                # column; the adapter trusts the passed value and never recomputes.
                 "chain_depth": child.chain_depth or (parent.chain_depth + 1),
             }
         )
@@ -750,12 +733,11 @@ class InMemoryRuntimeApiStore:
         limit: int,
         cursor: tuple[datetime, str] | None,
     ) -> Sequence[ApprovalRequestRecord]:
-        """In-memory recipient inbox query (PR 1.4.1).
+        """Return the recipient's approval inbox, newest-first with cursor pagination.
 
-        Newest-first ordering on ``(created_at DESC, approval_id DESC)``.
-        Cursor is exclusive — returns rows strictly older than it. RLS
-        is approximated by the ``org_id`` filter (the in-memory store has
-        no row-level enforcement; cross-tenant tests rely on the filter).
+        Ordering is ``(created_at DESC, approval_id DESC)``. The cursor is exclusive —
+        rows at or after it are excluded. The ``org_id`` filter approximates row-level
+        security for the in-memory path.
         """
 
         rows: list[ApprovalRequestRecord] = []
@@ -786,12 +768,10 @@ class InMemoryRuntimeApiStore:
         now: datetime,
         limit: int,
     ) -> Sequence[ApprovalRequestRecord]:
-        """Cross-org sweeper query — system actor only (PR 1.4.1).
+        """Return PENDING approvals whose ``expires_at`` has passed, oldest first.
 
-        The expiry sweeper runs as the runtime worker, which has the
-        cross-tenant read scope already used by the C8 retention sweeper
-        and the SIEM exporter. Returns the oldest expired rows first so
-        backlogs drain fairly.
+        Cross-org sweeper query run by the runtime worker. Returns rows oldest-first
+        so a backlog drains in fair order.
         """
 
         from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
@@ -829,12 +809,11 @@ class InMemoryRuntimeApiStore:
         after_id: str | None,
         limit: int,
     ) -> Sequence[dict]:
-        """Cross-tenant audit log read for the C9 SIEM cursor.
+        """Return audit log rows for SIEM export, resumable by signature cursor.
 
-        Returns rows ordered by insertion order (the in-memory store has
-        no separate ``(created_at, id)`` index — append order is the
-        cursor). Resumes after ``after_id`` matched against the chain
-        ``signature`` hex string used as the row id.
+        Row order is insertion order (the in-memory store has no separate
+        ``(created_at, id)`` index). ``after_id`` is matched against the chain
+        ``signature`` hex string; rows at or before that position are excluded.
         """
 
         rows: list[dict] = [dict(record) for _event_type, record in self.audit_log]
@@ -936,6 +915,7 @@ class InMemoryRuntimeApiStore:
     def _sign_audit_record(
         self, *, event_type: str, record: dict[str, object]
     ) -> dict[str, object]:
+        """Extend a record with HMAC hash-chain fields (seq, prev_hash, signature, key_version)."""
         org_id = str(record.get(_Fields.ORG_ID, "unknown"))
         prev_hash = self._audit_chain_heads_by_org.get(org_id)
         payload = self._audit_signing_payload(event_type=event_type, record=record)
@@ -955,9 +935,12 @@ class InMemoryRuntimeApiStore:
     def _audit_signing_payload(
         *, event_type: str, record: dict[str, object]
     ) -> dict[str, Any]:
-        # Only the canonical record fields are signed; chain fields are
-        # excluded so the signature is independent of itself. Datetimes go
-        # through the canonicalizer as ISO 8601.
+        """Build the signing payload by stripping chain fields from the record.
+
+        Chain fields (seq, prev_hash, signature, key_version) are excluded so the
+        signature is computed over the canonical domain data only, not over itself.
+        """
+        # Chain fields are excluded so the signature is independent of itself.
         signable = {
             k: v
             for k, v in record.items()
@@ -1055,7 +1038,9 @@ class InMemoryRuntimeApiStore:
             audit_event_id=audit_event_id,
         )
 
-    # Usage + pricing (B1, B2, B3, B4) -----------------------------------
+    # ------------------------------------------------------------------
+    # Usage + pricing
+    # ------------------------------------------------------------------
 
     async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
         """Idempotent on ``run_id``; second write is a no-op."""
@@ -1067,6 +1052,7 @@ class InMemoryRuntimeApiStore:
     async def record_model_call_usage(
         self, record: RuntimeModelCallUsageRecord
     ) -> None:
+        """Append a per-call usage record."""
         self.model_call_usage.append(record)
 
     async def update_run_usage_cost(
@@ -1077,6 +1063,7 @@ class InMemoryRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
+        """Back-fill cost and pricing fields on an existing run usage record."""
         existing = self.run_usage.get(run_id)
         if existing is None:
             return
@@ -1096,6 +1083,7 @@ class InMemoryRuntimeApiStore:
         pricing_id: str,
         pricing_version: str,
     ) -> None:
+        """Back-fill cost and pricing fields on an existing model-call usage record."""
         for index, row in enumerate(self.model_call_usage):
             if row.id == usage_id:
                 self.model_call_usage[index] = row.model_copy(
@@ -1108,6 +1096,12 @@ class InMemoryRuntimeApiStore:
                 return
 
     async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+        """Insert a new pricing row, closing any active row for the same (provider, model, region).
+
+        Preserves the partial unique-index semantics: only one open row (``effective_until IS NULL``)
+        per triple. An earlier active row is closed by setting its ``effective_until``
+        to the new row's ``effective_from``.
+        """
         # Close the active row for the same triple if its effective_from is
         # strictly earlier; preserves the partial unique index semantics.
         for index, existing in enumerate(self.pricing_rows):
@@ -1132,6 +1126,7 @@ class InMemoryRuntimeApiStore:
         region: str,
         at: datetime,
     ) -> ModelPricingRecord | None:
+        """Return the most-recently-effective pricing row for a provider/model/region at a point in time."""
         candidates = [
             row
             for row in self.pricing_rows
@@ -1151,6 +1146,7 @@ class InMemoryRuntimeApiStore:
         limit: int,
         cursor: str | None = None,
     ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run usage records where ``cost_micro_usd`` has not yet been filled in."""
         rows = sorted(
             (row for row in self.run_usage.values() if row.cost_micro_usd is None),
             key=lambda row: row.id,
@@ -1160,6 +1156,7 @@ class InMemoryRuntimeApiStore:
         return tuple(rows[:limit])
 
     async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        """Upsert a per-user daily usage rollup row, keyed by (org, user, day, provider, model)."""
         key = (
             row.org_id,
             row.user_id,
@@ -1170,6 +1167,7 @@ class InMemoryRuntimeApiStore:
         self.user_daily_usage[key] = row
 
     async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        """Upsert a per-org daily usage rollup row, keyed by (org, day, provider, model)."""
         key = (
             row.org_id,
             row.day.isoformat(),
@@ -1179,6 +1177,7 @@ class InMemoryRuntimeApiStore:
         self.org_daily_usage[key] = row
 
     async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        """Upsert a per-connector daily usage rollup row, keyed by (org, day, connector, model)."""
         key = (
             row.org_id,
             row.day.isoformat(),
@@ -1188,6 +1187,7 @@ class InMemoryRuntimeApiStore:
         self.connector_daily_usage[key] = row
 
     async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        """Upsert a per-subagent daily usage rollup row, keyed by (org, day, subagent, provider, model)."""
         key = (
             row.org_id,
             row.day.isoformat(),
@@ -1198,6 +1198,7 @@ class InMemoryRuntimeApiStore:
         self.subagent_daily_usage[key] = row
 
     async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        """Upsert a per-purpose daily usage rollup row, keyed by (org, day, purpose, provider, model)."""
         key = (
             row.org_id,
             row.day.isoformat(),
@@ -1215,6 +1216,7 @@ class InMemoryRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyUserRow]:
+        """Return per-user daily usage rows within the inclusive date window."""
         return tuple(
             sorted(
                 (
@@ -1236,6 +1238,7 @@ class InMemoryRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyOrgRow]:
+        """Return per-org daily usage rows within the inclusive date window."""
         return tuple(
             sorted(
                 (
@@ -1255,6 +1258,7 @@ class InMemoryRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyConnectorRow]:
+        """Return per-connector daily usage rows within the inclusive date window."""
         return tuple(
             sorted(
                 (
@@ -1274,6 +1278,7 @@ class InMemoryRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailySubagentRow]:
+        """Return per-subagent daily usage rows within the inclusive date window."""
         return tuple(
             sorted(
                 (
@@ -1293,6 +1298,7 @@ class InMemoryRuntimeApiStore:
         start_day: datetime,
         end_day: datetime,
     ) -> Sequence[UsageDailyPurposeRow]:
+        """Return per-purpose daily usage rows within the inclusive date window."""
         return tuple(
             sorted(
                 (
@@ -1312,6 +1318,7 @@ class InMemoryRuntimeApiStore:
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return model-call usage records within a time window; ``org_id=None`` is cross-org."""
         return tuple(
             sorted(
                 (
@@ -1336,7 +1343,7 @@ class InMemoryRuntimeApiStore:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Sequence[dict[str, object]]:
-        """PR 7.1 — paginated read across the in-memory audit chain."""
+        """Return paginated audit log events for an org, filtered and ordered by seq/created_at."""
 
         rows: list[dict[str, object]] = []
         for _event_type, record in self.audit_log:
@@ -1381,6 +1388,7 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> RuntimeRunUsageRecord | None:
+        """Return the usage record for a single run, scoped by org."""
         record = self.run_usage.get(run_id)
         if record is None or record.org_id != org_id:
             return None
@@ -1394,6 +1402,7 @@ class InMemoryRuntimeApiStore:
         start: datetime,
         end: datetime,
     ) -> Sequence[RuntimeRunUsageRecord]:
+        """Return run usage records within a completion-time window; ``None`` params are cross-tenant."""
         return tuple(
             sorted(
                 (
@@ -1418,6 +1427,7 @@ class InMemoryRuntimeApiStore:
         end: datetime,
         limit: int,
     ) -> Sequence[UsageConversationAggregateRecord]:
+        """Return the top conversations by token usage within a time window, ranked descending."""
         aggregates: dict[str, UsageConversationAggregateRecord] = {}
         for row in self.run_usage.values():
             if (
@@ -1462,6 +1472,7 @@ class InMemoryRuntimeApiStore:
 
     @staticmethod
     def _sum_optional_cost(left: int | None, right: int | None) -> int | None:
+        """Sum two optional cost values; ``None`` is treated as zero for the non-None operand."""
         if left is None:
             return right
         if right is None:
@@ -1474,6 +1485,7 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[RuntimeModelCallUsageRecord]:
+        """Return all model-call usage records for a single run."""
         return tuple(
             row
             for row in self.model_call_usage
@@ -1487,6 +1499,7 @@ class InMemoryRuntimeApiStore:
         user_id: str,
         conversation_id: str,
     ) -> RuntimeRunUsageRecord | None:
+        """Return the most recently completed run usage record for a conversation."""
         candidates = [
             row
             for row in self.run_usage.values()
@@ -1505,6 +1518,7 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[CompressionEventRecord]:
+        """Return compression events for a single run in creation order."""
         return tuple(
             sorted(
                 (
@@ -1517,7 +1531,7 @@ class InMemoryRuntimeApiStore:
         )
 
     # ------------------------------------------------------------------
-    # Budgets (B7).
+    # Budgets.
     # ------------------------------------------------------------------
 
     async def lookup_budgets_for_run(
@@ -1527,6 +1541,7 @@ class InMemoryRuntimeApiStore:
         user_id: str,
         now: datetime | None = None,
     ) -> Sequence[BudgetWithState]:
+        """Return all active budgets for an org/user pair with current-period spend, including active reservations."""
         from datetime import date, datetime as _datetime, timezone
 
         from agent_runtime.budgets.period import BudgetPeriodCalculator
@@ -1611,6 +1626,7 @@ class InMemoryRuntimeApiStore:
         run_id: str,
         now,
     ) -> ChargeOutcome:
+        """Apply a spend delta to a budget period state; idempotent on run_id."""
         key = (budget_id, period_start.isoformat())
         state = self.budget_states.get(key)
         if state is None:
@@ -1645,7 +1661,11 @@ class InMemoryRuntimeApiStore:
         reserved_tokens: int,
         now,
     ) -> BudgetReservationRecord | None:
-        # Idempotent on (budget_id, run_id) for active reservations.
+        """Create a budget reservation for a run, or return ``None`` if one already exists.
+
+        Idempotent on (budget_id, run_id) — a second call for the same active reservation
+        returns ``None`` rather than a duplicate row.
+        """
         existing = next(
             (
                 r
@@ -1677,6 +1697,7 @@ class InMemoryRuntimeApiStore:
         reservation_id: str,
         now,
     ) -> None:
+        """Mark a reservation as consumed; idempotent if already consumed or absent."""
         record = self.budget_reservations.get(reservation_id)
         if record is None or record.consumed_at is not None:
             return
@@ -1685,6 +1706,7 @@ class InMemoryRuntimeApiStore:
         )
 
     async def reap_expired_budget_reservations(self, *, now) -> int:
+        """Delete unconsumed reservations past their expiry; returns the count purged."""
         purged = 0
         for reservation_id, record in list(self.budget_reservations.items()):
             if record.consumed_at is None and record.expires_at < now:
@@ -1693,6 +1715,7 @@ class InMemoryRuntimeApiStore:
         return purged
 
     async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        """Return all budgets for an org, ordered by creation time descending."""
         return tuple(
             sorted(
                 (b for b in self.budgets.values() if b.org_id == org_id),
@@ -1719,13 +1742,15 @@ class InMemoryRuntimeApiStore:
         )
 
     async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        """Return a budget scoped by org, or ``None`` if not found."""
         record = self.budgets.get(budget_id)
         if record is None or record.org_id != org_id:
             return None
         return record
 
     async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
-        # Enforce the spec's UNIQUE (org_id, COALESCE(user_id,'<org>'), scope, period).
+        """Persist a new budget, enforcing the unique (org, user, scope, period) constraint."""
+        # Enforce UNIQUE (org_id, COALESCE(user_id,'<org>'), scope, period).
         for existing in self.budgets.values():
             if (
                 existing.org_id == record.org_id
@@ -1738,12 +1763,14 @@ class InMemoryRuntimeApiStore:
         return record
 
     async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        """Replace an existing budget record; raises ``KeyError`` if not found."""
         if record.id not in self.budgets:
             raise KeyError(record.id)
         self.budgets[record.id] = record
         return record
 
     async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        """Delete a budget and cascade-remove its state and reservation rows."""
         record = self.budgets.get(budget_id)
         if record is None or record.org_id != org_id:
             return
@@ -1762,12 +1789,12 @@ class InMemoryRuntimeApiStore:
         # Suppress unused import warnings if BudgetStatus isn't used here yet.
         _ = BudgetStatus
 
-    # Retention (C8) ----------------------------------------------------
-
     async def list_retention_policies(self, *, org_id: str) -> Sequence:
+        """Return all retention policies for an org."""
         return tuple(self.retention_policies.get(org_id, ()))
 
     async def upsert_retention_policy(self, record):  # type: ignore[no-untyped-def]
+        """Insert or replace the retention policy for a (scope, resource_id, kind) triple."""
         bucket = list(self.retention_policies.get(record.org_id, ()))
         bucket = [
             row
@@ -1780,6 +1807,7 @@ class InMemoryRuntimeApiStore:
         return record
 
     async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        """Remove a retention policy by id."""
         bucket = self.retention_policies.get(org_id, ())
         self.retention_policies[org_id] = tuple(
             row for row in bucket if row.id != policy_id
@@ -1788,12 +1816,10 @@ class InMemoryRuntimeApiStore:
     async def append_events_batch(
         self, events: Sequence[RuntimeEventDraft]
     ) -> Sequence[RuntimeEventEnvelope]:
-        """Append N events as one logical operation (P4 Stage 2 in-memory parity).
+        """Append N events as one logical operation, returning envelopes in input order.
 
-        Returns envelopes in input order with contiguous sequence numbers.
-        Empty input returns ``()`` without side effects. All events must
-        share the same ``run_id``; this is asserted to surface coalescer
-        bugs early.
+        Empty input returns ``()`` without side effects. All events must share the
+        same ``run_id``; a mismatch raises ``ValueError`` to surface coalescer bugs early.
         """
 
         if not events:
@@ -1980,6 +2006,7 @@ class InMemoryRuntimeApiStore:
         key: tuple[str, str, str],
         request: CreateRunRequest,
     ) -> None:
+        """Raise a 409 error if a prior idempotency key was used with different inputs."""
         fingerprint = self._run_idempotency_fingerprint[key]
         if fingerprint != (request.conversation_id, request.user_input):
             raise RuntimeApiError(
@@ -2000,6 +2027,7 @@ class InMemoryRuntimeApiStore:
         approval_id: str | None,
         payload: dict[str, object],
     ) -> None:
+        """Add a command to the outbox queue in PENDING state."""
         self._queue_order.append(command_id)
         self._queue_payloads[command_id] = {
             **payload,
@@ -2020,6 +2048,7 @@ class InMemoryRuntimeApiStore:
         worker_id: str,
         lock_expires_at: datetime,
     ) -> RuntimeWorkerClaim:
+        """Build a claim record and increment the attempt counter for a command."""
         payload = self._queue_payloads[command_id]
         self._queue_attempts[command_id] += 1
         return RuntimeWorkerClaim(

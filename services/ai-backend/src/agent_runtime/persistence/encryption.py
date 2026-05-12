@@ -88,6 +88,7 @@ class NullFieldEncryption(FieldEncryption):
     """
 
     def is_envelope_v1(self) -> bool:
+        """Always ``False`` — this adapter performs no encryption."""
         return False
 
     def encrypt(
@@ -98,6 +99,7 @@ class NullFieldEncryption(FieldEncryption):
         column: str,
         org_id: str,
     ) -> str:
+        """Return the UTF-8 decoded plaintext unchanged."""
         del table, column, org_id
         return plaintext.decode("utf-8")
 
@@ -109,6 +111,7 @@ class NullFieldEncryption(FieldEncryption):
         column: str,
         org_id: str,
     ) -> bytes:
+        """Return the UTF-8 encoded plaintext, refusing v1 envelopes."""
         del table, column, org_id
         if ciphertext.startswith(_ENVELOPE_PREFIX):
             raise CiphertextDecodeError(
@@ -152,9 +155,11 @@ class _DekCache:
 
     @staticmethod
     def _key(wrapped_dek: bytes) -> str:
+        """Return the SHA-256 hex digest of the wrapped DEK used as the cache key."""
         return hashlib.sha256(wrapped_dek).hexdigest()
 
     def get(self, wrapped_dek: bytes) -> bytes | None:
+        """Return the cached plaintext DEK, or ``None`` on miss or expiry."""
         digest = self._key(wrapped_dek)
         now = self._clock()
         with self._lock:
@@ -164,6 +169,7 @@ class _DekCache:
                 return None
             expires_at, dek = entry
             if expires_at < now:
+                # Evict the expired entry rather than leaving a stale slot.
                 self._entries.pop(digest, None)
                 self._misses += 1
                 return None
@@ -171,19 +177,24 @@ class _DekCache:
             return dek
 
     def put(self, wrapped_dek: bytes, dek: bytes) -> None:
+        """Store ``dek`` under ``wrapped_dek``, evicting the oldest entry on overflow."""
         digest = self._key(wrapped_dek)
         expires_at = self._clock() + self._ttl
         with self._lock:
             if len(self._entries) >= self._max:
+                # Simple LRU-by-expiry: the entry expiring soonest was also
+                # cached first, so evicting it is a reasonable proxy for LRU.
                 oldest = min(self._entries, key=lambda k: self._entries[k][0])
                 self._entries.pop(oldest, None)
             self._entries[digest] = (expires_at, dek)
 
     def stats(self) -> tuple[int, int]:
+        """Return ``(hits, misses)`` since the cache was created or cleared."""
         with self._lock:
             return self._hits, self._misses
 
     def clear(self) -> None:
+        """Flush all entries; useful for tests and CMK revocation."""
         with self._lock:
             self._entries.clear()
 
@@ -202,6 +213,7 @@ class EnvelopeFieldEncryption(FieldEncryption):
         self._cache = _DekCache(ttl_seconds=dek_cache_ttl, max_entries=dek_cache_size)
 
     def is_envelope_v1(self) -> bool:
+        """Always ``True`` — this adapter produces and consumes v1 envelopes."""
         return True
 
     def encrypt(
@@ -212,6 +224,7 @@ class EnvelopeFieldEncryption(FieldEncryption):
         column: str,
         org_id: str,
     ) -> str:
+        """Encrypt *plaintext* and return a v1 envelope string bound to ``(table, column, org_id)``."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except ImportError as exc:  # pragma: no cover - cryptography is a runtime dep
@@ -243,6 +256,7 @@ class EnvelopeFieldEncryption(FieldEncryption):
         column: str,
         org_id: str,
     ) -> bytes:
+        """Unwrap the DEK and decrypt *ciphertext*; raises on AAD mismatch or KMS failure."""
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
             from cryptography.exceptions import InvalidTag
@@ -272,10 +286,13 @@ class EnvelopeFieldEncryption(FieldEncryption):
 
     @staticmethod
     def _aad(*, table: str, column: str, org_id: str) -> bytes:
+        """Return the ``table|column|org_id`` AAD bytes that bind the ciphertext to its column."""
         return f"{table}|{column}|{org_id}".encode("utf-8")
 
     @staticmethod
     def _format_envelope(wrapped: bytes, iv: bytes, ct_with_tag: bytes) -> str:
+        """Encode ``(wrapped_dek, iv, ciphertext+tag)`` as a ``v1:<b64>:<b64>:<b64>`` string."""
+
         def _b64(value: bytes) -> str:
             return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -283,6 +300,7 @@ class EnvelopeFieldEncryption(FieldEncryption):
 
     @staticmethod
     def _parse_envelope(ciphertext: str) -> tuple[bytes, bytes, bytes]:
+        """Parse a ``v1:...`` envelope string into ``(wrapped_dek, iv, ciphertext+tag)``."""
         if not ciphertext.startswith(_ENVELOPE_PREFIX):
             raise CiphertextDecodeError("ciphertext missing v1 envelope prefix")
         body = ciphertext[len(_ENVELOPE_PREFIX) :]
@@ -358,6 +376,7 @@ class FieldCodec:
 
     @property
     def is_envelope_v1(self) -> bool:
+        """Return ``True`` when the underlying adapter produces v1 envelopes."""
         return self._enc.is_envelope_v1()
 
     def encrypt_text(
@@ -368,6 +387,7 @@ class FieldCodec:
         column: str,
         org_id: str,
     ) -> str | None:
+        """Encrypt a nullable text column value; returns ``None`` for ``None`` inputs."""
         if value is None:
             return None
         if not self._enc.is_envelope_v1():

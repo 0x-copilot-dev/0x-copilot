@@ -1,12 +1,8 @@
-"""Thin delegating shell for the FastAPI runtime API (P22 complete).
+"""Thin delegating shell that assembles the runtime API coordinators into one service object.
 
-``RuntimeApiService`` retains its original constructor signature so all
-existing test fixtures and the app factory continue to work unchanged.
-Internally it constructs the five coordinators and delegates every public
-method to them via 1-line forwarders.
-
-All implementation lives in the coordinators. This class is a facade kept
-for backwards compatibility with tests that construct it directly.
+``RuntimeApiService`` retains its original constructor signature so existing test
+fixtures and the app factory continue to work unchanged. All implementation lives
+in the coordinators; this class delegates every public method via 1-line forwarders.
 """
 
 from __future__ import annotations

@@ -1,35 +1,4 @@
-"""Per-run mutable registry of MCP tool name → display template.
-
-Polish-removal Phase 2.B (docs/refactor/01-presentation-polish-removal.md).
-
-MCP descriptors load **lazily** during a run: when the agent calls the
-``load_mcp_server`` builtin, ``BackendMcpClient.list_tools()`` returns
-``McpToolDescriptor`` instances whose ``display`` field was synthesised by
-``DisplayMetadataMiddleware`` (Phase 2.A). To make those templates visible
-to ``PresentationGenerator._resolve_tool_template`` without threading a
-reference through every event-emit call, we keep a per-run mutable map
-keyed by MCP tool name and bind it via :class:`ContextVar` at the run
-handler entry — same shape as
-:class:`agent_runtime.capabilities.citations.CitationLedger`'s binding.
-
-The registry is intentionally **dumb**:
-
-- One entry per ``(tool_name → ToolDisplayTemplate)``.
-- ``register`` is a no-op when nothing is bound (replay / eval / unit tests
-  that don't need the lookup): the lazy-load callsite never has to know
-  whether a run is active.
-- ``get`` returns ``None`` when nothing is bound or no entry matches —
-  the presentation generator's existing fallthrough handles that case.
-
-A run handler typically does:
-
-    registry: dict[str, ToolDisplayTemplate] = {}
-    token = McpDisplayRegistryContext.bind_for_run(registry)
-    try:
-        ...  # run body — descriptors land in ``registry`` as servers load
-    finally:
-        McpDisplayRegistryContext.unbind(token)
-"""
+"""Per-run ContextVar registry mapping MCP tool names to their synthesised display templates."""
 
 from __future__ import annotations
 
@@ -65,14 +34,10 @@ class McpDisplayRegistryContext:
 
     @classmethod
     def register(cls, tool_name: str, template: ToolDisplayTemplate) -> None:
-        """Record a synthesised template for ``tool_name`` on the active run.
+        """Record a synthesised display template for ``tool_name`` on the active run.
 
-        No-op when no registry is bound (replay / eval / unit-test paths).
-        Last write wins on duplicate names; this matches the runtime's
-        existing duplicate-name handling — the ``DynamicMcpRegistry``
-        rejects duplicate *server* names at registration time, so the
-        only realistic source of duplicates is two distinct servers
-        exposing tools that happen to share a name.
+        No-op when no registry is bound (replay / eval / unit tests). Last write
+        wins on duplicate tool names — two servers may expose identically named tools.
         """
 
         registry = _MCP_DISPLAY_REGISTRY_CTX.get(None)

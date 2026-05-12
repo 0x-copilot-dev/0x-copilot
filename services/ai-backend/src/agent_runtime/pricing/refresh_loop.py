@@ -1,36 +1,11 @@
-"""Background loop that re-ingests LiteLLM upstream pricing data (P12 Step 3).
+"""Background loop that periodically re-ingests pricing data from the configured primary source.
 
-Long-running task launched by the worker entrypoint. Every
-``PRICING_REFRESH_INTERVAL_SECONDS`` (default 86_400 = 24h) it
-re-composes the pricing catalog from the configured primary source
-plus overrides and diffs against the rows currently active in the
-persistence port.
-
-What happens per record on each tick:
-
-- **No active row**: insert. This is the "LiteLLM added a model since
-  last seed" path.
-- **Active row matches**: skip. Stable rows produce no log noise.
-- **Active row differs, change within sanity bound, ``auto_apply``
-  enabled**: close prior row + insert new (via the same
-  ``upsert_planner.apply_actions`` the seed-pricing script uses).
-- **Active row differs, change exceeds sanity bound (default 25%)**:
-  emit ``pricing.upstream_changed`` event with
-  ``action_taken="refused_sanity"`` and **do not write**, regardless
-  of the global ``auto_apply`` setting. Operator must investigate
-  before a 100× provider mispublish lands on the bill.
-- **Active row differs, ``auto_apply`` disabled**: log the diff with
-  ``action_taken="dry_run"`` and skip the write.
-
-The loop never touches ``RuntimeRunUsageRecord`` /
-``RuntimeModelCallUsageRecord``. History stays frozen — that's the
-``effective_from`` / ``effective_until`` ratchet's job.
-
-Opt-in via ``PRICING_REFRESH_ENABLED=true`` (default off). The
-``DeploymentProfile`` ``pricing_primary_source`` toggle controls
-which source to refresh from; when set to ``"yaml"`` (air-gapped),
-the loop self-disables on each tick because there is no upstream to
-refresh against.
+Runs every ``PRICING_REFRESH_INTERVAL_SECONDS`` (default 24 h). Per record: if no active
+row exists, insert; if the active row matches, skip; if it differs and ``auto_apply`` is
+enabled and the change is within the sanity bound (default ±25%), close and insert; if the
+change exceeds the sanity bound, log ``action_taken="refused_sanity"`` and skip regardless
+of ``auto_apply``. History rows are never modified. Opt-in via ``PRICING_REFRESH_ENABLED=true``.
+When the deployment profile uses YAML as the primary source, the loop self-disables per tick.
 """
 
 from __future__ import annotations

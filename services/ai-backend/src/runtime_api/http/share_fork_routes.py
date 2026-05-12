@@ -1,14 +1,9 @@
-"""HTTP route for the conversation fork mechanic (PR 6.2).
+"""HTTP route for the share-fork endpoint.
 
-One endpoint, ``POST /v1/agent/shares/{share_token}/fork``. The handler
-is a thin shim over :class:`ConversationForkService` (mounted on
-``request.app.state.conversation_fork_service`` by the runtime API
-bootstrap when the service is wired).
-
-Lives in its own module so the in-flight PR 6.1 (``share_routes.py``
-for the share lifecycle) can land alongside without merge friction —
-both groups attach to the same ``/v1/agent`` router via
-``register_share_fork_routes``.
+One endpoint: ``POST /v1/agent/shares/{share_token}/fork``. The handler
+is a thin shim over :class:`ConversationForkService`. Lives in its own
+module so the share-lifecycle routes and the fork route stay visibly
+distinct in the route table.
 """
 
 from __future__ import annotations
@@ -22,7 +17,7 @@ from runtime_api.schemas import ForkRequest, ForkResponse
 
 
 class ShareForkRoutes:
-    """Route handlers for the fork endpoint."""
+    """Route handlers for forking a shared conversation into the caller's workspace."""
 
     @classmethod
     async def fork_share(
@@ -32,6 +27,7 @@ class ShareForkRoutes:
         payload: ForkRequest,
         identity: Identity,
     ) -> ForkResponse:
+        """Fork the conversation identified by ``share_token`` into the caller's workspace."""
         return await cls._service(request).fork(
             share_token=share_token,
             recipient_org_id=identity.org_id,
@@ -41,13 +37,11 @@ class ShareForkRoutes:
 
     @staticmethod
     def _service(request: Request) -> ConversationForkService:
+        """Return the wired ConversationForkService or raise 503 if not configured."""
         service = getattr(request.app.state, "conversation_fork_service", None)
         if service is None:
-            # Surfaces through the standard runtime API error handler.
-            # Wiring the service is part of the runtime API bootstrap;
-            # the 503 here is a defensive fallback for half-configured
-            # deployments (e.g. the FE shipped before the service flag
-            # was set).
+            # 503 is a defensive fallback for half-configured deployments
+            # (e.g. the FE shipped before the service flag was toggled).
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "Conversation fork service is not configured.",
@@ -56,13 +50,7 @@ class ShareForkRoutes:
 
 
 def register_share_fork_routes(router: APIRouter) -> None:
-    """Attach PR 6.2's fork endpoint to the ``/v1/agent`` router.
-
-    Called once from ``RuntimeApiRouter.create_router`` alongside the
-    other ``register_*`` helpers (drafts, workspace feeds, workspace
-    defaults). Keeping registration centralised makes the route table
-    greppable from one file.
-    """
+    """Attach the share-fork endpoint to the ``/v1/agent`` router."""
 
     router.add_api_route(
         "/shares/{share_token}/fork",

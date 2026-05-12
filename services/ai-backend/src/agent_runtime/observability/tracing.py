@@ -1,23 +1,11 @@
 """Trace and correlation helpers for runtime observability.
 
-P13 step 3 — LangSmith decision: **kept, opt-in via the
-``LANGSMITH_TRACING`` env var**. The four ``RuntimeTracer.traced(...)``
-call sites in ``agent_runtime.execution.runtime`` plus utility helpers
-in :class:`TraceContext` (``event_id``, ``identity_hash``) are active.
-When ``LANGSMITH_TRACING`` is unset (the default), the decorator is a
-true no-op — the import of ``langsmith`` itself is lazy inside
-:meth:`RuntimeTracer._load_traceable`, so a deploy without the package
-installed is fine. Distributed tracing across processes lives in OTel
-(see :class:`agent_runtime.observability.queue_propagation`); LangSmith
-remains the LLM-internal trace surface for teams that consume the
-LangSmith UI.
-
-If a future audit shows ``LANGSMITH_TRACING`` is unset in all
-environments AND the four decorator call sites have no value to
-remaining consumers, this module can be retired in one PR. The
-:meth:`TraceContext.event_id` / :meth:`identity_hash` helpers would
-move to a small ``identity.py`` helper at that point — they are
-otherwise independent of LangSmith.
+Provides opt-in LangSmith tracing via ``LANGSMITH_TRACING`` (default off; the
+``langsmith`` import is lazy so missing the package is fine) and utility helpers
+on :class:`TraceContext` (``event_id``, ``identity_hash``). Distributed
+cross-process tracing is handled by OTel and
+:class:`~agent_runtime.observability.queue_propagation.QueueTracePropagator`;
+LangSmith is the per-LLM-call trace surface for teams using the LangSmith UI.
 """
 
 from __future__ import annotations

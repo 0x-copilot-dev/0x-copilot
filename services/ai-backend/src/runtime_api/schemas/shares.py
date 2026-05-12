@@ -1,18 +1,13 @@
-"""HTTP IO schemas for conversation sharing (PR 6.1).
+"""HTTP IO schemas for the conversation sharing lifecycle.
 
 Two surfaces in this module:
 
 - **Creator surface** — what the share-creator (chat owner / admin) sees.
-  Drives the SharePopover. Tokens come back **once** in the create
-  response and never again.
+  Tokens come back exactly once in the create response and are not stored in
+  plain text.
 - **Recipient surface** — what an authorised viewer sees on the
-  ``/share/:token`` page. Read-only snapshot of the conversation.
-
-Note: ``SharedConversationView`` reuses the existing
-``ConversationResponse`` / ``MessageResponse`` / ``RuntimeEventEnvelope``
-shapes. Per-citation/source restriction (when
-``sources_visible_to_viewer`` is False) is applied by the service before
-the payloads land in this envelope — schema shape stays stable.
+  ``/share/:token`` page. Read-only snapshot of the conversation; source
+  restriction is applied by the service before payloads land in this envelope.
 """
 
 from __future__ import annotations

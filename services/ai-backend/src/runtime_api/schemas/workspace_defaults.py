@@ -1,24 +1,20 @@
-"""Public request/response schemas for /v1/agent/workspace/defaults (PR 1.6 + PR 4.3).
+"""Request/response schemas for ``/v1/agent/workspace/defaults``.
 
 Workspace-level runtime defaults consulted at conversation-create
 (``default_connectors``) and at run-create (``default_model`` +
-``behavior_overrides``) when the inbound request omits the
-corresponding field.
+``behavior_overrides``) when the inbound request omits the corresponding
+field.
 
-Retention is *not* a column on this table — see migration 0019 header.
-The Settings retention slider composes ``scope='org'`` rows in
-``retention_policies`` (migration 0012) per kind. This schema carries
-``retention_days`` as a derived/composed view: GET resolves the
-org-scope policy for ``messages``; PUT writes the same value back as
-three policies (messages, events, checkpoints) inside one transaction.
+``retention_days`` is a derived view: GET resolves the org-scope policy for
+``messages``; PUT writes the value back as three policies (messages, events,
+checkpoints) in one transaction. The value is not a direct column on the
+``workspace_defaults`` table.
 
-PR 4.3 adds ``behavior_overrides`` — a small, opinion-shaped JSONB
-blob with five workspace-policy knobs (``system_prompt_override``,
-``temperature``, ``citation_density``, ``refusal_behavior``,
-``default_reasoning_effort``, ``training_data_opt_out``). Pydantic
-v2 strict-mode here is the single validation point; the persistence
-layer never queries by substructure (the runtime resolver reads the
-keys it knows, future keys are ignored cleanly).
+``behavior_overrides`` is a closed JSONB blob with workspace-policy knobs
+(``system_prompt_override``, ``temperature``, ``citation_density``,
+``refusal_behavior``, ``default_reasoning_effort``, ``training_data_opt_out``).
+Pydantic strict-mode is the single validation point; the persistence layer reads
+known keys and ignores future ones.
 """
 
 from __future__ import annotations
@@ -56,18 +52,24 @@ class _Fields:
 # PR 4.3 — three small, well-known enums that gate the workspace-policy
 # knobs. Each is a closed set; the FE renders a 3-way pill / select.
 class CitationDensity(StrEnum):
+    """Controls how aggressively the model cites sources in responses."""
+
     MINIMAL = "minimal"
     STANDARD = "standard"
     THOROUGH = "thorough"
 
 
 class RefusalBehavior(StrEnum):
+    """How the model handles potentially sensitive or policy-adjacent requests."""
+
     STANDARD = "standard"
     STRICT = "strict"
     PERMISSIVE = "permissive"
 
 
 class ReasoningEffort(StrEnum):
+    """Depth of chain-of-thought reasoning the model applies before responding."""
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"

@@ -63,24 +63,28 @@ class ShareRecord(RuntimeContract):
     @field_validator("share_token_prefix", mode="after")
     @classmethod
     def _hash_prefix_consistency(cls, value: str | None, info: object) -> str | None:
-        # The model_validator catches the cross-field case; the
-        # field-level validator just normalises empty strings to None
-        # so the SQL CHECK constraint never sees ``""``.
+        # Normalise empty strings to None so the SQL CHECK constraint never
+        # sees an empty string. Cross-field consistency (token_hash ↔ prefix)
+        # is enforced at the SQL layer, not here.
         if value is None:
             return None
         stripped = value.strip()
         return stripped or None
 
     def has_link(self) -> bool:
+        """Return ``True`` when a copy-link bearer token is set on this share."""
         return self.share_token_hash is not None
 
     def is_revoked(self) -> bool:
+        """Return ``True`` when ``revoked_at`` has been stamped."""
         return self.revoked_at is not None
 
     def is_expired(self, *, now: datetime) -> bool:
+        """Return ``True`` when ``expires_at`` is set and ``now`` has passed it."""
         return self.expires_at is not None and now >= self.expires_at
 
     def is_active(self, *, now: datetime) -> bool:
+        """Return ``True`` when the share is neither revoked nor expired."""
         return not self.is_revoked() and not self.is_expired(now=now)
 
 

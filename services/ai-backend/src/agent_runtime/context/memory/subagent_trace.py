@@ -52,11 +52,19 @@ def _extract_text(value: object) -> str | None:
     return text or None
 
 
-class StreamTextHelper:  # noqa: D101 - shim; named for parity with the public helper
+class StreamTextHelper:
+    """Shim exposing :func:`_extract_text` under the canonical class API.
+
+    Named for parity with ``runtime_worker.stream_messages.StreamTextHelper``
+    so code that was relocated here from the worker reads identically at call sites.
+    """
+
     extract = staticmethod(_extract_text)
 
 
 class _Files:
+    """Virtual filenames served under each ``/subagents/<task_id>/`` directory."""
+
     CONVERSATION = "conversation.md"
     TOOL_CALLS = "tool_calls.json"
     SUMMARY = "summary.md"
@@ -151,6 +159,8 @@ class SubagentTraceProjector:
         task_id: str,
         events: Sequence[RuntimeEventEnvelope],
     ) -> str:
+        """Render a human-readable Markdown summary from lifecycle events for one task."""
+
         scoped = cls.events_for_task(task_id, events)
         started = next(
             (
@@ -323,7 +333,10 @@ class SubagentTraceProjector:
         task_id: str,
         events: Sequence[RuntimeEventEnvelope],
     ) -> str:
-        """Raw event envelopes. Already visibility/redaction-filtered."""
+        """Serialize scoped event envelopes as newline-delimited JSON.
+
+        Only events that passed the visibility/redaction filter are included.
+        """
 
         scoped = cls.events_for_task(task_id, events)
         lines = [
@@ -333,6 +346,12 @@ class SubagentTraceProjector:
 
     @classmethod
     def _truncated_output(cls, output: object) -> object:
+        """Cap oversized tool output at ``_TOOL_OUTPUT_PREVIEW_LIMIT`` characters.
+
+        Returns the original value when it fits; otherwise a truncated string
+        with a trailing marker so the model knows content was cut.
+        """
+
         if output is None:
             return None
         if isinstance(output, (dict, list)):
@@ -367,20 +386,25 @@ class SubagentArtifactsBackend(BackendProtocol):
         self._conversation_id = conversation_id
         self._current_run_id = current_run_id
 
-    # --- BackendProtocol surface ---------------------------------------------
+    # --- BackendProtocol surface -------------------------------------------
 
     def ls(self, path: str) -> LsResult:
+        """Synchronous directory listing (delegates to the async implementation)."""
+
         return _run_sync(self.als(path))
 
     async def als(self, path: str) -> LsResult:
-        # Path inputs:
-        # - Direct callers (and unit tests) pass `/subagents/<task_id>/...`.
-        # - Through deepagents' `CompositeBackend`, the matched route prefix
-        #   `/subagents/` is stripped before delegation, so we receive `/`,
-        #   `/<task_id>/`, etc.
-        # We return entries with paths relative to our route (so CompositeBackend
-        # can prepend `/subagents/` correctly via `_remap_file_info_path`),
-        # and rely on `_TASK_PATH` to accept either shape on input.
+        """List subagent directories or per-task files at ``path``.
+
+        Accepts both the full ``/subagents/<task_id>/`` form (direct callers)
+        and the prefix-stripped ``/<task_id>/`` form that ``CompositeBackend``
+        delivers after removing the ``/subagents/`` route prefix.
+        Returned paths are relative to our route so ``CompositeBackend`` can
+        prepend the prefix correctly for the caller.
+        """
+        # Path shapes that can arrive here:
+        #   Direct callers / tests: ``/subagents/<task_id>/...``
+        #   Via CompositeBackend (prefix stripped): ``/``, ``/<task_id>/``
         normalized = self._normalize_dir_path(path)
         events = await self._collect_events()
         task_pairs = SubagentTraceProjector.list_task_ids_with_names(events)
@@ -410,6 +434,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         offset: int = 0,
         limit: int = 2000,
     ) -> ReadResult:
+        """Synchronous file read (delegates to the async implementation)."""
+
         return _run_sync(self.aread(file_path, offset, limit))
 
     async def aread(
@@ -418,6 +444,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         offset: int = 0,
         limit: int = 2000,
     ) -> ReadResult:
+        """Return the projected file content for a ``/subagents/<task_id>/<file>`` path."""
+
         match = _TASK_PATH.match(file_path)
         if match is None or match.group("file") is None:
             return ReadResult(error=f"File not found: {file_path}")
@@ -440,9 +468,13 @@ class SubagentArtifactsBackend(BackendProtocol):
         )
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        """Reject all writes — the subagent trace filesystem is read-only."""
+
         return WriteResult(error=_READ_ONLY_ERROR)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Reject all writes — the subagent trace filesystem is read-only."""
+
         return WriteResult(error=_READ_ONLY_ERROR)
 
     def edit(
@@ -452,6 +484,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
+        """Reject all edits — the subagent trace filesystem is read-only."""
+
         return EditResult(error=_READ_ONLY_ERROR)
 
     async def aedit(
@@ -461,6 +495,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
+        """Reject all edits — the subagent trace filesystem is read-only."""
+
         return EditResult(error=_READ_ONLY_ERROR)
 
     def grep(
@@ -469,6 +505,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
+        """Return an empty match list (grep is unsupported on projected files)."""
+
         return GrepResult(matches=[])
 
     async def agrep(
@@ -477,12 +515,18 @@ class SubagentArtifactsBackend(BackendProtocol):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
+        """Return an empty match list (grep is unsupported on projected files)."""
+
         return GrepResult(matches=[])
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Return an empty match list (glob is unsupported on projected files)."""
+
         return GlobResult(matches=[])
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Return an empty match list (glob is unsupported on projected files)."""
+
         return GlobResult(matches=[])
 
     # --- helpers -------------------------------------------------------------
@@ -494,6 +538,8 @@ class SubagentArtifactsBackend(BackendProtocol):
         file_name: str,
         events: Sequence[RuntimeEventEnvelope],
     ) -> str:
+        """Dispatch to the correct projector based on the requested virtual filename."""
+
         if file_name == _Files.CONVERSATION:
             return SubagentTraceProjector.project_conversation(task_id, events)
         if file_name == _Files.TOOL_CALLS:
@@ -506,8 +552,11 @@ class SubagentArtifactsBackend(BackendProtocol):
 
     @staticmethod
     def _normalize_dir_path(path: str) -> str:
+        """Canonicalize a directory path for root and task-level comparisons."""
+
         if not path:
             return "/subagents/"
+        # Preserve single trailing slash to distinguish directories from files.
         if path.endswith("/") and len(path) > 1:
             return path[:-1] + "/"
         return path
@@ -551,6 +600,8 @@ class SubagentArtifactsBackend(BackendProtocol):
 
 
 def _record_run_id(record: MessageRecord) -> str | None:
+    """Extract the run_id from a message record (thin wrapper for type clarity)."""
+
     return record.run_id
 
 

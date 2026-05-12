@@ -1,18 +1,4 @@
-"""In-memory ``ConversationToolOrdinalStorePort`` for tests and dev (PR 04).
-
-Mirrors the postgres adapter's contract:
-
-* ``record(...)`` is idempotent on ``(conversation_id, tool_call_id)``.
-  A retry for the same call_id returns the existing row unchanged.
-* If the same ``tool_call_id`` is already bound to a *different*
-  ordinal (concurrent allocator beat us), raise
-  :class:`ConversationOrdinalConflict`.
-* ``load(...)`` returns bindings sorted by ``conversation_ordinal``
-  ascending.
-
-The adapter is process-local. Concurrency comes from asyncio not
-threading, so a plain dict is sufficient — no lock.
-"""
+"""In-memory ``ConversationToolOrdinalStorePort`` for tests and local development."""
 
 from __future__ import annotations
 
@@ -49,6 +35,11 @@ class InMemoryConversationToolOrdinalStore:
         tool_name: str,
         run_id: str,
     ) -> ToolOrdinalBindingRecord:
+        """Bind a tool call to a conversation ordinal, enforcing idempotency and uniqueness.
+
+        Raises :class:`ConversationOrdinalConflict` if the call_id is already bound
+        to a different ordinal, or if two different call IDs compete for the same ordinal.
+        """
         if conversation_ordinal <= 0:
             raise ValueError("conversation_ordinal must be a positive integer")
         if not tool_call_id:
@@ -96,6 +87,7 @@ class InMemoryConversationToolOrdinalStore:
         org_id: str,
         conversation_id: str,
     ) -> Sequence[ToolOrdinalBindingRecord]:
+        """Return all bindings for a conversation, ordered by conversation_ordinal ascending."""
         return tuple(
             sorted(
                 (

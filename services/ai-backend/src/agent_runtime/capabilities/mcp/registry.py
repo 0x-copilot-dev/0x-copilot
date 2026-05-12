@@ -46,6 +46,7 @@ class DynamicMcpRegistry:
     providers: Sequence[McpServerProvider]
 
     def __post_init__(self) -> None:
+        """Validate that every provider implements the required MCP adapter interface."""
         for provider in self.providers:
             if not callable(getattr(provider, "list_server_cards", None)):
                 raise AgentRuntimeError(
@@ -129,6 +130,7 @@ class DynamicMcpRegistry:
         return entry
 
     async def _collect_entries(self) -> tuple[RegisteredMcpServer, ...]:
+        """Fetch and validate cards from every registered provider."""
         entries: list[RegisteredMcpServer] = []
         for provider in self.providers:
             try:

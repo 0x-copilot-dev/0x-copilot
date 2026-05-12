@@ -201,10 +201,9 @@ class RuntimeApiEventType(StrEnum):
 class ApprovalDecision(StrEnum):
     """Allowed user decisions for side-effecting approval requests.
 
-    PR 1.4 — ``FORWARDED`` is an API-edge variant: it routes the pending
-    approval to a second workspace user and never reaches the LangGraph
-    harness. The worker discriminates on this enum and skips
-    ``Command(resume=...)`` for the forwarded case.
+    ``FORWARDED`` is an API-edge variant: it routes the pending approval to a
+    second workspace user and never reaches the LangGraph harness. The worker
+    skips ``Command(resume=...)`` for the forwarded case.
     """
 
     APPROVED = "approved"
@@ -213,11 +212,11 @@ class ApprovalDecision(StrEnum):
 
 
 class ApprovalStatus(StrEnum):
-    """Approval request state after a decision is accepted.
+    """Approval request lifecycle state.
 
-    PR 1.4 — ``FORWARDED`` is a terminal state for the parent row in a
-    chain. Resume of the underlying run hangs off the child row's
-    eventual ``APPROVED`` / ``REJECTED`` instead.
+    ``FORWARDED`` is a terminal state for the parent row in a chain; the
+    underlying run resumes only when the child row reaches ``APPROVED`` or
+    ``REJECTED``.
     """
 
     PENDING = "pending"
@@ -257,8 +256,7 @@ class ApprovalReasonCode(StrEnum):
 
 
 class ApprovalReversible(StrEnum):
-    """Tri-state reversibility marker. ``NOT_APPLICABLE`` for read-only
-    actions where the question doesn't make sense."""
+    """Tri-state reversibility marker; ``NOT_APPLICABLE`` for read-only actions."""
 
     YES = "yes"
     NO = "no"

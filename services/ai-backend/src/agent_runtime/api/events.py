@@ -1,17 +1,11 @@
-"""Runtime event producer helpers shared by API producers and workers.
+"""Runtime event producer: append redacted, ordered, UI-ready event envelopes.
 
-Polish-removal Phase 4 (docs/refactor/01-presentation-polish-removal.md):
-the producer is now fully synchronous. ``append_*_event`` builds the
-deterministic preliminary presentation, persists the event, and notifies
-SSE subscribers. There is no background polish task, no
-``PRESENTATION_UPDATED`` follow-up envelope, no ``agent_intent_hint``
-buffer — the deterministic chain in :class:`PresentationGenerator` plus
-the agent-supplied ``_display_*`` fields (Phase 3) cover every case the
-polish LLM used to handle.
-
-The ``PRESENTATION_UPDATED`` enum value is preserved on
-``RuntimeApiEventType`` for replay compatibility with old persisted runs
-(see PRD §6.5). New runs never emit it.
+The producer is fully synchronous — ``append_*_event`` builds the deterministic
+presentation, persists the event, and notifies SSE subscribers in one step.
+There is no background polish task or follow-up envelope; deterministic
+presentation generation covers every case. The ``PRESENTATION_UPDATED`` enum
+value is preserved on ``RuntimeApiEventType`` for replay compatibility with
+old persisted runs. New runs never emit it.
 """
 
 from __future__ import annotations

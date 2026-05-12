@@ -160,6 +160,8 @@ class VersionedMemoryStore:
         self._files: dict[str, MemoryFileSnapshot] = {}
 
     def read(self, path: str) -> MemoryFileSnapshot | None:
+        """Return the current snapshot at ``path``, or ``None`` if absent."""
+
         normalized_path = MemoryValueNormalizer.normalize_memory_path(
             path, Keys.Field.PATH
         )
@@ -172,6 +174,12 @@ class VersionedMemoryStore:
         content: str,
         expected_version: int | None = None,
     ) -> MemoryFileSnapshot:
+        """Write ``content`` to ``path`` and return the new snapshot.
+
+        Raises :class:`AgentRuntimeError` when ``expected_version`` is
+        provided but does not match the currently stored version, signalling
+        a concurrent write conflict to the caller.
+        """
         normalized_path = MemoryValueNormalizer.normalize_memory_path(
             path, Keys.Field.PATH
         )

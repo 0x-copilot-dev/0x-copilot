@@ -326,11 +326,12 @@ class ManagedContextPayload(RuntimeContract):
 
 
 class MemoryValueNormalizer:
-    """Normalization helpers used by memory Pydantic validators.
+    """Normalization helpers for memory Pydantic validators.
 
-    Common methods delegate to the shared ``ValueNormalizer``;
-    memory-specific helpers (paths, namespaces, actor roles) and the
-    length-bounded ``normalize_id`` remain here.
+    Common methods delegate to the shared ``ValueNormalizer``. Memory-specific
+    helpers (path normalization, namespace coercion, actor-role sets) and the
+    length-bounded ``normalize_id`` live here because the memory module is the
+    sole consumer of these invariants.
     """
 
     from agent_runtime.validation import ValueNormalizer as _V
@@ -342,6 +343,8 @@ class MemoryValueNormalizer:
 
     @classmethod
     def normalize_id(cls, value: object, field_name: str) -> str:
+        """Validate that ``value`` is a non-empty string matching the ID pattern."""
+
         normalized = cls.normalize_nonempty_string(value, field_name)
         if len(normalized) > Limits.TRACE_ID_MAX_LENGTH:
             raise ValueError(
@@ -355,6 +358,8 @@ class MemoryValueNormalizer:
 
     @classmethod
     def normalize_namespace(cls, value: object) -> tuple[str, ...]:
+        """Coerce and validate each segment of a namespace tuple."""
+
         values = cls.coerce_iterable(value, Keys.Field.NAMESPACE)
         namespace = tuple(
             cls.normalize_id(item, Keys.Field.NAMESPACE) for item in values
@@ -365,7 +370,11 @@ class MemoryValueNormalizer:
 
     @classmethod
     def normalize_memory_path(cls, value: object, field_name: str) -> str:
+        """Validate an absolute memory path and reject traversal segments."""
+
         normalized = cls.normalize_nonempty_string(value, field_name)
+        # Explicit traversal guard before the regex; ``..`` segments survive
+        # some character classes and would be caught late in regex matching.
         if ".." in normalized.split("/"):
             raise ValueError(Messages.Validation.PATH_TRAVERSAL_UNSUPPORTED)
         if len(
@@ -378,6 +387,8 @@ class MemoryValueNormalizer:
 
     @classmethod
     def normalize_path_prefix(cls, value: object, field_name: str) -> str:
+        """Validate that ``value`` is a well-formed absolute path prefix ending in ``/``."""
+
         normalized = cls.normalize_memory_path(value, field_name)
         if not Patterns.PATH_PREFIX.fullmatch(normalized):
             raise ValueError(Messages.Validation.path_prefix(field_name))
@@ -389,6 +400,8 @@ class MemoryValueNormalizer:
         value: object,
         field_name: str,
     ) -> frozenset[MemoryActorRole]:
+        """Coerce an iterable of role strings into a frozen set of ``MemoryActorRole``."""
+
         values = cls.coerce_iterable(value, field_name)
         return frozenset(MemoryActorRole(item) for item in values)
 
@@ -400,6 +413,7 @@ class MemoryRedactor:
 
     @classmethod
     def redact_metadata(cls, value: object) -> MemoryMetadata:
+        """Return a mapping with deny-listed keys replaced by ``[redacted]``."""
         if value is None:
             return {}
         if not isinstance(value, Mapping):
@@ -414,10 +428,9 @@ class MemoryRedactor:
             if normalized_key in DENY_KEYS:
                 redacted[normalized_key] = cls.REDACTED
                 continue
-            # P11.2: no more value-pattern scrubbing. Memory metadata
-            # values pass through unchanged; sensitivity is decided at
-            # the key boundary (above) or — once P11.3 lands — at the
-            # field-annotation level on the enclosing Pydantic model.
+            # Sensitivity is decided at the key boundary only. Value-pattern
+            # scrubbing was removed because the false-positive cost is high
+            # on memory metadata; field-level annotations handle deeper cases.
             if isinstance(item, str | int | float | bool) or item is None:
                 redacted[normalized_key] = item
                 continue

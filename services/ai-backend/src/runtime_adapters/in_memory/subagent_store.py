@@ -1,14 +1,4 @@
-"""In-memory ``SubagentStorePort`` projecting from runtime events (PR 1.5).
-
-The store does not own its own state. It walks
-:class:`runtime_adapters.in_memory.runtime_api_store.InMemoryRuntimeApiStore`
-events for the runs that belong to a conversation and folds the
-``SUBAGENT_*`` lifecycle into one :class:`SubagentSnapshot` per ``task_id``.
-
-The fold mirrors what the postgres adapter does in SQL — both adapters return
-identical ordering for any given input timeline so tests can be authored once
-against either.
-"""
+"""In-memory ``SubagentStorePort`` that projects subagent snapshots from the event log."""
 
 from __future__ import annotations
 
@@ -43,6 +33,10 @@ class _SubagentProjector:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot | None:
+        """Apply one event to the current snapshot and return the updated snapshot.
+
+        Returns ``None`` if the event is not a subagent lifecycle event.
+        """
         if event.source is not StreamEventSource.SUBAGENT:
             return None
         task_id = event.task_id
@@ -80,6 +74,7 @@ class _SubagentProjector:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot:
+        """Transition the snapshot to RUNNING on a SUBAGENT_STARTED event."""
         base = current or cls._seed(
             event=event, org_id=org_id, conversation_id=conversation_id
         )
@@ -102,6 +97,7 @@ class _SubagentProjector:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot:
+        """Update the snapshot on a SUBAGENT_PROGRESS event; seeds a new snapshot if needed."""
         if current is None:
             return cls._seed(
                 event=event,
@@ -124,6 +120,7 @@ class _SubagentProjector:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot:
+        """Transition the snapshot to a terminal status on a SUBAGENT_COMPLETED event."""
         base = current or cls._seed(
             event=event, org_id=org_id, conversation_id=conversation_id
         )
@@ -147,6 +144,7 @@ class _SubagentProjector:
         org_id: str,
         conversation_id: str,
     ) -> SubagentSnapshot:
+        """Create a minimal snapshot for a task seen for the first time."""
         return SubagentSnapshot(
             task_id=event.task_id or "",
             parent_run_id=event.run_id,
@@ -158,6 +156,7 @@ class _SubagentProjector:
 
     @classmethod
     def _terminal_status(cls, event: RuntimeEventEnvelope) -> SubagentLifecycleStatus:
+        """Derive the terminal lifecycle status from the event's status field."""
         payload_status = (event.status or "").strip().lower()
         if payload_status == Values.Status.CANCELLED:
             return SubagentLifecycleStatus.CANCELLED
@@ -167,6 +166,7 @@ class _SubagentProjector:
 
     @classmethod
     def _subagent_name(cls, event: RuntimeEventEnvelope) -> str:
+        """Extract and sanitize the subagent display name from an event."""
         raw = event.subagent_id or event.payload.get("subagent_name")
         if isinstance(raw, str) and raw.strip():
             return raw.strip()[:128]
@@ -174,6 +174,7 @@ class _SubagentProjector:
 
     @staticmethod
     def _duration_from_payload(event: RuntimeEventEnvelope) -> int | None:
+        """Return ``duration_ms`` from the event payload if present and non-negative."""
         raw = event.payload.get("duration_ms")
         if isinstance(raw, int) and raw >= 0:
             return raw
@@ -183,6 +184,7 @@ class _SubagentProjector:
     def _duration_from_started(
         *, started_at: datetime | None, completed_at: datetime
     ) -> int | None:
+        """Compute elapsed milliseconds from start to completion, or ``None`` if start is unknown."""
         if started_at is None:
             return None
         delta = completed_at - started_at
@@ -190,10 +192,12 @@ class _SubagentProjector:
 
     @classmethod
     def is_running(cls, status: SubagentLifecycleStatus) -> bool:
+        """Return True if the status is an in-progress (non-terminal) state."""
         return status in cls._RUNNING_STATES
 
     @classmethod
     def recency_key(cls, snapshot: SubagentSnapshot) -> datetime:
+        """Return the best available recency timestamp for sorting, falling back to epoch."""
         return snapshot.completed_at or snapshot.started_at or cls.EVENT_HORIZON
 
 
@@ -218,6 +222,7 @@ class InMemorySubagentStore:
         running_only: bool,
         limit: int,
     ) -> Sequence[SubagentSnapshot]:
+        """Return subagent snapshots for a conversation, most-recent first, with token usage attached."""
         run_ids = self._run_ids_for(org_id=org_id, conversation_id=conversation_id)
         snapshots = self._fold_subagent_events(
             org_id=org_id,
@@ -238,6 +243,7 @@ class InMemorySubagentStore:
         )
 
     def _run_ids_for(self, *, org_id: str, conversation_id: str) -> tuple[str, ...]:
+        """Return run IDs belonging to the given org and conversation."""
         runs = getattr(self._store, "runs", {})
         return tuple(
             run.run_id
@@ -248,6 +254,7 @@ class InMemorySubagentStore:
     def _token_usage_for(
         self, *, org_id: str, task_ids: tuple[str, ...]
     ) -> dict[str, SubagentTokenUsage]:
+        """Aggregate model-call token counts keyed by task_id for a set of subagent tasks."""
         if not task_ids:
             return {}
         rows = getattr(self._store, "model_call_usage", ())
@@ -285,6 +292,7 @@ class InMemorySubagentStore:
         conversation_id: str,
         run_ids: tuple[str, ...],
     ) -> list[SubagentSnapshot]:
+        """Walk events for all runs and fold them into one snapshot per task_id."""
         events_by_run = getattr(self._store, "events_by_run", {})
         snapshots: dict[str, SubagentSnapshot] = {}
         for run_id in run_ids:

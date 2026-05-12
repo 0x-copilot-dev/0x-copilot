@@ -121,12 +121,14 @@ class InMemoryInboxBus:
 
     @classmethod
     def get_default(cls) -> "InMemoryInboxBus":
+        """Return (or create) the process-global inbox bus singleton."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
     @classmethod
     def reset_default_for_tests(cls) -> None:
+        """Clear the singleton so each test starts with a fresh bus."""
         cls._instance = None
 
     def __init__(self, *, max_buffer_per_user: int | None = None) -> None:
@@ -148,6 +150,7 @@ class InMemoryInboxBus:
         conversation_id: str,
         actor_user_id: str,
     ) -> InboxEventEnvelope:
+        """Append an event for ``user_id``, increment the cursor, and wake any active subscriber."""
         self._cursors[user_id] += 1
         envelope = InboxEventEnvelope(
             user_id=user_id,
@@ -180,18 +183,21 @@ class InMemoryInboxBus:
     def list_after(
         self, *, user_id: str, after_sequence: int
     ) -> Iterable[InboxEventEnvelope]:
+        """Return all buffered events with ``sequence_no > after_sequence`` for ``user_id``."""
         events = self._events.get(user_id)
         if events is None:
             return ()
         return tuple(event for event in events if event.sequence_no > after_sequence)
 
     def latest_sequence_no(self, *, user_id: str) -> int:
+        """Return the highest sequence_no published for ``user_id``, or 0 if none."""
         return self._cursors.get(user_id, 0)
 
     def unsubscribe(self, *, user_id: str) -> None:
-        # Keep events around — they may be needed for a reconnect
-        # within the buffer window — but drop the condition variable
-        # so we don't accumulate unused conditions.
+        """Drop the condition variable for ``user_id`` while retaining buffered events for reconnect."""
+        # Events are retained — they may be needed for a reconnect within
+        # the buffer window — but the condition variable is dropped to
+        # avoid accumulating unused asyncio objects.
         self._conditions.pop(user_id, None)
 
 

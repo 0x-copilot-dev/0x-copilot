@@ -35,6 +35,7 @@ class AwsKmsClient:
         self._client = kms_client or self._build_default_client()
 
     def _build_default_client(self) -> object:
+        """Lazily construct the boto3 KMS client, failing fast if boto3 is absent."""
         try:
             import boto3  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - optional dep
@@ -49,12 +50,14 @@ class AwsKmsClient:
         return boto3.client("kms", **kwargs)
 
     def wrap_data_key(self, plaintext_dek: bytes) -> tuple[bytes, str]:
+        """Encrypt a DEK via KMS Encrypt and return ``(ciphertext_blob, key_id)``."""
         response = self._client.encrypt(  # type: ignore[attr-defined]
             KeyId=self._key_id, Plaintext=plaintext_dek
         )
         return response["CiphertextBlob"], response.get("KeyId", self._key_id)
 
     def unwrap_data_key(self, wrapped_dek: bytes, *, key_id: str | None) -> bytes:
+        """Decrypt a wrapped DEK via KMS Decrypt and return the plaintext bytes."""
         kwargs: dict[str, object] = {"CiphertextBlob": wrapped_dek}
         if key_id:
             kwargs["KeyId"] = key_id

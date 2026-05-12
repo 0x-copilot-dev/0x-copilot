@@ -13,12 +13,15 @@ from runtime_api.rbac import public_route
 
 @dataclass(frozen=True)
 class CheckResult:
+    """Result of a single readiness probe; ``ok=False`` causes ``/readyz`` to return 503."""
+
     name: str
     ok: bool
     detail: str | None = None
 
 
 Checker = Callable[[], CheckResult]
+"""Callable that probes one dependency and returns a :class:`CheckResult`."""
 
 
 def register_health_routes(

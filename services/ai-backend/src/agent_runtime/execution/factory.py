@@ -384,6 +384,8 @@ def _local_tool_names(
 
 
 def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
+    """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema."""
+
     async def invoke_adapter(**kwargs: Any) -> object:
         return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
 
@@ -396,6 +398,7 @@ def _structured_tool(tool_adapter: object, args_schema: type[object]) -> Structu
 
 
 def _auth_session_creator(mcp_registry: object) -> object | None:
+    """Return the first MCP registry provider that supports OAuth session creation, or None."""
     providers = getattr(mcp_registry, "providers", ())
     for provider in providers:
         if callable(getattr(provider, "create_auth_session", None)):
@@ -406,6 +409,7 @@ def _auth_session_creator(mcp_registry: object) -> object | None:
 def _instructions_with_mcp_cards(
     *, instructions: str, mcp_servers: Sequence[object]
 ) -> str:
+    """Append the MCP server card block (or the no-servers block) to the base instructions."""
     if not mcp_servers:
         return "\n\n".join(
             (
@@ -436,6 +440,7 @@ def _instructions_with_mcp_cards(
 async def _skill_cards(
     *, skill_registry: object | None, runtime_context: AgentRuntimeContext
 ) -> tuple[object, ...]:
+    """Fetch skill cards from the registry, or return an empty tuple when absent."""
     if skill_registry is None:
         return ()
     list_available = getattr(skill_registry, "list_available_skills", None)
@@ -509,6 +514,7 @@ def _instructions_with_suggested_connectors(
 def _instructions_with_skill_cards(
     *, instructions: str, skill_cards: Sequence[object]
 ) -> str:
+    """Append the skill card block to the base instructions when skills are available."""
     if not skill_cards:
         return instructions
     card_lines = []
@@ -575,6 +581,7 @@ def _composed_deep_backend(
 def _parse_context(
     context: AgentRuntimeContext | dict[str, Any],
 ) -> AgentRuntimeContext:
+    """Coerce a raw dict or typed context into a validated ``AgentRuntimeContext``."""
     if isinstance(context, AgentRuntimeContext):
         return context
     try:
@@ -591,6 +598,7 @@ def _parse_dependencies(
     dependencies: RuntimeDependencies | dict[str, Any],
     correlation_id: str,
 ) -> RuntimeDependencies:
+    """Coerce a raw dict or typed object into a validated ``RuntimeDependencies``."""
     if isinstance(dependencies, RuntimeDependencies):
         return dependencies
     try:

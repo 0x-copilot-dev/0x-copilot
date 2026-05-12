@@ -1,25 +1,4 @@
-"""Conversation fork service (PR 6.2).
-
-Single transactional operation:
-
-    1. Resolve the share by its bearer token (PR 6.1's ``ShareSnapshotPort``).
-    2. Validate the recipient (workspace gate or specific-recipient gate).
-    3. Read the source conversation row + bounded snapshot of its messages.
-    4. Insert a new conversation owned by the recipient with the lineage
-       pointers populated (``parent_conversation_id``,
-       ``forked_from_share_id``).
-    5. Copy messages with new IDs, parent_message_id rewritten through
-       :class:`MessageCopyPlanner`, ``run_id`` / ``source_message_id`` /
-       ``branch_id`` reset to NULL.
-    6. Audit (``conversation.fork``) and notify (best-effort, fire-and-
-       forget after commit).
-
-The agent harness, capabilities middleware, MCP loader, and SSE pipeline
-are *not* touched. The fork is HTTP-CRUD; the recipient's first prompt
-goes through the existing ``RunService.create_run`` path with no special
-branch — the seeded messages have ``run_id = NULL`` so the run-context
-builder skips them when computing prior context.
-"""
+"""Transactional share-token-to-recipient-conversation fork service."""
 
 from __future__ import annotations
 
@@ -266,9 +245,8 @@ class ConversationForkService:
         if not source_title:
             return None
         prefix = "Forked from "
-        # Truncation budget mirrors PR 1.6's ``TITLE_MAX_LENGTH``; we
-        # don't import the constant to avoid a tight coupling between
-        # this module and the conversation schema module.
+        # Truncation budget mirrors the conversation schema's ``TITLE_MAX_LENGTH``; avoid
+        # importing the constant directly to keep cross-module coupling loose.
         budget = 240 - len(prefix)
         if len(source_title) <= budget:
             return f"{prefix}{source_title}"

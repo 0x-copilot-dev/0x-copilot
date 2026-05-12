@@ -30,18 +30,20 @@ MANIFEST_FILE = MIGRATIONS_DIR / "MANIFEST.lock"
 
 
 class MigrationManifestError(RuntimeError):
-    """Raised when MANIFEST.lock contradicts the migrations directory."""
+    """Raised when ``MANIFEST.lock`` is missing or contradicts the migrations directory."""
 
 
 class MigrationRunner:
-    """Apply, rollback, and report status for ai-backend migrations."""
+    """Apply, rollback, and report status for ai-backend yoyo migrations."""
 
     @classmethod
     def migrations_dir(cls) -> Path:
+        """Return the absolute path of the migrations directory."""
         return MIGRATIONS_DIR
 
     @classmethod
     def apply(cls, database_url: str) -> list[str]:
+        """Apply all pending migrations and return the list of applied IDs."""
         backend = cls._backend(database_url)
         migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
         with backend.lock():
@@ -54,6 +56,11 @@ class MigrationRunner:
 
     @classmethod
     def rollback(cls, database_url: str, *, to: str | None = None) -> list[str]:
+        """Roll back migrations in reverse order, optionally stopping at migration ``to``.
+
+        ``to`` is exclusive: all migrations with an ID strictly greater than
+        ``to`` are rolled back, and ``to`` itself is left applied.
+        """
         backend = cls._backend(database_url)
         migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
         applied = backend.to_rollback(migrations)
@@ -70,6 +77,7 @@ class MigrationRunner:
 
     @classmethod
     def status(cls, database_url: str) -> tuple[list[str], list[str]]:
+        """Return ``(applied_ids, pending_ids)`` for the current database state."""
         backend = cls._backend(database_url)
         migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
         applied = [migration.id for migration in backend.to_rollback(migrations)]
@@ -78,6 +86,7 @@ class MigrationRunner:
 
     @classmethod
     def auto_apply_enabled(cls, env: dict[str, str] | None = None) -> bool:
+        """Return ``True`` when ``RUNTIME_MIGRATIONS_AUTO_APPLY`` is not set to ``false``."""
         env = env if env is not None else dict(os.environ)
         return (
             env.get("RUNTIME_MIGRATIONS_AUTO_APPLY", "true").strip().lower() == "true"
@@ -85,6 +94,7 @@ class MigrationRunner:
 
     @classmethod
     def expected_manifest(cls) -> dict[str, str]:
+        """Parse and return the ``MANIFEST.lock`` checksum map, raising on absence."""
         if not MANIFEST_FILE.exists():
             raise MigrationManifestError(
                 f"Missing manifest: {MANIFEST_FILE}. Run "
@@ -94,6 +104,7 @@ class MigrationRunner:
 
     @classmethod
     def actual_manifest(cls) -> dict[str, str]:
+        """Compute the SHA-256 checksum map for all current migration files on disk."""
         result: dict[str, str] = {}
         for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
             if path.name.endswith(".rollback.sql"):
@@ -103,6 +114,8 @@ class MigrationRunner:
             digest = hashlib.sha256()
             digest.update(path.read_bytes())
             if rollback_path.exists():
+                # Mix a NUL separator before the rollback bytes so a forward-only
+                # migration and one with rollback content cannot hash-collide.
                 digest.update(b"\x00")
                 digest.update(rollback_path.read_bytes())
             result[migration_id] = digest.hexdigest()
@@ -110,10 +123,12 @@ class MigrationRunner:
 
     @classmethod
     def _backend(cls, database_url: str) -> yoyo.backends.DatabaseBackend:
+        """Return a yoyo database backend for the given URL."""
         return yoyo.get_backend(database_url)
 
     @staticmethod
     def _parse_manifest(text: str) -> dict[str, str]:
+        """Parse ``MANIFEST.lock`` text into a ``{migration_id: sha256}`` mapping."""
         result: dict[str, str] = {}
         for raw in text.splitlines():
             line = raw.strip()

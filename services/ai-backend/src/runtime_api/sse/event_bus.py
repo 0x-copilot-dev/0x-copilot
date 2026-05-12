@@ -75,6 +75,7 @@ class InMemoryEventBus:
         self._conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
 
     async def notify(self, run_id: str) -> None:
+        """Wake any waiters on ``run_id`` (no-op when none are registered)."""
         condition = self._conditions.get(run_id)
         if condition is None:
             return
@@ -82,6 +83,7 @@ class InMemoryEventBus:
             condition.notify_all()
 
     def notify_sync(self, run_id: str) -> None:
+        """Thread-safe synchronous wakeup of waiters on ``run_id``; drops silently when no loop is running."""
         condition = self._conditions.get(run_id)
         if condition is None:
             return
@@ -101,6 +103,7 @@ class InMemoryEventBus:
             )
 
     async def wait(self, run_id: str, *, timeout: float = 5.0) -> None:
+        """Block up to ``timeout`` seconds for the next notification on ``run_id``."""
         condition = self._conditions[run_id]
         try:
             async with condition:

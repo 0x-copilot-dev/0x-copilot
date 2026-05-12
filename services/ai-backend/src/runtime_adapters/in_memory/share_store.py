@@ -1,4 +1,4 @@
-"""In-memory ``ShareStorePort`` for tests and local development (PR 6.1)."""
+"""In-memory ``ShareStorePort`` for tests and local development."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ class InMemoryShareStore:
         share: ShareRecord,
         recipients: Sequence[ShareRecipientRecord],
     ) -> ShareRecord:
+        """Persist a new share and its initial recipient list; raises on duplicate id or token hash."""
         with self._lock:
             if share.share_id in self.shares:
                 raise ValueError(f"share {share.share_id} already exists")
@@ -45,6 +46,7 @@ class InMemoryShareStore:
             return share
 
     async def get_by_id(self, *, org_id: str, share_id: str) -> ShareRecord | None:
+        """Return a share scoped by org, or ``None`` if not found."""
         with self._lock:
             record = self.shares.get(share_id)
             if record is None or record.org_id != org_id:
@@ -58,6 +60,7 @@ class InMemoryShareStore:
         conversation_id: str,
         include_revoked: bool,
     ) -> Sequence[ShareRecord]:
+        """Return shares for a conversation, newest first; optionally including revoked rows."""
         with self._lock:
             results = [
                 share
@@ -70,6 +73,7 @@ class InMemoryShareStore:
             return tuple(results)
 
     async def find_by_token_hash(self, *, share_token_hash: str) -> ShareRecord | None:
+        """Return the share matching a token hash, or ``None`` if not found."""
         with self._lock:
             for share in self.shares.values():
                 if share.share_token_hash == share_token_hash:
@@ -79,6 +83,7 @@ class InMemoryShareStore:
     async def list_recipients(
         self, *, org_id: str, share_id: str
     ) -> Sequence[ShareRecipientRecord]:
+        """Return recipients for a share, ordered by grant time."""
         with self._lock:
             share = self.shares.get(share_id)
             if share is None or share.org_id != org_id:
@@ -93,6 +98,7 @@ class InMemoryShareStore:
         share_id: str,
         recipients: Sequence[ShareRecipientRecord],
     ) -> tuple[Sequence[str], Sequence[str]]:
+        """Replace the recipient list atomically; returns (added_user_ids, removed_user_ids)."""
         with self._lock:
             share = self.shares.get(share_id)
             if share is None or share.org_id != org_id:
@@ -115,6 +121,7 @@ class InMemoryShareStore:
         expires_at: datetime | None = None,
         clear_expires_at: bool = False,
     ) -> ShareRecord | None:
+        """Apply a partial update to a share record; returns the updated record or ``None`` if not found."""
         with self._lock:
             share = self.shares.get(share_id)
             if share is None or share.org_id != org_id:
@@ -135,6 +142,7 @@ class InMemoryShareStore:
     async def revoke_share(
         self, *, org_id: str, share_id: str, now: datetime
     ) -> ShareRecord | None:
+        """Stamp ``revoked_at`` on a share; idempotent if already revoked."""
         with self._lock:
             share = self.shares.get(share_id)
             if share is None or share.org_id != org_id:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import Field, NonNegativeInt, PositiveInt, field_validator
+from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
 
 from agent_runtime.execution.contracts import (
     JsonObject,
@@ -38,12 +38,12 @@ class OutboxEventRecord(RuntimeContract):
 
     @field_validator(Keys.Field.EVENT_ID, Keys.Field.AGGREGATE_ID, Keys.Field.ORG_ID)
     @classmethod
-    def _normalize_ids(cls, value: object, info) -> str:
+    def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
         return PersistenceValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.AGGREGATE_TYPE, Keys.Field.EVENT_TYPE)
     @classmethod
-    def _normalize_slugs(cls, value: object, info) -> str:
+    def _normalize_slugs(cls, value: object, info: ValidationInfo) -> str:
         return PersistenceValueNormalizer.normalize_slug(value, info.field_name)
 
     @field_validator(Keys.Field.LOCKED_BY, mode="before")
@@ -82,12 +82,12 @@ class RuntimeWorkerClaim(RuntimeContract):
         mode="before",
     )
     @classmethod
-    def _normalize_ids(cls, value: object, info) -> str:
+    def _normalize_ids(cls, value: object, info: ValidationInfo) -> str:
         return PersistenceValueNormalizer.normalize_id(value, info.field_name)
 
     @field_validator(Keys.Field.RUN_ID, Keys.Field.APPROVAL_ID, mode="before")
     @classmethod
-    def _normalize_optional_ids(cls, value: object, info) -> str | None:
+    def _normalize_optional_ids(cls, value: object, info: ValidationInfo) -> str | None:
         return PersistenceValueNormalizer.normalize_optional_id(value, info.field_name)
 
     @field_validator("command_type")

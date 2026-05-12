@@ -1,12 +1,4 @@
-"""Postgres-backed ``ConversationToolOrdinalStorePort`` (PR 04).
-
-Persists the ``(conversation_ordinal ↔ tool_call_id)`` binding map for
-the live citation system. Matches the schema in migration
-``0026_conversation_tool_ordinals.sql``.
-
-Composes the parent :class:`PostgresRuntimeApiStore` for the tenant-scoped
-connection pool — same pattern as :class:`PostgresSourceStore`.
-"""
+"""Postgres-backed ``ConversationToolOrdinalStorePort``."""
 
 from __future__ import annotations
 
@@ -24,10 +16,11 @@ _TABLE = "agent_conversation_tool_ordinals"
 
 
 class _BindingRowDecoder:
-    """Translate one Postgres row into a :class:`ToolOrdinalBindingRecord`."""
+    """Translate one Postgres dict_row into a :class:`ToolOrdinalBindingRecord`."""
 
     @classmethod
     def decode(cls, row: dict[str, object]) -> ToolOrdinalBindingRecord:
+        """Decode a raw Postgres row dict into a typed binding record."""
         return ToolOrdinalBindingRecord(
             org_id=str(row["org_id"]),
             conversation_id=str(row["conversation_id"]),
@@ -40,6 +33,7 @@ class _BindingRowDecoder:
 
     @staticmethod
     def _coerce_datetime(value: object) -> datetime:
+        """Return the value as a datetime, parsing from ISO 8601 string if needed."""
         if isinstance(value, datetime):
             return value
         return datetime.fromisoformat(str(value))
@@ -61,6 +55,7 @@ class PostgresConversationToolOrdinalStore:
         tool_name: str,
         run_id: str,
     ) -> ToolOrdinalBindingRecord:
+        """Persist a tool-call ordinal binding; idempotent on same (call_id, ordinal), raises on conflict."""
         if conversation_ordinal <= 0:
             raise ValueError("conversation_ordinal must be a positive integer")
         if not tool_call_id:
@@ -149,6 +144,7 @@ class PostgresConversationToolOrdinalStore:
         org_id: str,
         conversation_id: str,
     ) -> Sequence[ToolOrdinalBindingRecord]:
+        """Return all bindings for a conversation ordered by ordinal ascending."""
         async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.execute(

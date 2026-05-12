@@ -1,10 +1,8 @@
-"""Internal audit-list route for ``runtime_audit_log`` (PR 7.1).
+"""Internal paginated audit-list endpoint for the ``runtime_audit_log`` chain.
 
-Mirrors the backend's ``/internal/v1/audit/list`` shape but for the
-single ai-backend chain (``runtime_audit_log``). The facade composes
-both internal endpoints into the public ``GET /v1/audit``.
-
-Read-only. Service-token auth + ``ADMIN_AUDIT_EXPORT`` scope.
+Read-only. Service-token auth plus ``ADMIN_AUDIT_EXPORT`` scope required.
+The facade composes this with backend's own audit chains to produce
+the unified ``GET /v1/audit`` surface.
 """
 
 from __future__ import annotations
@@ -27,6 +25,8 @@ _MAX_LIMIT: Final = 200
 
 
 class _AuditChainView(BaseModel):
+    """Chain-integrity fields projected from one audit-log row."""
+
     model_config = ConfigDict(extra="forbid")
 
     seq: int | None = None
@@ -36,6 +36,8 @@ class _AuditChainView(BaseModel):
 
 
 class _AuditRowResponse(BaseModel):
+    """Wire shape for a single ``runtime_audit_log`` row."""
+
     model_config = ConfigDict(extra="forbid")
 
     stream: Literal["runtime_audit_log"] = "runtime_audit_log"
@@ -55,6 +57,8 @@ class _AuditRowResponse(BaseModel):
 
 
 class _AuditListResponse(BaseModel):
+    """Paginated audit-log listing with cursor-based navigation."""
+
     model_config = ConfigDict(extra="forbid")
 
     rows: tuple[_AuditRowResponse, ...] = ()
@@ -80,11 +84,14 @@ def _decode_cursor(raw: str | None) -> int:
 
 
 def _encode_cursor(seq: int) -> str:
+    """Encode a sequence number as a URL-safe base64 cursor token."""
+
     raw = json.dumps({"seq": seq}, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
 def _row_to_response(record: dict[str, Any]) -> _AuditRowResponse:
+    """Project a raw persistence dict into the audit-row wire shape."""
     actor_type = str(record.get("actor_type") or "user")
     if actor_type not in {"user", "runtime", "worker", "system"}:
         actor_type = "user"
@@ -128,6 +135,7 @@ def _row_to_response(record: dict[str, Any]) -> _AuditRowResponse:
 
 
 def _coerce_dt(value: Any) -> datetime:
+    """Coerce an arbitrary datetime-like value to a timezone-aware UTC datetime."""
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
@@ -144,6 +152,7 @@ def _coerce_dt(value: Any) -> datetime:
 
 
 def _to_utc(value: datetime | None) -> datetime | None:
+    """Normalise an optional datetime to UTC, returning None when absent."""
     if value is None:
         return None
     if value.tzinfo is None:

@@ -73,28 +73,18 @@ class RuntimeAdapterFactory:
     def from_settings(
         cls, settings: RuntimeSettings, *, role: str = "api"
     ) -> RuntimePorts:
-        """Build async runtime ports.
+        """Construct and return all runtime ports from application settings.
 
-        ``role`` distinguishes the API process from the worker process so the
-        pool's ``application_name`` shows up greppable in ``pg_stat_activity``.
-
-        The store's pool is *not* opened here. The caller (FastAPI lifespan
-        or worker entrypoint) must:
-
-            ports = RuntimeAdapterFactory.from_settings(settings)
-            await ports.lifecycle.open()
-            await ports.lifecycle.migrate()
-            try:
-                ...
-            finally:
-                await ports.lifecycle.close()
+        ``role`` is stamped on the pool's ``application_name`` so connections
+        are identifiable in ``pg_stat_activity``. The caller must open and
+        close the pool via ``ports.lifecycle``.
         """
 
         backend = settings.store.backend
-        # P2 — when the SSE bus is the Postgres LISTEN/NOTIFY backend, the
-        # postgres adapter must fire a NOTIFY after every append so the
-        # API process's listener wakes the SSE adapter cross-process.
-        # In-memory bus doesn't need this — that path uses asyncio.Condition.
+        # When the SSE bus uses Postgres LISTEN/NOTIFY, the adapter must fire a
+        # NOTIFY after every event append so the API process's listener wakes
+        # the SSE handler cross-process.  The in-memory bus uses asyncio.Condition
+        # and does not need an explicit notification.
         notify_after_append = settings.execution.event_bus_backend.lower() == "postgres"
         # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
         # route to the async-native InMemoryRuntimeApiStore.

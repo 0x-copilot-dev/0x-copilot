@@ -1,9 +1,9 @@
-"""Usage query service: shared period parsing + rollup math (B4).
+"""Usage query service: shared period parsing and rollup aggregation math.
 
-Used by both ``UsageApiRoutes`` (synchronous reads) and the rollup loop
-(``runtime_worker/usage_rollup_loop.py``). Period semantics live in one
-place so ``today`` means the same thing in the API response window and
-in the rollup table refresh window.
+Used by both the usage API routes (synchronous reads) and the rollup loop
+(``runtime_worker/usage_rollup_loop.py``). Period semantics live here so
+``today`` means the same thing in the API response window and the rollup
+table refresh window.
 """
 
 from __future__ import annotations

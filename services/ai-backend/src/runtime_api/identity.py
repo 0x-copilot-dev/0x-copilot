@@ -1,4 +1,4 @@
-"""W0.1 — single FastAPI identity dependency for runtime API routes.
+"""Single FastAPI identity dependency for runtime API routes.
 
 Every route that needs ``org_id`` / ``user_id`` declares::
 
@@ -8,10 +8,9 @@ Every route that needs ``org_id`` / ``user_id`` declares::
     async def handler(identity: Identity, ...): ...
 
 The dependency is non-optional — a missing or invalid identity raises 401
-before the handler runs. This collapses the two pre-W0.1 helpers
-(``RuntimeApiRoutes.scoped_identity`` query-param fallback for legacy
-routes; ``RuntimeServiceAuthenticator.trusted_identity_from_request``
-header-only path for the new workspace / drafts routes) into one path.
+before the handler runs. Routes that predate this dependency still use
+``RuntimeApiRoutes.scoped_identity`` for query-param fallback; new routes
+should prefer this module's ``Identity`` annotation.
 """
 
 from __future__ import annotations

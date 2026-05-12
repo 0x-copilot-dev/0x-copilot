@@ -14,6 +14,8 @@ _METER_NAME = "ai_backend.field_encryption"
 
 
 class _NoopRecorder:
+    """Silent recorder used when the OTel SDK is absent or not configured."""
+
     def record_op(
         self,
         *,
@@ -21,19 +23,25 @@ class _NoopRecorder:
         table: str,
         outcome: str,
     ) -> None:
+        """No-op: drop the field encryption operation counter increment."""
         return
 
     def record_kms_call(self, *, op: str, outcome: str) -> None:
+        """No-op: drop the KMS call counter increment."""
         return
 
     def record_cache(self, *, outcome: str) -> None:
+        """No-op: drop the DEK cache hit/miss counter increment."""
         return
 
     def record_backfill_rows(self, *, table: str, count: int) -> None:
+        """No-op: drop the backfill row counter increment."""
         return
 
 
 class _OtelRecorder:
+    """Live recorder that delegates to four OTel counter instruments."""
+
     def __init__(
         self,
         *,
@@ -48,23 +56,30 @@ class _OtelRecorder:
         self._backfill_counter = backfill_counter
 
     def record_op(self, *, op: str, table: str, outcome: str) -> None:
+        """Increment the encrypt/decrypt operation counter."""
         self._op_counter.add(1, {"op": op, "table": table, "outcome": outcome})
 
     def record_kms_call(self, *, op: str, outcome: str) -> None:
+        """Increment the KMS wrap/unwrap counter."""
         self._kms_counter.add(1, {"op": op, "outcome": outcome})
 
     def record_cache(self, *, outcome: str) -> None:
+        """Increment the DEK cache hit or miss counter."""
         self._cache_counter.add(1, {"outcome": outcome})
 
     def record_backfill_rows(self, *, table: str, count: int) -> None:
+        """Increment the backfill rows counter by ``count``."""
         self._backfill_counter.add(count, {"table": table})
 
 
 class FieldEncryptionMetrics:
+    """Lazy-initialised singleton that provides the active recorder instance."""
+
     _recorder: Any = None
 
     @classmethod
     def recorder(cls) -> Any:
+        """Return the singleton recorder, building it on first call."""
         if cls._recorder is not None:
             return cls._recorder
         cls._recorder = cls._build()
@@ -72,10 +87,12 @@ class FieldEncryptionMetrics:
 
     @classmethod
     def reset_for_testing(cls) -> None:
+        """Clear the cached recorder so tests can inject a fresh one."""
         cls._recorder = None
 
     @classmethod
     def _build(cls) -> Any:
+        """Attempt to create an OTel-backed recorder; fall back to no-op on failure."""
         try:
             from opentelemetry import metrics as otel_metrics
         except ImportError:  # pragma: no cover

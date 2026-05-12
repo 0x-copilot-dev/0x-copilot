@@ -34,11 +34,10 @@ class _Fields:
 
 
 class ApprovalForwardTarget(RuntimeContract):
-    """Two-stage approval forwarding target (PR 1.4).
+    """Forwarding target for a two-stage approval chain.
 
-    The chain v1 only addresses workspace users; ``external_email`` is
-    deferred to PR 6 alongside the share schema (which already gives us
-    a token vault, recipient table, and ACL story).
+    Only ``workspace_user`` is supported in v1; external-email targets are a
+    future extension that requires a token vault and recipient ACL story.
     """
 
     kind: Literal["workspace_user"] = "workspace_user"
@@ -94,9 +93,9 @@ class ApprovalDecisionRequest(RuntimeContract):
 class ApprovalDecisionRecord(RuntimeContract):
     """Persisted approval decision.
 
-    PR 1.4 — ``forwarded_to_user_id`` is set only when ``status ==
-    FORWARDED``; the worker discriminates on ``status`` to decide whether
-    to resume the LangGraph harness.
+    ``forwarded_to_user_id`` is set only when ``status == FORWARDED``; the
+    worker discriminates on ``status`` to decide whether to resume the
+    LangGraph harness.
     """
 
     approval_id: str
@@ -138,19 +137,19 @@ class ApprovalRequestRecord(RuntimeContract):
 
 
 class ApprovalDecisionResponse(RuntimeContract):
-    """Approval decision result returned to clients."""
+    """Approval decision result returned to clients.
+
+    ``forwarded_to_user_id`` and ``child_approval_id`` are populated only for
+    forward decisions. ``undo_expires_at`` is non-null only when
+    ``status==APPROVED`` and the request was tagged reversible.
+    """
 
     approval_id: str
     run_id: str
     status: ApprovalStatus
     decided_at: datetime
-    # PR 1.4 — present only when the response is for a forward decision; the
-    # FE uses this to render "Waiting on @marcus" without an extra fetch.
     forwarded_to_user_id: str | None = None
     child_approval_id: str | None = None
-    # PR 4.4.6.4 — non-null only when status==APPROVED AND the original
-    # request was tagged reversible=YES. Computed by the service layer
-    # at decision time; persisted via the existing decision metadata.
     undo_expires_at: datetime | None = None
 
 
@@ -175,12 +174,10 @@ class ApprovalUndoResponse(RuntimeContract):
 
 
 class AssignedApproval(RuntimeContract):
-    """One row in the recipient inbox (PR 1.4.1).
+    """One row in the recipient inbox, returned by ``GET /v1/agent/approvals?assigned_to_me=true``.
 
-    Returned by ``GET /v1/agent/approvals?assigned_to_me=true``. Carries
-    enough chain context for the FE to render "Forwarded by Sarah ·
-    10:41 — Post draft to #launch-aurora" + a deep link back into the
-    source conversation, without a second fetch.
+    Carries enough chain context to render the forwarded-by chip and a
+    deep link back to the source conversation without a second fetch.
     """
 
     approval_id: str
@@ -229,7 +226,7 @@ class ApprovalParam(RuntimeContract):
 
 
 class McpApprovalMetadata(RuntimeContract):
-    """Structured payload nested inside ``ApprovalRequestRecord.metadata``."""
+    """Structured consent-card payload nested inside ``ApprovalRequestRecord.metadata`` for MCP tool approvals."""
 
     model_config = ConfigDict(extra="allow")
 

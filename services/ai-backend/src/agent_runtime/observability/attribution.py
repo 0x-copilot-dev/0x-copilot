@@ -1,23 +1,9 @@
-"""Carry-side usage attribution (Sub-PRD 01b).
+"""Carry-side usage attribution: purpose classification and attribution context.
 
-Replaces the time-based DB heuristic in ``observability/usage_attribution.py``
-(deleted in the same PR) with a value object built at the LLM emit
-boundary from signals already present on the stream chunk and tool
-ledger.
-
-Two contracts:
-
-- :class:`Purpose` — five-value StrEnum + deterministic
-  :meth:`Purpose.derive` that classifies an LLM call by signals
-  available at emit time.
-- :class:`UsageAttributionContext` — frozen Pydantic value object
-  carrying every dimension we cost by. Pydantic validators make
-  impossible-attribution states unrepresentable (subagent without
-  slug, tool_interpretation without tool_call_id).
-
-The context is stamped onto :class:`runtime_worker.run_metrics._PerCallSlot`
-per AIMessage and materializes onto :class:`RuntimeModelCallUsageRecord`
-when the per-call row is built.
+:class:`Purpose` is a five-value StrEnum with a deterministic :meth:`Purpose.derive`
+that classifies an LLM call from signals available at emit time. :class:`UsageAttributionContext`
+is a frozen Pydantic value object carrying every dimension used for cost attribution;
+validators make impossible states unrepresentable (e.g. subagent purpose without a slug).
 """
 
 from __future__ import annotations

@@ -1,23 +1,9 @@
-"""Single boundary for persisting LLM token usage + cost (Sub-PRD 01c).
+"""Single boundary for persisting LLM token usage and cost.
 
-The capture layer's "writer" smell ends here. Before 01c, every usage
-write in the worker meant: build a record, INSERT it via one port
-method, look up pricing, compute cost, UPDATE the row via a sibling
-port method. Two parallel paths in ``handlers/run.py``
-(``_record_run_usage`` + ``_record_per_call_usage``) each repeated the
-shape, with two pricing lookups at slightly different timestamps.
-
-The :class:`UsageRecorder` Protocol collapses both into one boundary
-with two methods (``record_call``, ``record_run``). One production
-impl owns row-write + pricing-lookup + cost-stamp + fail-soft error
-handling. Tests get an in-memory fake; dev / replay gets a null sink.
-
-Fail-soft contract: the recorder's public methods never propagate
-exceptions. The run lifecycle must not break because a usage row
-couldn't be persisted (today's behavior — preserved).
-
-See ``docs/refactor/01c-usage-recorder.md`` for the full architectural
-rationale and the handler integration shape.
+:class:`UsageRecorder` collapses per-call and per-run usage writes into one
+boundary: row insertion, pricing lookup, cost stamping, and fail-soft error
+handling. Public methods never propagate exceptions — the run lifecycle must not
+break because a usage row failed to persist.
 """
 
 from __future__ import annotations

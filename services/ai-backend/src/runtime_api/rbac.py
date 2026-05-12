@@ -1,17 +1,16 @@
-"""A10 — RBAC enforcement at every ai-backend route.
+"""RBAC enforcement for every ai-backend route.
 
-Mirrors :mod:`backend_app.identity.rbac` (the ai-backend cannot import
-that module — service boundary). Same semantics:
+Mirrors the RBAC contract from the backend service (no cross-import — service boundary).
 
   - :func:`RequireScopes(*scopes)` — ALL of ``scopes`` must be present.
+  - :func:`RequireAnyScope(*scopes)` — ANY of ``scopes`` must be present.
   - :func:`RequireRoles(*roles)` — ANY of ``roles`` must be present.
-  - :func:`public_route()` — explicit opt-out marker for the CI
-    scope-check tool.
+  - :func:`public_route()` — explicit opt-out marker for CI scope checks.
   - ``RBAC_MODE=audit`` (default) → log denies, pass through;
     ``RBAC_MODE=enforce`` → 403.
 
-Denies are logged via the runtime audit log when the runtime API store
-is wired (production); otherwise via a structured warning log.
+Denies are written to the runtime audit log when the store is wired; otherwise
+they fall back to a structured warning log.
 """
 
 from __future__ import annotations
@@ -36,8 +35,11 @@ _ENFORCE = "enforce"
 
 
 class RbacMode:
+    """Reads and exposes the current RBAC enforcement mode from the environment."""
+
     @staticmethod
     def current() -> str:
+        """Return the normalized RBAC mode, defaulting to ``audit`` for unknown values."""
         mode = os.environ.get(_RBAC_MODE_ENV, _AUDIT).strip().lower()
         if mode not in {_AUDIT, _ENFORCE}:
             return _AUDIT
@@ -45,6 +47,7 @@ class RbacMode:
 
     @staticmethod
     def is_enforce() -> bool:
+        """Return True iff the current mode is ``enforce``."""
         return RbacMode.current() == _ENFORCE
 
 
@@ -58,6 +61,7 @@ def public_route() -> Callable[[Request], None]:
 
 
 def RequireScopes(*scopes: str) -> Callable[[Request], TrustedRequestIdentity]:
+    """Return a FastAPI dependency requiring ALL listed scopes on the caller identity."""
     required = frozenset(scopes)
 
     async def _dep(request: Request) -> TrustedRequestIdentity:
@@ -110,6 +114,7 @@ def RequireAnyScope(*scopes: str) -> Callable[[Request], TrustedRequestIdentity]
 
 
 def RequireRoles(*roles: str) -> Callable[[Request], TrustedRequestIdentity]:
+    """Return a FastAPI dependency requiring ANY of the listed roles on the caller."""
     required = frozenset(roles)
 
     async def _dep(request: Request) -> TrustedRequestIdentity:
@@ -126,6 +131,7 @@ def RequireRoles(*roles: str) -> Callable[[Request], TrustedRequestIdentity]:
 
 
 def _resolve_identity(request: Request) -> TrustedRequestIdentity:
+    """Resolve the caller's identity, synthesizing an empty-permissions identity in dev when absent."""
     identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
     if identity is None:
         # Dev-only path (no service token configured + not production).
@@ -148,6 +154,7 @@ def _evaluate(
     required_scopes: frozenset[str],
     required_roles: frozenset[str],
 ) -> TrustedRequestIdentity:
+    """Enforce scopes/roles, log any denial, and raise 403 in enforce mode."""
     if MFA_PENDING in identity.permission_scopes:
         _record_deny(
             request=request,
@@ -193,6 +200,7 @@ def _record_deny(
     required_roles: frozenset[str],
     missing_scopes: frozenset[str] = frozenset(),
 ) -> None:
+    """Emit a structured warning log and best-effort audit row for a denied request."""
     metadata = {
         "reason": reason,
         "required_scopes": sorted(required_scopes),

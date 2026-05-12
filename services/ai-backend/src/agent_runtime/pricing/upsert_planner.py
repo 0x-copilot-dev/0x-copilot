@@ -1,18 +1,10 @@
-"""Plan + apply pricing-record upserts idempotently (B3 / P12 Step 2).
+"""Plan and apply pricing-record upserts idempotently.
 
-The composer ([`composer.py`](composer.py)) decides which records *should* be in
-the catalog. This module decides what actually changes when those records meet
-the existing pricing-port state, so re-running the seed script is a no-op
-whenever the catalog is already current.
-
-Why this lives next to the composer rather than inside the script: the
-script is a thin CLI shell; the planning logic is library code that wants
-unit tests + reuse (e.g. by a future Phase 3 ``PricingRefreshLoop``).
-
-The Postgres adapter's ``upsert_pricing`` requires the new record's
-``effective_from`` to be strictly greater than the existing active row's.
-The planner enforces that — bumping by one minute when the composer's
-minute-floored timestamp collides with the existing row exactly.
+The composer decides which records should be in the catalog; this module decides
+what changes when those records meet existing persistence-port state, so re-runs
+are no-ops when the catalog is already current. The planner enforces that each
+new record's ``effective_from`` is strictly greater than the existing active row's —
+bumping by one minute when a minute-floored timestamp collides exactly.
 """
 
 from __future__ import annotations

@@ -1,14 +1,4 @@
-"""In-memory :class:`ShareSnapshotPort` (PR 6.2).
-
-Lives here, not under ``runtime_adapters.in_memory.runtime_api_store``,
-because the share table is owned by PR 6.1 and a thin standalone
-adapter avoids coupling the conversation store to a not-yet-shipped
-table. Tests for the fork service inject this directly.
-
-When PR 6.1 lands its ``conversation_shares`` writer it will populate
-real ``ShareSnapshot`` rows; until then the test harness uses
-``register`` / ``revoke`` to wire deterministic fixtures.
-"""
+"""In-memory ``ShareSnapshotPort`` for tests and local development."""
 
 from __future__ import annotations
 
@@ -39,9 +29,11 @@ class InMemoryShareSnapshotStore:
             self._expires_at[token] = expires_at
 
     def revoke(self, token: str) -> None:
+        """Mark a share token as revoked; subsequent lookups return ``None``."""
         self._revoked.add(token)
 
     async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:
+        """Return the snapshot for a token, or ``None`` if revoked or expired."""
         if share_token in self._revoked:
             return None
         snapshot = self._by_token.get(share_token)

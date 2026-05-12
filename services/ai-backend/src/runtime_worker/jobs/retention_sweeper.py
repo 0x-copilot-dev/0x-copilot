@@ -256,6 +256,15 @@ class RetentionSweeperLoop:
             if resolved.ttl_seconds is None:
                 return None
             ttl_seconds = resolved.ttl_seconds
+        elif kind in (
+            RetentionKind.MESSAGES_TOMBSTONED,
+            RetentionKind.EVENTS_TOMBSTONED,
+            RetentionKind.MEMORY_ITEMS_TOMBSTONED,
+        ):
+            grace_days = self._grace_days.get(kind, 0)
+            if grace_days == 0:
+                return None
+            ttl_seconds = grace_days * 86400
 
         total = RetentionSweepOutcome(org_id=org_id, kind=kind)
         t0 = time.monotonic()

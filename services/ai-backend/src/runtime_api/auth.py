@@ -1,4 +1,4 @@
-"""Trusted service identity for runtime API requests."""
+"""Trusted service-token identity parsing for incoming runtime API requests."""
 
 from __future__ import annotations
 
@@ -19,6 +19,12 @@ from fastapi import HTTPException, Request, status
 
 @dataclass(frozen=True)
 class TrustedRequestIdentity:
+    """Verified caller identity extracted from trusted service-token headers.
+
+    Populated only after the service token has been validated; untrusted
+    header values are never promoted into this type.
+    """
+
     org_id: str
     user_id: str
     roles: tuple[str, ...] = ("employee",)
@@ -27,7 +33,7 @@ class TrustedRequestIdentity:
 
 
 class RuntimeServiceAuthenticator:
-    """Class-scoped trusted service identity parsing for runtime API requests."""
+    """Validates the service token and extracts per-tenant identity from headers."""
 
     @classmethod
     def trusted_identity_from_request(
@@ -110,14 +116,20 @@ class RuntimeServiceAuthenticator:
 
     @staticmethod
     def _service_token() -> str:
+        """Return the expected service token from the environment, empty if unset."""
+
         return os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
 
     @staticmethod
     def _environment() -> str:
+        """Return the normalised runtime environment name."""
+
         return os.environ.get("RUNTIME_ENVIRONMENT", "development").lower()
 
     @staticmethod
     def _required_header(request: Request, header: str) -> str:
+        """Extract a required header value or raise 401."""
+
         value = request.headers.get(header, "").strip()
         if not value:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Missing {header}")
@@ -125,11 +137,14 @@ class RuntimeServiceAuthenticator:
 
     @staticmethod
     def _csv_header(request: Request, header: str) -> tuple[str, ...]:
+        """Parse a comma-separated header value into a tuple of stripped strings."""
+
         value = request.headers.get(header, "")
         return tuple(part.strip() for part in value.split(",") if part.strip())
 
     @staticmethod
     def _connector_scopes(value: str) -> dict[str, tuple[str, ...]]:
+        """Parse the JSON-encoded connector-scopes header into a typed mapping."""
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError as exc:

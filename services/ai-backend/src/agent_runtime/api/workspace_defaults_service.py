@@ -1,13 +1,4 @@
-"""Workspace defaults service helper (PR 1.6).
-
-Composes ``workspace_defaults`` (per-org runtime defaults — model +
-connectors) with the existing C8 ``retention_policies`` storage so the
-admin Settings panel sees one atomic write.
-
-Lives separate from ``service.RuntimeApiService`` to keep the latter
-small and to minimise merge-conflict surface with PRs that touch the
-same big class concurrently.
-"""
+"""Workspace defaults service: composites per-org model/connector defaults with retention policy storage."""
 
 from __future__ import annotations
 

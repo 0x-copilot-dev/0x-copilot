@@ -1,4 +1,6 @@
-"""Dynamic MCP loading primitives."""
+"""MCP sub-package: cards, client protocol, loader, middleware, permissions, and registry."""
+
+from __future__ import annotations
 
 from agent_runtime.capabilities.mcp.cards import (
     LoadedMcpServer,

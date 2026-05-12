@@ -1,15 +1,9 @@
-"""Integer-only cost computation in micro-USD (B3).
+"""Integer-only cost computation in micro-USD using banker's rounding.
 
-The persistence path stores cost in ``BIGINT micro_usd`` (1 USD =
-1_000_000 micro_usd) so a usage row can never drift due to floating-point
-rounding. The calculator uses banker's rounding (round-half-to-even) at
-the micro-USD boundary — this is what the spec calls out and matches
-typical financial conventions.
-
-Failure semantics: ``compute`` never raises. Any pricing argument that
-is malformed (negative numbers, missing required fields) returns 0 micro-USD
-so the caller gets a sentinel rather than an exception that would have
-to be swallowed at the worker hook anyway.
+Cost is stored as ``BIGINT micro_usd`` (1 USD = 1_000_000 micro-USD) so usage
+rows never drift from floating-point rounding. ``compute`` never raises; malformed
+arguments (negative numbers) return 0 so callers receive a sentinel rather than an
+exception to swallow.
 """
 
 from __future__ import annotations

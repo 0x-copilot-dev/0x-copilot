@@ -1,8 +1,6 @@
-"""HTTP routes for PR 1.6 — workspace defaults + conversation lifecycle.
+"""HTTP routes for workspace defaults and conversation lifecycle management.
 
-Lives outside ``routes.py`` so the parallel approval-forwarding work
-(PR 1.4.1) can land alongside without merge friction. Both route
-groups are mounted on the same ``/v1/agent`` router.
+Five endpoints under ``/v1/agent``:
 
   * ``GET    /v1/agent/workspace/defaults``        — read defaults
   * ``PUT    /v1/agent/workspace/defaults``        — write defaults (admin)
@@ -29,23 +27,16 @@ from runtime_api.schemas import (
 
 
 def _is_admin(request: Request) -> bool:
-    """Return True iff the trusted identity carries the admin scope.
-
-    Mirrors the gate used by the connector PATCH route (PR 1.2.1) so
-    audit semantics line up across every conversation-mutating
-    endpoint in the runtime API.
-    """
+    """Return True when the trusted identity carries the admin scope."""
 
     identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
     return identity is not None and ADMIN_USERS in identity.permission_scopes
 
 
 class WorkspaceDefaultsRoutes:
-    """Route handlers for workspace defaults (PR 1.6).
+    """Route handlers for reading and updating workspace runtime defaults.
 
-    Reads are public to any tenant member (the FE's Settings panel
-    populates from this); writes are gated by the existing
-    ``ADMIN_USERS`` permission scope.
+    Reads are open to any tenant member; writes require ``ADMIN_USERS``.
     """
 
     @classmethod
@@ -55,6 +46,7 @@ class WorkspaceDefaultsRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> WorkspaceDefaultsResponse:
+        """Return the current workspace defaults; materialises deployment fallbacks when no row exists."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -70,6 +62,7 @@ class WorkspaceDefaultsRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> WorkspaceDefaultsResponse:
+        """Replace workspace defaults for the org; admin-only."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -89,7 +82,7 @@ class WorkspaceDefaultsRoutes:
 
 
 class ConversationLifecycleRoutes:
-    """Route handlers for the lifecycle PATCH/DELETE/restore surface."""
+    """Route handlers for conversation title/folder/archive, soft-delete, and restore."""
 
     @classmethod
     async def update_conversation(
@@ -100,6 +93,7 @@ class ConversationLifecycleRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
+        """Apply a title, folder, or archived-state patch to a conversation."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -121,6 +115,7 @@ class ConversationLifecycleRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> Response:
+        """Soft-delete a conversation; 204 on success."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -140,6 +135,7 @@ class ConversationLifecycleRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ConversationResponse:
+        """Undo a soft-delete and return the conversation to the active list."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -154,13 +150,7 @@ class ConversationLifecycleRoutes:
 
 
 def register_workspace_defaults_routes(router: APIRouter) -> None:
-    """Add PR 1.6 routes to the ``/v1/agent`` router.
-
-    Called once from ``RuntimeApiRouter.create_router`` alongside the
-    other ``register_*`` helpers (drafts, workspace feeds). Keeping
-    registration centralised in a single function makes the route
-    table greppable.
-    """
+    """Mount workspace defaults and conversation lifecycle routes on the ``/v1/agent`` router."""
 
     router.add_api_route(
         "/workspace/defaults",

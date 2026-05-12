@@ -1,26 +1,4 @@
-"""DraftBackend — routes ``/drafts/`` writes through deepagents into Postgres.
-
-Drafts are first-class artifacts in the Atlas Workspace pane. Rather than
-inventing a new tool, we let the agent use deepagents' built-in ``write_file``
-and ``edit_file`` tools and route the ``/drafts/`` path prefix to this backend
-through the existing :class:`CompositeBackend` setup.
-
-Each successful ``awrite`` / ``aedit`` call:
-
-1. Validates the path (``/drafts/<32 hex>.md`` after CompositeBackend strips
-   the ``/drafts/`` prefix → leaves ``/<32 hex>.md``).
-2. Reads the latest persisted version (if any) for the same ``draft_id``.
-3. For ``aedit``, performs the substitution server-side (we never trust the
-   model's idea of current content) and validates the match shape.
-4. Inserts a new row through :class:`DraftStorePort` with ``version+1``.
-5. Emits a ``DRAFT_UPDATED`` runtime event so the SSE pipeline pushes the new
-   version to the FE Workspace pane DraftTab without an extra fetch.
-
-``aread`` returns the latest version's ``content_text``. ``als`` lists drafts
-in the bound conversation. The backend is **scoped to one run**: ``org_id``,
-``conversation_id``, ``run_id``, and ``user_id`` are bound at construction
-time, so the agent cannot escape its own tenant.
-"""
+"""Deep Agents BackendProtocol that routes the ``/drafts/`` prefix to versioned Postgres rows."""
 
 from __future__ import annotations
 
@@ -63,7 +41,7 @@ _FULL_PATH_RE = re.compile(r"^/drafts/([0-9a-f]{32})\.md$")
 
 
 class _Errors:
-    """Standardized backend error strings (deepagents recognises these literals)."""
+    """Error string literals returned to Deep Agents (the framework pattern-matches them)."""
 
     INVALID_PATH = "invalid_path"
     FILE_NOT_FOUND = "file_not_found"
@@ -74,30 +52,25 @@ class _Errors:
 
 
 class _ToolRuntimeProxy:
-    """Best-effort bridge to deepagents' ToolRuntime.
+    """Extension point for future per-call Deep Agents ToolRuntime attribution.
 
-    BackendProtocol methods don't take a runtime arg; deepagents' filesystem
-    middleware injects context into the backend instance via the ToolRuntime
-    on each call. We don't depend on that here — every per-call value
-    (``run_id``, ``user_id`` overrides, etc.) is bound at backend
-    construction. The proxy exists so that future plumbing (per-tool-call
-    overrides, attribution to a specific subagent) can be added without
-    re-shaping callers.
+    Identity values are bound at ``DraftBackend`` construction, so no per-call
+    injection is needed today.
     """
 
 
 def _summary_for(record: DraftRecord) -> str:
+    """Return a short human-readable label for a persisted draft version."""
     title = record.title.strip() or "Untitled draft"
     return f"Draft v{record.version}: {title}"
 
 
 def _section_split(content: str) -> list[dict[str, str]]:
-    """Split markdown into ``[{heading, body}]`` for the UI projection.
+    """Split markdown into ``[{heading, body}]`` sections for the SSE event payload.
 
-    Lines starting with ``#`` (with up to four ``#`` and one space) become
-    section headings. Free-form text before the first heading is collapsed
-    into a heading ``""`` section (the FE renders it without a header chip).
-    Pure presentation; nothing here is load-bearing for persistence.
+    Text before the first heading lands in a section with ``heading=""``; the
+    frontend renders it without a header chip. This is pure presentation logic
+    and is not used for persistence decisions.
     """
 
     sections: list[dict[str, str]] = []
@@ -124,7 +97,7 @@ def _section_split(content: str) -> list[dict[str, str]]:
 
 
 def _title_for(content: str, fallback: str = "") -> str:
-    """Derive a draft title from the first H1 (or first non-empty line)."""
+    """Extract a display title: the first H1 heading, or the first non-empty line, capped at 240 chars."""
 
     for line in content.splitlines():
         stripped = line.strip()
@@ -138,11 +111,10 @@ def _title_for(content: str, fallback: str = "") -> str:
 
 
 class DraftBackend(BackendProtocol):
-    """Deepagents backend that persists ``/drafts/<uuid>.md`` writes.
+    """Deep Agents BackendProtocol that persists ``/drafts/<uuid>.md`` writes to Postgres.
 
-    One instance per run. Construction binds the run's tenant identity; no
-    method takes ``org_id`` because we never trust the model's path strings to
-    carry it.
+    Scoped to one run at construction; path strings from the model are untrusted
+    for identity, so org/conversation/run/user are bound immutably at construction.
     """
 
     PATH_PREFIX: str = DraftPath.PREFIX
@@ -164,11 +136,9 @@ class DraftBackend(BackendProtocol):
         self._user_id = user_id
         self._emit = emit_event
 
-        # Per-draft lock keeps ``latest → +1 → insert`` atomic against
-        # concurrent edits inside the same agent loop (a supervisor + a
-        # subagent both editing the same draft). Cross-process races are
-        # caught by the UNIQUE (org_id, draft_id, version) constraint and
-        # surfaced through OptimisticConflict.
+        # Per-draft asyncio.Lock serializes "latest → +1 → insert" within this
+        # process. Cross-process write races are caught by the UNIQUE (org_id,
+        # draft_id, version) DB constraint and surface as OptimisticConflict.
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_guard = RLock()
 
@@ -178,6 +148,7 @@ class DraftBackend(BackendProtocol):
         return _run_sync(self.awrite(file_path, content))
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Create or overwrite a draft by inserting a new version row."""
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return WriteResult(error=_Errors.INVALID_PATH)
@@ -204,6 +175,7 @@ class DraftBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,  # noqa: FBT001, FBT002
     ) -> EditResult:
+        """Apply a string substitution to the latest draft version and persist the result."""
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return EditResult(error=_Errors.INVALID_PATH)
@@ -215,6 +187,8 @@ class DraftBackend(BackendProtocol):
         occurrences = latest.content_text.count(old_string)
         if occurrences == 0:
             return EditResult(error=_Errors.NO_MATCH)
+        # Reject ambiguous edits unless the caller explicitly opted into replace_all;
+        # this matches the Deep Agents spec for strict-anchor edits.
         if occurrences > 1 and not replace_all:
             return EditResult(error=_Errors.AMBIGUOUS_MATCH)
         if replace_all:
@@ -245,12 +219,15 @@ class DraftBackend(BackendProtocol):
         offset: int = 0,
         limit: int = 2000,
     ) -> ReadResult:
+        """Return the latest content of a draft, or a file-not-found error."""
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return ReadResult(error=_Errors.INVALID_PATH)
         latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
         if latest is None:
             return ReadResult(error=_Errors.FILE_NOT_FOUND)
+        # ``offset`` / ``limit`` are part of the BackendProtocol signature but
+        # drafts are small enough that we return the full content unconditionally.
         return ReadResult(
             file_data={
                 "content": latest.content_text,
@@ -263,10 +240,11 @@ class DraftBackend(BackendProtocol):
         return _run_sync(self.als(path))
 
     async def als(self, path: str) -> LsResult:
-        # ``path`` is post-strip — at the prefix root we receive ``"/"``.
+        """List all latest draft versions for the current conversation."""
+        # ``path`` is post-strip by CompositeBackend. The draft namespace is
+        # flat — there are no subdirectories, so anything other than the root
+        # sentinel values returns an empty listing rather than an error.
         if path not in ("/", "", "/."):
-            # Drafts are flat. Anything below ``/drafts/`` is a single file
-            # path; ``/drafts/foo/`` is not a thing.
             return LsResult(entries=[])
         records = await self._store.latest_for_conversation(
             org_id=self._org_id, conversation_id=self._conversation_id
@@ -299,6 +277,7 @@ class DraftBackend(BackendProtocol):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
+        """Search all latest drafts for lines containing ``pattern`` (substring, not regex)."""
         records = await self._store.latest_for_conversation(
             org_id=self._org_id, conversation_id=self._conversation_id
         )
@@ -322,8 +301,9 @@ class DraftBackend(BackendProtocol):
         return _run_sync(self.aglob(pattern, path))
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        # Pattern matching is intentionally limited to ``*.md`` — the only
-        # filenames our prefix can hold. We fall back to ``als``.
+        """Return all draft filenames; pattern is ignored because drafts are always ``*.md``."""
+        # All draft filenames are ``<uuid>.md`` — full glob matching would never
+        # reject any entry. Delegate to ``als`` for the canonical list.
         ls = await self.als("/")
         return GlobResult(matches=ls.entries or [])
 
@@ -346,9 +326,17 @@ class DraftBackend(BackendProtocol):
         content_text: str,
         status: DraftStatus,
     ) -> DraftRecord:
+        """Insert the next version row and emit DRAFT_UPDATED.
+
+        Holds a per-draft asyncio lock so the "read latest → +1 → insert" trio
+        is atomic within this process. The DB's UNIQUE (org_id, draft_id, version)
+        constraint catches cross-process races.
+        """
         async with self._lock_for(draft_id):
             latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
             next_version = (latest.version + 1) if latest is not None else 1
+            # Carry forward citation/connector/metadata from the previous version so
+            # a plain write doesn't silently strip send-metadata set by an earlier turn.
             citation_ids = latest.citation_ids if latest is not None else ()
             target_connector = latest.target_connector if latest is not None else None
             target_metadata = dict(latest.target_metadata) if latest is not None else {}
@@ -373,6 +361,7 @@ class DraftBackend(BackendProtocol):
         return persisted
 
     def _lock_for(self, draft_id: str) -> asyncio.Lock:
+        """Return or lazily create the per-draft asyncio.Lock for this backend instance."""
         with self._locks_guard:
             lock = self._locks.get(draft_id)
             if lock is None:
@@ -385,7 +374,14 @@ class DraftBackend(BackendProtocol):
 
 
 def _run_sync(awaitable: Awaitable[Any]) -> Any:
-    """Bridge async backend methods into deepagents' sync entry points."""
+    """Bridge Deep Agents' sync entry points to async implementations.
+
+    Production workers always call the async ``a*`` methods directly. This
+    helper exists solely for the framework's sync dispatch path. When a
+    running event loop is detected (e.g. an async test that exercises a sync
+    entry point), the coroutine is scheduled on that loop via
+    ``run_coroutine_threadsafe`` to avoid nesting ``run_until_complete`` calls.
+    """
 
     try:
         loop = asyncio.get_event_loop()
@@ -396,9 +392,6 @@ def _run_sync(awaitable: Awaitable[Any]) -> Any:
         finally:
             loop.close()
     if loop.is_running():
-        # We're inside an async context (e.g. tests calling sync entry from
-        # an async test). Schedule and synchronously wait — never reached in
-        # production where the worker drives ``a*`` methods directly.
         return asyncio.run_coroutine_threadsafe(
             asyncio.ensure_future(awaitable), loop
         ).result()
@@ -413,15 +406,12 @@ def make_event_emitter(
     event_producer: object,
     run: RunRecord,
 ) -> Callable[[DraftRecord], Awaitable[None]]:
-    """Build the ``emit_event`` callback for :class:`DraftBackend`.
+    """Build the ``emit_event`` callback to inject into ``DraftBackend``.
 
-    Kept as a free function rather than a backend method so the backend stays
-    pure and unit-testable without a real producer.
-
-    The producer is the same :class:`RuntimeEventProducer` used everywhere
-    else in the worker; we call its ``append_api_event`` so the event flows
-    through redaction, presentation projection, and the run-sequence cursor
-    update — same path as every other API-authored event.
+    Kept as a free function so ``DraftBackend`` stays testable without a live
+    producer. The returned closure calls ``append_api_event`` so every draft
+    update travels through the same sequencing and redaction path as other
+    runtime events.
     """
 
     async def _emit(record: DraftRecord) -> None:

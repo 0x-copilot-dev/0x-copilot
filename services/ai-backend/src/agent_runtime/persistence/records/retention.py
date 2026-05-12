@@ -1,8 +1,8 @@
-"""C8 records: per-tenant retention policies + sweep evidence.
+"""Pydantic records for per-tenant retention policies and sweep evidence (C8).
 
-Each row in ``retention_policies`` is one (scope, resource_id, kind) policy
+Each row in ``retention_policies`` is one ``(scope, resource_id, kind)`` policy
 with a TTL in seconds. Most-specific policy wins at resolution time:
-conversation > assistant > user > org > deployment-default.
+``conversation > assistant > user > org > deployment-default``.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from agent_runtime.execution.contracts import RuntimeContract
 
 
 class RetentionScope(StrEnum):
+    """Scope that a retention policy row applies to."""
+
     ORG = "org"
     USER = "user"
     CONVERSATION = "conversation"
@@ -24,13 +26,18 @@ class RetentionScope(StrEnum):
 
 
 class RetentionKind(StrEnum):
+    """Category of data that a retention policy deletes or tombstones.
+
+    The ``*_TOMBSTONED`` variants are sweep-only: they represent rows already
+    soft-deleted but not yet hard-deleted. They never appear in
+    ``retention_policies`` rows.
+    """
+
     MESSAGES = "messages"
     EVENTS = "events"
     CONTEXT_PAYLOADS = "context_payloads"
     CHECKPOINTS = "checkpoints"
     MEMORY_ITEMS = "memory_items"
-    # Phase 5: second-pass hard-delete after grace period.
-    # Never appear in retention_policies rows — sweep-only internal kinds.
     MESSAGES_TOMBSTONED = "messages_tombstoned"
     EVENTS_TOMBSTONED = "events_tombstoned"
     MEMORY_ITEMS_TOMBSTONED = "memory_items_tombstoned"

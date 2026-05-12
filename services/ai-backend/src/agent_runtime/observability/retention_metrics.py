@@ -1,14 +1,8 @@
-"""OTel meters for the C8 retention sweeper (Phase 1).
+"""OTel meters for the retention sweeper.
 
-Two signals through the existing pipeline:
-
-  - ``retention_swept_rows_total`` — counter, labels ``kind``, ``action``
-    (``tombstone`` | ``delete``), ``dry_run``. Incremented once per
-    non-zero sweep outcome chunk with the affected row count.
-  - ``retention_sweep_duration_seconds`` — histogram, label ``kind``.
-    Recorded once per (org, kind) sweep call.
-
-Gracefully no-ops when OTel is not importable (dev / test without the SDK).
+Two signals: ``retention_swept_rows_total`` (counter, labels ``kind``, ``action``,
+``dry_run``) and ``retention_sweep_duration_seconds`` (histogram, label ``kind``).
+Gracefully no-ops when OTel is not importable (dev/test without the SDK).
 """
 
 from __future__ import annotations

@@ -79,6 +79,7 @@ class RuntimeSseAdapter:
         run_id: str,
         sequence_no: int,
     ) -> str:
+        """Build and return a synthetic heartbeat SSE frame for the given run."""
         run = await service.get_run(org_id=org_id, user_id=user_id, run_id=run_id)
         payload = {Keys.Payload.MESSAGE: Messages.Event.HEARTBEAT}
         metadata = {"transient": True}

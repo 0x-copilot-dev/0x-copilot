@@ -1,18 +1,9 @@
-"""Application service backing the Workspace-pane data feeds (PR 1.5).
+"""Application service backing the Workspace-pane subagent and source data feeds.
 
-The service is a thin shaper between the read-only ports
-(:class:`SubagentStorePort`, :class:`SourceStorePort`) and the public DTOs
-(:class:`SubagentListResponse`, :class:`SourceListResponse`).
-
-It owns three responsibilities:
-
-* validate / clamp request inputs
-* truncate user-bearing text to the public budget
-* compose the response envelope
-
-It does **not** decrypt — adapters return decrypted records, so encryption is
-an adapter concern. It does **not** authorize — the route layer enforces
-``RUNTIME_USE`` scope and tenant identity.
+Validates and clamps request inputs, truncates user-bearing text to the public
+budget, and composes response envelopes from the read-only
+:class:`SubagentStorePort` and :class:`SourceStorePort` ports. Decryption and
+authorization are delegated to the adapter layer and the route layer respectively.
 """
 
 from __future__ import annotations

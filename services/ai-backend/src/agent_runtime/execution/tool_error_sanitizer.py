@@ -91,6 +91,7 @@ class ErrorSanitizer:
 
     @classmethod
     def _strip(cls, text: str) -> str:
+        """Apply all redaction patterns to *text* and return the scrubbed result."""
         scrubbed = _TRACEBACK_HEADER_PATTERN.sub("", text)
         scrubbed = _STACK_FRAME_PATTERN.sub("", scrubbed)
         for pattern in _SECRET_PATTERNS:
@@ -105,6 +106,7 @@ class ErrorSanitizer:
 
     @classmethod
     def _truncate(cls, text: str) -> str:
+        """Clip *text* to the sanitized byte budget, appending a truncation marker if needed."""
         if len(text) <= _MAX_SANITIZED_LENGTH:
             return text
         # Trim with an explicit marker so the LLM knows truncation
@@ -123,6 +125,7 @@ class ErrorHintExtractor:
 
     @classmethod
     def extract(cls, exc: BaseException) -> Mapping[str, Any]:
+        """Try each extractor in order; return the first non-``None`` result or ``{}``."""
         for extractor in (
             cls._pydantic_validation,
             cls._httpx_status,
@@ -136,6 +139,7 @@ class ErrorHintExtractor:
 
     @classmethod
     def _pydantic_validation(cls, exc: BaseException) -> Mapping[str, Any] | None:
+        """Return structured validation-error hints for Pydantic ``ValidationError``, else ``None``."""
         try:
             from pydantic import ValidationError
         except Exception:  # pragma: no cover — pydantic always available
@@ -163,6 +167,7 @@ class ErrorHintExtractor:
 
     @classmethod
     def _httpx_status(cls, exc: BaseException) -> Mapping[str, Any] | None:
+        """Return HTTP status hints for ``httpx.HTTPStatusError``, else ``None``."""
         try:
             import httpx
         except Exception:  # pragma: no cover — httpx always available
@@ -190,6 +195,7 @@ class ErrorHintExtractor:
 
     @classmethod
     def _httpx_transport(cls, exc: BaseException) -> Mapping[str, Any] | None:
+        """Return transport-error hints for httpx connectivity exceptions, else ``None``."""
         try:
             import httpx
         except Exception:  # pragma: no cover
@@ -211,6 +217,7 @@ class ErrorHintExtractor:
 
     @classmethod
     def _ddgs(cls, exc: BaseException) -> Mapping[str, Any] | None:
+        """Return search-provider hints for DDGS exceptions, else ``None``."""
         # ``ddgs.DDGSException`` is the public alias; we don't want to
         # hard-import the dep just to reflect on its name, so match by
         # qualified class name. Same path the runtime uses elsewhere.

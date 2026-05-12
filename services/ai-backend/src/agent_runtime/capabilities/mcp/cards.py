@@ -1,4 +1,4 @@
-"""Pydantic contracts for dynamic MCP server loading."""
+"""Pydantic contracts for MCP server cards, load requests/results, tool descriptors, and error types."""
 
 from __future__ import annotations
 
@@ -206,15 +206,10 @@ class McpLoadRequest(RuntimeContract):
 class McpToolCallRequest(RuntimeContract):
     """Request to invoke a validated tool on a selected MCP server.
 
-    PR 04 (citations binding map) — ``tool_call_id`` is injected by
-    LangGraph at dispatch via :class:`InjectedToolCallId`. The ai-backend
-    needs it to bind the conversation_ordinal allocated for this MCP
-    call to the call's stable LangGraph id, so citations resolved to
-    ``[[N]]`` in the model's prose can be looked up against a single
-    persisted binding map (see ``agent_conversation_tool_ordinals``).
-    Default is the empty string for replay/eval harnesses that build a
-    request manually; the runtime worker always supplies a non-empty
-    value.
+    ``tool_call_id`` is injected by LangGraph via :class:`InjectedToolCallId`
+    so the ordinal allocated for this call can be bound in the citations map.
+    Defaults to the empty string for replay/eval harnesses; the runtime worker
+    always supplies a non-empty value.
     """
 
     server_name: str
@@ -225,6 +220,7 @@ class McpToolCallRequest(RuntimeContract):
     @model_validator(mode="before")
     @classmethod
     def _collect_misplaced_arguments(cls, value: object) -> object:
+        """Fold unknown top-level keys into ``arguments`` so flat LangGraph calls are accepted."""
         if not isinstance(value, Mapping):
             return value
         known_keys = {
@@ -452,6 +448,7 @@ class McpToolCallResult(RuntimeContract):
 
     @model_validator(mode="after")
     def _require_exactly_one_outcome(self) -> "McpToolCallResult":
+        """Enforce that exactly one of ``output`` or ``error`` is set."""
         if (self.output is None) == (self.error is None):
             raise ValueError(Messages.Validation.EXACTLY_ONE_LOAD_OUTCOME)
         return self
@@ -464,6 +461,7 @@ class McpToolCallResult(RuntimeContract):
         tool_name: str,
         output: Mapping[str, Any],
     ) -> "McpToolCallResult":
+        """Return a successful result wrapping ``output``."""
         return cls(
             server_name=server_name,
             tool_name=tool_name,
@@ -481,6 +479,7 @@ class McpToolCallResult(RuntimeContract):
         tool_name: str | None = None,
         correlation_id: str | None = None,
     ) -> "McpToolCallResult":
+        """Return a failure result with a typed ``McpLoadError``."""
         return cls(
             server_name=server_name,
             tool_name=tool_name,
@@ -500,6 +499,7 @@ class McpToolCallResult(RuntimeContract):
         *,
         tool_name: str | None = None,
     ) -> "McpToolCallResult":
+        """Lift a pre-built ``McpLoadError`` into a failure result."""
         return cls(
             server_name=error.server_name,
             tool_name=tool_name,
@@ -515,12 +515,14 @@ class McpLoadResult(RuntimeContract):
 
     @model_validator(mode="after")
     def _require_exactly_one_outcome(self) -> "McpLoadResult":
+        """Enforce that exactly one of ``loaded_server`` or ``error`` is set."""
         if (self.loaded_server is None) == (self.error is None):
             raise ValueError(Messages.Validation.EXACTLY_ONE_LOAD_OUTCOME)
         return self
 
     @classmethod
     def ok(cls, loaded_server: LoadedMcpServer) -> "McpLoadResult":
+        """Return a successful load result."""
         return cls(loaded_server=loaded_server)
 
     @classmethod
@@ -533,6 +535,7 @@ class McpLoadResult(RuntimeContract):
         server_name: str | None = None,
         correlation_id: str | None = None,
     ) -> "McpLoadResult":
+        """Return a failure load result with a typed ``McpLoadError``."""
         return cls(
             error=McpLoadError(
                 code=code,
@@ -545,6 +548,7 @@ class McpLoadResult(RuntimeContract):
 
     @property
     def succeeded(self) -> bool:
+        """Return ``True`` when the load completed without error."""
         return self.loaded_server is not None
 
 
@@ -573,6 +577,7 @@ class McpSchemaValidator:
 
     @classmethod
     def validate_json_schema(cls, value: JsonSchema, field_name: str) -> JsonSchema:
+        """Validate that ``value`` is a JSON-serialisable mapping with a ``type`` key."""
         if not isinstance(value, Mapping):
             raise ValueError(Messages.Validation.json_schema_object(field_name))
         if Keys.Schema.TYPE not in value:

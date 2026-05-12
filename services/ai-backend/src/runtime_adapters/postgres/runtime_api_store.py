@@ -3351,6 +3351,27 @@ class PostgresRuntimeApiStore:
                 return await self._sweep_memory_items_chunked(
                     org_id=org_id, chunk_size=chunk_size, dry_run=dry_run
                 )
+            if kind is RetentionKind.MESSAGES_TOMBSTONED:
+                return await self._sweep_messages_tombstoned_chunked(
+                    org_id=org_id,
+                    ttl_seconds=ttl_seconds,
+                    chunk_size=chunk_size,
+                    dry_run=dry_run,
+                )
+            if kind is RetentionKind.EVENTS_TOMBSTONED:
+                return await self._sweep_events_tombstoned_chunked(
+                    org_id=org_id,
+                    ttl_seconds=ttl_seconds,
+                    chunk_size=chunk_size,
+                    dry_run=dry_run,
+                )
+            if kind is RetentionKind.MEMORY_ITEMS_TOMBSTONED:
+                return await self._sweep_memory_items_tombstoned_chunked(
+                    org_id=org_id,
+                    ttl_seconds=ttl_seconds,
+                    chunk_size=chunk_size,
+                    dry_run=dry_run,
+                )
         else:
             if kind is RetentionKind.MESSAGES:
                 return await self._sweep_messages(
@@ -3732,6 +3753,109 @@ class PostgresRuntimeApiStore:
             chunk_size=chunk_size,
             dry_run=dry_run,
             tally_field="tombstoned",
+        )
+
+    async def _sweep_messages_tombstoned_chunked(
+        self, *, org_id: str, ttl_seconds: int, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # Hard-delete messages that were tombstoned (status='deleted') and
+        # whose deleted_at exceeds the grace period. Legal hold exclusion
+        # still applies so a hold placed after tombstone blocks hard-delete.
+        sql = """
+            WITH due AS (
+                SELECT id FROM agent_messages
+                 WHERE org_id = %(org_id)s
+                   AND status = 'deleted'
+                   AND deleted_at IS NOT NULL
+                   AND deleted_at < NOW() - make_interval(secs => %(ttl)s)
+                   AND conversation_id NOT IN (
+                       SELECT resource_id
+                         FROM runtime_legal_holds
+                        WHERE org_id = %(org_id)s
+                          AND released_at IS NULL
+                   )
+                 ORDER BY deleted_at
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM agent_messages
+             USING due
+             WHERE agent_messages.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MESSAGES_TOMBSTONED,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="deleted",
+            extra_params={"ttl": ttl_seconds},
+        )
+
+    async def _sweep_events_tombstoned_chunked(
+        self, *, org_id: str, ttl_seconds: int, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # Hard-delete event rows whose payload was already redacted by the
+        # first-pass sweep (retention_purged flag set). Grace window is
+        # measured from retention_until (when the row became due for tombstone).
+        sql = """
+            WITH due AS (
+                SELECT id FROM runtime_events
+                 WHERE org_id = %(org_id)s
+                   AND (metadata_json_redacted->>'retention_purged')::boolean IS TRUE
+                   AND retention_until IS NOT NULL
+                   AND retention_until < NOW() - make_interval(secs => %(ttl)s)
+                   AND run_id NOT IN (
+                       SELECT resource_id
+                         FROM runtime_legal_holds
+                        WHERE org_id = %(org_id)s
+                          AND released_at IS NULL
+                   )
+                 ORDER BY retention_until
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM runtime_events
+             USING due
+             WHERE runtime_events.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.EVENTS_TOMBSTONED,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="deleted",
+            extra_params={"ttl": ttl_seconds},
+        )
+
+    async def _sweep_memory_items_tombstoned_chunked(
+        self, *, org_id: str, ttl_seconds: int, chunk_size: int, dry_run: bool
+    ) -> RetentionSweepOutcome:
+        # Hard-delete memory items soft-deleted by the first pass. Grace
+        # window measured from deleted_at.
+        sql = """
+            WITH due AS (
+                SELECT id FROM runtime_memory_items
+                 WHERE org_id = %(org_id)s
+                   AND deleted_at IS NOT NULL
+                   AND deleted_at < NOW() - make_interval(secs => %(ttl)s)
+                 ORDER BY deleted_at
+                 LIMIT %(chunk_size)s
+                 FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM runtime_memory_items
+             USING due
+             WHERE runtime_memory_items.id = due.id
+        """
+        return await self._execute_sweep_chunked(
+            sql=sql,
+            org_id=org_id,
+            kind=RetentionKind.MEMORY_ITEMS_TOMBSTONED,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            tally_field="deleted",
+            extra_params={"ttl": ttl_seconds},
         )
 
     async def backfill_retention_until(

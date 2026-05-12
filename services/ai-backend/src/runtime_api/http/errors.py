@@ -1,4 +1,4 @@
-"""Safe HTTP error mapping for the runtime API."""
+"""Exception types and global error-to-HTTP-response mapping for the runtime API."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from runtime_api.schemas import ApiErrorResponse
 
 
 class RuntimeApiError(Exception):
-    """Exception carrying a safe API error envelope and HTTP status."""
+    """Typed API exception wrapping a safe error envelope and an HTTP status code."""
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class RuntimeApiError(Exception):
 
 
 class RuntimeApiErrorMapper:
-    """Map internal exceptions to safe API responses."""
+    """FastAPI exception handlers that map internal errors to safe JSON responses."""
 
     @classmethod
     async def handle_runtime_api_error(
@@ -109,6 +109,7 @@ class RuntimeApiErrorMapper:
 
     @classmethod
     def _validation_error_response(cls, error_count: int) -> JSONResponse:
+        """Build a 400 JSON response for Pydantic / request validation failures."""
         response = ApiErrorResponse(
             code=RuntimeErrorCode.VALIDATION_ERROR,
             safe_message=Messages.Error.INVALID_REQUEST,

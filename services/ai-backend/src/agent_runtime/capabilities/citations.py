@@ -1,25 +1,10 @@
-"""Citation ledger — single seam for tool, provider, and replay paths.
+"""Per-run idempotent citation registry shared by tools, stream adapters, and replay.
 
-PR 1.1 (design at ``docs/new-design/01-citations-live-registry.md``).
-
-Tools, the Anthropic stream adapter, and the OpenAI Responses adapter all
-funnel through :meth:`CitationLedger.register` (single source) or
-:meth:`CitationLedger.register_many` (batch). The per-run idempotency
-key ``(connector, doc_id)`` is enforced in one place, ordinals are
-allocated monotonically, and one event fires per ingestion call:
-``source_ingested`` for the singular path, ``sources_ingested`` for the
-batch path.
-
-Tools reach the active ledger via :meth:`CitationLedger.cite` (a class
-method that resolves the ContextVar set by the runtime worker before
-graph execution). Tools that run outside the worker context (rare) get
-``None`` from the contextvar and ``cite`` returns the empty string —
-citations are best-effort decoration, never required for correctness.
-
-The ledger is provider-agnostic: it does not know whether a citation
-came from a tool result, an Anthropic ``citations_delta`` block, or an
-OpenAI ``output_text.done`` annotation. The token format is also
-provider-agnostic: ``[c<base36(ordinal)>]`` (e.g. ``[c1]``, ``[czh]``).
+Manages the (connector, doc_id) → CitationRecord cache, monotonic ordinal allocation,
+persistence via CitationStorePort, and event emission (source_ingested / sources_ingested).
+The active ledger is accessed via a ContextVar so tools call CitationLedger.cite() anywhere
+in the run's call stack without threading context through signatures. Token format is
+provider-agnostic: ``[c<base36(ordinal)>]``.
 """
 
 from __future__ import annotations
@@ -47,14 +32,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _Limits:
-    """Per-run caps. Soft ceilings to keep the SSE channel and registry tiny."""
+    """Per-run source caps to keep the SSE channel and in-memory registry bounded."""
 
     PER_RUN_MAX = 50
     BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 
 class _Fields:
-    """Wire payload field names — kept stable for replay compatibility."""
+    """source_ingested / sources_ingested payload field names, stable for replay."""
 
     CITATION = "citation"
     CITATIONS = "citations"
@@ -62,7 +47,7 @@ class _Fields:
 
 
 class SourceRef(RuntimeContract):
-    """Untrusted source descriptor a tool or provider hands to the ledger."""
+    """Untrusted source descriptor that a tool or provider submits to the ledger."""
 
     source_connector: str = Field(min_length=1, max_length=64)
     source_doc_id: str = Field(min_length=1, max_length=512)
@@ -100,9 +85,8 @@ class CitationLedger:
         self._producer = producer
         self._source = source
         self._per_run_max = per_run_max
-        # (connector, doc_id) -> CitationRecord. Ordinals fall out of insertion
-        # order, so the dict's preserved insertion order IS the canonical
-        # ordering of the run's citations.
+        # Insertion order is the canonical citation ordering for the run;
+        # dict preserves it, and ordinals are allocated by insertion position.
         self._cache: dict[tuple[str, str], CitationRecord] = {}
 
     @property
@@ -169,18 +153,12 @@ class CitationLedger:
         self,
         sources: Sequence[SourceRef],
     ) -> tuple[list[str], list[CitationRecord]]:
-        """Cache-check + bulk-persist. Shared by :meth:`register` and
-        :meth:`register_many`.
+        """Cache-check, dedup, cap-enforce, and bulk-persist a batch of sources.
 
-        Returns ``(tokens, newly_inserted)``:
-
-        * ``tokens`` — one entry per input source, in input order.
-          ``""`` for sources dropped at the per-run cap; the inline
-          ``[c<base36>]`` token otherwise.
-        * ``newly_inserted`` — canonical persisted records for the
-          *new* sources only (cache hits and cap-drops excluded), in
-          allocation order (ascending ordinal). Caller is responsible
-          for emitting the appropriate event.
+        Returns ``(tokens, newly_inserted)`` where tokens are 1:1 with input
+        order (``""`` for cap-dropped sources) and newly_inserted contains only
+        the records that were actually persisted (cache hits excluded). Caller
+        emits the appropriate event for newly_inserted.
         """
 
         if not sources:
@@ -189,9 +167,8 @@ class CitationLedger:
         tokens: list[str] = [""] * len(sources)
         new_records: list[CitationRecord] = []
         new_indices: list[int] = []
-        # In-batch dedup: a single batch can repeat the same (connector,
-        # doc_id) — both occurrences must collapse to the same ordinal
-        # without producing duplicate event entries or duplicate inserts.
+        # Tracks sources seen within this batch so repeated (connector, doc_id)
+        # pairs collapse to the same ordinal without producing duplicate inserts.
         in_batch: dict[tuple[str, str], CitationRecord] = {}
 
         for idx, source in enumerate(sources):
@@ -236,12 +213,10 @@ class CitationLedger:
         if not new_records:
             return tokens, []
 
-        # Persist before emitting events so a producer failure doesn't
-        # orphan a wire event without a backing row. The store is
-        # idempotent on (run_id, connector, doc_id), so a concurrent
-        # caller racing the same source receives the existing row back —
-        # output preserves input order so per-source token assignment
-        # stays correct.
+        # Persist before emitting so a producer failure never orphans a
+        # wire event without a backing row. The store is idempotent on
+        # (run_id, connector, doc_id), so concurrent callers racing the
+        # same source get the existing row back in input order.
         persisted = list(await self._store.insert_many_or_get(new_records))
         for offset, persisted_record in enumerate(persisted):
             idx = new_indices[offset]
@@ -289,14 +264,17 @@ class CitationLedger:
 
     @staticmethod
     def _token_id(ordinal: int) -> str:
+        """Return the raw token id string, e.g. ``"c1"`` or ``"czh"``."""
         return f"c{CitationLedger._to_base36(ordinal)}"
 
     @staticmethod
     def _token_for(ordinal: int) -> str:
+        """Return the bracketed inline token, e.g. ``"[c1]"``."""
         return f"[{CitationLedger._token_id(ordinal)}]"
 
     @staticmethod
     def _to_base36(value: int) -> str:
+        """Convert a positive integer to a base-36 string using 0-9a-z."""
         if value <= 0:
             raise ValueError("ordinal must be positive")
         digits: list[str] = []

@@ -30,10 +30,12 @@ class ToolOutcome(StrEnum):
 
     @property
     def is_terminal(self) -> bool:
+        """Always ``True`` — every ``ToolOutcome`` value is a terminal state."""
         return True
 
     @property
     def is_success(self) -> bool:
+        """Return ``True`` only for the ``SUCCEEDED`` outcome."""
         return self is ToolOutcome.SUCCEEDED
 
 
@@ -54,7 +56,9 @@ class ToolErrorCode(StrEnum):
     TOOL_BUDGET_EXCEEDED = "tool_budget_exceeded"
 
 
-# Statuses that indicate a tool call did not complete successfully.
+# Non-success terminal statuses used for filtering / metrics queries.
+# ``REJECTED`` is intentionally excluded: it is a pre-invocation gate,
+# not an in-flight failure, and has its own counter path.
 TOOL_FAILURE_STATUSES = frozenset(
     {
         ToolOutcome.FAILED.value,

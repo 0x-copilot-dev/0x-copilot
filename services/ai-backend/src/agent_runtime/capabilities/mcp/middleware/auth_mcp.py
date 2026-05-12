@@ -28,6 +28,8 @@ class McpAuthSessionCreator(Protocol):
 
 
 class McpAuthSession(RuntimeContract):
+    """Safe auth-session descriptor returned after an MCP OAuth initiation."""
+
     server_id: str
     server_name: str
     display_name: str
@@ -36,6 +38,8 @@ class McpAuthSession(RuntimeContract):
 
 
 class AuthMcpInput(RuntimeContract):
+    """Validated input for the auth_mcp tool."""
+
     server_name: str = Field(min_length=1)
     server_id: str | None = None
 
@@ -53,6 +57,7 @@ class AuthMcpTool:
     async def ainvoke(
         self, raw_input: AuthMcpInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Parse and validate ``raw_input``, start an auth session, and interrupt for user approval."""
         parsed_input = AuthMcpInputParser.parse(
             raw_input, self.runtime_context.trace_id
         )
@@ -82,9 +87,11 @@ class AuthMcpTool:
     async def __call__(
         self, raw_input: AuthMcpInput | Mapping[str, Any] | str
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
     def _approval_id(self, server_id: str) -> str:
+        """Build a deterministic approval ID scoped to run and server."""
         return f"mcp_auth:{self.runtime_context.run_id}:{server_id}"
 
     @staticmethod
@@ -92,6 +99,7 @@ class AuthMcpTool:
         session: McpAuthSession,
         resume: object,
     ) -> dict[str, Any]:
+        """Build the post-interrupt result dict from the user's approval decision."""
         decision = None
         if isinstance(resume, Mapping):
             decision = resume.get("decision")
@@ -120,6 +128,7 @@ class AuthMcpInputParser:
         raw_input: AuthMcpInput | Mapping[str, Any] | str,
         correlation_id: str,
     ) -> AuthMcpInput | McpLoadResult:
+        """Parse and validate ``raw_input``; return a failure result on invalid server name."""
         if isinstance(raw_input, AuthMcpInput):
             return raw_input
         if isinstance(raw_input, str):

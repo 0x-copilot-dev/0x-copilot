@@ -101,10 +101,9 @@ class RuntimeContextReference(RuntimeContract):
 class FilesystemPermissionSpec(RuntimeContract):
     """Domain-side mirror of deepagents' ``FilesystemPermission`` dataclass.
 
-    PR 1.3.5 adds this so :class:`SubagentDefinition` can grant or deny
-    write access to specific path prefixes (notably ``/drafts/``) without
-    importing the deepagents middleware into our domain models. The
-    factory translates these specs to deepagents' real
+    Allows :class:`SubagentDefinition` to grant or deny write access to
+    specific path prefixes without importing deepagents middleware into the
+    domain models. The factory translates these specs to deepagents'
     ``FilesystemPermission`` rules at agent-build time.
 
     ``operations`` are the deepagents operation names (``read`` / ``write`` /
@@ -153,11 +152,9 @@ class SubagentDefinition(RuntimeContract):
         le=Limits.CONCURRENCY_LIMIT_MAX,
     )
     enabled: bool = True
-    # PR 1.3.5 — explicit per-subagent filesystem permission rules.
-    # Default ``()`` means the subagent inherits the parent agent's
-    # permissions (deepagents semantics). To grant ``/drafts/`` write
-    # access to a specific subagent, populate this tuple with one or
-    # more allow rules.
+    # Explicit per-subagent filesystem permission rules. Default ``()`` means
+    # the subagent inherits the parent agent's permissions (deepagents semantics).
+    # Populate with allow rules to grant specific path prefix access (e.g. ``/drafts/``).
     fs_permissions: tuple[FilesystemPermissionSpec, ...] = ()
 
     @field_validator(_Fields.NAME)

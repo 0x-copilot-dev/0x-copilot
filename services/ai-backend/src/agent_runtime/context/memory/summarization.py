@@ -30,7 +30,7 @@ class SummarizationResult(RuntimeContract):
 
 
 class ContextSummarizationManager:
-    """Wrap SDK summarization with deterministic fallback behavior."""
+    """Drive Deep Agents SDK summarization with a deterministic fallback on failure."""
 
     FALLBACK_DECISION = (
         "Previous detailed context was compressed after summarization failed."
@@ -93,10 +93,13 @@ class ContextSummarizationManager:
     def _coerce_summary(
         cls, value: ContextSummary | Mapping[str, object] | str
     ) -> ContextSummary:
+        """Accept a typed summary, dict, or bare objective string."""
+
         if isinstance(value, ContextSummary):
             return value
         if isinstance(value, Mapping):
             return ContextSummary.model_validate(value)
+        # Bare string: treat as the objective with no decisions or next steps.
         return ContextSummary(
             objective=value,
             decisions=(),
@@ -113,8 +116,12 @@ class ContextSummarizationManager:
         artifacts: tuple[str, ...],
         next_steps: tuple[str, ...],
     ) -> ContextSummary:
+        """Build a minimal continuity summary when the SDK summarizer is unavailable."""
+
         return ContextSummary(
             objective=objective,
+            # Fill each empty tuple with one default entry so the model
+            # always has a minimal structure to continue from.
             decisions=decisions or (cls.FALLBACK_DECISION,),
             artifacts=artifacts or (cls.FALLBACK_ARTIFACT,),
             next_steps=next_steps or (cls.FALLBACK_NEXT_STEP,),
@@ -122,7 +129,7 @@ class ContextSummarizationManager:
 
 
 class ContextPayloadManager:
-    """Keep connector and tool output out of the prompt when it is too large."""
+    """Route connector and tool output to inline, offload, or summarize based on token budget."""
 
     PREVIEW_LINE_LIMIT = 10
 
@@ -190,6 +197,8 @@ class ContextPayloadManager:
         trace_id: str,
         before_tokens: int,
     ) -> ManagedContextPayload:
+        """Wrap ``content`` as an inline payload when it fits within the budget."""
+
         event = ContextCompressionEvent(
             before_tokens=before_tokens,
             after_tokens=before_tokens,
@@ -205,4 +214,6 @@ class ContextPayloadManager:
 
     @classmethod
     def _preview(cls, content: str) -> str:
+        """Return the first ``PREVIEW_LINE_LIMIT`` lines for the offloaded content hint."""
+
         return "\n".join(content.splitlines()[: cls.PREVIEW_LINE_LIMIT])

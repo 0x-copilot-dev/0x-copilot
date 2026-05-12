@@ -1,25 +1,10 @@
-"""HTTP IO + share-snapshot contracts for the conversation fork mechanic (PR 6.2).
+"""HTTP IO and share-snapshot contracts for the conversation fork mechanic.
 
-The fork endpoint (``POST /v1/agent/shares/{share_token}/fork``) consumes
-a *share snapshot* — the resolved view of one ``conversation_shares`` row
-plus the recipient gate's permitted user set. PR 6.1 owns the share
-table + token resolution adapter; PR 6.2 ships the consumer contract
-(:class:`ShareSnapshot` + :class:`ShareSnapshotPort`) so the fork can
-land independently and the postgres adapter can wire in when 6.1 ships.
-
-Three reasons this lives in a dedicated module rather than
-``runtime_api/schemas/conversations.py``:
-
-  1. The fork wire shape is small and self-contained — keeping it
-     separate keeps ``conversations.py`` focused on the conversation
-     row contracts.
-  2. PR 6.1 will add a ``runtime_api/schemas/shares.py`` for the full
-     share lifecycle; the share-snapshot Pydantic shape already named
-     here is the shape PR 6.1 produces (it can re-export from this
-     module so consumers stay stable across the two PRs).
-  3. The :class:`ShareSnapshotPort` Protocol is a thin contract — one
-     async method — that PR 6.1 implements without depending on
-     anything PR 6.2 ships.
+The fork endpoint (``POST /v1/agent/shares/{share_token}/fork``) consumes a
+*share snapshot* — the resolved view of one ``conversation_shares`` row plus
+the recipient gate's permitted user set. The fork contract
+(:class:`ShareSnapshot` + :class:`ShareSnapshotPort`) is kept in this module
+so the share-lifecycle and fork implementations can ship independently.
 """
 
 from __future__ import annotations
@@ -141,17 +126,10 @@ class ShareSnapshot(BaseModel):
 class ShareSnapshotPort(Protocol):
     """Resolve a share by its bearer token.
 
-    Implementations live in ``runtime_adapters/{in_memory,postgres}/``
-    once PR 6.1 ships the ``conversation_shares`` table + token store.
-    Until then, the in-memory adapter (this PR ships the in-memory
-    impl in ``runtime_adapters.in_memory.share_snapshot_store``)
-    provides a deterministic test harness for the fork service.
-
-    The lookup is *org-agnostic*: a share token is a global secret;
-    cross-org refusal is enforced at the service layer after the org
-    scope on the snapshot row is known. Implementations MUST return
-    ``None`` (not raise) for unknown / revoked / expired tokens — the
-    fork service maps that uniformly to a 404.
+    Implementations live in ``runtime_adapters/{in_memory,postgres}/``.
+    The lookup is org-agnostic — a share token is a global secret; cross-org
+    refusal is enforced at the service layer. Implementations MUST return
+    ``None`` (not raise) for unknown / revoked / expired tokens.
     """
 
     async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:

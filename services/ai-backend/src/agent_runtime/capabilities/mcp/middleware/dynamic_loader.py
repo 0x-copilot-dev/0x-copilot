@@ -53,6 +53,7 @@ class LoadMcpServerTool:
         self,
         raw_input: LoadMcpServerInput | Mapping[str, Any] | str,
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
 
@@ -65,6 +66,7 @@ class LoadMcpServerInputParser:
         raw_input: LoadMcpServerInput | Mapping[str, Any] | str,
         correlation_id: str,
     ) -> LoadMcpServerInput | McpLoadResult:
+        """Validate ``raw_input`` into a typed request; return a failure result on bad server name."""
         if isinstance(raw_input, LoadMcpServerInput):
             return raw_input
         if isinstance(raw_input, str):

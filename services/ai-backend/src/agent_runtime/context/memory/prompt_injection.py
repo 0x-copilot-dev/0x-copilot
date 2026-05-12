@@ -1,30 +1,23 @@
 """Heuristic prompt-injection detection for memory writes.
 
-The detector is a closed phrase list. Memory writes that contain any
-of these strings (case-insensitive) are flagged as injection attempts
-and rejected by ``MemoryPolicyAuthorizer.ensure_authorized``. The list
-is deliberately short and exact-phrase — false-positive cost on memory
-writes is high (legitimate user content gets rejected) and the
-attacker surface here is narrow (the model would have to be convinced
-to instruct itself via memory). For broader injection mitigation see
-the system-prompt + tool-permission layers; this detector is one cheap
-hop in defense-in-depth.
-
-Extracted from ``policy.MemoryWriteGuard`` in P11.4 so the policy
-authorizer can stay focused on path-and-actor authorization. The
-behavior is byte-identical to the prior inline implementation.
+The detector is a closed phrase list. Memory writes that contain any phrase
+(case-insensitive) are rejected by ``MemoryPolicyAuthorizer``. The list is
+intentionally short and exact — false-positive cost on legitimate memory writes
+is high, and the attacker surface here is narrow (the model must be convinced
+to write adversarial instructions to its own memory). This detector is one
+cheap layer in defense-in-depth; broader mitigation lives in the system-prompt
+and tool-permission layers.
 """
 
 from __future__ import annotations
 
 
 class PromptInjectionDetector:
-    """Memory-write content classifier.
+    """Stateless classifier for memory-write content.
 
-    Single classmethod entry point so memory's policy enforcement can
-    call it without instantiating state. The pattern tuple is class-
-    scoped so consumers can introspect (`for p in PromptInjectionDetector.PROMPT_INJECTION_PATTERNS`)
-    without exporting a separate module-level constant.
+    The pattern tuple is class-scoped so consumers can introspect
+    ``PromptInjectionDetector.PROMPT_INJECTION_PATTERNS`` without a
+    separate module-level export.
     """
 
     PROMPT_INJECTION_PATTERNS: tuple[str, ...] = (
@@ -37,10 +30,11 @@ class PromptInjectionDetector:
 
     @classmethod
     def is_prompt_injection(cls, content: str | None) -> bool:
-        """Return ``True`` when ``content`` contains any documented
-        prompt-injection phrase (case-insensitive). ``None`` returns
-        ``False`` so callers can pass through optional content fields
-        without guarding."""
+        """Return ``True`` when ``content`` matches any injection phrase (case-insensitive).
+
+        ``None`` returns ``False`` so callers can forward optional content
+        fields directly without a separate guard.
+        """
 
         if content is None:
             return False

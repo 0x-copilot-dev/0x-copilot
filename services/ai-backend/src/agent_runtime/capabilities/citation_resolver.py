@@ -1,36 +1,10 @@
-"""Per-run resolver for model-declared citation markers.
+"""Per-run filter that resolves ``[[N]]`` ordinal markers in streamed assistant text.
 
-PR 1.1-rev2 — citations as model-declared, conversation-scoped pointers.
-
-The resolver watches streamed assistant text for ``[[N]]`` tokens, where
-``N`` is a ``conversation_ordinal`` allocated by
-:class:`agent_runtime.capabilities.conversation_ordinals.ConversationOrdinalAllocator`.
-For each newly-observed marker it emits a ``citation_made`` event
-carrying a :class:`CitationLink` payload tying the prose location to the
-underlying tool invocation.
-
-Design notes:
-
-- **Per-message accumulation.** We keep the running text of each
-  assistant message keyed by ``message_id``. Because a marker is
-  matched only when it appears in full (``[[`` … ``]]``), partial
-  tokens split across deltas naturally don't fire — the regex simply
-  doesn't match until the closing ``]]`` arrives in a later delta.
-- **Idempotency.** Each emission is keyed by ``(prose_offset, ordinal)``
-  so re-deliveries of the same delta on stream resume don't duplicate
-  the event. Replay rebuild on the FE is also idempotent because
-  ``citation_made`` events ride the run's normal sequence_no log.
-- **Hallucinated ordinals.** When the model writes ``[[99]]`` for an
-  ordinal that was never allocated, we still emit the event (the FE
-  renders a muted placeholder per spec); the ``source_tool_call_id``
-  field is left empty for the FE to detect the unresolved case.
-- **No mutation of model output.** The resolver does not rewrite text
-  — the original ``[[N]]`` marker stays in the persisted assistant
-  message and the FE remark plugin replaces it with a chip at render
-  time.
-
-Bound per run via ``ContextVar`` (mirroring ``CitationLedger`` /
-``ConversationOrdinalAllocator`` / ``ToolBudgetGuard``).
+Watches each MODEL_DELTA for ``[[N]]`` tokens, accumulates per-message buffers to
+handle partial tokens split across deltas, and emits a ``citation_made`` event for
+each new (prose_offset, ordinal) pair. Hallucinated ordinals still emit with an
+empty source_tool_call_id (frontend renders a muted placeholder). Bound per run
+via ContextVar, mirroring CitationLedger and ConversationOrdinalAllocator.
 """
 
 from __future__ import annotations
@@ -53,7 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _Fields:
-    """Wire payload field names — kept stable for replay compatibility."""
+    """citation_made event payload field names, stable for replay compatibility."""
 
     LINK = "link"
     CONVERSATION_ORDINAL = "conversation_ordinal"
@@ -64,24 +38,22 @@ class _Fields:
 
 
 class CitationResolver:
-    """Per-run filter that resolves ``[[N]]`` markers into ``citation_made`` events."""
+    """Watch streamed assistant deltas and emit ``citation_made`` events for each ``[[N]]``."""
 
-    # Decimal-int conversation ordinal between double brackets. Anchored
-    # to digits only (no whitespace, no other characters) to keep partial
-    # matches that can never become valid tokens (e.g. ``[[abc]]``) out
-    # of the registry without an extra validation pass.
+    # Matches ``[[N]]`` where N is one or more decimal digits only. Partial tokens
+    # split across deltas naturally fail to match until the closing ``]]`` arrives.
     _CITATION_PATTERN = re.compile(r"\[\[(\d+)\]\]")
 
     class _MessageBuffer:
-        """Running text + already-emitted set per assistant message."""
+        """Accumulated text and already-emitted (offset, ordinal) pairs for one message."""
 
         __slots__ = ("accumulated", "emitted")
 
         def __init__(self) -> None:
             self.accumulated: str = ""
-            # (prose_offset, ordinal) — keyed jointly so the same ordinal
-            # cited at two distinct prose positions still emits twice
-            # (two chips → two events), but a re-delivered delta does not.
+            # Keyed by (prose_offset, ordinal) so the same ordinal at two
+            # different prose positions emits twice (two chips), while a
+            # re-delivered delta on stream resume does not duplicate.
             self.emitted: set[tuple[int, int]] = set()
 
     def __init__(
@@ -127,9 +99,8 @@ class CitationResolver:
             )
 
     async def _observe(self, *, message_id: str, delta_text: str) -> None:
-        # Late import inside the method to avoid the recurring
-        # ``capabilities`` <-> ``runtime_api.schemas`` circular import
-        # path used by ``CitationLedger`` and adopted here for parity.
+        # Late import to avoid the capabilities ↔ runtime_api.schemas circular
+        # import path that CitationLedger also side-steps the same way.
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
         buf = self._buffers.get(message_id)
@@ -152,6 +123,7 @@ class CitationResolver:
                 continue
             buf.emitted.add(key)
             if ordinal not in self._seen_ordinals_set:
+                # Preserve first-occurrence ordering for sealed_ordinals().
                 self._seen_ordinals_set.add(ordinal)
                 self._seen_ordinals.append(ordinal)
             tool_call_id = self._allocator.tool_call_id_for(ordinal) or ""
@@ -167,14 +139,10 @@ class CitationResolver:
                     self._allocator.last_allocated,
                 )
             else:
-                # PR 04 — every cited ordinal *should* resolve to a
-                # bound tool_call_id from the persistent allocator.
-                # Empty here means either (a) the model hallucinated
-                # ``[[N]]`` for an ordinal that was never allocated, or
-                # (b) a tool path slipped through Phase 1's plumbing
-                # without binding its tool_call_id. Both surface as the
-                # FE's ``?`` placeholder; the metric is the alarm that
-                # tells us when (b) recurs.
+                # Empty tool_call_id means either (a) the model hallucinated
+                # [[N]] for an ordinal never allocated, or (b) a tool dispatch
+                # path bypassed the binding. Both render as "?" on the frontend;
+                # this warning is the signal to investigate (b).
                 _LOGGER.warning(
                     "[citations] resolver.unbound_ordinal run=%s msg=%s "
                     "ordinal=%d offset=%d (allocator_last=%d) — chip will "

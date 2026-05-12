@@ -108,6 +108,7 @@ async def with_optimistic_retry(
 
 
 def _table_for_error(error: PersistenceError | None) -> str:
+    """Return the table name label for an OTel attribute, or ``"unknown"`` when unrecognised."""
     from agent_runtime.persistence.errors import (
         ConcurrentMemoryItemUpdateError,
         ConcurrentRunUpdateError,

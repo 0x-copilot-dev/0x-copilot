@@ -38,13 +38,13 @@ JsonObject: TypeAlias = dict[str, JsonValue]
 
 
 class RuntimeContract(BaseModel):
-    """Base model for typed runtime boundaries."""
+    """Immutable, strictly-validated Pydantic base for all runtime domain models."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_assignment=True)
 
 
 class FeatureFlag(StrEnum):
-    """Feature gates known to the runtime roadmap."""
+    """Optional capability gates that can be enabled per request context."""
 
     DYNAMIC_TOOL_LOADING = "dynamic_tool_loading"
     SKILLS_MIDDLEWARE = "skills_middleware"
@@ -249,12 +249,11 @@ class RuntimeRunHandle(RuntimeContract):
 
 
 class CatalogSuggestionCard(RuntimeContract):
-    """PR 4.4.7 Phase 2 — one catalog entry the agent may suggest.
+    """One uninstalled catalog connector that the agent may suggest to the user.
 
-    Materialised at run-create from
-    ``backend.McpRegistryService.list_suggestible_connectors``. Tight
-    Pydantic shape so the system prompt and discovery tool see the
-    same fields without re-parsing the wire payload.
+    Materialised at run-create from ``backend.McpRegistryService.list_suggestible_connectors``
+    so the system prompt and discovery tool see the same fields without re-parsing
+    the wire payload.
     """
 
     slug: str
@@ -262,12 +261,9 @@ class CatalogSuggestionCard(RuntimeContract):
     description: str = ""
     scopes_summary: str | None = None
     brand_color: str | None = None
-    # PR 4.4.7 follow-up — when True, install requires the user to
-    # paste a pre-registered OAuth client first (vendor doesn't expose
-    # RFC 8414 metadata or RFC 7591 dynamic client registration). The
-    # discovery card stamps this onto the wire payload so the FE
-    # routes Connect to the credentials form instead of running a
-    # 1-click install + redirect.
+    # When True, install requires the user to paste a pre-registered OAuth client
+    # (vendor doesn't expose RFC 8414 / RFC 7591). The FE routes Connect to the
+    # credentials form instead of the 1-click install + redirect flow.
     requires_pre_registered_client: bool = False
 
     @field_validator("slug")
@@ -286,31 +282,21 @@ class CatalogSuggestionCard(RuntimeContract):
 
 
 class AgentRuntimeContext(RuntimeContract):
-    """Request-level identity, authorization, model, and trace context."""
+    """Immutable, fully-validated identity, authorization, model, and trace context for one request."""
 
     user_id: str
     org_id: str
     roles: frozenset[str]
     permission_scopes: frozenset[str] = Field(default_factory=frozenset)
     connector_scopes: dict[str, frozenset[str]] = Field(default_factory=dict)
-    # PR 4.4.6.2 — server_ids the user explicitly paused for this run
-    # (popover toggle ⇒ ``enabled_connectors[server_id] = null``). Kept
-    # separate from ``connector_scopes`` because the latter only carries
-    # *active* entries: an empty ``connector_scopes`` is ambiguous
-    # between "no per-chat override" and "everything paused". This set
-    # gives MCP permission gates and the call-tool path an explicit
-    # signal so a paused MCP server is invisible AND unloadable AND
-    # uncallable for the duration of this run.
+    # Connectors paused by the user via the per-chat toggle. Kept separate from
+    # ``connector_scopes`` because an empty scopes mapping is ambiguous between
+    # "no override" and "everything paused". A paused server is invisible,
+    # unloadable, and uncallable for the duration of this run.
     paused_connectors: frozenset[str] = Field(default_factory=frozenset)
-    # PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may
-    # surface as progressive-discovery suggestions in this run. These
-    # are *uninstalled* connectors filtered server-side by
-    # ``backend.McpRegistryService.list_suggestible_connectors`` (paused
-    # excluded, user mutes excluded, catalog-level
-    # ``discoverable=false`` excluded unless user overrode). Suggesting
-    # a slug that isn't in this tuple is a no-op via the discovery
-    # service's permission gate. Empty tuple ⇒ system prompt skips the
-    # section and the agent doesn't surface any suggestions.
+    # Uninstalled catalog connectors the agent may suggest this run. Filtered
+    # server-side to exclude paused, user-muted, and non-discoverable entries.
+    # An empty tuple means the system prompt omits the suggestions section.
     suggested_connectors: tuple["CatalogSuggestionCard", ...] = Field(
         default_factory=tuple
     )
@@ -323,23 +309,15 @@ class AgentRuntimeContext(RuntimeContract):
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
-    # PR 4.3 — workspace-policy knobs resolved at run-create. Persisted
-    # in ``agent_runs.runtime_context_json`` like every other field on
-    # this context. Stored as a generic ``JsonObject`` here (rather than
-    # a typed ``WorkspaceBehaviorOverrides``) because ``contracts`` lives
-    # in ``agent_runtime/execution`` and importing the runtime_api
-    # schema would invert the layering. Consumers (citation middleware,
-    # safety middleware, model-call middleware) downcast to the typed
-    # model via ``WorkspaceBehaviorOverrides.model_validate``.
+    # Workspace-level policy knobs (e.g. training opt-out, behavior overrides)
+    # resolved at run-create and persisted verbatim in ``agent_runs``. Stored as
+    # a generic ``JsonObject`` rather than a typed model to avoid importing
+    # ``runtime_api`` schemas, which would invert the layering. Consumers
+    # downcast via ``WorkspaceBehaviorOverrides.model_validate``.
     workspace_behavior_overrides: JsonObject = Field(default_factory=dict)
-    # PR 8.0.5 — per-(org, user) runtime policies resolved at run-create
-    # from backend's ``/internal/v1/policies/runtime`` aggregate route.
-    # Same JsonObject pattern as ``workspace_behavior_overrides`` so
-    # consumers downcast via the typed snapshot classes
-    # (``ToolUsePolicySnapshot.from_response`` /
-    # ``PrivacySettingsSnapshot.from_response``). Empty dict ⇒ "use
-    # deployment defaults" — every consumer's snapshot factory accepts
-    # absent keys without raising.
+    # Per-(org, user) policies resolved at run-create from the backend aggregate
+    # route. Empty dict means "use deployment defaults." Consumers downcast to
+    # ``ToolUsePolicySnapshot`` / ``PrivacySettingsSnapshot`` as needed.
     user_policies_json: JsonObject = Field(default_factory=dict)
 
     @field_validator("user_id", "org_id")
@@ -364,15 +342,9 @@ class AgentRuntimeContext(RuntimeContract):
     @field_validator("connector_scopes", mode="before")
     @classmethod
     def _normalize_connector_scopes(cls, value: object) -> dict[str, frozenset[str]]:
-        # Keys here are connector ids from
-        # ``ConversationConnectorScopes`` (e.g. ``"seed:linear"``) — the
-        # conversation column accepts any non-empty trimmed string and
-        # the runtime registry validates *existence*, not lexical
-        # form. Lowercase + trim to match the historic case-insensitive
-        # semantics, but accept colons / other characters that the
-        # strict slug pattern would reject so an active per-chat scope
-        # override for a catalog-seeded server actually materialises
-        # onto the context instead of failing pydantic validation.
+        # Connector ids (e.g. ``"seed:linear"``) accept any non-empty trimmed string;
+        # the strict slug pattern would reject the colon. Lowercase + trim to preserve
+        # historic case-insensitive semantics without blocking catalog-seeded servers.
         if value is None:
             return {}
         if not isinstance(value, Mapping):
@@ -424,14 +396,9 @@ class AgentRuntimeContext(RuntimeContract):
     @field_validator("paused_connectors", mode="before")
     @classmethod
     def _normalize_paused_connectors(cls, value: object) -> frozenset[str]:
-        # Accept the conversation column's connector-id shape (any
-        # non-empty trimmed string) rather than the strict
-        # ``[a-z0-9_-]`` slug — server_ids include a ``seed:`` prefix
-        # ("seed:linear"), and ``ConversationConnectorScopes`` is the
-        # source of truth here per
-        # ``ConnectorScopeValidator._coerce_connector_id``. Validating
-        # connector existence is the runtime registry's job, not this
-        # contract's.
+        # Accept the same connector-id shape as ``connector_scopes`` (any
+        # non-empty trimmed string, including the ``seed:`` prefix). Existence
+        # validation belongs to the runtime registry, not this contract.
         if value is None:
             return frozenset()
         if isinstance(value, (str, bytes)):
@@ -618,10 +585,7 @@ class StreamEvent(RuntimeContract):
 
 
 class StreamValueNormalizer:
-    """Normalization helpers used by streaming Pydantic validators.
-
-    All common methods delegate to the shared ``ValueNormalizer``.
-    """
+    """Normalization helpers for streaming-contract Pydantic validators."""
 
     from agent_runtime.validation import ValueNormalizer as _V
 
@@ -633,12 +597,16 @@ class StreamValueNormalizer:
 
 
 def _normalize_nonempty_string(value: object, field_name: str) -> str:
+    """Delegate to the shared ``ValueNormalizer`` for non-empty string validation."""
+
     from agent_runtime.validation import ValueNormalizer
 
     return ValueNormalizer.normalize_nonempty_string(value, field_name)
 
 
 def _normalize_runtime_id(value: object, field_name: str) -> str:
+    """Generate a UUID when ``value`` is ``None``; otherwise validate the ID pattern."""
+
     if value is None:
         return uuid4().hex
     normalized = _normalize_nonempty_string(value, field_name)
@@ -649,6 +617,8 @@ def _normalize_runtime_id(value: object, field_name: str) -> str:
 
 
 def _normalize_slug(value: object, field_name: str) -> str:
+    """Delegate to the shared ``ValueNormalizer`` for slug normalization."""
+
     from agent_runtime.validation import ValueNormalizer
 
     return ValueNormalizer.normalize_slug(value, field_name)
@@ -660,6 +630,8 @@ def _normalize_slug_set(
     *,
     require_non_empty: bool = False,
 ) -> frozenset[str]:
+    """Normalize a collection of slugs and optionally enforce non-emptiness."""
+
     from agent_runtime.validation import ValueNormalizer
 
     normalized = ValueNormalizer.normalize_slug_set(value, field_name)
@@ -670,18 +642,24 @@ def _normalize_slug_set(
 
 
 def _normalize_scope_set(value: object, field_name: str) -> frozenset[str]:
+    """Delegate to the shared ``ValueNormalizer`` for OAuth scope-set normalization."""
+
     from agent_runtime.validation import ValueNormalizer
 
     return ValueNormalizer.normalize_scope_set(value, field_name)
 
 
 def _normalize_scope(value: object, field_name: str) -> str:
+    """Delegate to the shared ``ValueNormalizer`` for a single OAuth scope string."""
+
     from agent_runtime.validation import ValueNormalizer
 
     return ValueNormalizer.normalize_scope(value, field_name)
 
 
 def _coerce_iterable(value: object, field_name: str) -> tuple[object, ...]:
+    """Delegate to the shared ``ValueNormalizer`` for iterable coercion."""
+
     from agent_runtime.validation import ValueNormalizer
 
     return ValueNormalizer.coerce_iterable(value, field_name)

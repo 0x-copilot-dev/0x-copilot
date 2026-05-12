@@ -106,7 +106,7 @@ class RuntimeLogEvent(BaseModel):
         ``Sensitive(...)`` is elided. The current ``RuntimeLogEvent``
         fields are all log-safe (structural names, IDs, status, safe
         messages) so this is a no-op today — the integration is in
-        place for future taggings via P11.3.
+        place for future ``Sensitive`` taggings.
         """
 
         return SafeLogDumper.dump_safe(self, mode="json", exclude_none=True)
@@ -152,9 +152,9 @@ class RuntimeLogger:
         :class:`MetadataRedactor` at log emission — that step drops any
         deny-keyed entries (it does not value-scan the message text). If an
         upstream caller bakes a credential into an exception's ``str(exc)``,
-        the credential reaches the log. **Don't bake credentials into
-        exception messages.** P11.5 (parent PRD §8) made this a tool-emission
-        hygiene concern rather than a runtime scrub-on-log behavior.
+        the credential reaches the log. **Don't bake credentials into exception
+        messages** — this is a tool-emission hygiene concern, not a runtime
+        scrub-on-log behavior.
         """
 
         max_chars = (

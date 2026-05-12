@@ -1,18 +1,13 @@
 """Most-specific retention policy resolution.
 
-Specificity order: ``conversation > assistant > user > org > default``.
-The resolver folds a flat list of ``RetentionPolicyRecord`` rows for one
-org into a lookup keyed by ``(scope, resource_id, kind)`` and answers
-``resolve(kind, conversation_id=, user_id=, assistant_id=)`` by walking
-that order.
+Specificity order: ``conversation > assistant > user > org > default``. The
+resolver folds a flat list of ``RetentionPolicyRecord`` rows for one org into
+a lookup keyed by ``(scope, resource_id, kind)`` and answers
+``resolve(kind, conversation_id=, user_id=, assistant_id=)`` by walking that order.
+Pure logic — no DB, no clock — so it is cheap to invoke per-row inside the sweeper.
 
-Deployment defaults match the C8 spec:
-
-  - SaaS: 365 days for messages and events.
-  - Single-tenant: no default (no-op until customer seeds policies).
-
-The resolver is pure logic — no DB, no clock — so it's easy to test and
-cheap to invoke per-row inside the sweeper.
+SaaS deployment default: 365 days for messages and events. Single-tenant: no
+default until the customer seeds policies.
 """
 
 from __future__ import annotations
@@ -65,16 +60,14 @@ class RetentionPolicyResolver:
     ) -> None:
         """Compose retention policies for one org.
 
-        ``privacy_user_retention_days`` (PR 8.0.5) layers per-user
-        ``privacy_settings.retention_days`` overrides on top of the
-        C8 policy table. Each entry is treated as a USER-scope
-        policy across every ``RetentionKind`` so the existing
-        specificity walk (CONVERSATION > ASSISTANT > USER > ORG)
-        picks it up unchanged. A user override never expands beyond
-        the C8-defined kinds — i.e. setting ``retention_days=30``
-        applies to messages/events/context_payloads/checkpoints/
-        memory_items in lock-step, matching the user-visible "delete
-        my chats after 30 days" promise on the Privacy panel.
+        ``privacy_user_retention_days`` layers per-user
+        ``privacy_settings.retention_days`` overrides on top of the org policy
+        table. Each entry is synthesised as a USER-scope policy across every
+        ``RetentionKind`` so the existing specificity walk picks it up unchanged.
+        A user override applies to all retention kinds in lock-step (messages,
+        events, context_payloads, checkpoints, memory_items), matching the
+        "delete my chats after N days" user-visible promise. Explicit org/ops
+        policies always win when they exist for the same (user, kind).
         """
 
         self._org_id = org_id
@@ -91,9 +84,8 @@ class RetentionPolicyResolver:
                 continue
             key = (policy.scope, policy.resource_id or "", policy.kind)
             self._by_key[key] = policy
-        # PR 8.0.5 — synthesize USER-scope rows from the privacy
-        # snapshot. C8 rows still win when they exist for the same
-        # (user, kind) — explicit ops policy beats user preference.
+        # Synthesize USER-scope rows from the privacy snapshot. Explicit org/ops
+        # policy rows win when they exist for the same (user, kind).
         for user_id, retention_days in (privacy_user_retention_days or {}).items():
             if retention_days <= 0:
                 continue

@@ -1,24 +1,10 @@
-"""Card presentation metadata for user-facing runtime events.
+"""Deterministic card presentation metadata generator for user-facing runtime events.
 
-Polish-removal Phase 4 (docs/refactor/01-presentation-polish-removal.md).
-The generator is now fully deterministic — no LLM, no async polish, no
-``PRESENTATION_UPDATED`` follow-up event. Resolution order:
-
-1. **Deterministic templates** — events whose presentation is fully derivable
-   from payload (approval / auth / error / tool_call_delta).
-2. **Tool template** — when a tool registers a :class:`ToolDisplayTemplate`
-   (Phase 1) or the MCP descriptor synthesiser builds one (Phase 2.A/B),
-   the renderer fills the template from the payload.
-3. **Agent-supplied ``_display_*``** (Phase 3) — when the matched template
-   is ``synthetic=True`` (or absent), the agent's optional
-   ``_display_title`` / ``_display_summary`` from tool args wins. Author
-   templates always beat agent override.
-4. **Minimal envelope** — humanised tool name + status, with
-   :class:`PayloadProjector` filling ``result_preview`` rows for result
-   events. Always returns something so cards never render empty.
-
-The full chain produces a complete envelope synchronously. There is no
-asynchronous patch path; the envelope written with the event is final.
+Resolution order: (1) deterministic templates for events whose presentation is
+fully derivable from payload; (2) registered tool display templates filled from
+payload; (3) agent-supplied ``_display_*`` fields from tool args when the template
+is synthetic; (4) minimal envelope with humanised tool name and status as fallback.
+The full chain runs synchronously — the envelope written with the event is final.
 """
 
 from __future__ import annotations
@@ -74,12 +60,11 @@ class PresentationGenerator:
         }
     )
 
-    # Polish-removal Phase 2.B (docs/refactor/01-presentation-polish-removal.md).
     # MCP tool calls flow through a single dispatcher tool. The runtime
-    # emits events with ``payload.tool_name`` set to the dispatcher's name;
-    # the *actual* MCP tool name lives nested inside ``payload.args``. Pin
-    # the dispatcher name here so the resolution chain knows when to
-    # extract instead of looking up the dispatcher itself.
+    # emits events with ``payload.tool_name`` set to the dispatcher's name,
+    # but the actual MCP tool name lives nested inside ``payload.args``.
+    # Pin the dispatcher name so the resolution chain knows when to extract
+    # the inner name rather than look up the dispatcher itself.
     _MCP_DISPATCHER_TOOL_NAME = "call_mcp_tool"
 
     _RESULT_EVENT_TYPES = frozenset(
@@ -122,9 +107,8 @@ class PresentationGenerator:
                 return validated
 
         tool_template = self._resolve_tool_template(payload)
-        # Phase 2.B — promote inner MCP arguments to the top level for the
-        # template + projector. No-op for non-dispatcher events. See
-        # ``_effective_template_payload`` for the rationale.
+        # Promote inner MCP arguments to the top level for the template + projector.
+        # No-op for non-dispatcher events. See ``_effective_template_payload``.
         effective_payload = self._effective_template_payload(payload)
         if tool_template is not None:
             tool_rendered = ToolTemplateRenderer.render(
@@ -134,9 +118,8 @@ class PresentationGenerator:
                 group_key=group_key,
             )
             if tool_rendered is not None:
-                # Phase 3.A — Tier-3 override: agent-supplied ``_display_*``
-                # in tool args wins over a synthesised template, never over
-                # an author-written one.
+                # Tier-3 override: agent-supplied ``_display_*`` in tool args
+                # wins over a synthesised template, never over an author-written one.
                 self._apply_tier3_override(tool_rendered, payload, tool_template)
                 validated = self._validated(tool_rendered)
                 if validated is not None:
@@ -152,8 +135,8 @@ class PresentationGenerator:
             group_key=group_key,
             template=tool_template,
         )
-        # Phase 3.A — when no tool template fired, Tier-3 fills the envelope
-        # title / summary if the agent supplied them.
+        # When no tool template fired, Tier-3 fills the envelope title / summary
+        # if the agent supplied them.
         if envelope is not None:
             self._apply_tier3_override(envelope, payload, tool_template)
         return envelope
@@ -184,9 +167,9 @@ class PresentationGenerator:
         For all events except the MCP dispatcher this is just
         ``payload.tool_name``. When the event is a ``call_mcp_tool``
         dispatcher invocation the actual MCP tool name lives inside
-        ``payload.args.tool_name`` (Phase 2.B); we extract it so the
-        synthesised MCP template resolves rather than the dispatcher
-        itself (which has no meaningful copy on its own).
+        ``payload.args.tool_name``; we extract it so the synthesised MCP template
+        resolves correctly rather than looking up the dispatcher itself (which
+        has no meaningful display copy of its own).
         """
 
         tool_name = payload.get("tool_name")

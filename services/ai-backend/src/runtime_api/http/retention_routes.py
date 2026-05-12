@@ -1,12 +1,9 @@
-"""Admin CRUD HTTP routes for C8 retention policies.
+"""Admin CRUD routes for per-tenant C8 retention policies.
 
-The sweeper itself runs in the worker; these routes let operators seed
-and tune per-tenant policies without dropping into psql. Every route is
-gated by the ``admin:retention`` scope (router-level dependency); the
-router-level ``runtime:use`` keeps the path consistent with the rest of
-``/v1/*``. Until A10 ships across every deployment, the soft fall-back
-to ``RBAC_MODE=audit`` keeps the routes usable while operators wire
-their roles.
+The sweeper itself runs in the worker; these routes let operators seed and tune
+policies without database access. CRUD paths require ``admin:retention``; the
+effective-TTL read is open to any tenant member so the Privacy & data panel
+renders without admin scope.
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ from runtime_api.schemas.retention import (
 
 
 class RetentionAdminRoutes:
-    """Per-tenant retention policy admin endpoints."""
+    """Route handlers for admin-scoped retention policy CRUD and effective-TTL view."""
 
     @classmethod
     async def list_policies(
@@ -47,6 +44,8 @@ class RetentionAdminRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> RetentionPolicyListResponse:
+        """Return all retention policy rows for the caller's org."""
+
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -115,6 +114,7 @@ class RetentionAdminRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> RetentionPolicyView:
+        """Create or update a retention policy and recompute affected ``retain_until`` stamps."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -146,6 +146,7 @@ class RetentionAdminRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> dict[str, str]:
+        """Delete a retention policy and recompute stamps using the remaining fallback TTL."""
         org_id, _ = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -174,6 +175,7 @@ class RetentionAdminRoutes:
 
     @staticmethod
     def _validate_resource_id(payload: RetentionPolicyUpsertRequest) -> None:
+        """Enforce the scope/resource_id co-constraint before persistence."""
 
         if payload.scope is RetentionScope.ORG and payload.resource_id is not None:
             raise HTTPException(
@@ -188,6 +190,7 @@ class RetentionAdminRoutes:
 
     @staticmethod
     def _to_view(record: RetentionPolicyRecord) -> RetentionPolicyView:
+        """Project a persistence record to the public API wire shape."""
         return RetentionPolicyView(
             id=record.id,
             org_id=record.org_id,

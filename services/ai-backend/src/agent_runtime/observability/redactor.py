@@ -1,20 +1,11 @@
-"""Redaction primitives for the structural model.
+"""Redaction primitives: credential-key deny set, field-tagging, and structural coercers.
 
-After the P11.1–P11.6 sequence the redaction surface is exactly four
-pieces: the credential-key deny set, the field-tagging annotation
-system (``Sensitive`` + ``SafeLogDumper``), and the structural
-``JsonObjectCoercer`` that handles ``JsonObject`` field shape without
-performing any redaction.
-
-Logs are the only place data is filtered. :class:`MetadataRedactor`
-(P13 step 2) is the single source-of-truth filter used by both
-``RuntimeLogEvent.metadata`` and ``HttpLogEvent.metadata`` to drop
-dict keys that match :data:`DENY_KEYS`; :meth:`SafeLogDumper.dump_safe`
-elides Pydantic fields annotated :class:`Sensitive`. Everywhere else
-(SSE, persistence, runtime context) carries data whole.
-
-See ``docs/refactor/01-redaction-subsystem.md`` for the rationale and
-the six-phase plan that landed this shape.
+Logs are the only place data is filtered. :class:`MetadataRedactor` is the single
+filter used by both ``RuntimeLogEvent.metadata`` and ``HttpLogEvent.metadata`` to
+drop dict keys matching :data:`DENY_KEYS`. :meth:`SafeLogDumper.dump_safe` elides
+Pydantic fields annotated :class:`Sensitive`. :class:`JsonObjectCoercer` handles
+``JsonObject`` shape coercion without performing any redaction. All other surfaces
+(SSE, persistence, runtime context) carry data whole.
 """
 
 from __future__ import annotations
@@ -32,16 +23,11 @@ _redactor_debug_logger = logging.getLogger("agent_runtime")
 
 
 # Exact-match deny set for dict keys carrying credentials in free-form
-# ``metadata`` payloads. P11.2 replaced the prior substring-regex match
-# (``Patterns.SENSITIVE_KEY.search(key)``) with this closed set; the
-# regex over-matched on observability counters like ``input_tokens``
-# (any name containing the substring ``token``) and required a hand-
-# maintained ``_TOKEN_COUNT_KEYS`` allowlist. Exact match doesn't need
-# the workaround.
-#
-# Add a key here only when a new credential-shaped field name lands in
-# code review. The set is intentionally small and stable — pattern-
-# matching against value contents lives nowhere in this codebase.
+# ``metadata`` payloads. Uses exact match rather than a substring-regex
+# to avoid over-matching observability counters like ``input_tokens``
+# (any name containing ``token``). The set is intentionally small and
+# stable — pattern-matching against values lives nowhere in this codebase.
+# Add a key here only when a new credential-shaped field name lands in review.
 DENY_KEYS: frozenset[str] = frozenset(
     {
         # Generic credentials
@@ -69,17 +55,14 @@ DENY_KEYS: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# P11.5: structural coercion separated from redaction.
+# Structural coercion is separated from redaction.
 #
-# Pydantic ``JsonObject`` fields (``RuntimeEventEnvelope.payload`` /
-# ``.metadata``, runs / conversations metadata, persistence record JSON
-# blobs) previously ran through ``ObservabilityRedactor.redact_json_object``
-# in their ``mode="before"`` validators. That call did two unrelated
-# jobs: (a) coerce ``None`` / non-mapping values into a dict shape and
-# (b) scrub credential-shaped keys / clip long strings. The parent PRD
-# §8 split those: logs keep redaction at their own boundary, everywhere
-# else only coercion runs. ``JsonObjectCoercer`` is the coercion-only
-# helper those 19 non-log validators call after P11.5.
+# Pydantic ``JsonObject`` validators previously ran a combined coerce+scrub
+# helper. That call did two unrelated jobs: (a) coerce ``None`` / non-mapping
+# values into a dict shape, and (b) scrub credential-shaped keys / clip long
+# strings. Logs keep redaction at their own boundary; everywhere else only
+# coercion runs. ``JsonObjectCoercer`` is the coercion-only helper for non-log
+# validators.
 # ---------------------------------------------------------------------------
 
 
@@ -87,19 +70,16 @@ class MetadataRedactor:
     """Single-source ``metadata: dict`` filter for structured log models.
 
     Both ``RuntimeLogEvent`` and ``HttpLogEvent`` carry a free-form
-    ``metadata`` dict; before P13 each model carried its own
-    ``_MetadataRedactor`` with slightly divergent value-type tuples and
-    differing debug-log behavior. Consolidating here makes the deny
-    contract a single thing to evolve — adding a new sensitive key name
-    or tightening a value-type rule lands in one place.
+    ``metadata`` dict. Consolidating here makes the deny contract a single
+    thing to evolve — adding a new sensitive key name or tightening a
+    value-type rule lands in one place.
 
     Behavior:
 
     - Non-dict input → ``{}``. Validators reject non-mapping metadata.
     - Non-string keys are dropped.
     - Keys in :data:`DENY_KEYS` are dropped (defense-in-depth alongside
-      structural ``Sensitive`` field tagging; see PRD §8 in
-      ``01-redaction-subsystem.md``).
+      structural ``Sensitive`` field tagging).
     - Values must be a scalar (``str``, ``int``, ``float``, ``bool``)
       or ``None``; non-scalar values are dropped because a nested dict
       or list would defeat the "metadata is structural log content"
@@ -167,15 +147,13 @@ class JsonObjectCoercer:
 
 
 # ---------------------------------------------------------------------------
-# P11.3: structural field-tagging for log emission.
+# Structural field-tagging for log emission.
 #
-# The deny-key set above protects free-form ``metadata: dict`` payloads from
-# credential-shaped key names. It cannot protect typed Pydantic fields that
-# carry sensitive content under benign-looking names — assistant text under
-# ``content``, raw user input under ``message``, etc. Field tagging fixes
-# that: a field is marked ``Sensitive(...)`` at declaration time, and the
-# log emitter elides it from the dumped record. Sensitivity is a property
-# of the field, not the value.
+# The deny-key set protects free-form ``metadata: dict`` payloads but cannot
+# protect typed Pydantic fields that carry sensitive content under
+# benign-looking names (e.g. assistant text under ``content``). Field tagging
+# solves this: mark a field ``Sensitive(...)`` at declaration time and the log
+# emitter elides it. Sensitivity is a property of the field, not the value.
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +220,6 @@ class SafeLogDumper:
     only** — nested Pydantic models inside the dump are not inspected.
     If a nested field carries sensitive content, tag it at the
     enclosing level or call :meth:`dump_safe` at each level explicitly.
-    See PRD §9 for the nested-recursion follow-up.
     """
 
     _cache: ClassVar[dict[type[BaseModel], frozenset[str]]] = {}

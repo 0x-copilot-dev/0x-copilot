@@ -98,18 +98,18 @@ def format_web_subagent_suffix(
     )
 
 
-# Back-compat: the legacy module-level constant used by the harness profile
-# registration. Kept as a string so existing imports continue to work without
-# being made dynamic at import time. Callers that want a per-org cap should
-# instead invoke ``format_web_subagent_suffix(cap)`` directly when building
-# the harness.
+# Back-compat constant. Callers wanting a per-org cap should invoke
+# ``format_web_subagent_suffix(cap)`` directly instead.
 WEB_SUBAGENT_CHECKPOINT_SUFFIX = format_web_subagent_suffix()
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 
 
 def _ensure_web_harness_profiles_registered() -> None:
-    """Hide unsafe or confusing Deep Agents built-ins for web runtime runs."""
+    """Register per-provider web harness profiles once, excluding unsafe built-in tools.
+
+    Idempotent — subsequent calls return immediately once the registration flag is set.
+    """
 
     global _web_harness_profiles_registered
     if _web_harness_profiles_registered:
@@ -162,6 +162,10 @@ class DeepAgentBuildRequest:
     # ``runtime_context.workspace_behavior_overrides``; threaded here
     # so every chat-model construction site honours workspace policy
     # uniformly (subagents inherit the same kwargs).
+    # Extra ``init_chat_model`` kwargs from workspace policy (e.g. training
+    # opt-out headers). Derived in ``factory.py`` and threaded here so every
+    # chat-model construction site — including subagents — honours policy
+    # uniformly.
     extra_model_kwargs: Mapping[str, object] | None = None
 
     @property
@@ -175,12 +179,9 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     """Build a Deep Agents graph with an explicit, version-pinned API call."""
 
     _ensure_web_harness_profiles_registered()
-    # Polish-removal Phase 3.B (docs/refactor/01-presentation-polish-removal.md):
-    # wrap every bound tool's args_schema so the agent's tool block carries
-    # the optional ``_display_*`` fields and the wrapped invocation strips
-    # them before delegating to the underlying tool implementation.
-    # Idempotent — safe to call on a tools list that's already been wrapped
-    # (e.g. subagent re-binding).
+    # Wrap each tool's args_schema to carry the optional ``_display_*`` fields;
+    # the wrapper strips them before forwarding to the underlying implementation.
+    # Idempotent: safe to call on a list that has already been wrapped.
     from agent_runtime.capabilities.middleware import (  # noqa: PLC0415
         wrap_tools_with_display,
     )
@@ -225,13 +226,12 @@ def build_chat_model(
     *,
     extra_kwargs: Mapping[str, object] | None = None,
 ) -> BaseChatModel:
-    """Create the LangChain chat model for a runtime model profile.
+    """Create the LangChain chat model configured for a runtime model profile.
 
-    ``extra_kwargs`` (PR 4.3) is merged AFTER the provider-specific
-    kwargs so workspace policy (training opt-out headers) wins on
-    conflict. Pass ``None`` (the default) for callers that don't have
-    a workspace context — chiefly the presentation layer's projection
-    factory.
+    ``extra_kwargs`` is merged after provider-specific kwargs so workspace policy
+    (e.g. training opt-out headers) wins on any conflict. Pass ``None`` for
+    callers without a workspace context (e.g. the presentation layer's projection
+    factory).
     """
 
     kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
@@ -265,12 +265,15 @@ def build_chat_model(
 
 
 def _langchain_model_provider(provider: str) -> str:
+    """Translate the normalised provider slug to the LangChain ``model_provider`` string."""
+    # LangChain uses ``google_genai`` while the runtime normalises to ``gemini``.
     if provider == "gemini":
         return "google_genai"
     return provider
 
 
 def _openai_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
+    """Return OpenAI Responses API kwargs derived from a model reasoning config."""
     kwargs: dict[str, object] = {"use_responses_api": True}
     reasoning = model_config.reasoning
     if reasoning is None:
@@ -293,6 +296,7 @@ def _openai_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
 
 
 def _anthropic_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
+    """Return Anthropic extended-thinking kwargs derived from a model reasoning config."""
     reasoning = model_config.reasoning
     if reasoning is None or not reasoning.enabled:
         return {}

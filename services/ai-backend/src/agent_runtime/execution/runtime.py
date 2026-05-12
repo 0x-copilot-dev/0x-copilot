@@ -26,16 +26,17 @@ from agent_runtime.observability.tracing import (
 
 
 class RuntimeStreamModes:
-    """LangGraph stream mode sets used by the runtime."""
+    """Named LangGraph stream-mode lists used by runtime invocation helpers."""
 
     RICH = ["messages", "updates", "custom", "values"]
 
 
 class RuntimeStreamOptions:
-    """Deep Agents/LangGraph stream options used by the runtime."""
+    """Factory methods for Deep Agents / LangGraph ``astream`` keyword arguments."""
 
     @classmethod
     def rich(cls) -> dict[str, object]:
+        """Return the kwargs for a full-fidelity multi-mode stream (messages + updates + values)."""
         return {
             "stream_mode": RuntimeStreamModes.RICH,
             "subgraphs": True,
@@ -312,4 +313,5 @@ async def astream_runtime_resume(
 
 
 def _elapsed_ms(started_at: float) -> int:
+    """Return milliseconds elapsed since ``started_at`` (``perf_counter`` epoch), clipped to 0."""
     return max(0, int((perf_counter() - started_at) * 1000))

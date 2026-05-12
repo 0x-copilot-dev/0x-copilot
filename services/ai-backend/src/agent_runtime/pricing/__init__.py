@@ -1,4 +1,4 @@
-"""Versioned pricing catalog and integer-only cost computation (B3)."""
+"""Versioned pricing catalog and integer-only micro-USD cost computation."""
 
 from agent_runtime.pricing.calculator import CostCalculator
 from agent_runtime.pricing.catalog import ModelPricingCatalog

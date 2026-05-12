@@ -1,26 +1,11 @@
 """Provider-agnostic token-usage extraction.
 
-Sub-PRD 01a of [01-usage-capture-and-attribution.md].
-
-Two contracts plus a registry:
-
-- :class:`NormalizedTokenUsage` — frozen Pydantic value object with
-  explicit fields for every token kind we price. Default 0 everywhere
-  so pricing math is total. ``input_tokens`` is the GROSS input figure
-  (regular + cached + cache_creation); ``cached_input_tokens`` and
-  ``cache_creation_input_tokens`` are subsets of it billed at their
-  own rates.
-- :class:`ProviderTokenUsageExtractor` — Protocol with one method,
-  ``extract(chunk) -> NormalizedTokenUsage | None``. One implementation
-  per provider — the only provider-aware code on the usage path.
-- :class:`TokenUsageExtractorRegistry` — dispatch by provider slug.
-  Unknown providers fall through to a permissive least-common-
-  denominator extractor so a new provider's tokens are captured (at
-  lcd quality) before a dedicated extractor lands.
-
-This module replaces the alias-soup ``TokenUsageExtractor`` /
-``_token_value`` / ``_cached_input_tokens`` helpers that used to live
-in ``run_metrics.py``.
+Three primitives: :class:`NormalizedTokenUsage` (frozen Pydantic value object with
+fields for every token kind we price), :class:`ProviderTokenUsageExtractor`
+(Protocol with one ``extract(chunk) -> NormalizedTokenUsage | None`` method per
+provider), and :class:`TokenUsageExtractorRegistry` (dispatch by provider slug).
+Unknown providers fall through to a least-common-denominator extractor so new
+provider tokens are captured before a dedicated extractor lands.
 """
 
 from __future__ import annotations

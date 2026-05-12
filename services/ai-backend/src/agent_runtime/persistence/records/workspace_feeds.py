@@ -1,14 +1,12 @@
-"""Projection records for the Workspace-pane data feeds (PR 1.5).
+"""Read-only projection records for the Workspace-pane data feeds.
 
 Both records are *read-only projections*: they are computed at read time from
 ``runtime_events`` (subagents) and ``runtime_citations`` (sources). The
 :class:`SubagentStorePort` and :class:`SourceStorePort` return tuples of these
-records, which the
-:class:`agent_runtime.api.workspace_feed_service.WorkspaceFeedService` then
-shapes into the public HTTP DTOs.
+records, which the workspace feed service then shapes into the public HTTP DTOs.
 
-Keeping the projection records separate from the wire DTOs lets adapters stay
-ignorant of HTTP concerns and lets the service own truncation, redaction, and
+Keeping projection records separate from wire DTOs lets adapters stay ignorant of
+HTTP concerns and gives the service ownership of truncation, redaction, and
 field-level encryption decisions.
 """
 

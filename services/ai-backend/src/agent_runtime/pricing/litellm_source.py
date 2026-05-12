@@ -1,23 +1,14 @@
-"""LiteLLM-sourced pricing ingestion (B3 / P12 Step 1).
+"""LiteLLM-sourced pricing ingestion from the vendored ``model_prices.json`` file.
 
-LiteLLM ships ``model_prices_and_context_window.json`` — a community-
-maintained per-model rate catalog covering Anthropic, OpenAI, Google,
-and the long tail. We vendor that file under ``litellm_data/`` and
-parse it into :class:`ModelPricingRecord` instances using the same
-``Decimal`` / ``ROUND_HALF_EVEN`` arithmetic ``CostCalculator`` uses,
-so the rounded micro-USD values stay byte-identical to the calculator
-that consumes them.
+LiteLLM ships a community-maintained per-model rate catalog covering Anthropic,
+OpenAI, Google, and the long tail. The JSON is vendored under ``litellm_data/``
+and parsed into :class:`ModelPricingRecord` instances using the same
+``Decimal`` / ``ROUND_HALF_EVEN`` arithmetic as :class:`CostCalculator`, so
+rounded micro-USD values are byte-identical to those consumed by the calculator.
 
-Step 1 of the P12 plan is observation-only: the source produces records
-but nothing in the runtime upserts them yet. The
-``compare_litellm`` CLI uses this module to print a parity diff
-against the YAML seeds.
-
-Why vendored JSON instead of ``import litellm``: the runtime version of
-``litellm`` pins ``openai`` and ``pydantic`` at strictly older versions
-than agent-runtime requires (P12 PRD §9 "LiteLLM dependency surface" —
-the documented fallback path). Refreshing the vendored copy is a
-dev-time script, not a runtime dependency.
+The JSON is vendored rather than imported from the ``litellm`` package because
+the runtime's ``litellm`` version pins older ``openai`` and ``pydantic`` versions.
+Refreshing the vendored copy is a dev-time script, not a runtime dependency.
 """
 
 from __future__ import annotations
@@ -84,17 +75,11 @@ class _Fields:
 
 
 class LiteLLMPricingSource:
-    """Read the vendored LiteLLM ``model_prices.json`` and yield records.
+    """Read the vendored LiteLLM ``model_prices.json`` and return records.
 
-    The source is stateless — every call to :meth:`load_all` re-parses
-    the JSON. Callers that need caching should wrap with
-    :class:`agent_runtime.pricing.catalog.ModelPricingCatalog` after
-    upserting the records into the persistence port.
-
-    Step 1 of P12: the source produces records; the existing
-    ``scripts/usage/seed_pricing.py`` does not yet consume them. The
-    ``compare_litellm`` CLI uses this module directly to print parity
-    diffs vs the YAML seeds.
+    Stateless — every :meth:`load_all` call re-parses the JSON. Callers that
+    need caching should wrap with :class:`~agent_runtime.pricing.catalog.ModelPricingCatalog`
+    after upserting into the persistence port.
     """
 
     DEFAULT_PRICING_VERSION_PREFIX = "litellm"

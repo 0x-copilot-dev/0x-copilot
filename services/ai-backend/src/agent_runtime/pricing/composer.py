@@ -1,25 +1,9 @@
-"""Compose the active pricing catalog from one primary source plus overrides.
+"""Merge primary pricing source (LiteLLM or YAML seeds) with override records into one upsert sequence.
 
-Step 2 of the P12 plan switches the source-of-truth from the hand-
-authored YAML seeds to LiteLLM. The composer is the single point that
-decides which records to upsert:
-
-1. **Primary source** — LiteLLM in production; YAML seeds in air-gapped
-   boots. Chosen by ``PricingComposer.load(primary_source=...)``.
-2. **Overrides** — ``pricing_overrides.yaml`` entries, each with a
-   ``reason`` field. Overrides win on
-   ``(provider, model_name, region)`` collision.
-
-Re-ingest is idempotent at the upsert layer: ``PersistencePort.upsert_pricing``
-closes any prior active row whose ``effective_from`` is strictly earlier,
-then inserts the new one. Callers (typically
-``scripts/usage/seed_pricing.py``) iterate the composer output and
-hand each record to ``upsert_pricing``.
-
-There is exactly **one merge rule** here so the precedence is unambiguous:
-``overrides`` replaces primary records on key collision; primary records
-with no override pass through unchanged. The composer never mutates the
-underlying records.
+Primary source is LiteLLM in production and YAML seeds in air-gapped deployments, chosen by
+``PricingComposer.load(primary_source=...)``. Override entries win on ``(provider, model_name,
+region)`` collision; primary records without an override pass through unchanged. Re-ingest is
+idempotent at the upsert layer. The composer never mutates the underlying records.
 """
 
 from __future__ import annotations

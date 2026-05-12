@@ -1,17 +1,9 @@
-"""Self-fork service (PR A3 / 8.0.3c).
+"""Owner-initiated conversation self-fork service (the "Retry from here" affordance).
 
-The owner of a conversation forks from a specific message in their own
-thread (the "Retry from here" affordance). Mechanically the operation
-mirrors :class:`ConversationForkService` (PR 6.2) — read source row,
-slice messages, build a new conversation row, copy messages with
-:class:`MessageCopyPlanner`, audit, return — minus everything that's
-share-specific (share-token resolution, recipient gate, cross-org
-opacity 404, share-snapshot bound, share-forked notification).
-
-Sequencing is deliberately simple: the source-side validation just
-requires the caller to own the source conversation in the same tenant.
-The agent harness, capabilities middleware, and SSE pipeline are not
-touched. Nothing here is share-aware.
+Reads the source conversation, slices messages up to the pivot point, builds a
+new conversation row owned by the same user, copies messages via
+:class:`MessageCopyPlanner`, and emits an audit event. No share-token, recipient
+gate, or notification path — the operation is share-unaware.
 """
 
 from __future__ import annotations

@@ -1,13 +1,9 @@
-"""Time-keyed pricing lookup with a small in-process cache (B3).
+"""Time-keyed pricing lookup with a small in-process LRU cache.
 
-Worker cost-computation hooks fire on every RUN_COMPLETED, so a naive
-DB hit per row inflates p99 lookup latency. The catalog wraps the
-persistence-port lookup in a per-key cache. Cache key is
-``(provider, model_name, region, at_floor_to_minute)`` — minute-level
-granularity is enough since pricing changes per quarter at most.
-
-Cache eviction is bounded by ``maxsize`` to prevent unbounded memory
-growth across long-running worker processes.
+Worker cost-computation hooks fire on every RUN_COMPLETED, so a naive DB hit per
+row inflates p99 lookup latency. The cache key is ``(provider, model_name, region,
+at_floor_to_minute)`` — minute granularity is sufficient because pricing changes at
+most quarterly. Cache size is bounded to prevent unbounded growth in long-running workers.
 """
 
 from __future__ import annotations

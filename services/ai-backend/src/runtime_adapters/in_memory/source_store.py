@@ -1,8 +1,4 @@
-"""In-memory ``SourceStorePort`` aggregating ``runtime_citations`` rows.
-
-Wraps PR 1.1's :class:`InMemoryCitationStore` and folds rows into one
-:class:`SourceAggregate` per unique ``(source_connector, source_doc_id)``.
-"""
+"""In-memory ``SourceStorePort`` that aggregates citation rows into per-source summaries."""
 
 from __future__ import annotations
 
@@ -16,13 +12,15 @@ from agent_runtime.persistence.records import CitationRecord, SourceAggregate
 class _CitationReader(Protocol):
     """Narrow read surface of :class:`InMemoryCitationStore`.
 
-    Avoids a hard import-time dependency on the citation store module so this
-    file is robust to PR 1.1's evolving API surface.
+    Using a Protocol avoids a hard import-time dependency on the citation store
+    module, keeping this file decoupled from the store's full interface.
     """
 
     async def list_for_conversation(
         self, *, org_id: str, conversation_id: str
-    ) -> Sequence[CitationRecord]: ...
+    ) -> Sequence[CitationRecord]:
+        """Return all citations for a conversation."""
+        ...
 
 
 class _SourceAggregator:
@@ -36,6 +34,7 @@ class _SourceAggregator:
         run_id: str | None,
         limit: int,
     ) -> tuple[SourceAggregate, ...]:
+        """Group citation rows by source doc, sort by citation count desc, and return top ``limit``."""
         if run_id is not None:
             rows = tuple(row for row in rows if row.run_id == run_id)
         buckets: dict[tuple[str, str], list[CitationRecord]] = {}
@@ -52,6 +51,7 @@ class _SourceAggregator:
 
     @staticmethod
     def _fold(rows: list[CitationRecord]) -> SourceAggregate:
+        """Collapse a list of same-doc citations into one aggregate, keeping the latest row's metadata."""
         rows.sort(key=lambda row: row.created_at)
         latest = rows[-1]
         return SourceAggregate(
@@ -70,6 +70,7 @@ class _SourceAggregator:
 
     @staticmethod
     def _latest_freshness(rows: list[CitationRecord]) -> datetime | None:
+        """Return the most recent ``freshness_at`` across a bucket, or ``None`` if all are absent."""
         candidates = [row.freshness_at for row in rows if row.freshness_at is not None]
         return max(candidates) if candidates else None
 
@@ -88,6 +89,7 @@ class InMemorySourceStore:
         run_id: str | None,
         limit: int,
     ) -> Sequence[SourceAggregate]:
+        """Aggregate citations for a conversation into per-source summaries."""
         rows = tuple(
             await self._citations.list_for_conversation(
                 org_id=org_id, conversation_id=conversation_id

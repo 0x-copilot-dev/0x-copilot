@@ -1,27 +1,9 @@
-"""Generic citation projector — shared by MCP middleware and local tools.
+"""Stateless extractor that pattern-matches tool results to CitationLedger sources.
 
-The projector pattern-matches the four result shapes that produce ~95% of
-citations in the wild and registers each detected source through
-:class:`CitationLedger`. Tool authors get citations for free without
-per-tool wiring; the ledger remains the single seam.
-
-Recognized shapes (in priority order):
-
-1. Anthropic-style ``content`` blocks: ``{"content": [...]}``.
-2. Generic results list wrapper: ``{"results": [...]}``.
-3. Single resource read: ``{"resource": {...}}``.
-4. Top-level list of dicts: ``[{"title": ..., "url"|"link"|"uri": ...}]``
-   — the shape returned by ``DuckDuckGoSearchResults(output_format="list")``
-   and most LangChain web-search wrappers.
-
-The projector does NOT mutate the structured result returned to the model:
-the model wasn't trained to expect ``[c<id>]`` tokens inside JSON results,
-and rewriting them would break tools that read the result back. Inline
-chips for tool-derived sources require an opt-in shape change documented
-in ``docs/new-design/02-citations-followups.md``.
-
-Best-effort: when no ledger is bound (citations disabled, or no run
-context — e.g. eval / replay), the projector is a silent no-op.
+Recognizes content-blocks, results-list, single-resource, and top-level list-of-dicts
+shapes (covering most web-search wrappers). Never mutates the result returned to the
+model; registers each detected source via CitationLedger. Silent no-op when no ledger
+is bound (replay / eval / test paths).
 """
 
 from __future__ import annotations
@@ -37,15 +19,15 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CitationProjector:
-    """Stateless extractor: tool result → list of registered sources."""
+    """Dispatch tool results through recognized shapes and register sources with the ledger."""
 
     class Limits:
-        """Per-result caps to keep the registry tiny on noisy connectors."""
+        """Per-result source caps to bound registry size on high-volume connectors."""
 
         PER_RESULT_MAX = 25
 
     class Keys:
-        """Result-shape field names — kept stable for back-compat."""
+        """Result-shape field names — stable for back-compat."""
 
         CONTENT = "content"
         RESULTS = "results"
@@ -111,6 +93,7 @@ class CitationProjector:
 
     @classmethod
     def _extract_sources(cls, connector: str, result: object) -> Iterable[SourceRef]:
+        """Dispatch ``result`` to the appropriate shape extractor."""
         if isinstance(result, list):
             yield from cls._from_results_list(connector, result)
             return
@@ -123,6 +106,9 @@ class CitationProjector:
             yielded = True
             yield ref
         if not yielded:
+            # Priority ordering: content-blocks first, then results list, then
+            # single-resource. Each shape is tried only when the higher-priority
+            # shape produced nothing, to avoid double-registering the same source.
             for ref in cls._from_results_list(connector, result.get(keys.RESULTS)):
                 yielded = True
                 yield ref
@@ -137,6 +123,7 @@ class CitationProjector:
     def _from_content_blocks(
         cls, connector: str, content: object
     ) -> Iterable[SourceRef]:
+        """Yield sources from Anthropic-style ``{"content": [...]}`` blocks."""
         if not isinstance(content, list):
             return
         keys = cls.Keys
@@ -164,6 +151,7 @@ class CitationProjector:
 
     @classmethod
     def _from_results_list(cls, connector: str, results: object) -> Iterable[SourceRef]:
+        """Yield sources from a list of result-dict entries (web-search style)."""
         if not isinstance(results, list):
             return
         keys = cls.Keys
@@ -193,6 +181,7 @@ class CitationProjector:
     def _from_single_resource(
         cls, connector: str, resource: object
     ) -> SourceRef | None:
+        """Return a single source from a ``{"resource": {...}}`` payload, or ``None``."""
         if not isinstance(resource, dict):
             return None
         refs = list(cls._yield_resource_refs(connector, resource))
@@ -202,6 +191,7 @@ class CitationProjector:
     def _yield_resource_refs(
         cls, connector: str, resource: dict[str, Any]
     ) -> Iterable[SourceRef]:
+        """Yield zero or one SourceRef from a raw MCP resource dict."""
         keys = cls.Keys
         ref = cls._build(
             connector=connector,
@@ -229,6 +219,7 @@ class CitationProjector:
         url: str | None,
         snippet: str | None,
     ) -> SourceRef | None:
+        """Construct a SourceRef; return ``None`` when doc_id or title are absent."""
         if not doc_id or not title:
             return None
         return SourceRef(
@@ -241,6 +232,7 @@ class CitationProjector:
 
     @staticmethod
     def _coerce_text(value: object) -> str | None:
+        """Return ``value`` stripped if it is a non-empty string, else ``None``."""
         if not isinstance(value, str):
             return None
         stripped = value.strip()

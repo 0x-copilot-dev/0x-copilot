@@ -1,18 +1,4 @@
-"""Connector authentication pre-check for the Workspace-pane draft send flow.
-
-The :class:`CapabilityAuthGate` answers one question: "is ``target_connector``
-reachable for this runtime context — right now?" It's used by
-
-- :class:`DraftService.send` as a pre-check, so non-authenticated targets
-  return ``409 connector_auth_required`` *before* any draft row mutation;
-- the approval-resolution path as a re-check at dispatch time, so a connector
-  that was revoked between API send and approval resolution doesn't quietly
-  succeed.
-
-The gate is dependency-free beyond the registries it wraps; both registries
-are in-memory caches refreshed on the existing TTL by the run handler. One
-``check`` call is sub-µs in the hot path.
-"""
+"""Auth-gate for connectors: answers "is this connector reachable right now?" before a draft send or approval dispatch."""
 
 from __future__ import annotations
 
@@ -43,31 +29,44 @@ class CapabilityAuthCheck:
 
 
 class _ToolRegistryLike(Protocol):
+    """Structural view of the built-in tool registry consumed by the gate."""
+
     def list_available_tools(self, context: object) -> tuple[ToolCard, ...]: ...
 
 
 class _McpServerLike(Protocol):
-    """Structural view of one entry returned by ``mcp_registry.list_available_servers``.
+    """Minimal fields the gate reads from an MCP server entry.
 
-    We only depend on the fields we actually read so unit tests can supply
-    minimal stubs without re-validating the full :class:`McpServerCard`.
+    Using a narrow structural protocol keeps unit-test stubs small; the gate
+    never validates the full ``McpServerCard`` shape.
     """
 
     name: str
     server_id: str | None
-    auth_state: object  # McpAuthState; compared by ``str(value)``
+    # Compared as ``str(auth_state) == "authenticated"`` to avoid importing
+    # ``McpAuthState`` here and creating a hard circular dependency.
+    auth_state: object
     enabled: bool
 
 
 class _McpRegistryLike(Protocol):
+    """Structural view of the MCP registry consumed by the gate."""
+
     async def list_available_servers(
         self, context: object
     ) -> Iterable[_McpServerLike]: ...
 
 
 class CapabilityAuthGate:
-    """Resolve a ``target_connector`` to an authentication verdict."""
+    """Resolve a ``target_connector`` name to an authentication verdict.
 
+    Checks built-in tools first (always authenticated when visible), then
+    MCP servers. A single instance is safe to reuse across requests; both
+    registries are in-memory caches with their own TTL refresh.
+    """
+
+    # String representation of ``McpAuthState.AUTHENTICATED`` — kept as a
+    # literal to avoid a hard import cycle between this module and mcp.cards.
     AUTHENTICATED_AUTH_STATE = "authenticated"
 
     def __init__(
@@ -85,20 +84,21 @@ class CapabilityAuthGate:
         target_connector: str,
         runtime_context: object,
     ) -> CapabilityAuthCheck:
-        """Return an outcome explaining whether the connector is reachable."""
+        """Return whether ``target_connector`` is reachable for ``runtime_context``."""
 
         if not target_connector:
             return CapabilityAuthCheck(
                 outcome=CapabilityAuthOutcome.UNKNOWN_CAPABILITY,
                 safe_message="target_connector is required.",
             )
-        # 1. Is the target a built-in tool the user can already see?
+        # Built-in tools are always reachable once visible — no auth step.
         for tool in self._tool_registry.list_available_tools(runtime_context):
             if tool.name == target_connector:
                 return CapabilityAuthCheck(
                     outcome=CapabilityAuthOutcome.AUTHENTICATED,
                 )
-        # 2. Is it a known MCP server?
+        # Walk MCP servers for a name match; order within a workspace is
+        # non-deterministic, but name uniqueness is enforced by the registry.
         for server in await self._mcp_registry.list_available_servers(runtime_context):
             if server.name != target_connector:
                 continue

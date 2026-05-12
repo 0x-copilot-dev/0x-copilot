@@ -90,4 +90,5 @@ class InboxSseAdapter:
 
     @staticmethod
     def now_utc() -> datetime:
+        """Return the current UTC datetime; extracted for test-time mocking."""
         return datetime.now(timezone.utc)

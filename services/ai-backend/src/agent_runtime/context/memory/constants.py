@@ -90,14 +90,7 @@ class Limits:
 
 
 class Patterns:
-    """Memory-path structural validators.
-
-    Credential-shaped ``SENSITIVE_KEY`` / ``SENSITIVE_VALUE`` regexes
-    were removed in P11.4. Credential redaction now flows through the
-    canonical ``DENY_KEYS`` set in
-    :mod:`agent_runtime.observability.redactor`; field-level
-    sensitivity uses ``Sensitive[]`` annotations.
-    """
+    """Compiled regex validators for memory paths, prefixes, and IDs."""
 
     ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     MEMORY_PATH = re.compile(r"^/[A-Za-z0-9._:/-]+$")
@@ -115,10 +108,9 @@ class Messages:
         INVALID_CONTEXT_SUMMARY = "Context summary was empty or invalid."
         MEMORY_POLICY_DENIED = "Memory access was denied by policy."
         PROMPT_INJECTION_REJECTED = "Memory write was rejected by policy."
-        # PR 8.0.5 — surfaced when the user's privacy snapshot has
-        # ``memory_enabled=false``. Distinct from policy-denied so SIEM
-        # exports / observability can split user-toggled denials from
-        # path-policy denials cleanly.
+        # Surfaced when the user's privacy snapshot has ``memory_enabled=false``.
+        # Kept distinct from ``MEMORY_POLICY_DENIED`` so SIEM exports and
+        # observability can separate user-toggled refusals from path-policy denials.
         MEMORY_DISABLED_BY_USER = "Memory writes disabled by user."
 
     class Validation:

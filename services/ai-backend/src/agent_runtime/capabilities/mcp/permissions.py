@@ -36,12 +36,9 @@ class McpPermissionPolicy:
     ) -> bool:
         """Return whether the runtime context may load this MCP server.
 
-        PR 4.4.6.2 — paused server_ids are denied here so a connector the
-        user toggled off in the per-chat popover is invisible to
-        ``list_server_cards`` AND blocked from ``load_server`` for the
-        duration of the run. The check is by ``server_id`` (the same key
-        the conversation column writes); cards without a ``server_id``
-        (deployment-level cards, not user-installed) skip the gate.
+        Paused ``server_id``s are denied so per-chat connector toggles
+        block both card listing and server loading. Cards without a
+        ``server_id`` (deployment-level cards) skip the paused-id gate.
         """
 
         if card.server_id is not None and card.server_id in context.paused_connectors:

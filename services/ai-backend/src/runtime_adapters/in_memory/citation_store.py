@@ -26,12 +26,18 @@ class InMemoryCitationStore:
 
     @property
     def rows(self) -> tuple[CitationRecord, ...]:
+        """Return a snapshot of all stored citation records."""
         with self._lock:
             return tuple(self._rows)
 
     async def insert_many_or_get(
         self, records: Sequence[CitationRecord]
     ) -> Sequence[CitationRecord]:
+        """Insert citations that do not yet exist; return existing records for duplicates.
+
+        Idempotency key is (run_id, source_connector, source_doc_id) — duplicate
+        records are returned as-was rather than overwritten.
+        """
         if not records:
             return ()
         with self._lock:
@@ -53,6 +59,7 @@ class InMemoryCitationStore:
         org_id: str,
         run_id: str,
     ) -> Sequence[CitationRecord]:
+        """Return citations for a single run, ordered by ordinal."""
         with self._lock:
             return tuple(
                 sorted(
@@ -71,6 +78,7 @@ class InMemoryCitationStore:
         org_id: str,
         conversation_id: str,
     ) -> Sequence[CitationRecord]:
+        """Return all citations in a conversation, ordered by creation time."""
         with self._lock:
             return tuple(
                 sorted(

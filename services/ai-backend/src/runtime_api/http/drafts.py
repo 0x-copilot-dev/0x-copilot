@@ -1,17 +1,14 @@
-"""HTTP routes for the Workspace-pane draft artifact (PR 1.3).
+"""HTTP routes for the Workspace-pane draft artifact.
 
-Five endpoints, all under ``/v1/agent``:
+Five endpoints mounted on ``/v1/agent``:
 
 - ``GET    /conversations/{cid}/drafts``
 - ``GET    /drafts/{draft_id}`` (optional ``?version=N``)
 - ``PATCH  /drafts/{draft_id}`` (edit-in-place)
-- ``POST   /drafts/{draft_id}/send`` (request approval-gated send)
+- ``POST   /drafts/{draft_id}/send`` (approval-gated send)
 - ``POST   /drafts/{draft_id}/discard``
 
-The handlers are thin shims around :class:`DraftService`. Identity comes from
-the standard ``RuntimeServiceAuthenticator`` headers; non-identity-bearing
-requests fall back to query params for parity with the rest of the runtime
-router (per ``RuntimeApiRoutes.scoped_identity``).
+Every handler is a thin shim over :class:`~agent_runtime.api.draft_service.DraftService`.
 """
 
 from __future__ import annotations
@@ -34,7 +31,7 @@ from runtime_api.schemas import (
 
 
 class DraftRoutes:
-    """Route handlers for ``/v1/agent`` draft endpoints."""
+    """Route handlers for the ``/v1/agent`` draft endpoints."""
 
     @classmethod
     async def list_drafts(
@@ -43,6 +40,7 @@ class DraftRoutes:
         conversation_id: str,
         identity: Identity,
     ) -> DraftListResponse:
+        """Return the latest version of every draft for one conversation."""
         return await cls._service(request).list_for_conversation(
             org_id=identity.org_id, conversation_id=conversation_id
         )
@@ -55,6 +53,7 @@ class DraftRoutes:
         identity: Identity,
         version: int | None = Query(None, ge=1),
     ) -> Draft:
+        """Return a specific draft version, or the latest version when omitted."""
         return await cls._service(request).get(
             org_id=identity.org_id, draft_id=draft_id, version=version
         )
@@ -67,6 +66,7 @@ class DraftRoutes:
         payload: DraftPatchRequest,
         identity: Identity,
     ) -> Draft:
+        """Replace a draft's content in-place and return the updated version."""
         return await cls._service(request).patch(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -82,6 +82,7 @@ class DraftRoutes:
         payload: DraftSendRequest,
         identity: Identity,
     ) -> DraftSendResponse:
+        """Request an approval-gated send of a draft through a connector."""
         return await cls._service(request).send(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -97,6 +98,7 @@ class DraftRoutes:
         payload: DraftDiscardRequest,
         identity: Identity,
     ) -> Draft:
+        """Mark a draft as discarded (soft-delete, terminal state)."""
         return await cls._service(request).discard(
             org_id=identity.org_id,
             user_id=identity.user_id,
@@ -108,6 +110,7 @@ class DraftRoutes:
 
     @staticmethod
     def _service(request: Request) -> DraftService:
+        """Return the wired DraftService or raise 503 if absent."""
         service = getattr(request.app.state, "draft_service", None)
         if service is None:
             raise HTTPException(

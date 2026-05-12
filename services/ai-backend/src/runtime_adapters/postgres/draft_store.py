@@ -1,14 +1,12 @@
 """Postgres-backed ``DraftStorePort``.
 
-This adapter is a thin sibling of :class:`PostgresRuntimeApiStore`: it borrows
-the same connection pool and :class:`FieldCodec`, runs all queries through the
-``_tenant_connection`` helper so RLS session vars are stamped, and never
-mutates rows in place — every status change is a new ``runtime_drafts`` row
+Borrows the parent store's connection pool and :class:`FieldCodec`, runs all queries
+through ``_tenant_connection`` so RLS session variables are stamped, and never
+mutates rows in place — every status change inserts a new ``runtime_drafts`` row
 with ``version = previous + 1``.
 
-Encryption uses ``v1`` envelopes for ``title``, ``content_text``, and
-``target_metadata``. ``citation_ids`` stays plaintext so we can exact-match
-against ``runtime_citations`` ids when PR 1.1 lands.
+Encrypted columns: ``title``, ``content_text``, and ``target_metadata`` (v1 envelopes).
+``citation_ids`` stays plaintext to allow exact-match joins against citation IDs.
 """
 
 from __future__ import annotations
@@ -35,12 +33,11 @@ class PostgresDraftStore:
 
     @property
     def _codec(self) -> FieldCodec:
+        """Return the parent store's FieldCodec for encryption/decryption."""
         return self._parent._codec  # type: ignore[attr-defined]
 
     async def insert_version(self, record: DraftRecord) -> DraftRecord:
-        """Insert one new draft version. Raises :class:`OptimisticConflict`
-        if ``(org_id, draft_id, version)`` is already present.
-        """
+        """Insert one new draft version; raises :class:`OptimisticConflict` on duplicate (draft_id, version)."""
 
         codec = self._codec
         title_encrypted = codec.encrypt_text(
@@ -114,6 +111,7 @@ class PostgresDraftStore:
         return record
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
+        """Return the highest-versioned draft row, or ``None`` if the draft does not exist."""
         async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -135,6 +133,7 @@ class PostgresDraftStore:
     async def get_version(
         self, *, org_id: str, draft_id: str, version: int
     ) -> DraftRecord | None:
+        """Return a specific version of a draft, or ``None`` if not found."""
         async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -154,6 +153,7 @@ class PostgresDraftStore:
     async def latest_for_conversation(
         self, *, org_id: str, conversation_id: str
     ) -> Sequence[DraftRecord]:
+        """Return the highest-versioned row for each draft in a conversation."""
         async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
             async with conn.cursor() as cur:
                 await cur.execute(

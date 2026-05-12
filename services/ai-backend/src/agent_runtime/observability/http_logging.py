@@ -100,10 +100,9 @@ class HttpLogEvent(BaseModel):
         return MetadataRedactor.redact(value)
 
     def to_log_dict(self) -> dict[str, object]:
-        # P11.3: route through ``SafeLogDumper`` so any field annotated
-        # ``Sensitive(...)`` is elided. No current ``HttpLogEvent``
-        # field is tagged — the integration is in place for future
-        # taggings.
+        # Route through ``SafeLogDumper`` so any field annotated ``Sensitive(...)``
+        # is elided. No current ``HttpLogEvent`` field is tagged — the integration
+        # is in place for future taggings.
         return SafeLogDumper.dump_safe(self, mode="json", exclude_none=True)
 
 

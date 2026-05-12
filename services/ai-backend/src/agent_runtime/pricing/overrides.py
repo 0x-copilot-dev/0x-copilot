@@ -1,22 +1,9 @@
-"""Pricing overrides (B3 / P12 Step 2).
+"""Pricing overrides: escape-hatch records for models the primary source doesn't cover.
 
-Overrides are the escape hatch for ``(provider, model_name, region)``
-triples where the primary source (LiteLLM, or the YAML seed in
-air-gapped boots) does not produce the value we want to bill at. Two
-canonical use cases:
-
-1. **Custom / fine-tune models** that LiteLLM doesn't ship rates for
-   (e.g. an internal Anthropic fine-tune named ``claude-internal-x``).
-2. **Migration legacy** — at the Step 2 cutover, any seed value that
-   diverges from LiteLLM gets pinned to the legacy value via an
-   override so the **active row at switchover reads identically**.
-   See [`config/pricing_overrides.yaml`](../../../config/pricing_overrides.yaml)
-   for the current pinned set.
-
-Every override entry requires a ``reason`` field. The loader fails
-closed if it is missing — the design assumes overrides are reviewable
-by whoever inherits the catalog. ``pricing.override_applied`` is
-logged once per ingest per override.
+Overrides win on ``(provider, model_name, region)`` collision with the primary
+source. Each entry requires a ``reason`` field; the loader fails closed if it is
+missing so overrides remain reviewable. ``pricing.override_applied`` is logged
+once per ingest per override entry.
 """
 
 from __future__ import annotations

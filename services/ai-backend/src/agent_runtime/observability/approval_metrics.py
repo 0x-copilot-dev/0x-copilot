@@ -1,24 +1,10 @@
-"""OTel meters for two-stage approval forwarding (PR 1.4.1 Gap #9).
+"""OTel meters for two-stage approval forwarding.
 
-Exposes three signals through the existing OTel pipeline (configured by
-C11 in :mod:`agent_runtime.observability.otel`):
-
-  - ``approval_forward_total`` — counter, labels ``decision_kind`` +
-    ``depth``. Increments once per successful forward.
-  - ``approval_forward_invalid_total`` — counter, label ``reason``.
-    Increments on every guard rejection inside ``_guard_forwardable``
-    so dashboards can split self-forward / cross-org / depth-cap /
-    membership-invalid without parsing logs.
-  - ``approval_chain_resolution_seconds`` — histogram. Recorded on the
-    leaf decision when the parent chain is non-empty; bucket layout
-    chosen so 30s / 1min / 5min / 30min / 1h / 1d are the natural read
-    points on a Grafana board.
-
-DRY anchors: these meters publish through the same
-``opentelemetry.metrics.get_meter`` pipeline as
-``db_statement_metrics`` and ``run_metrics``. No new exporter, no
-parallel dashboard primitive. The module gracefully no-ops when OTel
-isn't importable (dev/test) so callers don't have to guard.
+Exposes three signals: ``approval_forward_total`` (counter, labels ``decision_kind``
+and ``depth``), ``approval_forward_invalid_total`` (counter, label ``reason``), and
+``approval_chain_resolution_seconds`` (histogram). Publishes through the same
+``opentelemetry.metrics.get_meter`` pipeline as other runtime meters. Gracefully
+no-ops when OTel is not importable (dev/test) so callers need no guard.
 """
 
 from __future__ import annotations

@@ -41,19 +41,16 @@ class _EnvFields:
     WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
     START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
     ALLOW_EMPTY_CAPABILITIES = "RUNTIME_ALLOW_EMPTY_CAPABILITIES"
-    # P4 Stage 2 — worker-side ``MODEL_DELTA`` coalesce window (ms). When
-    # > 0, the streaming executor accumulates chunks for the window and
-    # flushes them via ``append_events_batch`` (one DB round-trip per
-    # batch). Default ``0`` (disabled) so Stage 2 ships dark; flip on per
-    # environment after measurement on staging.
+    # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
+    # executor accumulates chunks for the window and flushes via
+    # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
     DELTA_COALESCE_WINDOW_MS = "RUNTIME_DELTA_COALESCE_WINDOW_MS"
-    # Hard cap on chunks per batch — forces a flush even if the window has
-    # not expired. Defends against pathological emit rates.
+    # Hard cap on chunks per coalesce batch — forces a flush even if the window
+    # has not expired, defending against pathological emit rates.
     DELTA_COALESCE_MAX_CHUNKS = "RUNTIME_DELTA_COALESCE_MAX_CHUNKS"
-    # P2 — SSE event bus backend selection. ``in_memory`` (default) uses
-    # the legacy single-process ``asyncio.Condition`` path. ``postgres``
-    # switches to ``LISTEN/NOTIFY`` so the worker's append wakes SSE
-    # adapters in a separate API process.
+    # SSE event bus backend. ``in_memory`` uses the single-process
+    # ``asyncio.Condition`` path; ``postgres`` switches to ``LISTEN/NOTIFY`` so
+    # the worker's append wakes SSE adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"

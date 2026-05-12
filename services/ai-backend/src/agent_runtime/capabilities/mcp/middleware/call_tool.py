@@ -52,6 +52,7 @@ class CallMcpTool:
         self,
         raw_input: McpToolCallRequest | Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Validate input, re-check permissions, call the tool, and annotate with a citation hint."""
         parsed_input = CallMcpToolInputParser.parse(
             raw_input,
             self.runtime_context.trace_id,
@@ -70,14 +71,8 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
-        # PR 4.4.6.2 — defense-in-depth re-check after registry resolve.
-        # ``McpPermissionPolicy`` would have already hidden a paused
-        # server from ``list_server_cards`` and refused
-        # ``load_server``, so the model normally never reaches this
-        # point with a paused name. The re-check exists so a stale
-        # tool reference from an earlier turn (or a model that
-        # remembers the server name without re-discovery) can't bypass
-        # the per-chat pause.
+        # Defense-in-depth: re-check authorization after registry resolve so a stale
+        # tool reference from an earlier turn can't bypass per-chat pausing.
         if not McpPermissionPolicy.is_server_card_authorized(
             self.runtime_context, resolution.card
         ):
@@ -134,25 +129,18 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
-        # Citations live registry (PR 1.1 follow-up C). Best-effort source
-        # detection from the structured tool output; never raises into the
-        # tool path. Result is returned to the model unchanged so JSON
-        # consumers see the original shape.
+        # Project citation sources from the structured output. Best-effort;
+        # the original output shape is preserved for JSON consumers.
         await CitationProjectingMcpMiddleware.project(
             connector=parsed_input.server_name,
             tool_call_id=self.runtime_context.trace_id,
             result=output,
         )
 
-        # PR 04 — allocate a conversation-scoped ordinal *bound* to the
-        # LangGraph-assigned ``tool_call_id`` (now plumbed through via
-        # ``InjectedToolCallId`` on :class:`McpToolCallRequest`). The
-        # binding lets the resolver stamp ``source_tool_call_id`` on
-        # every ``citation_made`` event without the FE needing an
-        # ordinal-position fallback. Best-effort: when no allocator is
-        # bound (replay/eval) or no tool_call_id was injected (legacy
-        # call sites that build the request by hand), the output is
-        # returned unchanged.
+        # Allocate a conversation-scoped ordinal bound to tool_call_id so the
+        # citation resolver can stamp source_tool_call_id on citation_made events.
+        # Best-effort: when no allocator is bound (replay/eval) or no tool_call_id
+        # was injected (manual call sites), the output is returned unchanged.
         try:
             allocator = ConversationOrdinalAllocator.active()
             if allocator is None:
@@ -210,6 +198,7 @@ class CallMcpTool:
         self,
         raw_input: McpToolCallRequest | Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Delegate to ``ainvoke``."""
         return await self.ainvoke(raw_input)
 
 
@@ -222,6 +211,7 @@ class CallMcpToolInputParser:
         raw_input: McpToolCallRequest | Mapping[str, Any],
         correlation_id: str,
     ) -> McpToolCallRequest | McpToolCallResult:
+        """Validate ``raw_input`` into a typed request; return a failure result on error."""
         if isinstance(raw_input, McpToolCallRequest):
             return raw_input
         try:

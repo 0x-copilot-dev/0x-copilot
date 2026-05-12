@@ -1,29 +1,20 @@
-"""Cross-process trace propagation across the runtime queue.
+"""W3C trace-context propagation across the API-to-worker queue boundary.
 
-P13 Step 1. The API and the worker run in separate processes; when a
-``RuntimeRunCommand`` is enqueued the API holds the active OTel span,
-but the worker that later claims the command starts a brand-new trace
-tree — the parent context is gone. The result is two unrelated traces
-per run: one for the API request, one for the worker handler. Operators
-cannot follow a run end-to-end in the OTLP backend.
+The API and worker run in separate processes. Without propagation each worker
+claim starts a new root span, breaking end-to-end trace continuity in the OTLP
+backend. This module serialises the active W3C context (``traceparent`` /
+``tracestate``) onto the command payload at enqueue time and deserialises it
+at claim time.
 
-This module carries the W3C trace context (``traceparent`` /
-``tracestate``) on the command payload. The API calls :meth:`inject` to
-serialize the active context; the worker calls :meth:`extract` to
-reconstitute it before starting the handler span. Behavior is fail-soft
-on either end:
+Behavior is fail-soft on both ends: :meth:`inject` returns an empty dict when
+no span is active; :meth:`extract` returns the default OTel ``Context`` on a
+missing or malformed carrier — calling code simply begins a fresh trace.
 
-- :meth:`inject` returns an empty dict when no span is active, or when
-  propagation is disabled via ``RUNTIME_PROPAGATE_QUEUE_TRACE=false``.
-- :meth:`extract` returns the default OTel ``Context`` on missing or
-  malformed carrier headers. Calling code that starts a span with that
-  context simply begins a fresh trace — the pre-P13 behavior.
+The dispatch flag ``RUNTIME_PROPAGATE_QUEUE_TRACE`` defaults to ``true``.
+Both sides honor the same flag so propagation can be disabled without code
+changes — useful if dashboards keyed on fresh-trace-per-worker-run need to be
+rebuilt first.
 
-The dispatch flag (``RUNTIME_PROPAGATE_QUEUE_TRACE``) defaults to
-**true**. Both sides honor the same flag so a deployment can disable
-propagation without code changes — useful if dashboards keyed on
-"fresh trace per worker run" need to be rebuilt before the link is
-established.
 """
 
 from __future__ import annotations

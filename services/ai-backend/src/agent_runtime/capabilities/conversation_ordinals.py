@@ -1,48 +1,10 @@
-"""Conversation-scoped tool invocation ordinal allocator.
+"""Conversation-scoped monotonic ordinal allocator for tool call citations.
 
-PR 04 — citations binding map.
-
-Each tool invocation in a conversation is assigned a monotonic
-``conversation_ordinal`` at dispatch time. The ordinal is a stable,
-durable pointer used by:
-
-- the per-tool result-hinting wrappers that prepend
-  ``[Tool call #N — cite as [[N]] when referencing this result.]``
-  to the result text the model reads, so the model can declare which
-  tool grounded any factual claim with a stable pointer;
-- the :class:`agent_runtime.capabilities.citation_resolver.CitationResolver`
-  that watches streamed assistant text for ``[[N]]`` markers and stamps
-  ``source_tool_call_id`` on each emitted ``citation_made`` event;
-- the cross-turn observation builder that surfaces prior turns' tool
-  calls into the model's context, so cross-turn citation continues to
-  resolve to the same ``tool_call_id`` it referred to in the originating
-  turn.
-
-The allocator is a write-through cache over a persistent
-``(conversation_ordinal ↔ tool_call_id)`` binding table
-(:class:`agent_runtime.persistence.ports.ConversationToolOrdinalStorePort`,
-backed by ``agent_conversation_tool_ordinals`` from migration 0026).
-This replaces the prior positional-event-counting seeder, whose count
-could disagree with the live counter when the MCP middleware allocated
-inside a tool body or when approval interrupts caused repeated rebinds.
-With persistence:
-
-* Every allocation writes one row to the store. The PRIMARY KEY +
-  UNIQUE constraint guarantee one ordinal per ``tool_call_id`` per
-  conversation. Retries (LangGraph re-dispatch on resume) collapse
-  to the existing row.
-* Approval resumes reload the allocator from the store; in-memory
-  state survives the pause without recomputation.
-* Cross-turn citations look up the same canonical mapping the cross-turn
-  observation builder reads from.
-
-The allocator is bound per run via ``ContextVar`` so tools and middleware
-reach it without threading the runtime context through every signature
-(mirrors :class:`agent_runtime.capabilities.citations.CitationLedger`).
-When no allocator is bound (replay, eval harnesses, unit tests of inner
-tools), :meth:`ConversationOrdinalAllocator.active` returns ``None`` and
-the wrappers degrade to a no-op append. Citations are best-effort
-decoration, never required for tool correctness.
+Assigns a stable ``conversation_ordinal`` to each tool invocation and persists
+the (ordinal ↔ tool_call_id) binding via ConversationToolOrdinalStorePort so the
+CitationResolver can stamp source_tool_call_id on citation_made events, and
+cross-turn observations continue to resolve to the same canonical mapping. Bound
+per run via ContextVar; degrades to a silent no-op when unbound (replay/eval/tests).
 """
 
 from __future__ import annotations
@@ -61,16 +23,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ConversationOrdinalAllocator:
-    """Per-conversation monotonic ordinal allocator for tool invocations.
+    """Monotonic ordinal allocator for a single conversation's tool calls.
 
-    Owns the in-memory counter for the active run, plus the
-    ``(ordinal → tool_call_id)`` mapping the resolver consults when
-    stamping ``citation_made`` events. State is loaded from
-    :class:`ConversationToolOrdinalStorePort` at construction
-    (:meth:`for_conversation`) and written back on every successful
-    :meth:`allocate_for_tool_call`. Without a store the allocator
-    operates purely in memory — used by replay paths and unit tests of
-    inner tools.
+    Owns the in-memory counter and bidirectional ordinal ↔ tool_call_id map.
+    State is loaded from the persistent store at construction and written back
+    on every fresh allocation. Operates in-memory only when no store is provided
+    (replay / eval / unit tests).
     """
 
     def __init__(
@@ -90,9 +48,9 @@ class ConversationOrdinalAllocator:
         self._run_id = run_id
         self._store = store
         self._counter = starting_ordinal
-        # Bidirectional index: ordinal → tool_call_id, plus the reverse
-        # for fast idempotent lookup on retries (same ``tool_call_id``
-        # bound twice must collapse to the same ordinal).
+        # Bidirectional mapping: ordinal → tool_call_id and its reverse.
+        # The reverse enables fast idempotent lookup so retrying the same
+        # tool_call_id always returns its original ordinal.
         self._ordinal_to_tool_call_id: dict[int, str] = dict(
             ordinal_to_tool_call_id or {}
         )
@@ -140,8 +98,7 @@ class ConversationOrdinalAllocator:
         if existing is not None:
             return existing
         if self._store is None:
-            # No persistence layer (replay / eval / unit tests of
-            # inner tools). Allocate in memory and return.
+            # Storeless path (replay / eval / unit tests): in-memory only.
             self._counter += 1
             self._ordinal_to_tool_call_id[self._counter] = tool_call_id
             self._tool_call_id_to_ordinal[tool_call_id] = self._counter
@@ -154,10 +111,8 @@ class ConversationOrdinalAllocator:
                 tool_name,
             )
             return self._counter
-        # Late import to avoid a cross-package import cycle:
-        # capabilities.conversation_ordinals → persistence.ports →
-        # capabilities (via record dataclasses) — keeping the conflict
-        # exception import lazy preserves the prior import topology.
+        # Late import to avoid the capabilities → persistence.ports → capabilities
+        # circular dependency; lazy import here breaks the cycle at runtime.
         from agent_runtime.persistence.ports import (  # noqa: PLC0415
             ConversationOrdinalConflict,
         )
@@ -213,7 +168,7 @@ class ConversationOrdinalAllocator:
         return 0 < ordinal <= self._counter
 
     async def _reload_from_store(self) -> None:
-        """Refresh in-memory state after a conflict from the store."""
+        """Reload the full binding map from the store after an ordinal conflict."""
 
         if self._store is None:
             return
@@ -241,19 +196,12 @@ class ConversationOrdinalAllocator:
         run_id: str,
         store: "ConversationToolOrdinalStorePort",
     ) -> "ConversationOrdinalAllocator":
-        """Build an allocator restored from the persistent binding map.
+        """Build an allocator seeded from the store's persisted binding map.
 
-        Reads every binding for ``conversation_id`` from the store, sets
-        the counter to ``max(conversation_ordinal)``, and seeds the
-        in-memory map. The next allocate returns ``counter + 1`` —
-        strictly greater than any ordinal already persisted for this
-        conversation, regardless of which run created it (so a brand-new
-        tool call in turn T+k does not collide with an ordinal allocated
-        in turn T).
-
-        Approval resumes call this with the same ``run_id`` the run
-        started under, so new bindings made post-resume stay attributed
-        to the original run.
+        Sets the counter to max(existing ordinals) so the first new allocation
+        is strictly greater than any prior ordinal in the conversation, regardless
+        of which run created it. Approval resumes pass the original run_id so
+        new bindings remain attributed to the run that started.
         """
 
         bindings = await store.load(org_id=org_id, conversation_id=conversation_id)

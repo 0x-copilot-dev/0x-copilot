@@ -1,27 +1,4 @@
-"""Local-tool citation capture (PR 1.1 follow-up D).
-
-Bridges :class:`CitationProjector` to the LangChain tool dispatch loop.
-Mirrors :class:`agent_runtime.capabilities.tool_budget_guard.ToolBudgetGuardedRegistry`:
-the registry-of-tools port is passed through unchanged, only the
-``list_available_tools`` output is rewritten so each model-visible
-LangChain :class:`BaseTool` runs through :class:`CitationCapturingTool`.
-
-The wrapper is a passthrough for the model — the tool's name,
-description, args_schema, and result are returned unchanged. Side effect:
-after each successful invocation, the result is fed to
-:meth:`CitationProjector.project`, which registers detected sources
-through the active per-run :class:`CitationLedger` (and so emits one
-``source_ingested`` event per unique source). When no ledger is bound
-(unit tests of the inner tool, eval/replay), the projector silently
-returns and the wrapper is a no-op.
-
-We deliberately do NOT inject ``[c<id>]`` tokens into the tool result
-text. The model wasn't trained to expect chip tokens inside arbitrary
-tool outputs, and rewriting them would (1) make the model echo chips for
-sources it didn't actually use and (2) break tools that read the result
-back. The right rail :class:`SourcesTab` populates from the same SSE
-events; the user gets a clean source list without inline chip noise.
-"""
+"""LangChain BaseTool wrappers that project citation sources and append ordinal [[N]] hints to tool results."""
 
 from __future__ import annotations
 
@@ -41,29 +18,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _CitationHint:
-    """Render the per-tool-call citation hint appended to result text.
+    """Appends a ``[[N]]`` ordinal pointer to a tool result so the model can cite it.
 
-    PR 1.1-rev2 — every tool result the model reads gets a one-line
-    suffix that names a stable ``[[N]]`` pointer the model can cite when
-    grounding any factual claim in this result. The suffix is rendered
-    by a class so the format is testable and the only consumer (the
-    wrapper's ``_arun``) imports a single name.
-
-    Result types:
-
-    - ``str`` — append ``\\n\\n[Tool call #N — <tool> — cite as [[N]]…]``.
-    - ``tuple`` — LangChain's ``response_format="content_and_artifact"``
-      contract; the first element is the string the model reads, the
-      second is the structured artifact. We extend the first element
-      and return a new tuple. ``DuckDuckGoSearchResults`` and most
-      LangChain web-search wrappers use this shape.
-    - ``list`` of strings — append the hint to the last string entry, or
-      append a new string entry when the list is empty / has no string
-      tail. (LangChain occasionally returns ``list[str]`` for tools that
-      stream multi-part text outputs.)
-    - ``dict`` — MCP envelope with a ``content`` array, OR generic dict
-      that gets a top-level ``_citation_hint`` field added.
-    - any other shape — return unchanged.
+    Handles ``str``, ``tuple`` (LangChain content_and_artifact), ``list``, ``dict``
+    (MCP content array or generic key-value), and falls through unchanged for all
+    other shapes. The hint is the only instruction the model needs to embed a stable
+    pointer in its prose.
     """
 
     HINT_TEMPLATE = (
@@ -82,29 +42,34 @@ class _CitationHint:
 
     @classmethod
     def render(cls, *, ordinal: int, tool_name: str) -> str:
+        """Return the formatted hint string for ``ordinal`` and ``tool_name``."""
         return cls.HINT_TEMPLATE.format(ordinal=ordinal, tool_name=tool_name)
 
     @classmethod
     def append_to(cls, result: object, *, ordinal: int, tool_name: str) -> object:
+        """Append the rendered hint to ``result``, preserving its shape.
+
+        Handles str, tuple, list, dict (MCP content-array or generic), and
+        returns any other shape unchanged. Never raises.
+        """
         rendered = cls.render(ordinal=ordinal, tool_name=tool_name)
         suffix = cls.SEPARATOR + rendered
         if isinstance(result, str):
             return result + suffix
         if isinstance(result, tuple):
-            # LangChain ``response_format="content_and_artifact"`` —
-            # ``(content_string, artifact)`` is the canonical shape;
-            # ``DuckDuckGoSearchResults(output_format="list")`` returns
-            # ``(formatted_text, list[dict])``. Extending the first
-            # element is the only place the model actually reads.
+            # LangChain content_and_artifact shape: head is the string the
+            # model reads; the tail is the structured artifact we must not
+            # modify (DuckDuckGo, most web-search wrappers use this).
             if len(result) >= 1 and isinstance(result[0], str):
                 return (result[0] + suffix, *result[1:])
-            # Tuple whose head isn't a string — walk for the last
-            # string entry and extend it.
+            # Tuple with no string head — walk backwards for the last string.
             updated_seq: list[Any] = list(result)
             for idx in range(len(updated_seq) - 1, -1, -1):
                 if isinstance(updated_seq[idx], str):
                     updated_seq[idx] = updated_seq[idx] + suffix
                     return tuple(updated_seq)
+            # No string entry at all — prepend the hint so the model still
+            # gets a stable pointer even from a non-string tuple.
             updated_seq.insert(0, suffix.lstrip())
             return tuple(updated_seq)
         if isinstance(result, list):
@@ -113,17 +78,15 @@ class _CitationHint:
                 if isinstance(updated[idx], str):
                     updated[idx] = updated[idx] + suffix
                     return updated
-            # No string entry found — append the hint as its own entry
-            # so the model still sees a stable pointer.
+            # No string entry — append the hint as its own element.
             updated.append(suffix.lstrip())
             return updated
         if isinstance(result, dict):
             updated_dict = dict(result)
             content = updated_dict.get(cls.MCP_CONTENT_KEY)
             if isinstance(content, list):
-                # MCP CallToolResult shape — append a TextContent block
-                # so the hint rides the same content array the server's
-                # data uses, keeping the model's view consistent.
+                # MCP CallToolResult envelope — add a TextContent block so
+                # the hint appears in the same array the server data uses.
                 updated_content = list(content)
                 updated_content.append(
                     {
@@ -133,27 +96,20 @@ class _CitationHint:
                 )
                 updated_dict[cls.MCP_CONTENT_KEY] = updated_content
                 return updated_dict
-            # Generic dict (internal API, custom tool) — surface the
-            # hint as a dedicated top-level field so consumers that
-            # JSON-render the result still expose it to the model.
+            # Generic dict (internal API, custom tool) — add a dedicated
+            # top-level key so JSON-rendering consumers still expose it.
             updated_dict[cls.DICT_HINT_KEY] = rendered
             return updated_dict
         return result
 
 
 class CitationCapturingTool(BaseTool):
-    """LangChain ``BaseTool`` wrapper that projects tool results to the ledger.
+    """BaseTool wrapper that projects results to the citation ledger and appends ordinal hints.
 
-    Inner tool's ``name`` / ``description`` / ``args_schema`` are
-    propagated so the model sees an identical surface. Only the
-    invocation path differs: after the inner returns, we project the
-    result through :class:`CitationProjector` (best-effort, never raises
-    into the tool path).
-
-    The sync ``_run`` path delegates without projection — the citation
-    ledger is async-only and the runtime always invokes tools via
-    ``_arun``. Sync invocation is reserved for unit tests of inner
-    tools, where citation capture is irrelevant.
+    Propagates the inner tool's name, description, and args_schema unchanged.
+    The sync ``_run`` path delegates without projection; the runtime always
+    dispatches via ``_arun`` where both the ledger projection and the hint
+    append happen best-effort.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -164,33 +120,24 @@ class CitationCapturingTool(BaseTool):
         return self.inner._run(*args, **kwargs)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        # PR 04 — ``tool_call_id`` is injected by LangGraph via
-        # :class:`InjectedToolCallId` when the args_schema declares it
-        # (see ``_augment_schema_with_tool_call_id`` for the wrapper
-        # that adds the marker to inner schemas that don't have it).
-        # The inner tool's ``_arun`` typically does NOT accept this
-        # kwarg, so pop before forwarding.
+        # LangGraph injects tool_call_id via InjectedToolCallId on schemas that
+        # declare it; the inner tool typically does not accept it, so strip
+        # before forwarding. _augment_schema_with_tool_call_id ensures the
+        # wrapper's schema declares the annotation for inner schemas that don't.
         tool_call_id = self._extract_tool_call_id(kwargs)
         kwargs.pop("tool_call_id", None)
         result = await self.inner._arun(*args, **kwargs)
-        # Legacy PR 1.1 path — pattern-matches the result against a
-        # fixed set of shapes and registers any sources via the
-        # ``CitationLedger``. Best-effort, never raises into the tool
-        # path. Kept during rollout so existing ``[c<id>]`` chips
-        # continue to render for the shapes the projector recognizes.
+        # Source-registration path: pattern-match the result and register any
+        # detected sources with the active CitationLedger. Best-effort.
         await CitationProjector.project(
             connector=self.name,
             tool_call_id=tool_call_id,
             result=result,
         )
-        # PR 1.1-rev2 path — allocate a conversation-scoped ordinal,
-        # bind it to the tool_call_id (when known) so the
-        # ``CitationResolver`` can populate ``source_tool_call_id`` on
-        # emit, and append a single-line hint to the result text the
-        # model reads. The model embeds ``[[N]]`` in its prose; the
-        # resolver fires ``citation_made`` events from the streamed
-        # output. When no allocator is bound (replay/eval), the result
-        # is returned unchanged.
+        # Ordinal-hint path: allocate a conversation-scoped ordinal, bind it
+        # to tool_call_id (so CitationResolver can stamp source_tool_call_id),
+        # then append the hint text the model uses when writing [[N]].
+        # When no allocator is bound (replay/eval) the result is unchanged.
         try:
             allocator = ConversationOrdinalAllocator.active()
             if allocator is None:
@@ -200,14 +147,9 @@ class CitationCapturingTool(BaseTool):
                     self.name,
                 )
             elif not tool_call_id:
-                # PR 04 — every tool that can be cited must have a real
-                # ``tool_call_id``. The schema-augmentation path in
-                # :meth:`CitationCapturingRegistry._wrap` guarantees one
-                # for tools that go through LangChain dispatch; the only
-                # surviving path here is unit tests of the inner tool in
-                # isolation (no LangChain), where citations are
-                # irrelevant. Surface the gap rather than allocate
-                # without a binding.
+                # The schema-augmentation path guarantees a tool_call_id for
+                # LangChain dispatch; an empty value here means the inner was
+                # called directly (unit tests, replay) where citation is moot.
                 _LOGGER.warning(
                     "[citations] tool.hint_skipped tool=%s "
                     "reason=no_tool_call_id_injected (test/replay path)",
@@ -251,33 +193,31 @@ class CitationCapturingTool(BaseTool):
 
 
 class CitationCapturingRegistry:
-    """Wrap a tool registry so every returned tool projects citations.
+    """Registry decorator that wraps every BaseTool with CitationCapturingTool.
 
-    Tools that aren't LangChain ``BaseTool`` instances pass through
-    untouched — citation capture only applies to the model-visible
-    LangChain layer. Already-wrapped tools are returned unchanged so
-    nesting registries is idempotent.
+    Non-BaseTool entries pass through unchanged. Wrapping is idempotent:
+    an already-wrapped tool is returned as-is.
     """
 
     def __init__(self, *, inner: object) -> None:
         self._inner = inner
 
     def list_available_tools(self, context: object) -> tuple[object, ...]:
+        """Return all tools from the inner registry, each wrapped for citation capture."""
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
         return tuple(self._wrap(tool) for tool in rendered)
 
     @classmethod
     def _wrap(cls, tool: object) -> object:
+        """Wrap a single tool; return it unchanged if not a BaseTool or already wrapped."""
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, CitationCapturingTool):
             return tool
-        # PR 04 — augment the inner tool's args_schema so LangGraph
-        # injects ``tool_call_id`` into ``_arun`` kwargs. Without this,
-        # tools like DuckDuckGo's ``DuckDuckGoSearchResults`` (whose
-        # upstream schema doesn't declare ``InjectedToolCallId``) emit
-        # citations with an empty ``source_tool_call_id`` and the FE
-        # has to fall back to a fragile ordinal-position lookup.
+        # Augment the args_schema so LangGraph injects tool_call_id into
+        # _arun kwargs. Tools that don't declare InjectedToolCallId natively
+        # (e.g. DuckDuckGo) would otherwise emit citations with an empty
+        # source_tool_call_id, forcing fragile ordinal-position lookups.
         return CitationCapturingTool(
             name=tool.name,
             description=tool.description,
@@ -289,16 +229,11 @@ class CitationCapturingRegistry:
     def _augment_schema_with_tool_call_id(
         inner_schema: object,
     ) -> type[BaseModel]:
-        """Return a Pydantic args_schema that declares ``tool_call_id``
-        as ``Annotated[str, InjectedToolCallId]``.
+        """Return a Pydantic args_schema that adds ``tool_call_id: Annotated[str, InjectedToolCallId]``.
 
-        LangChain's ``BaseTool.args_schema`` is typed as
-        ``ArgsSchema | None`` — a Pydantic model class, a JSON-schema-ish
-        dict, or ``None``. We only know how to extend a real Pydantic
-        class; for the dict / None cases we fall back to a minimal
-        synthetic schema carrying just the injected field. Idempotent:
-        a Pydantic class that already declares ``tool_call_id`` is
-        returned unchanged.
+        Extends a real Pydantic class via ``create_model``; falls back to a
+        minimal synthetic schema for dict/None args_schemas. Idempotent when
+        the schema already declares ``tool_call_id``.
         """
 
         if isinstance(inner_schema, type) and issubclass(inner_schema, BaseModel):

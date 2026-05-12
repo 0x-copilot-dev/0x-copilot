@@ -1,22 +1,11 @@
-"""Deterministic presentation templates that render UI cards without an LLM call.
+"""Deterministic templates that render UI event-card presentation without an LLM call.
 
-Polish-removal Phase 4 (docs/refactor/01-presentation-polish-removal.md):
-the LLM polish path is gone. ``PresentationGenerator`` resolution is now
-entirely deterministic:
-
-1. ``DeterministicTemplates`` for events whose presentation is fully derivable
-   from the payload (approval / auth / error / tool_call_delta).
-2. ``ToolTemplateRenderer`` for events whose tool author registered a
-   ``ToolDisplayTemplate`` (or the MCP descriptor synthesiser built one) —
-   fills title/summary placeholders from the payload.
-3. ``PayloadProjector`` for ``TOOL_RESULT`` / ``TOOL_CALL_COMPLETED`` —
-   synthesizes ``result_preview`` rows from the tool's output payload
-   (either via the tool's declared ``result_preview_path`` /
-   ``result_preview_row``, or via field-name heuristics on common shapes).
-4. Agent-supplied ``_display_*`` (Phase 3) overrides synthetic templates
-   and fills the minimal envelope.
-5. Minimal envelope fallback — humanized tool name + status. Always returns
-   something so a card never renders empty.
+``DeterministicTemplates`` covers events derivable entirely from payload (approval,
+auth, error, tool_call_delta). ``ToolTemplateRenderer`` fills title/summary
+placeholders for tools that registered a display template. ``PayloadProjector``
+synthesises ``result_preview`` rows for result events. Agent-supplied
+``_display_*`` fields override synthetic templates and fill the minimal envelope.
+The minimal envelope fallback always returns something so no card renders empty.
 """
 
 from __future__ import annotations

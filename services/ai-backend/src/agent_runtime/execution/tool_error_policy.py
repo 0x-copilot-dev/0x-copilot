@@ -111,6 +111,7 @@ class DefaultToolErrorPolicy:
 
     @staticmethod
     def _safe_traceback(exc: BaseException) -> str | None:
+        """Return the full traceback string, or ``None`` if formatting fails."""
         try:
             return "".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)

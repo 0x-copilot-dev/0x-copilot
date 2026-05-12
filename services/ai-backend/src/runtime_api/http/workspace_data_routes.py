@@ -1,19 +1,15 @@
-"""HTTP routes for PR 4.3 workspace data lifecycle stubs.
+"""HTTP stub routes for the workspace export and bulk-delete data lifecycle.
 
-Two endpoints, both mounted on the same ``/v1/agent`` router as the
-PR 1.6 workspace defaults / conversation lifecycle routes:
+Two endpoints mounted on ``/v1/agent``:
 
-  * ``POST   /v1/agent/workspace/export``  — admin-only; returns 202
-    with ``{export_id, status: 'queued'}`` and writes one audit row.
-    The actual NDJSON dump pipeline is a follow-up PR.
-  * ``DELETE /v1/agent/workspace/data``    — admin-only; high-blast
-    radius; v1 returns 501 Not Implemented and audits the typed-
-    confirmation correctness so an attacker can't fly under audit by
-    sending the wrong slug. The body carries ``confirm_slug`` which
-    must match the org's slug for the confirmation to be "correct"
-    (still 501 either way).
+  * ``POST   /v1/agent/workspace/export``  — admin-only; queues an export job
+    and returns ``{export_id, status: 'queued'}``; writes one audit row.
+    The actual NDJSON dump pipeline is a planned follow-up.
+  * ``DELETE /v1/agent/workspace/data``    — admin-only; always 501 in v1.
+    Audits the ``confirm_slug`` correctness so even a failed attempt is
+    traceable; correct confirmation is a prerequisite for future v2.
 
-Both routes share the ``ADMIN_USERS`` permission scope used by PR 1.6.
+Both require the ``ADMIN_USERS`` permission scope.
 """
 
 from __future__ import annotations
@@ -60,6 +56,7 @@ class WorkspaceDeleteAllRequest(RuntimeContract):
 
 
 def _require_admin(request: Request) -> None:
+    """Raise 403 when the caller's identity does not carry ``ADMIN_USERS``."""
     identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
     if identity is None or ADMIN_USERS not in identity.permission_scopes:
         raise HTTPException(
@@ -69,7 +66,7 @@ def _require_admin(request: Request) -> None:
 
 
 class WorkspaceDataRoutes:
-    """Route handlers for the export + delete-all stubs (PR 4.3)."""
+    """Route handlers for the workspace export and bulk-delete stub endpoints."""
 
     @classmethod
     async def request_export(
@@ -79,6 +76,7 @@ class WorkspaceDataRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> WorkspaceExportResponse:
+        """Queue a workspace data export and return the new export-job id."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
@@ -104,6 +102,7 @@ class WorkspaceDataRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> None:
+        """Audit the bulk-delete intent and always return 501 (pipeline not yet implemented)."""
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )

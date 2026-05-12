@@ -1,14 +1,8 @@
-"""Parity-diff CLI: ``python -m agent_runtime.pricing.compare_litellm`` (P12 Step 1).
+"""CLI that diffs YAML pricing seeds against the vendored LiteLLM catalog.
 
-Loads the YAML seeds and the vendored LiteLLM catalog, then prints a
-diff for every ``(provider, model_name, region)`` triple the YAML
-seeds currently ship. The output is human-readable lines, one per row,
-plus an exit code: ``0`` if every YAML seed matches LiteLLM within
-tolerance, ``1`` if any seed diverges.
-
-CI can run this to surface drift between the hand-curated seeds and
-the LiteLLM upstream. It does not modify the catalog or the DB; it is
-observation-only — the contract Step 1 of the P12 PRD commits to.
+Prints one line per ``(provider, model_name, region)`` seed triple and exits
+with code ``0`` when every seed matches LiteLLM within tolerance, ``1`` if any
+seed diverges. Observation-only — does not modify the catalog or the database.
 
 Usage::
 
@@ -31,8 +25,7 @@ from agent_runtime.pricing.litellm_source import LiteLLMPricingSource
 from agent_runtime.pricing.seed_loader import PricingSeedLoader
 
 
-# Default tolerance: 0.1% per the PRD §9 "Tolerance bands per provider"
-# discussion. The CLI flag overrides per invocation.
+# Default tolerance: 0.1%. The CLI flag overrides per invocation.
 _DEFAULT_TOLERANCE: Final[Decimal] = Decimal("0.001")
 
 

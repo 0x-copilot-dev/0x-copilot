@@ -26,7 +26,7 @@ from runtime_api.schemas import (
 
 
 class WorkspaceFeedRoutes:
-    """Route handlers for ``/v1/agent`` workspace-feed endpoints."""
+    """Route handlers for the Workspace pane subagents and sources data feeds."""
 
     @classmethod
     async def list_subagents(
@@ -39,6 +39,7 @@ class WorkspaceFeedRoutes:
         ),
         limit: int = Query(50, ge=1, le=200),
     ) -> SubagentListResponse:
+        """Return subagent cards for the Agents tab, optionally filtered by status."""
         return await cls._service(request).list_subagents(
             org_id=identity.org_id,
             conversation_id=conversation_id,
@@ -55,6 +56,7 @@ class WorkspaceFeedRoutes:
         run_id: str | None = Query(None, min_length=1, max_length=128),
         limit: int = Query(200, ge=1, le=500),
     ) -> SourceListResponse:
+        """Return deduplicated citation sources for the Sources tab, optionally scoped to one run."""
         return await cls._service(request).list_sources(
             org_id=identity.org_id,
             conversation_id=conversation_id,
@@ -64,6 +66,7 @@ class WorkspaceFeedRoutes:
 
     @staticmethod
     def _service(request: Request) -> WorkspaceFeedService:
+        """Return the wired WorkspaceFeedService or raise 503 if not configured."""
         service = getattr(request.app.state, "workspace_feed_service", None)
         if service is None:
             raise HTTPException(

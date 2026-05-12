@@ -1,20 +1,11 @@
-"""C11 — pg_stat_statements scraper + slow-query OTel hook.
+"""``pg_stat_statements`` scraper and slow-query OTel hook.
 
-Two surfaces:
-
-1. ``DbStatementMetricsCollector`` periodically SELECTs from
-   ``pg_stat_statements`` and exports per-digest counters/totals to OTel.
-   Query *text* is never exported; only the SHA-256 digest of the
-   normalized statement.
-
-2. ``SlowQueryTracer`` is a per-query wrapper that emits an OTel span
-   when a query duration crosses ``RUNTIME_DB_SLOW_QUERY_MS`` (default
-   500 ms). Spans never carry the query text — only digest + duration +
-   service/role.
-
-Both surfaces fail-soft when ``pg_stat_statements`` is not installed or
-when OTel hasn't been bootstrapped: the scraper logs once and exits;
-the slow-query hook becomes a no-op.
+``DbStatementMetricsCollector`` periodically reads ``pg_stat_statements`` and
+exports per-digest counters to OTel. Query text is never exported; only the
+SHA-256 digest of the normalised statement. ``SlowQueryTracer`` emits an OTel
+span when a query duration crosses ``RUNTIME_DB_SLOW_QUERY_MS`` (default 500 ms);
+spans carry only the digest, duration, and service/role. Both surfaces fail-soft
+when ``pg_stat_statements`` is unavailable or OTel is not bootstrapped.
 """
 
 from __future__ import annotations

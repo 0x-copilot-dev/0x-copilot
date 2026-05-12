@@ -1,4 +1,4 @@
-"""Backend-backed MCP provider for production registry integration."""
+"""MCP provider and client that proxy calls through the core backend's internal API."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 
 @dataclass(frozen=True)
 class BackendMcpProvider:
-    """MCP provider that reads safe card metadata from the core backend."""
+    """McpServerProvider that fetches server cards and auth sessions from the backend."""
 
     backend_url: str
     runtime_context: AgentRuntimeContext
@@ -48,6 +48,7 @@ class BackendMcpProvider:
     timeout_seconds: float = 10
 
     async def list_server_cards(self) -> tuple[McpServerCard, ...]:
+        """Fetch compact server cards from the backend and strip required_scopes."""
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.get(
                 f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
@@ -64,6 +65,7 @@ class BackendMcpProvider:
         )
 
     def create_client(self, card: McpServerCard) -> McpClient:
+        """Instantiate a BackendMcpClient for the given server card."""
         return BackendMcpClient(
             backend_url=self.backend_url,
             runtime_context=self.runtime_context,
@@ -77,6 +79,7 @@ class BackendMcpProvider:
         server_id: str,
         runtime_context: AgentRuntimeContext,
     ) -> McpAuthSession:
+        """Start an OAuth session for ``server_id`` and return the auth URL."""
         card = await self._card_by_server_id_or_name(server_id)
         resolved_server_id = card.server_id or card.name
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -101,10 +104,16 @@ class BackendMcpProvider:
 
     @staticmethod
     def _runtime_visible_card(card: object) -> McpServerCard:
+        """Validate the raw backend card and clear ``required_scopes`` for runtime use.
+
+        The backend is the authority on scope enforcement; the runtime side
+        strips required_scopes so it never double-enforces them.
+        """
         parsed = McpServerCard.model_validate(card)
         return parsed.model_copy(update={Keys.Field.REQUIRED_SCOPES: frozenset()})
 
     async def _card_by_server_id_or_name(self, value: str) -> McpServerCard:
+        """Resolve a server_id-or-name to a card; raise if no match is found."""
         for card in await self.list_server_cards():
             if card.server_id == value or card.name == value:
                 return card
@@ -128,6 +137,7 @@ class BackendMcpClient:
     request_id: int = 0
 
     async def connect(self) -> RawMcpConnectionMetadata:
+        """Open a client session via the backend proxy and run the MCP initialize handshake."""
         if self.card.auth_state not in {
             McpAuthState.AUTHENTICATED,
             McpAuthState.AUTH_SKIPPED,
@@ -156,6 +166,7 @@ class BackendMcpClient:
         )
 
     async def list_tools(self) -> tuple[McpToolDescriptor | dict[str, Any], ...]:
+        """Fetch tool descriptors via ``tools/list`` and build typed ``McpToolDescriptor`` objects."""
         result = await self._rpc_result(Values.JsonRpcMethod.LIST_TOOLS)
         tools = result.get(Keys.Field.TOOLS, ())
         if not isinstance(tools, list):
@@ -167,9 +178,11 @@ class BackendMcpClient:
     async def list_resources(
         self,
     ) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
+        """Fetch resource descriptors via ``resources/list``; return empty tuple if unsupported."""
         try:
             result = await self._rpc_result(Values.JsonRpcMethod.LIST_RESOURCES)
         except McpUnsupportedMethodError:
+            # resources/list is optional in the MCP spec; graceful degradation.
             return ()
         resources = result.get(Keys.Field.RESOURCES, ())
         if not isinstance(resources, list):
@@ -186,6 +199,7 @@ class BackendMcpClient:
         tool_name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Invoke ``tool_name`` on the connected server and return the raw JSON-RPC result."""
         return await self._rpc_result(
             Values.JsonRpcMethod.CALL_TOOL,
             {
@@ -195,6 +209,7 @@ class BackendMcpClient:
         )
 
     async def _initialize(self) -> None:
+        """Send the MCP initialize + notifications/initialized handshake; idempotent."""
         if self.initialized:
             return
         await self._rpc_result(
@@ -219,7 +234,10 @@ class BackendMcpClient:
     async def _rpc_result(
         self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
+        """Build and send a JSON-RPC request; return the ``result`` dict or ``{}``."""
         if self.server_url is None and method != Values.JsonRpcMethod.INITIALIZE:
+            # Lazy connect: ``initialize`` itself drives ``connect`` first, so only
+            # subsequent methods need this guard.
             await self.connect()
         self.request_id += 1
         payload: dict[str, Any] = {
@@ -242,6 +260,10 @@ class BackendMcpClient:
 
     @staticmethod
     def _is_method_not_found(error: dict[str, Any]) -> bool:
+        """Return True when the JSON-RPC error code equals the -32601 method-not-found sentinel.
+
+        Tolerates both int and string-encoded codes as some proxies stringify them.
+        """
         code = error.get(Keys.Field.CODE)
         if isinstance(code, int):
             return code == Values.JsonRpcError.METHOD_NOT_FOUND
@@ -253,6 +275,7 @@ class BackendMcpClient:
         return False
 
     async def _rpc(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST a JSON-RPC envelope through the backend proxy and unwrap the result."""
         server_id = self.card.server_id or self.card.name
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             try:
@@ -285,6 +308,7 @@ class BackendMcpClient:
         return rpc_payload
 
     def _tool_descriptor(self, tool: dict[str, Any]) -> McpToolDescriptor:
+        """Build a validated ``McpToolDescriptor`` from raw server data, synthesising display metadata."""
         name = self._required_string(
             tool, Keys.Field.NAME, Values.Placeholder.TOOL_NAME
         )
@@ -296,11 +320,9 @@ class BackendMcpClient:
             tool.get(Keys.NativeDescriptor.OUTPUT_SCHEMA_CAMEL)
             or {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
         )
-        # Polish-removal Phase 2.A — synthesise a deterministic display
-        # template at descriptor-build time so the presentation layer never
-        # falls through to the polish LLM for MCP tools. Uses the server
-        # card's ``display_name`` (or ``name`` as fallback) as the connector
-        # label. See ``docs/refactor/01-presentation-polish-removal.md``.
+        # Synthesise a deterministic display template at descriptor-build time so
+        # the presentation layer never needs an LLM call for MCP tools. The server
+        # card's ``display_name`` (or ``name`` as fallback) becomes the connector label.
         from agent_runtime.capabilities.middleware import (  # noqa: PLC0415
             DisplayMetadataMiddleware,
         )
@@ -315,11 +337,9 @@ class BackendMcpClient:
             input_schema=input_schema,
             output_shape=output_shape,
         )
-        # Phase 2.B — register on the per-run lookup so
-        # ``PresentationGenerator._resolve_tool_template`` can see this
-        # template for ``call_mcp_tool`` dispatcher events. ``register`` is
-        # a no-op when no registry is bound (replay / eval / tests that
-        # don't need the lookup), so unconditional registration is safe.
+        # Register on the per-run lookup so the presentation layer can resolve
+        # display templates for ``call_mcp_tool`` dispatcher events. ``register``
+        # is a no-op when no registry is bound (replay / eval / tests).
         McpDisplayRegistryContext.register(name, display)
         return McpToolDescriptor(
             name=name,
@@ -332,6 +352,7 @@ class BackendMcpClient:
         )
 
     def _resource_descriptor(self, resource: dict[str, Any]) -> McpResourceDescriptor:
+        """Build a validated ``McpResourceDescriptor`` from raw server data."""
         name = self._required_string(
             resource, Keys.Field.NAME, Values.Placeholder.RESOURCE_NAME
         )
@@ -356,12 +377,14 @@ class BackendMcpClient:
 
     @staticmethod
     def _schema(value: object) -> dict[str, Any]:
+        """Return ``value`` if it is a dict, else a bare ``{type: object}`` schema."""
         if isinstance(value, dict):
             return value
         return {Keys.Schema.TYPE: Values.SchemaType.OBJECT}
 
     @staticmethod
     def _required_string(payload: dict[str, Any], key: str, fallback: str) -> str:
+        """Return the stripped string value for ``key``, or ``fallback`` when absent or blank."""
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -369,16 +392,18 @@ class BackendMcpClient:
 
     @staticmethod
     def _optional_string(value: object) -> str | None:
+        """Return the stripped string, or ``None`` when blank or non-string."""
         if isinstance(value, str) and value.strip():
             return value.strip()
         return None
 
 
 class BackendMcpServiceAuth:
-    """Service-auth header construction for backend MCP calls."""
+    """Service-auth header builder for backend MCP internal-API calls."""
 
     @staticmethod
     def headers(runtime_context: AgentRuntimeContext) -> dict[str, str]:
+        """Return service-token headers when ``ENTERPRISE_SERVICE_TOKEN`` is set; else ``{}``."""
         token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
         if not token:
             return {}

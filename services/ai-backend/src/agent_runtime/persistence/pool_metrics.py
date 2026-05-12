@@ -117,6 +117,7 @@ class PoolMetrics:
     def _observe_pool_stat(
         self, stat_key: str, *_unused_metric_names: str
     ) -> list[metrics.Observation]:
+        """Return one OTel observation for a single pool stat key, or an empty list on failure."""
         if self._pool is None:
             return []
         try:
@@ -146,6 +147,7 @@ class PoolMetrics:
             self._acquire_histogram.record(elapsed, attributes=self._base_attributes())
 
     def record_optimistic_retry(self, *, table: str, outcome: str) -> None:
+        """Increment the optimistic-lock retry counter for ``table`` with ``outcome``."""
         self._optimistic_retry_counter.add(
             1,
             attributes={
@@ -156,6 +158,7 @@ class PoolMetrics:
         )
 
     def record_atomic_upsert(self, *, table: str, outcome: str) -> None:
+        """Increment the atomic-upsert outcome counter for ``table``."""
         self._atomic_upsert_counter.add(
             1,
             attributes={
@@ -166,6 +169,7 @@ class PoolMetrics:
         )
 
     def _base_attributes(self) -> dict[str, Any]:
+        """Return the ``service`` and ``role`` label set shared by all instruments."""
         return {
             self._ATTR_KEY_SERVICE: self._service,
             self._ATTR_KEY_ROLE: self._role,
