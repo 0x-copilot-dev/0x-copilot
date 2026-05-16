@@ -90,7 +90,6 @@ async function loadBitmap(file: File): Promise<ImageBitmap> {
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       resolve(img as any);
     };
     img.onerror = () => {

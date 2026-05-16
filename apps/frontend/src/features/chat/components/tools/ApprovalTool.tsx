@@ -153,7 +153,6 @@ export function ApprovalTool({
     // `submit` closes over `resume` + `approvalId`; we intentionally
     // do not list `submit` in the dep array (it's recreated each
     // render) — re-register cycles each render would churn the order.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalId, isAskAQuestion, isForwarded, resolved, approvalFocus]);
 
   const submitForward = (member: WorkspaceMember): void => {

@@ -98,7 +98,6 @@ export function ModelAndBehavior({
   // current overrides so we don't re-render on unrelated defaults churn.
   useEffect(() => {
     setDraft(overrides);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(overrides)]);
 
   useEffect(() => {

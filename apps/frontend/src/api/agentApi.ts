@@ -52,7 +52,6 @@ import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
 import {
-  correlationHeaders,
   httpDelete,
   httpGet,
   httpPatchQuery,
@@ -60,6 +59,7 @@ import {
   httpPostQuery,
   httpPutQuery,
 } from "./http";
+import { getAppTransport } from "./transport";
 
 const SSE_EVENT_NAME = "runtime_event";
 
@@ -456,20 +456,15 @@ export function decideApproval(
   if (forwardTo !== undefined && forwardTo !== null) {
     payload.forward_to = forwardTo;
   }
-  const params = new URLSearchParams({ org_id: identity.orgId });
-  return fetch(
-    `/v1/agent/approvals/${encodeURIComponent(approvalId)}/decision?${params}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json", ...correlationHeaders() },
-      body: JSON.stringify(payload),
-    },
-  ).then(async (response) => {
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `Request failed with ${response.status}`);
-    }
-    return (await response.json()) as ApprovalDecisionResponse;
+  // Only `org_id` rides the query — not the full identity that
+  // httpPostQuery would inject — because the decision endpoint authorises
+  // by approval row plus org context, with `decided_by_user_id` carried in
+  // the body. Bypasses the helper and goes straight through Transport.
+  return getAppTransport().request<ApprovalDecisionResponse>({
+    method: "POST",
+    path: `/v1/agent/approvals/${encodeURIComponent(approvalId)}/decision`,
+    query: { org_id: identity.orgId },
+    body: payload,
   });
 }
 
@@ -480,22 +475,13 @@ export function requestApprovalUndo(
   approvalId: string,
   identity: RequestIdentity,
 ): Promise<ApprovalUndoResponse> {
-  const params = new URLSearchParams({
-    org_id: identity.orgId,
-    user_id: identity.userId,
-  });
-  return fetch(
-    `/v1/agent/approvals/${encodeURIComponent(approvalId)}/undo?${params}`,
-    {
-      method: "POST",
-      headers: { ...correlationHeaders() },
-    },
-  ).then(async (response) => {
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `Request failed with ${response.status}`);
-    }
-    return (await response.json()) as ApprovalUndoResponse;
+  // POST with no body. httpPostQuery would always JSON.stringify a body
+  // slot + add a content-type header; Transport.request honours omitting
+  // both when `body` is undefined, preserving the prior wire shape.
+  return getAppTransport().request<ApprovalUndoResponse>({
+    method: "POST",
+    path: `/v1/agent/approvals/${encodeURIComponent(approvalId)}/undo`,
+    query: { org_id: identity.orgId, user_id: identity.userId },
   });
 }
 
@@ -601,13 +587,12 @@ export function streamRunEvents({
   onProtocolError?: (error: RuntimeStreamProtocolError) => void;
   onOpen?: () => void;
 }): AgentEventStream {
-  const params = identityParams(identity);
-  params.set("after_sequence", String(afterSequence));
-  return _streamSseEvents({
-    url: `/v1/agent/runs/${runId}/stream?${params}`,
+  return getAppTransport().subscribeServerSentEvents({
+    path: `/v1/agent/runs/${runId}/stream`,
+    query: sseQueryFor(identity, afterSequence),
     eventName: SSE_EVENT_NAME,
     onOpen,
-    onError,
+    onError: (_err) => onError(streamErrorEvent()),
     onMessage: (data) => {
       let parsed: unknown;
       try {
@@ -670,13 +655,12 @@ export function streamInboxEvents({
   onError: (event: Event) => void;
   onOpen?: () => void;
 }): AgentEventStream {
-  const params = identityParams(identity);
-  params.set("after_sequence", String(afterSequence));
-  return _streamSseEvents({
-    url: `/v1/agent/me/inbox/stream?${params}`,
+  return getAppTransport().subscribeServerSentEvents({
+    path: "/v1/agent/me/inbox/stream",
+    query: sseQueryFor(identity, afterSequence),
     eventName: SSE_EVENT_NAME,
     onOpen,
-    onError,
+    onError: (_err) => onError(streamErrorEvent()),
     onMessage: (data) => {
       try {
         const parsed = JSON.parse(data) as InboxEventEnvelope;
@@ -694,132 +678,38 @@ export function streamInboxEvents({
   });
 }
 
-/**
- * Authenticated SSE reader.
- *
- * Why not EventSource? The browser's `EventSource` cannot send custom
- * headers, so the bearer never reaches the facade and the stream 401s.
- * Workarounds (cookie sessions, `?token=…` URL params) either invent a
- * second auth scheme or write bearer-equivalents to access logs / proxy
- * logs — bad fit for the bearer-only model the codebase committed to in
- * W0.1. Streaming `fetch` carries the standard `Authorization` header
- * via `correlationHeaders()`, no new server surface, no logged
- * credentials.
- *
- * Reconnect semantics intentionally live with the caller — the chat
- * screen knows the right `?after_sequence=N` to resume with based on
- * the highest event it has actually rendered.
- */
-function _streamSseEvents({
-  url,
-  eventName,
-  onOpen,
-  onError,
-  onMessage,
-}: {
-  url: string;
-  eventName: string;
-  onOpen?: () => void;
-  onError: (event: Event) => void;
-  onMessage: (data: string) => void;
-}): AgentEventStream {
-  const controller = new AbortController();
-  const stream: AgentEventStream = {
-    close: () => controller.abort(),
-  };
-
-  void (async () => {
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        headers: { ...correlationHeaders(), accept: "text/event-stream" },
-        signal: controller.signal,
-      });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        return;
-      }
-      onError(_streamErrorEvent(err));
-      return;
-    }
-    if (!response.ok || response.body === null) {
-      onError(_streamErrorEvent(`stream returned ${response.status}`));
-      return;
-    }
-    onOpen?.();
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    try {
-      // SSE frames are separated by a blank line. We accumulate text
-      // across chunks, split on the frame boundary, and dispatch each
-      // completed frame. A frame's `event:` and `data:` lines are
-      // collected and the buffered data is passed to onMessage when the
-      // event name matches.
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          return;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        let boundary = buffer.indexOf("\n\n");
-        while (boundary !== -1) {
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          _dispatchFrame(frame, eventName, onMessage);
-          boundary = buffer.indexOf("\n\n");
-        }
-      }
-    } catch (err) {
-      if (controller.signal.aborted) {
-        return;
-      }
-      onError(_streamErrorEvent(err));
-    } finally {
-      reader.releaseLock();
-    }
-  })();
-
-  return stream;
+// Identity + after_sequence in the shape Transport.subscribeServerSentEvents
+// wants (a query object, not a URLSearchParams string). Both SSE callers
+// share this so they can't drift in how the cursor is named.
+function sseQueryFor(
+  identity: RequestIdentity,
+  afterSequence: number,
+): Record<string, string> {
+  const out: Record<string, string> = { after_sequence: String(afterSequence) };
+  for (const [k, v] of identityParams(identity)) {
+    out[k] = v;
+  }
+  return out;
 }
 
-function _dispatchFrame(
-  frame: string,
-  expectedEvent: string,
-  onMessage: (data: string) => void,
-): void {
-  let event = "message";
-  const dataLines: string[] = [];
-  for (const rawLine of frame.split("\n")) {
-    const line = rawLine.replace(/\r$/, "");
-    if (line === "" || line.startsWith(":")) {
-      continue;
-    }
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).replace(/^ /, ""));
-    }
-    // Other SSE fields (id:, retry:) intentionally ignored — the chat
-    // screen owns reconnect cursoring via after_sequence.
-  }
-  if (event !== expectedEvent || dataLines.length === 0) {
-    return;
-  }
-  onMessage(dataLines.join("\n"));
-}
-
-function _streamErrorEvent(detail: unknown): Event {
-  // The legacy callers were typed against EventSource's onerror, which
-  // hands them a bare Event. Mirror that — the only handler we have on
-  // the chat screen reacts to "stream broken" and reconnects; the
-  // detail is logged elsewhere.
+// The legacy onError signature was modelled after EventSource's bare Event
+// — chat callers only react to "stream broken" and reconnect. Preserve
+// that contract here so we don't have to fan out a wider refactor across
+// every SSE consumer in this PR.
+function streamErrorEvent(): Event {
   if (typeof Event === "function") {
     return new Event("error");
   }
-  return { type: "error", detail } as unknown as Event;
+  return { type: "error" } as unknown as Event;
 }
+
+// SSE plumbing (frame parsing, abortable fetch, reconnect-cursor-free
+// reader loop) used to live here as `_streamSseEvents`. It moved to
+// packages/chat-transport/src/web/sse.ts so the desktop webview's
+// transport bridge can stream events through the extension host without
+// re-implementing the parser. Domain envelope validation
+// (`isRuntimeEventEnvelope`, `RuntimeStreamProtocolError`) stays here —
+// it's frontend-specific and runtime-event-specific.
 
 // PR 6.1 — Conversation sharing. Six endpoints; the bearer ``share_token``
 // rides in the URL on the recipient endpoints, but the caller must still

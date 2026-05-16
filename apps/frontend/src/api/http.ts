@@ -1,42 +1,43 @@
+import { UnauthorizedError } from "@enterprise-search/chat-transport";
+
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
+import {
+  getAppTransport,
+  getAuthBearer,
+  notifyUnauthorized,
+  setAuthBearerProvider,
+  setUnauthorizedHandler,
+} from "./transport";
+
+// Re-exported for callers that catch typed auth errors. Source of truth is
+// @enterprise-search/chat-transport — keep the symbol here only as a
+// backward-compatible re-export so AuthContext + tests don't need to chase
+// the package boundary in every catch block.
+export { UnauthorizedError };
 
 const REQUEST_ID_HEADER = "x-request-id";
 const AUTHORIZATION_HEADER = "authorization";
 
-// AuthContext registers a callback so a 401 anywhere in the API surface
-// flows back to "anonymous" + login redirect — without prop-threading
-// the auth context through every API helper. Defaults to a no-op so
-// tests and pre-AuthContext callers don't blow up.
 type UnauthorizedHandler = (response: Response) => void;
-let _onUnauthorized: UnauthorizedHandler = () => {};
+type BearerProvider = () => string | null;
+
+// Bearer plumbing and 401 notification used to live as module-private
+// closures in this file. They moved into ./transport.ts so a single
+// WebTransport instance owns the substrate boundary (see
+// docs/architecture/desktop-app-rollout.md §3.1). The two `configure*`
+// functions below are deprecation shims kept so AuthContext, the api
+// modules, and existing tests can migrate one PR at a time instead of in
+// a flag-day rewrite. Slated for deletion in the rollout plan's PR #5.
 
 export function configureUnauthorizedHandler(
   handler: UnauthorizedHandler | null,
 ): void {
-  _onUnauthorized = handler ?? (() => {});
+  setUnauthorizedHandler(handler);
 }
-
-// Bearer plumbing lives at the HTTP layer (not in authApi) so every API
-// helper attaches `Authorization: Bearer …` automatically when a session
-// is active. Previously this was private to authApi.ts and most modules
-// shipped requests with no bearer at all — the facade tolerated that
-// while DEV_AUTH_BYPASS existed (W0.1 removed it). AuthProvider wires
-// this up once on mount via configureAuthBearerProvider.
-type BearerProvider = () => string | null;
-let _bearerProvider: BearerProvider = () => null;
 
 export function configureAuthBearerProvider(provider: BearerProvider): void {
-  _bearerProvider = provider;
-}
-
-export class UnauthorizedError extends Error {
-  readonly status = 401;
-
-  constructor(detail?: string) {
-    super(detail || "Request failed with 401");
-    this.name = "UnauthorizedError";
-  }
+  setAuthBearerProvider(provider);
 }
 
 export async function assertOk(response: Response): Promise<void> {
@@ -44,20 +45,12 @@ export async function assertOk(response: Response): Promise<void> {
     return;
   }
   const body = await response.text();
-  // FastAPI / Starlette serialise errors as ``{"detail": "..."}``.
-  // Pull the message out so consumers don't render raw JSON. Falls
-  // through to the body verbatim when it isn't JSON (proxy timeouts,
-  // HTML error pages, etc.).
+  // FastAPI / Starlette serialise errors as `{"detail": "..."}`. Pull the
+  // message out so consumers don't render raw JSON. Non-JSON bodies fall
+  // through verbatim (proxy timeouts, HTML error pages).
   const message = parseErrorMessage(body) ?? body;
   if (response.status === 401) {
-    // Notify AuthContext (or any registered handler) before throwing so
-    // the caller's catch can still surface a useful message — the
-    // notification is fire-and-forget.
-    try {
-      _onUnauthorized(response);
-    } catch {
-      /* handler errors must not mask the original 401 */
-    }
+    notifyUnauthorized(response);
     throw new UnauthorizedError(message);
   }
   throw new Error(message || `Request failed with ${response.status}`);
@@ -96,7 +89,7 @@ export function correlationHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     [REQUEST_ID_HEADER]: newRequestId(),
   };
-  const bearer = _bearerProvider();
+  const bearer = getAuthBearer();
   if (bearer) {
     headers[AUTHORIZATION_HEADER] = `Bearer ${bearer}`;
   }
@@ -133,20 +126,28 @@ async function assertOkJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+// kept exported because some legacy api modules wrap `assertOkJson` for
+// the JSON happy path; everything else routes through getAppTransport().
+export { assertOkJson };
+
 function buildQuery(
   identity: RequestIdentity | null,
   extra: Record<string, string | undefined> | undefined,
-): string {
-  const params = identity ? identityParams(identity) : new URLSearchParams();
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  if (identity) {
+    for (const [k, v] of identityParams(identity)) {
+      out[k] = v;
+    }
+  }
   if (extra) {
-    for (const [key, value] of Object.entries(extra)) {
-      if (value !== undefined) {
-        params.set(key, value);
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) {
+        out[k] = v;
       }
     }
   }
-  const query = params.toString();
-  return query ? `?${query}` : "";
+  return out;
 }
 
 export async function httpGet<T>(
@@ -154,10 +155,11 @@ export async function httpGet<T>(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<T> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
-    headers: correlationHeaders(),
+  return getAppTransport().request<T>({
+    method: "GET",
+    path,
+    query: buildQuery(identity, extra),
   });
-  return assertOkJson<T>(response);
 }
 
 export async function httpPostQuery<T>(
@@ -166,21 +168,20 @@ export async function httpPostQuery<T>(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<T> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+  return getAppTransport().request<T>({
     method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(body),
+    path,
+    query: buildQuery(identity, extra),
+    body,
   });
-  return assertOkJson<T>(response);
 }
 
 export async function httpPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
+  return getAppTransport().request<T>({
     method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(body),
+    path,
+    body,
   });
-  return assertOkJson<T>(response);
 }
 
 export async function httpPatchQuery<T>(
@@ -189,12 +190,12 @@ export async function httpPatchQuery<T>(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<T> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+  return getAppTransport().request<T>({
     method: "PATCH",
-    headers: jsonHeaders(),
-    body: JSON.stringify(body),
+    path,
+    query: buildQuery(identity, extra),
+    body,
   });
-  return assertOkJson<T>(response);
 }
 
 export async function httpPutQuery<T>(
@@ -203,12 +204,12 @@ export async function httpPutQuery<T>(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<T> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+  return getAppTransport().request<T>({
     method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(body),
+    path,
+    query: buildQuery(identity, extra),
+    body,
   });
-  return assertOkJson<T>(response);
 }
 
 export async function httpDelete(
@@ -216,9 +217,9 @@ export async function httpDelete(
   identity: RequestIdentity,
   extra?: Record<string, string | undefined>,
 ): Promise<void> {
-  const response = await fetch(`${path}${buildQuery(identity, extra)}`, {
+  await getAppTransport().request<void>({
     method: "DELETE",
-    headers: correlationHeaders(),
+    path,
+    query: buildQuery(identity, extra),
   });
-  await assertOk(response);
 }

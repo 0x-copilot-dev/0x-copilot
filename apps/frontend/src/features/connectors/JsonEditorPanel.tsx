@@ -44,7 +44,7 @@ export function JsonEditorPanel({
       setText(initial);
     }
     setLastSyncedSnapshot(initial);
-  }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initial]);
 
   function handlePreview(): void {
     try {

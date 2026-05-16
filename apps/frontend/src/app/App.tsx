@@ -25,16 +25,12 @@ import { useConnectors } from "../features/connectors/useConnectors";
 import { useThemeSync } from "../features/me/useThemeSync";
 import { useUserPreferences } from "../features/me/useUserPreferences";
 import { useUserProfile } from "../features/me/useUserProfile";
-import {
-  SettingsScreen,
-  type SettingsSection,
-} from "../features/settings/SettingsScreen";
-import {
-  DEFAULT_SETTINGS_SECTION,
-  SETTINGS_SECTIONS,
-  migrateLegacySettingsPath,
-} from "../features/settings/useSettingsSection";
+import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
+import { ChatShell } from "@enterprise-search/chat-surface";
+import { getAppTransport } from "../api/transport";
+import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
+import type { AppRoute } from "./routes";
 
 /**
  * The org slug LoginScreen falls back to when the URL doesn't carry one.
@@ -45,14 +41,6 @@ const DEFAULT_ORG_ID =
   (typeof import.meta !== "undefined" &&
     import.meta.env?.VITE_DEFAULT_ORG_ID) ||
   "org_123";
-
-type AppRoute =
-  | { screen: "chat" }
-  | { screen: "settings"; section: SettingsSection }
-  // PR 6.1/6.2 — recipient view of a shared conversation. The token in
-  // the URL is the access grant; the AuthGate still requires a logged-in
-  // session because v1 keeps shares same-org-only.
-  | { screen: "share"; token: string };
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 
@@ -169,75 +157,6 @@ function completeMcpOAuthOnce(
   return completion;
 }
 
-// PR 4.3 — Settings is path + hash: ``/settings#<section>``. The legacy
-// ``/settings/<section>`` form is migrated once on mount via
-// ``migrateLegacySettingsPath``; old bookmarks survive without a 404.
-// PR 6.1 — ``/share/:token`` deep-links straight to the recipient view.
-function routeFromLocation(): AppRoute {
-  const path = window.location.pathname.replace(/\/+$/, "") || "/";
-  if (path === "/settings") {
-    const hash = window.location.hash.replace(/^#/, "");
-    if (hash && isSettingsSection(hash)) {
-      return { screen: "settings", section: hash };
-    }
-    return { screen: "settings", section: DEFAULT_SETTINGS_SECTION };
-  }
-  // Legacy `/settings/<section>` falls through here only briefly between
-  // the migrator's ``replaceState`` call and React's first paint. Treat
-  // it the same as the modern hash form so the first paint is correct
-  // even if the migrator hasn't run yet (e.g. SSR-style hydration).
-  if (path.startsWith("/settings/")) {
-    const section = decodeURIComponent(path.slice("/settings/".length));
-    return {
-      screen: "settings",
-      section: isSettingsSection(section) ? section : DEFAULT_SETTINGS_SECTION,
-    };
-  }
-  if (path.startsWith("/share/")) {
-    // Token in the URL is the access grant; we pass it through verbatim.
-    // The recipient endpoint validates it server-side. Empty path
-    // segment falls through to ``chat`` (defensive — should not happen
-    // because we always emit ``/share/<token>`` from the share popover).
-    const token = decodeURIComponent(path.slice("/share/".length));
-    if (token) {
-      return { screen: "share", token };
-    }
-  }
-  return { screen: "chat" };
-}
-
-function pathForRoute(route: AppRoute): { path: string; hash: string } {
-  if (route.screen === "chat") {
-    return { path: "/", hash: "" };
-  }
-  if (route.screen === "share") {
-    return { path: `/share/${encodeURIComponent(route.token)}`, hash: "" };
-  }
-  return {
-    path: "/settings",
-    hash: route.section === DEFAULT_SETTINGS_SECTION ? "" : `#${route.section}`,
-  };
-}
-
-function applyAppRoute(
-  route: AppRoute,
-  setRoute: (route: AppRoute) => void,
-  mode: "push" | "replace" = "push",
-): void {
-  const { path, hash } = pathForRoute(route);
-  const target = `${path}${hash}`;
-  const current = `${window.location.pathname}${window.location.hash}`;
-  if (current !== target || window.location.search) {
-    const method = mode === "replace" ? "replaceState" : "pushState";
-    window.history[method]({}, "", target);
-  }
-  setRoute(route);
-}
-
-function isSettingsSection(value: string): value is SettingsSection {
-  return (SETTINGS_SECTIONS as readonly string[]).includes(value);
-}
-
 function EnterpriseSearchApp({
   identity,
 }: {
@@ -251,34 +170,25 @@ function EnterpriseSearchApp({
   const profile = useUserProfile();
   const preferences = useUserPreferences();
   useThemeSync(preferences.data);
+  // Routing goes through the Router port (packages/chat-surface). HashRouter
+  // owns every window.history / popstate / hashchange interaction on web;
+  // the desktop substrate will swap in its own implementation without any
+  // App.tsx changes.
+  const [router] = useState(() => new HashRouter());
   const [route, setRoute] = useState<AppRoute>(() => {
     // PR 4.3 — One-shot migration of legacy ``/settings/<section>`` URLs
     // into the hashed form. Runs at most once per session because the
-    // migrator's own ``replaceState`` removes the legacy path. We do
-    // it inside the lazy initialiser so the first paint already shows
-    // the right section.
+    // migrator's own ``replaceState`` removes the legacy path. Done in
+    // the lazy initialiser so the first paint already shows the right
+    // section.
     migrateLegacySettingsPath();
-    return routeFromLocation();
+    return router.current();
   });
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
   const [completedMcpAuthAction, setCompletedMcpAuthAction] =
     useState<CompletedMcpAuthAction | null>(null);
 
-  useEffect(() => {
-    // PR 4.3 — listen to both popstate (back/forward) and hashchange
-    // (URL paste / "Manage" deep-links) so the section state is always
-    // a function of the URL.
-    function sync(): void {
-      setRoute(routeFromLocation());
-    }
-
-    window.addEventListener("popstate", sync);
-    window.addEventListener("hashchange", sync);
-    return () => {
-      window.removeEventListener("popstate", sync);
-      window.removeEventListener("hashchange", sync);
-    };
-  }, []);
+  useEffect(() => router.subscribe(setRoute), [router]);
 
   useEffect(() => {
     if (window.location.pathname !== "/mcp/oauth/callback") {
@@ -294,7 +204,7 @@ function EnterpriseSearchApp({
       setOauthStatus(
         "Connector authentication callback was missing state, code, or error.",
       );
-      applyAppRoute({ screen: "chat" }, setRoute, "replace");
+      router.navigate({ screen: "chat" }, { replace: true });
       return;
     }
     const callbackState = state;
@@ -343,14 +253,13 @@ function EnterpriseSearchApp({
               completedAt: new Date().toISOString(),
             });
             setOauthStatus(`${server.display_name} is connected.`);
-            applyAppRoute({ screen: "chat" }, setRoute, "replace");
+            router.navigate({ screen: "chat" }, { replace: true });
           } else {
             setCompletedMcpAuthAction(null);
             setOauthStatus(`${server.display_name} is connected.`);
-            applyAppRoute(
+            router.navigate(
               { screen: "settings", section: "connectors" },
-              setRoute,
-              "replace",
+              { replace: true },
             );
           }
           await connectors.refresh().catch(() => undefined);
@@ -362,7 +271,7 @@ function EnterpriseSearchApp({
               ? err.message
               : "Connector authentication failed.",
           );
-          applyAppRoute({ screen: "chat" }, setRoute, "replace");
+          router.navigate({ screen: "chat" }, { replace: true });
         }
       }
     }
@@ -373,8 +282,9 @@ function EnterpriseSearchApp({
     };
   }, [connectors.refresh, identity]);
 
+  let body: ReactElement;
   if (route.screen === "settings") {
-    return (
+    body = (
       <SettingsScreen
         connectors={connectors}
         skills={skills}
@@ -382,16 +292,14 @@ function EnterpriseSearchApp({
         profile={profile}
         preferences={preferences}
         initialSection={route.section}
-        onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
+        onBackToChat={() => router.navigate({ screen: "chat" })}
         onSectionChange={(section) =>
-          applyAppRoute({ screen: "settings", section }, setRoute)
+          router.navigate({ screen: "settings", section })
         }
       />
     );
-  }
-
-  if (route.screen === "share") {
-    return (
+  } else if (route.screen === "share") {
+    body = (
       <ShareScreen
         token={route.token}
         identity={identity}
@@ -401,21 +309,32 @@ function EnterpriseSearchApp({
           // ?conversationId= and opens that thread.
           window.location.href = `/?conversationId=${encodeURIComponent(conversationId)}`;
         }}
-        onBackToChat={() => applyAppRoute({ screen: "chat" }, setRoute)}
+        onBackToChat={() => router.navigate({ screen: "chat" })}
+      />
+    );
+  } else {
+    body = (
+      <ChatScreen
+        connectors={connectors}
+        skills={skills}
+        identity={identity}
+        onOpenSettings={(section = "profile") => {
+          router.navigate({ screen: "settings", section });
+        }}
+        oauthStatus={oauthStatus}
+        completedMcpAuthAction={completedMcpAuthAction}
       />
     );
   }
 
+  // Every screen mounts inside ChatShell so any descendant — including
+  // future components migrated into chat-surface — can reach the active
+  // Transport and Router via hooks instead of singletons. The transport
+  // is a stable module singleton; the router is the local HashRouter
+  // instance.
   return (
-    <ChatScreen
-      connectors={connectors}
-      skills={skills}
-      identity={identity}
-      onOpenSettings={(section = "profile") => {
-        applyAppRoute({ screen: "settings", section }, setRoute);
-      }}
-      oauthStatus={oauthStatus}
-      completedMcpAuthAction={completedMcpAuthAction}
-    />
+    <ChatShell transport={getAppTransport()} router={router}>
+      {body}
+    </ChatShell>
   );
 }

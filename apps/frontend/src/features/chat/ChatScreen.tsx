@@ -394,7 +394,6 @@ export function ChatScreen({
     // bg is intentionally elided from deps — its identity is stable
     // (the hook returns a memoised object). Re-running this effect
     // because of bg would tear down the visible run on every freeze.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, loadHistoryItems]);
 
   useEffect(() => {
@@ -1603,7 +1602,6 @@ export function ChatScreen({
     // this component (declared with useCallback or as named functions),
     // so we omit them from the dep list to avoid resurrecting them on
     // every render and re-creating the runtime.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 

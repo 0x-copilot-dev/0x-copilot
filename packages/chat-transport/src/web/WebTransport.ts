@@ -8,6 +8,7 @@ import {
   type TypedRequest,
   UnauthorizedError,
 } from "../types";
+import { runSseStream } from "./sse";
 
 type BearerProvider = () => string | null;
 type UnauthorizedHandler = (response: Response) => void;
@@ -39,13 +40,13 @@ export class WebTransport implements Transport {
   readonly #baseUrl: string;
   readonly #bearerProvider: BearerProvider;
   readonly #onUnauthorized: UnauthorizedHandler;
-  readonly #fetch: FetchFn;
+  readonly #fetchOverride: FetchFn | undefined;
 
   constructor(config: WebTransportConfig = {}) {
     this.#baseUrl = config.baseUrl ?? "";
     this.#bearerProvider = config.bearerProvider ?? (() => null);
     this.#onUnauthorized = config.onUnauthorized ?? (() => {});
-    this.#fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#fetchOverride = config.fetch;
   }
 
   async request<TRes>(req: TypedRequest): Promise<TRes> {
@@ -58,17 +59,34 @@ export class WebTransport implements Transport {
     if (req.body !== undefined) {
       init.body = JSON.stringify(req.body);
     }
-    const response = await this.#fetch(url, init);
+    const response = await this.#doFetch(url, init);
     return this.#parseResponse<TRes>(response);
   }
 
-  subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-    // Wired in PR #3 when the existing _streamSseEvents helper moves into
-    // packages/chat-transport/src/web/sse.ts. Until then nothing in
-    // apps/frontend uses Transport for SSE, so this stub is unreachable.
-    throw new Error(
-      "WebTransport.subscribeServerSentEvents: not yet wired (rollout plan PR #3)",
-    );
+  // Resolve fetch on every call rather than at construction so test code
+  // that replaces globalThis.fetch via vi.spyOn (after the transport is
+  // already constructed) still intercepts requests. The override branch
+  // remains for dependency injection in non-spy tests.
+  #doFetch(url: string, init: RequestInit): Promise<Response> {
+    if (this.#fetchOverride) {
+      return this.#fetchOverride(url, init);
+    }
+    return globalThis.fetch(url, init);
+  }
+
+  subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription {
+    return runSseStream({
+      url: this.#buildUrl(opts.path, opts.query),
+      headers: this.#baseHeaders(),
+      eventName: opts.eventName ?? "message",
+      onMessage: opts.onMessage,
+      onOpen: opts.onOpen,
+      onError: opts.onError,
+      // Deferred lookup mirrors #doFetch — test-time vi.spyOn replacements
+      // of globalThis.fetch must still intercept SSE requests.
+      fetchImpl: (input, init) =>
+        this.#doFetch(input as string, init as RequestInit),
+    });
   }
 
   getSession(): Session {
@@ -103,16 +121,24 @@ export class WebTransport implements Transport {
     return qs ? `${base}?${qs}` : base;
   }
 
-  #buildHeaders(req: TypedRequest): Record<string, string> {
+  // Shared by request() and subscribeServerSentEvents(): a fresh request-id
+  // plus the bearer when a session is active. The two callers layer their
+  // own headers on top (content-type for request, accept for SSE).
+  #baseHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       [REQUEST_ID_HEADER]: newRequestId(),
     };
-    if (req.body !== undefined) {
-      headers["content-type"] = JSON_CONTENT_TYPE;
-    }
     const bearer = this.#bearerProvider();
     if (bearer) {
       headers[AUTHORIZATION_HEADER] = `Bearer ${bearer}`;
+    }
+    return headers;
+  }
+
+  #buildHeaders(req: TypedRequest): Record<string, string> {
+    const headers = this.#baseHeaders();
+    if (req.body !== undefined) {
+      headers["content-type"] = JSON_CONTENT_TYPE;
     }
     if (req.headers) {
       for (const [k, v] of Object.entries(req.headers)) {
