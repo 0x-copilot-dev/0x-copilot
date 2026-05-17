@@ -43,7 +43,7 @@
     "@typescript-eslint/parser": "8.59.3",
     "eslint": "9.39.4",
     "globals": "15.15.0",
-    "jsdom": "25.0.1",
+    "jsdom": "29.1.1",
     "vitest": "4.1.5"
   }
 }

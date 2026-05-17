@@ -33,7 +33,7 @@
     "@vitejs/plugin-react": "6.0.1",
     "eslint": "9.39.4",
     "globals": "15.15.0",
-    "jsdom": "25.0.1",
+    "jsdom": "29.1.1",
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "typescript": "6.0.3",
