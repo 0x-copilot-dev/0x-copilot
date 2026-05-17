@@ -102,6 +102,7 @@ from backend_app.observability import (
     emit_access_log,
 )
 from backend_app.dev_idp import register_dev_idp_routes
+from backend_app.home import register_home_routes
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.audit_list import register_audit_list_routes
 from backend_app.routes.billing import register_billing_routes
@@ -1285,6 +1286,14 @@ def create_app(
     register_health_routes(app)
     # Dev IdP (W0.1) — env-gated; no-op in production.
     register_dev_idp_routes(app)
+    # Phase 2 — Home destination aggregator. Tenant-first, owner-only,
+    # SectionResult-wrapped. Greeting is real; every other section is a
+    # stub today (see backend_app/home/service.py TODOs).
+    register_home_routes(
+        app,
+        me_store=resolved_me_store,
+        identity_store=resolved_identity_store,
+    )
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).

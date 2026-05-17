@@ -3394,3 +3394,21 @@ export type {
 // (single declaration site — see ./refs.ts).
 export type { ItemKind, ItemRef, ItemRefSnapshot, SectionResult } from "./refs";
 // === end Phase 0.5 ===
+
+// === Phase 2 Home destination ===
+// Morning-briefing aggregator response. Wire shape is canonical; section
+// composers may ship as stubs until their upstream destinations land.
+export type {
+  HomeActivityKind,
+  HomeActivityRow,
+  HomeFavoriteTool,
+  HomeFocusItem,
+  HomeGreeting,
+  HomePinnedChat,
+  HomeRecentRun,
+  HomeResponse,
+  HomeUpcomingMeeting,
+  HomeRunStatus,
+  TimeSegment,
+} from "./home";
+// === end Phase 2 Home ===
