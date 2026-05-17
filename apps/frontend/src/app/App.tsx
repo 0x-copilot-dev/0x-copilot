@@ -72,6 +72,21 @@ const SettingsScreen = lazy(() =>
     default: m.SettingsScreen,
   })),
 );
+// P5-C — Routines destination data binder. Owns its own Vite chunk so
+// the Routines screen costs the main bundle nothing until the user
+// navigates to it. Same lazy-loading shape as the other destination
+// screens above.
+//
+// TODO(merge): once P5-B's `<RoutinesDestination>` lands in
+// `@enterprise-search/chat-surface` and `ShellDestinationSlug` is
+// extended to include `"routines"`, RoutinesRoute keeps its current
+// shape — only the inner host-side list inside the route is replaced
+// with the package-shipped destination component.
+const RoutinesRoute = lazy(() =>
+  import("../features/routines/RoutinesRoute").then((m) => ({
+    default: m.RoutinesRoute,
+  })),
+);
 
 // Single fallback used whenever a route chunk is in flight. Matches the
 // existing AuthGate "Loading session…" spinner shape so the user does
@@ -616,15 +631,6 @@ function EnterpriseSearchApp({
       />
     );
   } else if (route.destination === "home") {
-    // Phase 2 P2-C — Home gets a feature-level data binder
-    // (`HomeRoute`) that owns the `/v1/home` fetch, the
-    // per-user `home.activity_window_hours` KV setting, and
-    // the `/v1/home/stream` SSE subscription. The presentational
-    // `<HomeDestination>` (and its sibling `<HomePanel>` in the
-    // ContextPanel slot — landed by P2-B1) renders inside.
-    // TODO(merge): once P2-B1's <HomePanel> is exported from
-    // `@enterprise-search/chat-surface`, mount it via ChatShell's
-    // ContextPanel slot.
     body = (
       <section
         data-testid="destination-outlet"
@@ -636,14 +642,6 @@ function EnterpriseSearchApp({
       </section>
     );
   } else if (route.destination === "todos") {
-    // Phase 3 P3-C — Todos gets a feature-level data binder
-    // (`TodosRoute`) that owns the `/v1/todos` fetch, the
-    // overdue-count → `BadgePort.setBadge("todos", n)` wiring
-    // (sub-PRD §14.1), and the context-aware project default
-    // (sub-PRD §16 Q6 / cross-audit §9.6). On the top-level
-    // /todos destination there is no current project, so the
-    // route passes `projectId={null}` — inline-add defaults to
-    // "Unfiled" until the user picks a project filter.
     body = (
       <section
         data-testid="destination-outlet"
@@ -655,16 +653,6 @@ function EnterpriseSearchApp({
       </section>
     );
   } else if (route.destination === "inbox") {
-    // Phase 4 P4-C — Inbox gets a feature-level data binder
-    // (`InboxRoute`) that owns the `/v1/inbox` fetch, the
-    // `/v1/inbox/unread_count` badge-warmup query, the
-    // `/v1/inbox/stream` SSE subscription with `?after_sequence=N`
-    // resume, the unread-count → `BadgePort.setBadge("inbox", n)`
-    // wiring (sub-PRD §3.6, §14), the `NotificationPort.notify(...)`
-    // gating for high-priority `item_created` envelopes (sub-PRD §14
-    // — `isAvailable()` keeps the web no-op silent), and the
-    // polling-fallback on `/v1/inbox/unread_count` when SSE cannot
-    // establish (sub-PRD §3.6 degraded mode).
     body = (
       <section
         data-testid="destination-outlet"
@@ -673,6 +661,20 @@ function EnterpriseSearchApp({
         aria-label="inbox destination"
       >
         <InboxRoute identity={identity} />
+      </section>
+    );
+  } else if (route.destination === "routines") {
+    // P5-C — Routines destination dispatch. ShellDestinationSlug was
+    // extended to include "routines" by P5-B1, so the comparison is a
+    // plain string check (cast no longer needed).
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="routines"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="routines destination"
+      >
+        <RoutinesRoute identity={identity} />
       </section>
     );
   } else {
