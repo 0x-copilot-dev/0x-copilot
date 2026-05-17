@@ -2,7 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import type { Transport } from "@enterprise-search/chat-transport";
 
-import { TcSurfaceMount } from "./TcSurfaceMount";
+import { TcSurfaceMount, type PendingDiffHandle } from "./TcSurfaceMount";
 import { TcTabs, type TcTab } from "./TcTabs";
 
 export interface ThreadCanvasProps {
@@ -12,9 +12,10 @@ export interface ThreadCanvasProps {
   readonly onActivateTab: (uri: string) => void;
   readonly onCloseTab: (uri: string) => void;
   readonly transport: Transport;
-  readonly onApprove?: () => void;
-  readonly onReject?: () => void;
-  readonly pendingDiff?: unknown | null;
+  readonly onApprove?: (diffId: string) => void;
+  readonly onReject?: (diffId: string) => void;
+  readonly onSuggestChanges?: (diffId: string) => void;
+  readonly pendingDiff?: PendingDiffHandle | null;
 }
 
 const gridStyle: CSSProperties = {
@@ -78,6 +79,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     transport,
     onApprove,
     onReject,
+    onSuggestChanges,
     pendingDiff,
   } = props;
 
@@ -100,6 +102,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
             transport={transport}
             onApprove={onApprove}
             onReject={onReject}
+            onSuggestChanges={onSuggestChanges}
             pendingDiff={pendingDiff}
           />
         </div>

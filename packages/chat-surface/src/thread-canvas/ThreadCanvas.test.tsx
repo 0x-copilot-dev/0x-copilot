@@ -79,7 +79,15 @@ describe("ThreadCanvas", () => {
         transport={stubTransport}
         onApprove={onApprove}
         onReject={() => {}}
-        pendingDiff={{ field: "subject" }}
+        pendingDiff={{
+          diff: { field: "subject" },
+          meta: {
+            diffId: "d-1",
+            provenance: "test",
+            title: "Test diff",
+            regionAnchorId: "anchor-1",
+          },
+        }}
       />,
     );
     fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
