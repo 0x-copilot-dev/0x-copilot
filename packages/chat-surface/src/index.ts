@@ -419,3 +419,34 @@ export {
   type MemoryType,
 } from "./destinations/memory";
 // === end Phase 2-A / 3 destinations ===
+
+// === Phase 5 — Routines (12th destination) ===
+export {
+  RoutinesDestination,
+  RoutinesPanel,
+  nextFireDisplay,
+  uniqueTriggerKinds,
+  type RenderRoutineDetailSlot,
+  type Routine,
+  type RoutineAutonomy,
+  type RoutineBehavior,
+  type RoutineConnectorConfig,
+  type RoutineDataResidency,
+  type RoutineManualFire,
+  type RoutineMissedFirePolicy,
+  type RoutineOutputTarget,
+  type RoutinePermissions,
+  type RoutineScope,
+  type RoutineStatus,
+  type RoutineTrigger,
+  type RoutineTriggerKind,
+  type RoutinesDestinationProps,
+  type RoutinesFilterCounts,
+  type RoutinesFilterSlug,
+  type RoutinesPanelProjectChip,
+  type RoutinesPanelProps,
+  type RoutinesPanelTriggerCounts,
+  type RoutinesPanelTriggerSlug,
+  type TriggerId,
+} from "./destinations/routines";
+// === end Phase 5 ===

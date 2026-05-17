@@ -127,6 +127,14 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
           <path d="M9 9h6M9 12h6M9 15h4" />
         </svg>
       );
+    case "routines":
+      // Clock face + recurrence sweep: Routines = scheduled / triggered runs.
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 8v4l3 2" />
+        </svg>
+      );
   }
 }
 

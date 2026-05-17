@@ -1,4 +1,5 @@
-// Order matches the 11 top-level destinations in project_atlas_product_model.
+// Order matches the 12 top-level destinations in project_atlas_product_model
+// (P5 adds Routines as the 12th — scheduled / triggered runs).
 // AppRail / Topbar / ChatShell all read from this constant — single source
 // of truth for the slug ↔ label mapping.
 
@@ -13,7 +14,8 @@ export type ShellDestinationSlug =
   | "todos"
   | "connectors"
   | "team"
-  | "memory";
+  | "memory"
+  | "routines";
 
 export interface ShellDestination {
   readonly slug: ShellDestinationSlug;
@@ -32,6 +34,7 @@ export const SHELL_DESTINATIONS: readonly ShellDestination[] = [
   { slug: "connectors", label: "Connectors" },
   { slug: "team", label: "Team" },
   { slug: "memory", label: "Memory" },
+  { slug: "routines", label: "Routines" },
 ];
 
 export const DEFAULT_SHELL_DESTINATION: ShellDestinationSlug = "home";

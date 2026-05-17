@@ -5,13 +5,15 @@ import { AppRail } from "./AppRail";
 import { SHELL_DESTINATIONS, type ShellDestinationSlug } from "./destinations";
 
 describe("AppRail", () => {
-  it("renders 11 destination buttons in order", () => {
+  it("renders 12 destination buttons in order (incl. Routines)", () => {
     render(<AppRail activeDestination="home" onNavigate={() => {}} />);
     const nav = screen.getByRole("navigation", { name: /atlas destinations/i });
     const buttons = within(nav).getAllByRole("button");
-    expect(buttons).toHaveLength(11);
+    expect(buttons).toHaveLength(12);
     const slugs = buttons.map((b) => b.getAttribute("data-destination"));
     expect(slugs).toEqual(SHELL_DESTINATIONS.map((d) => d.slug));
+    // P5-B1: Routines is the 12th destination.
+    expect(slugs[slugs.length - 1]).toBe("routines");
   });
 
   it("clicking a destination button calls onNavigate with that slug", () => {
