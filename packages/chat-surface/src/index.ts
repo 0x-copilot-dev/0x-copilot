@@ -147,3 +147,7 @@ export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === Phase 0-B ports facade ===
 export * from "./ports";
 // === end Phase 0-B ===
+
+// === Phase 1-B chat-shell-layout ===
+export { AppRail, ContextPanel, Topbar, RightRail } from "./shell";
+// === end Phase 1-B ===
