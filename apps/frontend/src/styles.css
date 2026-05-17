@@ -8219,3 +8219,23 @@ body.login-body {
   color: var(--color-text-subtle);
   font-size: var(--font-size-xl);
 }
+
+/* ============================================================
+ * Shell scoping — chats destination
+ *
+ * Inside the ChatShell, the chat surface (ChatScreen) brings its own
+ * left-side sidebar (`.aui-sidebar`). That sidebar's header (LogoMark)
+ * and footer (UserCard) duplicate the AppRail + ProfileMenu shown by
+ * the shell itself — and were the "double sidebar" the user was angry
+ * about. Hide them only inside the shell so the chat surface still
+ * works in isolation (storybooks, the desktop substrate's standalone
+ * chat view, etc).
+ *
+ * Mirrors the os.css reference rules:
+ *   .chats-host .sidebar__head { display: none !important; }
+ *   .chats-host .sidebar__user { display: none !important; }
+ * ============================================================ */
+[data-component="chat-shell"][data-destination="chats"] .aui-sidebar__header,
+[data-component="chat-shell"][data-destination="chats"] .aui-sidebar__footer {
+  display: none;
+}

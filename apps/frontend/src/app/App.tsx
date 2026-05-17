@@ -29,18 +29,48 @@ import { UserProfileProvider } from "../features/me/UserProfileContext";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
 import {
+  AgentsDestination,
   ChatShell,
+  ConnectorsDestination,
   DocumentPresenceSignal,
+  HomeDestination,
+  InboxDestination,
   KeyValueStoreProvider,
+  LibraryDestination,
   LocalStorageKeyValueStore,
+  MemoryDestination,
+  ProjectsDestination,
   SecretStorageProvider,
+  TeamDestination,
+  TodosDestination,
+  ToolsDestination,
   WebSecretStorage,
   useKeyValueStore,
+  type ShellDestinationSlug,
 } from "@enterprise-search/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
-import type { AppRoute } from "./routes";
+import { ROOT_DESTINATION, type AppRoute } from "./routes";
 import { errorMessage } from "../utils/errors";
+
+// Map every non-chats destination slug to the placeholder component
+// shipped with the chat-surface package. Chats has a dedicated host
+// component (ChatScreen) below — adding it here would only confuse the
+// renderer.
+const NON_CHATS_DESTINATIONS: Readonly<
+  Record<Exclude<ShellDestinationSlug, "chats">, () => ReactElement>
+> = {
+  home: HomeDestination,
+  agents: AgentsDestination,
+  library: LibraryDestination,
+  inbox: InboxDestination,
+  tools: ToolsDestination,
+  projects: ProjectsDestination,
+  todos: TodosDestination,
+  connectors: ConnectorsDestination,
+  team: TeamDestination,
+  memory: MemoryDestination,
+};
 
 /**
  * The org slug LoginScreen falls back to when the URL doesn't carry one.
@@ -249,7 +279,10 @@ function EnterpriseSearchApp({
       setOauthStatus(
         "Connector authentication callback was missing state, code, or error.",
       );
-      router.navigate({ screen: "chat" }, { replace: true });
+      router.navigate(
+        { screen: "chat", destination: ROOT_DESTINATION },
+        { replace: true },
+      );
       return;
     }
     const callbackState = state;
@@ -298,7 +331,10 @@ function EnterpriseSearchApp({
               completedAt: new Date().toISOString(),
             });
             setOauthStatus(`${server.display_name} is connected.`);
-            router.navigate({ screen: "chat" }, { replace: true });
+            router.navigate(
+              { screen: "chat", destination: ROOT_DESTINATION },
+              { replace: true },
+            );
           } else {
             setCompletedMcpAuthAction(null);
             setOauthStatus(`${server.display_name} is connected.`);
@@ -312,7 +348,10 @@ function EnterpriseSearchApp({
       } catch (err) {
         if (!cancelled) {
           setOauthStatus(errorMessage(err, "Connector authentication failed."));
-          router.navigate({ screen: "chat" }, { replace: true });
+          router.navigate(
+            { screen: "chat", destination: ROOT_DESTINATION },
+            { replace: true },
+          );
         }
       }
     }
@@ -323,6 +362,19 @@ function EnterpriseSearchApp({
     };
   }, [connectors.refresh, identity]);
 
+  // Compute the active destination ONCE so AppRail / ContextPanel /
+  // Topbar all agree on which destination is "live". Non-chat screens
+  // (settings, share) collapse the rail's active state to the legacy
+  // chats destination — the rail itself is hidden visually for those
+  // screens anyway via ChatShell receiving no leaf, but keeping the
+  // value valid avoids a stale highlight if the user navigates back.
+  const activeDestination: ShellDestinationSlug =
+    route.screen === "chat" ? route.destination : ROOT_DESTINATION;
+
+  const handleRailNavigate = (slug: ShellDestinationSlug): void => {
+    router.navigate({ screen: "chat", destination: slug });
+  };
+
   let body: ReactElement;
   if (route.screen === "settings") {
     body = (
@@ -332,7 +384,9 @@ function EnterpriseSearchApp({
         identity={identity}
         profile={profile}
         initialSection={route.section}
-        onBackToChat={() => router.navigate({ screen: "chat" })}
+        onBackToChat={() =>
+          router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
+        }
         onSectionChange={(section) =>
           router.navigate({ screen: "settings", section })
         }
@@ -349,10 +403,17 @@ function EnterpriseSearchApp({
           // ?conversationId= and opens that thread.
           window.location.href = `/?conversationId=${encodeURIComponent(conversationId)}`;
         }}
-        onBackToChat={() => router.navigate({ screen: "chat" })}
+        onBackToChat={() =>
+          router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
+        }
       />
     );
-  } else {
+  } else if (route.destination === "chats") {
+    // Chats keeps the legacy host-side ChatScreen — it owns its own
+    // thread sidebar + composer, and the chat-surface package's
+    // ChatsDestination is only a placeholder. ChatShell hides the
+    // ContextPanel column for chats (full-bleed), so there is exactly
+    // one rail + one thread sidebar + one main pane (+ right rail).
     body = (
       <ChatScreen
         connectors={connectors}
@@ -364,6 +425,22 @@ function EnterpriseSearchApp({
         oauthStatus={oauthStatus}
         completedMcpAuthAction={completedMcpAuthAction}
       />
+    );
+  } else {
+    // Every other destination renders the package-shipped component.
+    // These are placeholder surfaces today; wiring real data fetchers
+    // is the next agent's job. The mapping itself is `route.destination`
+    // → `NON_CHATS_DESTINATIONS[destination]` — single source of truth.
+    const Destination = NON_CHATS_DESTINATIONS[route.destination];
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination={route.destination}
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label={`${route.destination} destination`}
+      >
+        <Destination />
+      </section>
     );
   }
 
@@ -378,6 +455,8 @@ function EnterpriseSearchApp({
       router={router}
       keyValueStore={keyValueStore}
       presenceSignal={presenceSignal}
+      activeDestination={activeDestination}
+      onNavigate={handleRailNavigate}
     >
       {body}
     </ChatShell>

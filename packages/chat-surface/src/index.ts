@@ -159,7 +159,26 @@ export * from "./ports";
 // === end Phase 0-B ===
 
 // === Phase 1-B chat-shell-layout ===
-export { AppRail, ContextPanel, Topbar, RightRail } from "./shell";
+export {
+  AppRail,
+  ContextPanel,
+  Topbar,
+  RightRail,
+  APP_RAIL_WIDTH,
+  CONTEXT_PANEL_WIDTH,
+  RIGHT_RAIL_WIDTH,
+  TOPBAR_HEIGHT,
+  DEFAULT_SHELL_DESTINATION,
+  SHELL_DESTINATIONS,
+  type AppRailProps,
+  type ChatShellProps,
+  type ContextPanelPrimaryAction,
+  type ContextPanelProps,
+  type ContextPanelSearch,
+  type ShellDestination,
+  type ShellDestinationSlug,
+  type TopbarProps,
+} from "./shell";
 // === end Phase 1-B ===
 
 // === Phase 1-D routing-palette ===

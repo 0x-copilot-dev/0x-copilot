@@ -1,53 +1,28 @@
-import {
-  useEffect,
-  useState,
-  type CSSProperties,
-  type ReactElement,
-} from "react";
+import { type CSSProperties, type ReactElement } from "react";
 
-import { useRouter } from "../providers/RouterProvider";
-import type { ArtifactRoute } from "../routing/router";
+import { SHELL_DESTINATIONS, type ShellDestinationSlug } from "./destinations";
 
-import {
-  DEFAULT_SHELL_DESTINATION,
-  SHELL_DESTINATIONS,
-  type ShellDestinationSlug,
-} from "./destinations";
-
+// Geometry constants — kept here, not stretched into a token, because they
+// describe THIS component's box (not a colour or a font). One source of
+// truth: the same constant feeds the rail's own style and is exported so
+// ChatShell's grid template can mirror it without redefining the literal.
 const RAIL_WIDTH = 52;
-const BACKGROUND = "#0E1015";
-const BORDER = "#22252E";
-const ICON_INACTIVE = "#3D4250";
-const ICON_ACTIVE = "#7B9BFF";
-const ACTIVE_TINT = "rgba(123, 155, 255, 0.08)";
 
-function destinationFromRoute(
-  route: ArtifactRoute | null,
-): ShellDestinationSlug {
-  if (route === null) return DEFAULT_SHELL_DESTINATION;
-  switch (route.kind) {
-    case "chat":
-    case "conversation":
-      return "chats";
-    case "run":
-    case "subagent":
-    case "tool-result":
-      return "agents";
-    case "mcp":
-    case "mcp-tool":
-      return "connectors";
-    case "skill":
-      return "tools";
-    case "workspace":
-      return "team";
-    default:
-      return DEFAULT_SHELL_DESTINATION;
-  }
-}
-
-function routeForDestination(slug: ShellDestinationSlug): ArtifactRoute | null {
-  if (slug === "chats") return { kind: "chat", conversationId: "" };
-  return null;
+export interface AppRailProps {
+  /**
+   * The destination the host considers active. The rail is controlled —
+   * it never reads from a router itself. The host owns route↔destination
+   * mapping (see `apps/frontend/src/app/App.tsx`); the rail just renders
+   * a button per destination and reports clicks back.
+   */
+  readonly activeDestination: ShellDestinationSlug;
+  /**
+   * Click handler — the host translates the slug into whatever route
+   * shape it owns (chat / settings / share / admin-…) and decides what
+   * to do with the navigation. Click on the already-active destination
+   * is delivered too; the host can ignore or treat as a deep-link reset.
+   */
+  readonly onNavigate: (slug: ShellDestinationSlug) => void;
 }
 
 function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
@@ -147,28 +122,16 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
   }
 }
 
-export function AppRail(): ReactElement {
-  const router = useRouter<ArtifactRoute>();
-  const [route, setRoute] = useState<ArtifactRoute | null>(() => {
-    try {
-      return router.current();
-    } catch {
-      return null;
-    }
-  });
-
-  useEffect(() => {
-    return router.subscribe((next) => setRoute(next));
-  }, [router]);
-
-  const active = destinationFromRoute(route);
-
+export function AppRail({
+  activeDestination,
+  onNavigate,
+}: AppRailProps): ReactElement {
   const railStyle: CSSProperties = {
     width: RAIL_WIDTH,
     minWidth: RAIL_WIDTH,
     height: "100%",
-    backgroundColor: BACKGROUND,
-    borderRight: `1px solid ${BORDER}`,
+    backgroundColor: "var(--color-bg)",
+    borderRight: "1px solid var(--color-border)",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -185,21 +148,19 @@ export function AppRail(): ReactElement {
       data-component="app-rail"
     >
       {SHELL_DESTINATIONS.map((d) => {
-        const isActive = d.slug === active;
-        const target = routeForDestination(d.slug);
-        const handleClick = (): void => {
-          if (target !== null) router.navigate(target);
-        };
+        const isActive = d.slug === activeDestination;
         const buttonStyle: CSSProperties = {
           width: 36,
           height: 36,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: isActive ? ACTIVE_TINT : "transparent",
+          background: isActive
+            ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
+            : "transparent",
           border: "none",
           borderRadius: 8,
-          color: isActive ? ICON_ACTIVE : ICON_INACTIVE,
+          color: isActive ? "var(--color-accent)" : "var(--color-text-subtle)",
           cursor: "pointer",
           padding: 0,
         };
@@ -211,7 +172,7 @@ export function AppRail(): ReactElement {
             aria-current={isActive ? "page" : undefined}
             data-destination={d.slug}
             data-state={isActive ? "active" : "inactive"}
-            onClick={handleClick}
+            onClick={() => onNavigate(d.slug)}
             style={buttonStyle}
             title={d.label}
           >
@@ -222,3 +183,5 @@ export function AppRail(): ReactElement {
     </nav>
   );
 }
+
+export { RAIL_WIDTH as APP_RAIL_WIDTH };

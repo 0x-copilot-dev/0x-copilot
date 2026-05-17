@@ -1,4 +1,9 @@
-import type { NavigateOptions, Router } from "@enterprise-search/chat-surface";
+import {
+  SHELL_DESTINATIONS,
+  type NavigateOptions,
+  type Router,
+  type ShellDestinationSlug,
+} from "@enterprise-search/chat-surface";
 
 import type { SettingsSection } from "../features/settings/SettingsScreen";
 import {
@@ -6,17 +11,22 @@ import {
   SETTINGS_SECTIONS,
 } from "../features/settings/sections";
 
-import type { AppRoute } from "./routes";
+import { ROOT_DESTINATION, type AppRoute } from "./routes";
 
 const VALID_SETTINGS_SECTIONS = new Set<string>(SETTINGS_SECTIONS);
+const VALID_DESTINATIONS = new Set<string>(
+  SHELL_DESTINATIONS.map((d) => d.slug),
+);
 
 // HashRouter is the web app's substrate-side implementation of the
 // Router port. Every browser-history / URL-parsing concern in the web
 // app lives here; App.tsx (and the rest of apps/frontend) treats routing
 // as a black box behind this class.
 //
-// URL conventions preserved from the prior inline routing in App.tsx:
-//   /                           → { screen: "chat" }
+// URL conventions:
+//   /                           → { screen: "chat", destination: "chats" }
+//   /<destination>              → { screen: "chat", destination }
+//     where <destination> is one of the 11 ShellDestinationSlug values.
 //   /settings#<section>         → { screen: "settings", section }
 //   /share/<token>              → { screen: "share", token }
 // Legacy /settings/<section> is migrated once on mount via
@@ -104,12 +114,28 @@ function routeFromLocation(): AppRoute {
       return { screen: "share", token };
     }
   }
-  return { screen: "chat" };
+  if (path === "/") {
+    return { screen: "chat", destination: ROOT_DESTINATION };
+  }
+  // /<destination> for the 11 known slugs. Unknown paths fall through
+  // to the root destination so /typo behaves like a 404 → chats rather
+  // than crashing the route union.
+  const segment = decodeURIComponent(path.replace(/^\//, ""));
+  if (isShellDestinationSlug(segment)) {
+    return { screen: "chat", destination: segment };
+  }
+  return { screen: "chat", destination: ROOT_DESTINATION };
 }
 
 function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "chat") {
-    return { path: "/", hash: "" };
+    // Round-trip the root destination as `/` so external bookmarks /
+    // copy-paste keep the legacy entry URL. Every other destination
+    // lives at `/<slug>`.
+    if (route.destination === ROOT_DESTINATION) {
+      return { path: "/", hash: "" };
+    }
+    return { path: `/${route.destination}`, hash: "" };
   }
   if (route.screen === "share") {
     return { path: `/share/${encodeURIComponent(route.token)}`, hash: "" };
@@ -122,6 +148,10 @@ function pathForRoute(route: AppRoute): { path: string; hash: string } {
 
 function isSettingsSection(value: string): value is SettingsSection {
   return VALID_SETTINGS_SECTIONS.has(value);
+}
+
+function isShellDestinationSlug(value: string): value is ShellDestinationSlug {
+  return VALID_DESTINATIONS.has(value);
 }
 
 /**
