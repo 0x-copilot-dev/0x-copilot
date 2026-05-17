@@ -1,5 +1,7 @@
 import { join } from "node:path";
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow, ipcMain, session, webContents } from "electron";
+
+import { CHANNELS } from "@enterprise-search/chat-transport";
 
 import {
   registerAppProtocolHandler,
@@ -7,16 +9,16 @@ import {
 } from "./app-protocol";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
+import { registerIpcHandlers } from "./ipc/handlers";
+import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
 
 app.setName("Atlas");
 
-// Must run before app.ready — registers app:// as standard / secure /
-// fetch-capable so CSP and same-origin policy apply normally (PRD D24
-// pattern; S2 friction note 2).
 registerAppProtocolPrivilege();
 
 let mainWindow: BrowserWindow | null = null;
+let teardownIpcHandlers: (() => void) | null = null;
 
 void app.whenReady().then(() => {
   startCrashReporter();
@@ -24,6 +26,17 @@ void app.whenReady().then(() => {
 
   const rendererDir = join(__dirname, "..", "renderer");
   registerAppProtocolHandler(rendererDir, session.defaultSession);
+
+  const transportBridge = new TransportBridge((webContentsId, payload) => {
+    const target = webContents.fromId(webContentsId);
+    if (target && !target.isDestroyed()) {
+      target.send(CHANNELS.streamEvent, payload);
+    }
+  });
+  teardownIpcHandlers = registerIpcHandlers({
+    ipcMain,
+    bridge: transportBridge,
+  });
 
   mainWindow = createMainWindow();
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
@@ -35,6 +48,11 @@ void app.whenReady().then(() => {
       mainWindow = createMainWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  teardownIpcHandlers?.();
+  teardownIpcHandlers = null;
 });
 
 app.on("window-all-closed", () => {

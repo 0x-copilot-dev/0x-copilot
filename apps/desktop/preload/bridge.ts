@@ -1,25 +1,30 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+
+import { isAllowedChannel } from "@enterprise-search/chat-transport";
 
 import type { WindowBridge } from "./window-bridge-types";
 
-// Phase 1-A stub. Phase 1-C populates the channel allowlist and replaces
-// these throws with real ipcRenderer.invoke / ipcRenderer.on calls. The
-// surface (ipc.invoke / ipc.on) is the load-bearing contract Agent 1-C's
-// IpcTransport consumes — keeping it stable at the preload boundary
-// means swapping bodies at integration time, not re-shaping the bridge.
-function notYetWiredError(method: "invoke" | "on"): Error {
-  return new Error(
-    `bridge.ipc.${method}: not yet wired (Phase 1-C lands the IPC channel allowlist)`,
-  );
-}
-
 const bridge: WindowBridge = {
   ipc: {
-    invoke<T = unknown>(_channel: string, _payload: unknown): Promise<T> {
-      throw notYetWiredError("invoke");
+    invoke<T = unknown>(channel: string, payload: unknown): Promise<T> {
+      if (!isAllowedChannel(channel)) {
+        return Promise.reject(
+          new Error(`bridge.ipc.invoke: channel "${channel}" not in allowlist`),
+        );
+      }
+      return ipcRenderer.invoke(channel, payload) as Promise<T>;
     },
-    on(_channel: string, _handler: (payload: unknown) => void): () => void {
-      throw notYetWiredError("on");
+    on(channel: string, handler: (payload: unknown) => void): () => void {
+      if (!isAllowedChannel(channel)) {
+        throw new Error(`bridge.ipc.on: channel "${channel}" not in allowlist`);
+      }
+      const wrapped = (_event: IpcRendererEvent, payload: unknown): void => {
+        handler(payload);
+      };
+      ipcRenderer.on(channel, wrapped);
+      return () => {
+        ipcRenderer.removeListener(channel, wrapped);
+      };
     },
   },
 };

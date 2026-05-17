@@ -1,12 +1,24 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { mountApp } from "./bootstrap";
 
 describe("renderer bootstrap", () => {
   let container: HTMLElement | null = null;
   let unmount: (() => void) | null = null;
+
+  beforeEach(() => {
+    // jsdom has no preload-injected window.bridge. Stub a noop so
+    // IpcTransport's constructor (which installs a stream-event listener
+    // at construction time) can wire up cleanly.
+    (window as unknown as { bridge: unknown }).bridge = {
+      ipc: {
+        invoke: () => Promise.resolve(),
+        on: () => () => undefined,
+      },
+    };
+  });
 
   afterEach(() => {
     if (unmount !== null) {
@@ -18,6 +30,7 @@ describe("renderer bootstrap", () => {
     unmount = null;
     container?.remove();
     container = null;
+    delete (window as unknown as { bridge?: unknown }).bridge;
   });
 
   it("mounts <ChatShell /> with the desktop placeholder visible", () => {
@@ -25,8 +38,6 @@ describe("renderer bootstrap", () => {
     container.id = "root";
     document.body.appendChild(container);
 
-    // React 19's createRoot.render commits asynchronously; act() flushes
-    // the render before we query the DOM.
     act(() => {
       unmount = mountApp(container as HTMLElement);
     });
