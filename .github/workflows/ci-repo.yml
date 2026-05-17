@@ -44,13 +44,16 @@ jobs:
             pre-commit run --from-ref "$BASE_SHA" --to-ref "$HEAD_SHA" --show-diff-on-failure
           fi
 
-      # Dependabot PRs run with a restricted GITHUB_TOKEN that gitleaks-action
-      # can't use against the issues/PR API ("Resource not accessible by
-      # integration"), so the step always crashes there. Skip on dependabot —
-      # bot PRs only touch package manifests/lockfiles, and a full secret scan
-      # still runs on every push to main.
+      # Dependabot-authored PRs run with a restricted GITHUB_TOKEN that
+      # gitleaks-action can't use against the issues/PR API ("Resource not
+      # accessible by integration"). The restriction is determined by the
+      # PR author, not the actor who triggered the run — so a maintainer
+      # pushing a follow-up commit to a dependabot/* branch still gets the
+      # restricted token. Match on the PR author so the skip survives those
+      # follow-ups; bot PRs only touch package manifests/lockfiles, and a
+      # full secret scan still runs on every push to main.
       - name: Secret scan
-        if: github.actor != 'dependabot[bot]'
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
