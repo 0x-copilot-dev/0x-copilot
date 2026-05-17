@@ -229,6 +229,14 @@ def build_chat_model(
     kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
     if model_config.reasoning is None or not model_config.reasoning.enabled:
         kwargs["temperature"] = model_config.temperature
+    # ``max_tokens`` is the LangChain-canonical key for the output cap and is
+    # honoured by every supported provider (OpenAI, Anthropic, Gemini). We
+    # only emit it when the resolved config carries an explicit number so
+    # deployments without a baseline keep relying on provider defaults.
+    # The number is already depth-scaled by ``DepthBudgetTable.apply`` —
+    # this is the single read site.
+    if model_config.max_output_tokens is not None:
+        kwargs["max_tokens"] = model_config.max_output_tokens
     if model_config.provider == "openai":
         kwargs.update(_openai_model_kwargs(model_config))
     elif model_config.provider == "anthropic":

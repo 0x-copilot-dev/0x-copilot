@@ -489,6 +489,11 @@ class RunCoordinator:
                     if model is not None
                     else None,
                     reasoning=model.reasoning if model is not None else None,
+                    # Top-level on the request, not nested under ``model`` —
+                    # depth is a per-turn user choice, not a model attribute.
+                    # The resolver folds it into ``model_profile`` via the
+                    # single depth → budget mapping point.
+                    reasoning_depth=request.reasoning_depth,
                 )
             )
         except AgentRuntimeError as exc:

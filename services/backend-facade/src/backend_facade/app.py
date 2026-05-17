@@ -55,6 +55,11 @@ class FacadeRunRequest(BaseModel):
     user_input: str
     assistant_id: str | None = None
     model: dict[str, object] | None = None
+    # Composer's Fast / Balanced / Deep selection. Forwarded verbatim to
+    # ai-backend, which validates the value against its ``ReasoningDepth``
+    # literal union (anything else → 422). Declared here so Pydantic's
+    # default ``extra="ignore"`` doesn't drop the field on ``model_dump``.
+    reasoning_depth: str | None = None
     content: list[dict[str, object]] | None = None
     attachments: list[dict[str, object]] | None = None
     quote: dict[str, object] | None = None
