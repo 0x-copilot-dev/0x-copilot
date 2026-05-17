@@ -126,6 +126,13 @@ apps/desktop/                                    NEW
 │   ├── index.html
 │   ├── bootstrap.tsx                            ReactDOM.createRoot + <ChatShell />
 │   └── ipc-transport-factory.ts                 builds IpcTransport from window.bridge
+
+# Module system: package.json deliberately omits "type": "module". Phase 1A
+# picks per-process: main + preload compile to CJS (Node-shaped, __dirname
+# works, electron's CJS loader resolves @enterprise-search/* directly);
+# renderer compiles to ESM via esbuild bundle (browser-shaped). Two
+# tsconfigs (tsconfig.main.json + tsconfig.renderer.json) split the targets.
+# Validated in Phase S spike S1-B.
 └── build/
     ├── mac/
     │   ├── entitlements.plist
@@ -229,24 +236,25 @@ packages/surface-renderers/                      NEW
 
 ### 3.3 Key port signatures (the contracts subagents work against)
 
-These are the load-bearing interfaces. Phase 0 freezes them before any other agent starts. After Phase 0 merges, they change only by explicit orchestrator decision with a migration note.
+These are the load-bearing interfaces. Phase 0 froze them. After Phase 0, they change only by explicit orchestrator decision with a migration note.
+
+**On-disk vs aspirational** (reconciliation from Phase 0-B's flag): the Transport and Router shapes below are what the on-disk producers actually export, not the SSE-event-aware shape that earlier PRD drafts described. Future extensions (`subscribeRunStream` typed by `RuntimeEventEnvelope`, `Promise<Session>` for async session refresh, `reauthenticate()` for renderer-initiated re-login) are deferred to a "contracts alignment" PR that must land **before Phase 5 (auth) or Phase 6 (tier-2)**, whichever comes first. Until then, every consumer uses the verbatim on-disk shape.
 
 ```ts
-// packages/chat-transport/src/transport.ts (EXISTING — verbatim)
+// packages/chat-transport/src/transport.ts (EXISTING — verbatim, FROZEN until contracts-alignment PR)
 export interface Transport {
   request<TRes>(req: TypedRequest): Promise<TRes>;
-  subscribeRunStream(
-    runId: string,
-    afterSequence: number | undefined,
-    handler: (event: RuntimeEventEnvelope) => void,
-    signal: AbortSignal,
-  ): Promise<void>;
-  getSession(): Promise<Session | null>;
-  reauthenticate(): Promise<Session>;
+  subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription;
+  getSession(): Session;
   capabilities(): TransportCapabilities;
 }
+// SseSubscribeOptions / SseSubscription carry raw `string` messages + onOpen/onMessage/onError
+// callbacks. Domain envelope parsing (RuntimeEventEnvelope) lives one layer above Transport so
+// the port stays substrate-agnostic and stable as agent event types evolve.
 
-// packages/chat-surface/src/ports/SurfaceHost.ts (NEW)
+// packages/chat-surface/src/ports/SurfaceHost.ts (NEW — Phase 0-B; not consumed in MVP)
+// Surface lifecycle for tier-2 dynamic adapter loading + future rich-canvas surfaces.
+// Pure lifecycle: no I/O — surfaces talk to MCP via the host's TcSurfaceMount, not via this port.
 export interface SurfaceHost {
   mountSurface(args: {
     id: string;
@@ -260,18 +268,18 @@ export interface SurfaceHost {
   onSurfaceEvent(handler: (event: SurfaceEvent) => void): () => void;
 }
 
-// packages/chat-surface/src/ports/Router.ts (NEW — formalized from existing)
-export interface Router {
-  current(): Route;
-  navigate(route: Route): void;
-  back(): void;
-  subscribe(handler: (route: Route) => void): () => void;
+// packages/chat-surface/src/routing/router.ts (EXISTING — verbatim, FROZEN until contracts-alignment PR)
+// On disk Router is generic over a Route type and ships ArtifactRoute as the concrete shape:
+export interface Router<TRoute> {
+  current(): TRoute;
+  navigate(route: TRoute, opts?: NavigateOptions): void;
+  subscribe(handler: (route: TRoute) => void): () => void;
 }
-export interface Route {
-  destination: Destination;
-  view?: string;
-  id?: string;
-}
+// Note: no `back()` on the on-disk shape. Phase 1-D may grow it on the producer; until then
+// consumers route via explicit `navigate` calls only.
+//
+// Concrete app route shape (ArtifactRoute) is a discriminated union, not the simpler
+// { destination, view?, id? } sketch from earlier PRD drafts.
 
 // packages/chat-surface/src/surfaces/SaaSRendererAdapter.ts (NEW — FROZEN in Phase 4)
 //
@@ -602,12 +610,12 @@ Depends on: Phase 5 merged (we want a verified working tier-1+tier-3 product bef
 
 The agent generates `SaaSRendererAdapter` implementations from constrained templates, persisted per tenant, sandboxed, with the §9.5 quality bar enforced. This phase ships local-only tier-2 (no server-side registry yet — that's Phase 7).
 
-| Agent | Slug                    | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ----- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 6A    | `tier2-sandbox`         | `apps/desktop/main/adapters/{loader,sandbox,ast-allowlist}.ts` + `packages/chat-surface/src/surfaces/Tier2Loader.tsx`. Dynamic `import()` of `{userData}/adapters/{scheme}-v{n}.js` via `vm` module in main (no privileged globals exposed); AST scan with the import allowlist (`react`, `@enterprise-search/design-system` primitives, a documented pure-utility set); render wrapper with 100 ms timeout + error boundary (already present from 4A, extended for tier-2). Tests: deliberately bad adapters (calls `fetch`, imports `child_process`, infinite loop, throws on every render) are all caught and rolled back to tier-3 without affecting the host. |
-| 6B    | `tier2-codegen-backend` | `services/ai-backend/agent_runtime/capabilities/` — new MCP-style capability `generateRenderAdapter(scheme, sample_state, layout_template)`. Layout templates as constants: `form`, `table`, `kanban`, `definition-list`. Given a SaaS scheme + a sample state from the live MCP tool + a template choice, produces an adapter source string. Capability emits to the run stream so the desktop can persist the result. Tests: each template produces a syntactically valid adapter that passes the AST allowlist; round-trip (codegen → AST scan → smoke render) succeeds for each template.                                                                      |
-| 6C    | `tier2-lifecycle`       | `apps/desktop/main/adapters/{registry-host,quality-gate,lifecycle-events}.ts`. Orchestrates the full pipeline: detect missing adapter → request generation → run smoke render (Q4) → install on success → hot-swap into the chat-surface registry → on render error (Q6) mark broken + queue regen. Bounded retry budget (3 attempts, ~5 s each); on overflow continue regen in background with tier-3 visible. Persists adapter lifecycle events to a local SQLite audit log. Tests: full happy-path round trip in <5 s; broken adapter triggers exactly one regen; retry budget exhaustion surfaces tier-3 immediately.                                          |
-| 6D    | `tier2-quality-gate`    | `apps/desktop/main/adapters/quality-gate/{schema,allowlist,smoke-render,error-boundary,broken-mark}.ts`. Implementation of Q1–Q6 from §9.5: schema validation at load (Zod-checked adapter shape), static analysis (the AST allowlist scanner with explicit deny list), smoke render before activation (synthetic minimal state + diff), render-with-timeout + error-boundary instrumentation, render-error invalidation. Each Q has a unit test that proves it catches its category.                                                                                                                                                                              |
+| Agent | Slug                    | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 6A    | `tier2-sandbox`         | `apps/desktop/main/adapters/{loader,sandbox,ast-allowlist}.ts` + `packages/chat-surface/src/surfaces/Tier2Loader.tsx`. Dynamic `import()` of `{userData}/adapters/{scheme}-v{n}.js` via `vm` module in main (no privileged globals exposed); AST scan with the import allowlist (`react`, `@enterprise-search/design-system` primitives, a documented pure-utility set). **Render isolation must be preemptive, not measured.** Phase 0-A's `TcSurfaceMount` budget for tier-1 is wall-clock-measured-on-the-next-commit (React renders are synchronous; `setTimeout` cannot interrupt them), which is fine for first-party code that we wrote. Tier-2 runs **agent-generated** code and so the 100 ms budget must be _enforceable_ — render the adapter inside a Web Worker (renderer-process child) that exposes only an allowlisted React + design-system bundle; the worker is terminable from the main thread via `Worker.terminate()` if it exceeds the budget. Successful renders post their rendered VDOM (serialized as a constrained JSON tree of allowlisted primitives) back to the host, which reconciles into the page. Tests: deliberately bad adapters (calls `fetch`, imports `child_process`, infinite loop / `while(true){}`, throws on every render, allocates 1 GB string) are all caught and rolled back to tier-3 without affecting the host or starving the main thread. |
+| 6B    | `tier2-codegen-backend` | `services/ai-backend/agent_runtime/capabilities/` — new MCP-style capability `generateRenderAdapter(scheme, sample_state, layout_template)`. Layout templates as constants: `form`, `table`, `kanban`, `definition-list`. Given a SaaS scheme + a sample state from the live MCP tool + a template choice, produces an adapter source string. Capability emits to the run stream so the desktop can persist the result. Tests: each template produces a syntactically valid adapter that passes the AST allowlist; round-trip (codegen → AST scan → smoke render) succeeds for each template.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 6C    | `tier2-lifecycle`       | `apps/desktop/main/adapters/{registry-host,quality-gate,lifecycle-events}.ts`. Orchestrates the full pipeline: detect missing adapter → request generation → run smoke render (Q4) → install on success → hot-swap into the chat-surface registry → on render error (Q6) mark broken + queue regen. Bounded retry budget (3 attempts, ~5 s each); on overflow continue regen in background with tier-3 visible. Persists adapter lifecycle events to a local SQLite audit log. Tests: full happy-path round trip in <5 s; broken adapter triggers exactly one regen; retry budget exhaustion surfaces tier-3 immediately.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 6D    | `tier2-quality-gate`    | `apps/desktop/main/adapters/quality-gate/{schema,allowlist,smoke-render,error-boundary,broken-mark}.ts`. Implementation of Q1–Q6 from §9.5: schema validation at load (Zod-checked adapter shape), static analysis (the AST allowlist scanner with explicit deny list), smoke render before activation (synthetic minimal state + diff), render-with-timeout + error-boundary instrumentation, render-error invalidation. Each Q has a unit test that proves it catches its category.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 Exit criteria: opening a thread whose canvas URI has no tier-1 match triggers tier-2 generation; on success the user sees a tier-2 render; deliberately-bad generated adapters are caught at every quality gate without escaping; the audit log has an entry for every adapter lifecycle event.
 
@@ -664,6 +672,7 @@ If a comment is necessary, **one short line** at most. No multi-paragraph docstr
 ### 6.4 React
 
 - Functional components + hooks only; no class components.
+  - **Exception: React error boundaries.** React's error-boundary API requires a class component (`componentDidCatch` / `static getDerivedStateFromError` have no hook equivalent). One private class per place that needs an error boundary is permitted, scoped to the boundary file and not exported. Phase 0-A's `TcSurfaceMount` is the canonical example. Do not generalize the exception beyond error boundaries.
 - Lift state only when two siblings need it. Otherwise local `useState`.
 - No `useEffect` for derived state — compute inline.
 - Event handlers prefixed `on` in props (`onApprove`, `onReject`); internal callers use `handle` prefix.
@@ -930,9 +939,9 @@ All six enforced from Phase 6 onward. Visual regression (full screenshot diffing
 
 - Tier-2 adapters loaded via dynamic `import()` of `{userData}/adapters/{scheme}-v{n}.js` from disk only. Never loaded from the network at render time (downloads are pre-fetched via 7B, AST-scanned, persisted, _then_ loaded).
 - **No privileged objects in adapter scope.** Adapter `import` graph is restricted to: `react`, `@enterprise-search/design-system` primitives, a documented allowlist of pure utility functions. Anything else fails the AST allowlist (Q2). The adapter has no way to call `Transport`, MCP, `fetch`, IPC bridge, `window`, `document`, `localStorage`, `child_process`, `fs`, etc. — they simply do not exist in its scope.
-- **Render-with-timeout.** 100 ms wall-clock per `renderCurrent` / `renderDiff` call. Timeout → error boundary → tier-3 fallback → mark adapter version broken → queue regeneration.
-- **No persistence from adapters.** Adapters cannot write to disk, read from disk, start workers, open network connections, call `eval` / `Function`. Enforced by the sandbox primitives (D29) + the AST allowlist (Q2).
-- **Sandbox process model.** Tier-2 adapter loading uses Node's `vm` module in the renderer's preload to expose only the allowlisted module graph. Renderer-process isolation is sufficient given pure-render discipline (D28); we don't need per-adapter `BrowserView` overhead.
+- **Preemptive render timeout (Worker isolation).** 100 ms wall-clock per `renderCurrent` / `renderDiff` call, enforced by running the adapter inside a Web Worker that the main thread can `terminate()`. Phase 0-A's tier-1 render budget is _measured_ (next-commit) because React renders are synchronous and `setTimeout` cannot interrupt them — sufficient for first-party code we wrote, **not sufficient for agent-generated code** that may have infinite loops or memory bombs. The Worker is the preemptive mechanism. On terminate → error boundary in main → tier-3 fallback → mark adapter version broken → queue regeneration.
+- **No persistence from adapters.** Adapters cannot write to disk, read from disk, spawn nested workers, open network connections, call `eval` / `Function`. Enforced by the sandbox primitives (D29) + the AST allowlist (Q2).
+- **Sandbox process model.** Tier-2 adapter loading uses Node's `vm` module in main to AST-scan + compile, then the compiled module runs inside a renderer-spawned Web Worker (one per render call, terminated on completion or timeout). Worker scope exposes only an allowlisted bundle (`react`, `@enterprise-search/design-system` primitives, pure utility allowlist). Renderer-process isolation alone is _not_ sufficient for agent-generated code despite pure-render discipline (D28) — preemptive termination requires the Worker boundary.
 - **Audit trail.** Every adapter lifecycle event (install, hot-swap, broken-mark, regen-success, harvest-to-review) writes to the local SQLite audit log; on Phase 7 promotion, also written to the backend audit table.
 
 ### 9.5.3 Sharing model
