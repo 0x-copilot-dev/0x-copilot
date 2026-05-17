@@ -83,6 +83,8 @@ export interface FavoriteToolSummary {
   readonly subtitle?: string;
   readonly tool_kind: "skill" | "mcp" | "api" | "builtin";
   readonly last_used_at?: string;
+  /** P2-B3 uses use_count for sort + label pluralization. */
+  readonly use_count?: number;
 }
 /** Alias used by P2-B3's FavoriteTools section. */
 export type HomeFavoriteTool = FavoriteToolSummary;
@@ -200,8 +202,22 @@ export interface TodoSummary {
   readonly source_label?: string;
   readonly project_id?: string;
 }
-/** Alias used by P2-B3's TodaysFocus section. */
-export type HomeFocusItem = TodoSummary;
+// P2-B3's TodaysFocus uses a richer focus-item shape (kind + urgency_score
+// + due_at as ISO instant). Distinct from TodoSummary which is the
+// destination-shell's view (text + priority + due_iso). Both ship.
+export type HomeFocusKind = "todo" | "approval" | "review";
+export type HomeFocusPriority = "low" | "med" | "high";
+export interface HomeFocusItem {
+  readonly todo_id: string;
+  readonly title: string;
+  readonly kind: HomeFocusKind;
+  readonly priority?: HomeFocusPriority;
+  readonly due_at?: string;
+  readonly urgency_score: number;
+  readonly is_overdue?: boolean;
+  readonly source_label?: string;
+  readonly project_id?: string;
+}
 
 // ---- §4.5 Meetings --------------------------------------------------------
 
@@ -209,6 +225,8 @@ export type MeetingConnectorKind =
   | "google_calendar"
   | "microsoft_calendar"
   | "other";
+/** Alias used by P2-B3. */
+export type HomeMeetingConnectorKind = MeetingConnectorKind;
 
 export interface MeetingSummary {
   readonly meeting_id: string;
@@ -220,8 +238,19 @@ export interface MeetingSummary {
   readonly conferencing_url?: string;
   readonly source_connector: MeetingConnectorKind;
 }
-/** Alias used by P2-B3's UpcomingMeetings section. */
-export type HomeUpcomingMeeting = MeetingSummary;
+
+// P2-B3's UpcomingMeetings uses `starts_at` ISO instant directly.
+// Distinct from MeetingSummary which has start_iso/end_iso pair.
+export interface HomeUpcomingMeeting {
+  readonly meeting_id?: string;
+  readonly title: string;
+  readonly starts_at: string;
+  readonly ends_at?: string;
+  readonly source_connector: MeetingConnectorKind;
+  readonly conferencing_url?: string;
+  readonly attendee_count?: number;
+  readonly is_organizer?: boolean;
+}
 
 /** Sentinel error code for UpcomingMeetings unavailable-due-to-no-calendar
  *  state. Used by P2-B3 + P2-A1 backend composer. */

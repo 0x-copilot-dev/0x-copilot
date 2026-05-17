@@ -131,7 +131,7 @@ export function FavoriteTools({
             ) : null}
             <div style={metaStyle}>
               <span data-testid="home-favorite-tool-use-count">
-                {pluralizeUses(tool.use_count)}
+                {pluralizeUses(tool.use_count ?? 0)}
               </span>
               {tool.last_used_at !== undefined ? (
                 <span data-testid="home-favorite-tool-last-used">
