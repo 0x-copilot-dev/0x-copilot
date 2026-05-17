@@ -1,14 +1,16 @@
-// LOCAL STUB — at merge, orchestrator rewires imports to
-// "@enterprise-search/api-types".
+// chat-surface Home adapter shape (transitional; kept post-Phase-2 merge).
 //
-// Field-for-field with `docs/atlas-new-design/destinations/home-prd.md` §4.
-// Every import of these types must carry a `// TODO(merge): rewire to
-// "@enterprise-search/api-types"` comment so the orchestrator can find
-// them mechanically at merge.
+// Three Phase-2 agents (P2-B1 destination shell, P2-B2 sections A, P2-B3
+// sections B) developed in parallel against slightly different shape
+// conventions. The canonical backend wire (from P2-A1's `packages/api-types/
+// src/home.ts`) is LEANER than the rich UI shape chat-surface consumes.
+// Apps/frontend (P2-C's `HomeRoute`) adapts the lean wire to this rich
+// shape at the host boundary.
 //
-// Owned-by: P2-A1 (api-types/home.ts) will land first; this stub is a
-// scaffold so P2-B1 can develop in parallel without waiting on the
-// type-package merge.
+// This file exports BOTH naming conventions (P2-B1's rich union vocabulary
+// AND P2-B2/B3's simpler row vocabulary) as aliases so every consumer
+// compiles without code rewrites. Wave 3+ may refactor chat-surface to
+// consume `@enterprise-search/api-types` directly and delete this file.
 
 import type {
   ConversationId,
@@ -18,20 +20,31 @@ import type {
   SkillId,
 } from "@enterprise-search/api-types";
 
-// ---- §4.1 HomeGreeting + HomePayload --------------------------------------
+// ---- §4.1 Greeting --------------------------------------------------------
 
-export type TimeOfDay = "morning" | "afternoon" | "evening" | "late";
+/** Server-computed against tenant timezone (home-prd §4.1). */
+export type HomeTimeOfDay = "morning" | "afternoon" | "evening" | "late";
+/** Alias used by P2-B1's shell code. */
+export type TimeOfDay = HomeTimeOfDay;
+/** Alias used by some test fixtures. */
+export type TimeSegment = "morning" | "afternoon" | "evening";
 
+/**
+ * Greeting block. The `user_first_name` field is optional — when both the
+ * IdP `given_name` and the first-token of IdP `name` are missing the backend
+ * MUST omit it, and the frontend renders the no-name fallback
+ * `"Good {time_of_day}."` (cross-audit §9.5 Q5: email local-part is NOT used).
+ */
 export interface HomeGreeting {
-  readonly time_of_day: TimeOfDay;
-  readonly user_first_name: string;
+  readonly time_of_day: HomeTimeOfDay;
+  readonly user_first_name?: string;
   readonly tenant_local_date: string;
   readonly tenant_local_iso: string;
   readonly agents_working_count: number;
   readonly needs_you_count: number;
 }
 
-// ---- §4.2 reused sub-types ------------------------------------------------
+// ---- §4.2 Pinned chats ----------------------------------------------------
 
 export interface PinnedChatSummary {
   readonly conversation_id: ConversationId;
@@ -41,22 +54,32 @@ export interface PinnedChatSummary {
   readonly unread_message_count: number;
   readonly project_id?: string;
 }
+/** Alias used by P2-B2's PinnedChats section. */
+export type HomePinnedChat = PinnedChatSummary;
 
-export type RecentRunStatus =
+// ---- §4.2 Recent runs -----------------------------------------------------
+
+export type HomeRecentRunStatus =
   | "running"
   | "succeeded"
   | "failed"
   | "cancelled"
   | "queued";
+/** Alias used by P2-B1's shell code. */
+export type RecentRunStatus = HomeRecentRunStatus;
 
 export interface RecentRunSummary {
   readonly run_id: RunId;
   readonly title: string;
-  readonly status: RecentRunStatus;
+  readonly status: HomeRecentRunStatus;
   readonly started_at: string;
   readonly completed_at?: string;
   readonly conversation_id?: ConversationId;
 }
+/** Alias used by P2-B3's RecentRuns section. */
+export type HomeRecentRun = RecentRunSummary;
+
+// ---- §4.2 Favorite tools --------------------------------------------------
 
 export interface FavoriteToolSummary {
   readonly skill_id: SkillId;
@@ -65,8 +88,10 @@ export interface FavoriteToolSummary {
   readonly tool_kind: "skill" | "mcp" | "api" | "builtin";
   readonly last_used_at?: string;
 }
+/** Alias used by P2-B3's FavoriteTools section. */
+export type HomeFavoriteTool = FavoriteToolSummary;
 
-// ---- §4.3 AgentActivityEntry discriminated union --------------------------
+// ---- §4.3 Agent activity (rich discriminated union — P2-B1's convention) ---
 
 export type AgentActivityKind =
   | "drafted_artifact"
@@ -158,7 +183,15 @@ export type AgentActivityEntry =
   | ExtractedTodosActivity
   | IngestedDatasetActivity;
 
-// ---- §4.4 TodoSummary -----------------------------------------------------
+/** Alias used by P2-B2's ActivityFeed section. Same shape as
+ *  AgentActivityEntryBase (the union's common fields). */
+export type HomeActivityRow = AgentActivityEntryBase;
+
+/** P2-B3 imports HomeActivityKind for kind-mapping tables; alias to
+ *  AgentActivityKind. */
+export type HomeActivityKind = AgentActivityKind;
+
+// ---- §4.4 Todos -----------------------------------------------------------
 
 export type TodoSourceKind = "user" | "chat" | "agent";
 export type TodoPriority = "low" | "med" | "high";
@@ -173,8 +206,10 @@ export interface TodoSummary {
   readonly source_label?: string;
   readonly project_id?: string;
 }
+/** Alias used by P2-B3's TodaysFocus section. */
+export type HomeFocusItem = TodoSummary;
 
-// ---- §4.5 MeetingSummary --------------------------------------------------
+// ---- §4.5 Meetings --------------------------------------------------------
 
 export type MeetingConnectorKind =
   | "google_calendar"
@@ -191,8 +226,14 @@ export interface MeetingSummary {
   readonly conferencing_url?: string;
   readonly source_connector: MeetingConnectorKind;
 }
+/** Alias used by P2-B3's UpcomingMeetings section. */
+export type HomeUpcomingMeeting = MeetingSummary;
 
-// ---- §4.6 StarredProjectSummary + QuickAction -----------------------------
+/** Sentinel error code for UpcomingMeetings unavailable-due-to-no-calendar
+ *  state. Used by P2-B3 + P2-A1 backend composer. */
+export const HOME_MEETINGS_NO_CONNECTOR = "no_calendar_connector";
+
+// ---- §4.6 Starred projects + quick actions --------------------------------
 
 export interface StarredProjectSummary {
   readonly project_id: string;
@@ -211,15 +252,13 @@ export interface QuickAction {
   readonly is_admin_only?: boolean;
 }
 
-// ---- §4.1 HomePayload (top-level) -----------------------------------------
+// ---- §4.1 Top-level payload ----------------------------------------------
 
 /**
- * Top-level payload returned by `GET /v1/home`. The orchestrator at merge
- * rewires this to `import { HomeResponse } from "@enterprise-search/api-types"`.
- *
- * Aliased as `HomeResponse` in some sub-PRD revisions — both names refer
- * to the same shape; only `HomePayload` is exported here to keep the
- * stub canonical.
+ * Top-level payload consumed by chat-surface's HomeDestination. RICHER
+ * than the backend wire (canonical at `@enterprise-search/api-types`
+ * `HomeResponse`); the host (`apps/frontend/HomeRoute`) bridges between
+ * the two shapes. Wave 3+ may collapse to one.
  */
 export interface HomePayload {
   readonly greeting: HomeGreeting;
@@ -228,7 +267,6 @@ export interface HomePayload {
   readonly recent_runs: SectionResult<ReadonlyArray<RecentRunSummary>>;
   readonly favorite_tools: SectionResult<ReadonlyArray<FavoriteToolSummary>>;
   readonly todays_focus: SectionResult<ReadonlyArray<TodoSummary>>;
-  /** `null` = no calendar connector — render the connect-CTA per §3.1.7. */
   readonly upcoming_meetings: SectionResult<
     ReadonlyArray<MeetingSummary>
   > | null;
@@ -239,9 +277,8 @@ export interface HomePayload {
   readonly cached_at: string;
 }
 
-/**
- * Alias used by the P2-B1 task brief. Same shape as `HomePayload`; kept
- * so destination code can import either name during the stub window. The
- * orchestrator collapses to a single name at merge.
- */
+/** Alias used by P2-B2's section task brief. Same shape as HomePayload. */
 export type HomeResponse = HomePayload;
+
+/** Alias used by P2-B1 in some signatures. */
+export type HomeRunStatus = HomeRecentRunStatus;
