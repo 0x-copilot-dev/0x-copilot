@@ -70,43 +70,43 @@ is a Phase 1-B / Phase 3 concern. Phase 1-D ships the 9 entries that
 
 ## Functional requirements
 
-- [ ] FR-1 — `HashRouter` implements `Router<ArtifactRoute | null>`.
+- [x] FR-1 — `HashRouter` implements `Router<ArtifactRoute | null>`.
       `current()` returns the parsed `ArtifactRoute` for the current
       `globalThis.location.hash`, or `null` when the hash is empty or
       doesn't decode to a known scheme/body shape.
-- [ ] FR-2 — `navigate(route, options?)` writes the canonical hash and
+- [x] FR-2 — `navigate(route, options?)` writes the canonical hash and
       notifies subscribers — including the subscriber that triggered the
       `navigate` call. `replace: true` uses `globalThis.location.replace`-
       equivalent semantics (history-replace, not push); default is push.
-- [ ] FR-3 — `subscribe(listener)` registers a listener and returns an
+- [x] FR-3 — `subscribe(listener)` registers a listener and returns an
       unsubscribe function. Listeners fire on every `hashchange` event
       AND on every `navigate` call, with the freshly-parsed route.
-- [ ] FR-4 — Construction: `new HashRouter()` uses the current
+- [x] FR-4 — Construction: `new HashRouter()` uses the current
       `globalThis.location.hash`. `new HashRouter({ initialRoute })`
       overrides for tests (also writes the canonical hash on construction
       so `current()` and the substrate agree).
-- [ ] FR-5 — Hash format: `#/{scheme}/{body}` where `{scheme}` and
+- [x] FR-5 — Hash format: `#/{scheme}/{body}` where `{scheme}` and
       `{body}` are the same values `buildArtifactUri` produces
       (`scheme://body`). Unknown / malformed hashes resolve to `null`,
       not to a synthesized default — silent defaulting masks routing bugs.
-- [ ] FR-6 — `ROUTE_TABLE` is a frozen record keyed by
+- [x] FR-6 — `ROUTE_TABLE` is a frozen record keyed by
       `ArtifactRoute['kind']`. Each `RouteEntry` carries: `kind`,
       `scheme` (matches `ARTIFACT_SCHEMES`), `label` (human string),
       `iconHint` (string keyword the AppRail can map), and `Component`
       (a React component rendered with `route` prop). Phase 1 components
       are stubs (`<div>{label}</div>`); Phase 3 replaces them.
-- [ ] FR-7 — `CommandPalette` opens on Cmd+K (Mac) or Ctrl+K (other
+- [x] FR-7 — `CommandPalette` opens on Cmd+K (Mac) or Ctrl+K (other
       platforms) via a `keydown` listener on `globalThis.document`;
       closes on Esc. Cmd+K toggles when already open. Search input
       auto-focuses on open.
-- [ ] FR-8 — Result list is built from two sources: (a) every
+- [x] FR-8 — Result list is built from two sources: (a) every
       `ROUTE_TABLE` entry rendered as `{label} · destination`, and
       (b) mock chat/project/library entries (placeholder data, fine for
       Phase 1). Substring-match against `label`, case-insensitive.
-- [ ] FR-9 — Arrow Up / Down moves selection (with wrap-around); Enter
+- [x] FR-9 — Arrow Up / Down moves selection (with wrap-around); Enter
       calls `router.navigate(...)` with the selected entry's route and
       closes the palette; Esc closes without navigating.
-- [ ] FR-10 — Mounts as a `position: fixed` scrim + centered card. No
+- [x] FR-10 — Mounts as a `position: fixed` scrim + centered card. No
       portals (substrate-port discipline — `createPortal` requires
       `document`).
 
@@ -219,15 +219,28 @@ export function CommandPalette(props: CommandPaletteProps): React.ReactNode;
 
 ## Done criteria
 
-- [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
-- [ ] No imports outside scope
-- [ ] No bare browser globals (only `globalThis.` member access)
-- [ ] No new third-party dependency
-- [ ] `packages/chat-surface/src/index.ts` only gains the delimited
+- [x] All FRs met
+- [x] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
+- [x] `npm test --workspace @enterprise-search/chat-surface` passes
+      (28 HashRouter + 9 route-table + 12 CommandPalette tests)
+- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [x] No imports outside scope
+- [x] No bare browser globals (only `globalThis.` member access)
+- [x] No new third-party dependency
+- [x] `packages/chat-surface/src/index.ts` only gains the delimited
       Phase 1-D block; all pre-existing exports untouched
+
+### Pending integration (not 1D's responsibility)
+
+- Apps/desktop renderer still mounts `StubRouter` from 1A; the
+  `HashRouter` displacement (one-line swap in
+  `apps/desktop/renderer/bootstrap.tsx`) belongs to the Phase 2
+  integration window.
+- Open Q2 (ArtifactRoute coverage of 11 Atlas destinations) remains
+  open — Phase 3 (or a route-union widening sub-PRD) owns the
+  resolution. The shell currently no-ops the 8 unmatched tiles.
+- Open Q4 (real palette entries via `Transport.request`) — wired
+  when Phase 2+ ships transport-backed search.
 
 ## Notes for orchestrator review
 
