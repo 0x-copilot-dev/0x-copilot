@@ -1,3 +1,10 @@
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
   app,
@@ -9,6 +16,7 @@ import {
   webContents,
 } from "electron";
 
+import type { AdapterGeneratedPayload } from "@enterprise-search/api-types";
 import type { Transport } from "@enterprise-search/chat-transport";
 import {
   CHANNELS,
@@ -17,7 +25,22 @@ import {
   withBearerRefresh,
 } from "@enterprise-search/chat-transport";
 
-import { wireQualityGateForTier2 } from "./adapters/integrate";
+import {
+  wireQualityGateForTier2,
+  wireSmokeRenderExecutorForTier2,
+} from "./adapters/integrate";
+import {
+  startTier2Lifecycle,
+  type LifecycleBoundaryEvent,
+  type LifecycleEventSource,
+  type Tier2LifecycleHandle,
+} from "./adapters/lifecycle";
+import type { LifecycleEventsDeps } from "./adapters/lifecycle-events";
+import {
+  markBrokenFromBoundary,
+  type RegistryHostDeps,
+  type RendererDispatcher,
+} from "./adapters/registry-host";
 import {
   AuthService,
   createFileAuthAuditLog,
@@ -40,11 +63,37 @@ registerAppProtocolPrivilege();
 
 let mainWindow: BrowserWindow | null = null;
 let teardownIpcHandlers: (() => void) | null = null;
+let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
+
+// Pluggable tier-2 event source. Phase 6 ships a no-op stub — the wiring to
+// the live run-stream (subscribing to adapter_generated events) is Phase 7's
+// concern. Tests inject a real source.
+class StubLifecycleEventSource implements LifecycleEventSource {
+  onAdapterGenerated(
+    _handler: (p: AdapterGeneratedPayload) => void,
+  ): () => void {
+    return () => {};
+  }
+  onBoundaryError(
+    _handler: (info: LifecycleBoundaryEvent) => void,
+  ): () => void {
+    return () => {};
+  }
+}
+
+class WindowDispatcher implements RendererDispatcher {
+  send(channel: string, payload: unknown): void {
+    if (mainWindow === null) return;
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send(channel, payload);
+  }
+}
 
 void app.whenReady().then(() => {
   startCrashReporter();
   registerDeepLinks();
   wireQualityGateForTier2();
+  wireSmokeRenderExecutorForTier2();
 
   const rendererDir = join(__dirname, "..", "renderer");
   registerAppProtocolHandler(rendererDir, session.defaultSession);
@@ -64,6 +113,27 @@ void app.whenReady().then(() => {
     },
     { transport },
   );
+
+  const tier2Source = new StubLifecycleEventSource();
+  const userDataDir = app.getPath("userData");
+  const adapterDir = join(userDataDir, "adapters");
+  const audit: LifecycleEventsDeps = {
+    logPath: join(userDataDir, "audit", "adapter-lifecycle.log"),
+    fs: {
+      appendFile,
+      mkdir,
+      readFile: async (path, _encoding) => readFile(path, "utf8"),
+    },
+  };
+  const dispatcher = new WindowDispatcher();
+  const hostDeps: RegistryHostDeps = {
+    adapterDir,
+    clock: Date.now,
+    dispatcher,
+    audit,
+    installer: { fs: { writeFile, mkdir, unlink } },
+  };
+
   teardownIpcHandlers = registerIpcHandlers({
     ipcMain,
     bridge: transportBridge,
@@ -73,6 +143,24 @@ void app.whenReady().then(() => {
       getSession: (workspaceId) => authService.getSession(workspaceId),
       refresh: (workspaceId) => authService.refresh(workspaceId),
     },
+    tier2: {
+      onBoundaryError: (payload) => {
+        void markBrokenFromBoundary(
+          {
+            scheme: payload.scheme,
+            version: payload.version,
+            method: payload.method,
+            reason: payload.message,
+          },
+          hostDeps,
+        );
+      },
+    },
+  });
+
+  tier2LifecycleHandle = startTier2Lifecycle({
+    source: tier2Source,
+    host: hostDeps,
   });
 
   mainWindow = createMainWindow();
@@ -88,6 +176,8 @@ void app.whenReady().then(() => {
 });
 
 app.on("before-quit", () => {
+  tier2LifecycleHandle?.stop();
+  tier2LifecycleHandle = null;
   teardownIpcHandlers?.();
   teardownIpcHandlers = null;
 });

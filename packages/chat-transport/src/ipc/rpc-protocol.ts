@@ -20,6 +20,16 @@ export const CHANNELS = {
   authSignIn: "auth.sign-in",
   authSignOut: "auth.sign-out",
   authRefresh: "auth.refresh",
+  // Phase 6C tier-2 adapter lifecycle. Main owns the install pipeline
+  // (Q1-Q5); the renderer owns the chat-surface registry. Adapter source
+  // crosses the boundary, never adapter objects (functions cannot be
+  // structured-cloned across Electron IPC).
+  tier2Install: "tier2.install",
+  tier2Uninstall: "tier2.uninstall",
+  tier2MarkBroken: "tier2.mark-broken",
+  // Renderer → main: forwarded when the renderer's error boundary catches
+  // a live tier-2 render throw (Q6 trip).
+  tier2BoundaryError: "tier2.boundary-error",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
@@ -87,6 +97,55 @@ export const RendererSessionSchema = z
   })
   .strict();
 export type RendererSession = z.infer<typeof RendererSessionSchema>;
+
+// === Phase 6C tier-2 lifecycle ===
+
+const Tier2RenderMethodSchema = z.enum(["renderCurrent", "renderDiff"]);
+
+export const Tier2InstallPayloadSchema = z
+  .object({
+    scheme: z.string().min(1),
+    version: z.number().int().nonnegative(),
+    source: z.string().min(1),
+    generatedAt: z.string().min(1),
+    generatorModel: z.string().min(1),
+  })
+  .strict();
+export type Tier2InstallPayload = z.infer<typeof Tier2InstallPayloadSchema>;
+
+export const Tier2UninstallPayloadSchema = z
+  .object({
+    scheme: z.string().min(1),
+    version: z.number().int().nonnegative(),
+  })
+  .strict();
+export type Tier2UninstallPayload = z.infer<typeof Tier2UninstallPayloadSchema>;
+
+export const Tier2MarkBrokenPayloadSchema = z
+  .object({
+    scheme: z.string().min(1),
+    version: z.number().int().nonnegative(),
+    method: Tier2RenderMethodSchema,
+    reason: z.string().min(1),
+  })
+  .strict();
+export type Tier2MarkBrokenPayload = z.infer<
+  typeof Tier2MarkBrokenPayloadSchema
+>;
+
+export const Tier2BoundaryErrorPayloadSchema = z
+  .object({
+    scheme: z.string().min(1),
+    version: z.number().int().nonnegative(),
+    method: Tier2RenderMethodSchema,
+    message: z.string().min(1),
+  })
+  .strict();
+export type Tier2BoundaryErrorPayload = z.infer<
+  typeof Tier2BoundaryErrorPayloadSchema
+>;
+
+// === end Phase 6C ===
 
 export const StreamEventKindSchema = z.enum([
   "open",

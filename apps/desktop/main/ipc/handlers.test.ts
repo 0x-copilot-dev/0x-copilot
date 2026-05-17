@@ -455,3 +455,87 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);
   });
 });
+
+describe("tier2.boundary-error channel (Phase 6C)", () => {
+  it("registers the handler only when tier2 dispatcher is supplied", () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+    });
+    expect(ipcMain.has(CHANNELS.tier2BoundaryError)).toBe(false);
+  });
+
+  it("validates and forwards to the dispatcher", async () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    const onBoundaryError = vi.fn();
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      tier2: { onBoundaryError },
+    });
+    const result = (await ipcMain.invoke(CHANNELS.tier2BoundaryError, 42, {
+      scheme: "email",
+      version: 1,
+      method: "renderCurrent",
+      message: "TypeError: x is undefined",
+    })) as { ok: true };
+    expect(result.ok).toBe(true);
+    expect(onBoundaryError).toHaveBeenCalledWith({
+      scheme: "email",
+      version: 1,
+      method: "renderCurrent",
+      message: "TypeError: x is undefined",
+    });
+  });
+
+  it("rejects malformed payloads with IpcValidationError", async () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      tier2: { onBoundaryError: vi.fn() },
+    });
+    await expect(
+      ipcMain.invoke(CHANNELS.tier2BoundaryError, 1, {
+        scheme: "email",
+        version: "not-a-number",
+        method: "renderCurrent",
+        message: "x",
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("rejects an unknown method enum value", async () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      tier2: { onBoundaryError: vi.fn() },
+    });
+    await expect(
+      ipcMain.invoke(CHANNELS.tier2BoundaryError, 1, {
+        scheme: "email",
+        version: 1,
+        method: "renderUnknown",
+        message: "x",
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+});
