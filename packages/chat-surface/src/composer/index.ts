@@ -3,12 +3,15 @@ export {
   ToolPicker,
   type ToolPickerProps,
   type ToolDescriptor,
+  type ToolKind,
 } from "./ToolPicker";
 export {
   ModelPicker,
   type ModelPickerProps,
   type ModelDescriptor,
+  type Depth,
   listModelDescriptors,
+  listDepthDescriptors,
 } from "./ModelPicker";
 export {
   MentionPopover,

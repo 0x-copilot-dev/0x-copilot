@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import { ModelPicker, listModelDescriptors } from "./ModelPicker";
+import {
+  ModelPicker,
+  listDepthDescriptors,
+  listModelDescriptors,
+} from "./ModelPicker";
 
 describe("ModelPicker", () => {
   it("renders nothing when closed", () => {
@@ -101,5 +105,64 @@ describe("ModelPicker", () => {
       "claude-sonnet-4-6",
       "claude-haiku-4-5",
     ]);
+  });
+
+  /* Combined Model · Depth popover (chat1.md L805-820). The same popover
+   * surfaces both axes — model rows and a Fast/Balanced/Deep grid. */
+  it("renders the depth chips Fast/Balanced/Deep when open", () => {
+    render(
+      <ModelPicker
+        open={true}
+        selectedModel="claude-opus-4-7"
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("depth-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("depth-picker-row-fast")).toBeInTheDocument();
+    expect(screen.getByTestId("depth-picker-row-balanced")).toBeInTheDocument();
+    expect(screen.getByTestId("depth-picker-row-deep")).toBeInTheDocument();
+  });
+
+  it("marks the selected depth with aria-checked=true and fires onDepthChange", () => {
+    const onDepthChange = vi.fn();
+    render(
+      <ModelPicker
+        open={true}
+        selectedModel="claude-opus-4-7"
+        selectedDepth="balanced"
+        onSelect={() => {}}
+        onDepthChange={onDepthChange}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("depth-picker-row-balanced")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByTestId("depth-picker-row-fast"));
+    expect(onDepthChange).toHaveBeenCalledWith("fast");
+  });
+
+  it("does not close the popover when a depth chip is selected", () => {
+    /* Depth is a frequently tuned axis after picking a model; closing
+     * here would force a re-open and make the popover feel modal. */
+    const onClose = vi.fn();
+    render(
+      <ModelPicker
+        open={true}
+        selectedModel="claude-opus-4-7"
+        onSelect={() => {}}
+        onDepthChange={() => {}}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("depth-picker-row-deep"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("exposes the depth descriptor list for hosts that need it", () => {
+    const list = listDepthDescriptors();
+    expect(list.map((d) => d.id)).toEqual(["fast", "balanced", "deep"]);
   });
 });

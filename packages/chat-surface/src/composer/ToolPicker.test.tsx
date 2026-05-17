@@ -204,6 +204,65 @@ describe("ToolPicker", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  /* Unified Tools popover (chat1.md L805-820): "skills + MCPs combined
+   * in a single popover, sectioned". Tools without an explicit `kind`
+   * fall into the MCPs section — the historical contract of
+   * /v1/mcp/tools. */
+  it("renders Skills and MCPs sections when both kinds are present", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({
+        tools: [
+          { name: "summarize", label: "Summarize", kind: "skill" },
+          { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
+        ],
+      }),
+    );
+    render(
+      withTransport(
+        transport,
+        <ToolPicker
+          open={true}
+          selectedTools={[]}
+          onToggle={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tool-picker-section-skills"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("tool-picker-section-mcps")).toBeInTheDocument();
+    expect(screen.getByText("Summarize")).toBeInTheDocument();
+    expect(screen.getByText("Gmail draft")).toBeInTheDocument();
+  });
+
+  it("hides the Skills section when no skill-kind tools are returned", async () => {
+    /* Historical /v1/mcp/tools responses had no `kind` — those rows
+     * land in MCPs and Skills should be absent rather than render an
+     * empty section heading. */
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ tools: SAMPLE_TOOLS }),
+    );
+    render(
+      withTransport(
+        transport,
+        <ToolPicker
+          open={true}
+          selectedTools={[]}
+          onToggle={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await screen.findByText("Gmail draft");
+    expect(
+      screen.queryByTestId("tool-picker-section-skills"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-picker-section-mcps")).toBeInTheDocument();
+  });
+
   it("does not refetch when re-opened after a successful first load", async () => {
     const { transport, record } = makeTransport(() =>
       Promise.resolve({ tools: SAMPLE_TOOLS }),
