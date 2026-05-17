@@ -18,7 +18,7 @@ import globals from "globals";
 //
 // Architecture context:
 //   docs/architecture/desktop-app.md
-//   docs/architecture/desktop-app-rollout.md §3, §E3
+//   docs/plan/desktop/PRD.md §3.2, §6.5
 //
 // The one allowed substrate touchpoint inside this package is the web
 // reference implementation of KeyValueStore — it uses

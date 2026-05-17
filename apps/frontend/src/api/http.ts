@@ -25,10 +25,10 @@ type BearerProvider = () => string | null;
 // Bearer plumbing and 401 notification used to live as module-private
 // closures in this file. They moved into ./transport.ts so a single
 // WebTransport instance owns the substrate boundary (see
-// docs/architecture/desktop-app-rollout.md §3.1). The two `configure*`
-// functions below are deprecation shims kept so AuthContext, the api
-// modules, and existing tests can migrate one PR at a time instead of in
-// a flag-day rewrite. Slated for deletion in the rollout plan's PR #5.
+// docs/architecture/desktop-app.md §6 — streaming & data flow). The two
+// `configure*` functions below are deprecation shims kept so AuthContext,
+// the api modules, and existing tests can migrate one PR at a time
+// instead of in a flag-day rewrite.
 
 export function configureUnauthorizedHandler(
   handler: UnauthorizedHandler | null,

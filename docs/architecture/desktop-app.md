@@ -4,7 +4,7 @@ Status: **proposal — substrate decided (custom Electron)** · Owner: TBD · La
 
 This document specifies the architecture for the Mac and Windows desktop client of the Atlas / enterprise-search product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
 
-This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` is replaced by the PRD and will be removed in Phase 0.
+This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` was replaced by the PRD and removed in Phase 0.
 
 Substrate: **custom Electron** (one `BrowserWindow` mounting `packages/chat-surface`). Validated by Phase S of the PRD on 2026-05-17; see [phase-0.5/S2-decision.md](../plan/desktop/phase-0.5/S2-decision.md) for the full reasoning. Phase 1's `electron-shell` agent builds `apps/desktop/` from scratch against the Phase 4 contract; spike code does not land on main.
 

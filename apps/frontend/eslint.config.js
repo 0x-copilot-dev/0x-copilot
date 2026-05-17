@@ -12,7 +12,7 @@ import globals from "globals";
 // The lint rule below pins that contract. Without it, the next regression
 // is inevitable. Architecture context:
 //   docs/architecture/desktop-app.md
-//   docs/architecture/desktop-app-rollout.md §3, §4
+//   docs/plan/desktop/PRD.md §3.2, §6.5
 
 const BOUNDARY_MESSAGE_GLOBALS =
   "features must call typed api modules under src/api/*; the substrate primitive (fetch/SSE/XHR) lives behind the Transport port, not in features.";
