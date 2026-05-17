@@ -23,20 +23,20 @@
     "@opentelemetry/sdk-trace-web": "2.7.1",
     "@opentelemetry/semantic-conventions": "1.41.1",
     "@radix-ui/react-popover": "1.1.15",
-    "@vitejs/plugin-react": "6.0.1",
+    "@vitejs/plugin-react": "6.0.2",
     "qrcode.react": "4.2.0",
-    "react": "19.2.5",
-    "react-dom": "19.2.5",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
     "recharts": "2.15.4",
-    "streamdown": "2.4.0",
+    "streamdown": "2.5.0",
     "tinykeys": "3.0.0",
     "typescript": "6.0.3",
-    "vite": "8.0.10"
+    "vite": "8.0.13"
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "6.6.3",
-    "@testing-library/react": "16.3.0",
-    "@testing-library/user-event": "14.5.2",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
     "@types/node": "25.8.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
@@ -44,6 +44,6 @@
     "eslint": "9.39.4",
     "globals": "15.15.0",
     "jsdom": "29.1.1",
-    "vitest": "4.1.5"
+    "vitest": "4.1.6"
   }
 }
