@@ -507,3 +507,13 @@ Implications for P4-A impl:
 ### 9.4 Phase 1 Chats canvas — all 10 sub-PRD recommendations accepted as binding
 
 See [implementation-plan.md](implementation-plan.md) §3 (Phase 1) for the full table. No deviations.
+
+### 9.5 Phase 2 Home — all 8 questions resolved (3 deviations from sub-PRD recs)
+
+See [implementation-plan.md](implementation-plan.md) §3 (Phase 2) for the full table. Three deviations from the sub-PRD's recommendations:
+
+- **Q1 Activity window length** — user-configurable **in Phase 2** (per-user KV `home.activity_window_hours`, allowed values 6/12/24/48/168), not deferred to Wave 4+. Affects P2-A backend: the `/v1/home` route reads the per-user window from KV instead of hard-coding 24h. Tests must cover non-default windows.
+- **Q5 Greeting personalization** — fallback chain stops at `"Good morning."` (no name interpolation if both IdP fields are missing). Email local-part is NOT used. Affects P2-A backend's greeting composer.
+- **Q8 SSE drop-off** — exponential backoff range explicitly **1s → 30s**. No "paused" indicator surfaced to the user. Affects P2-B chat-surface SSE reconnect logic.
+
+Q7 quick-action customization: "do whatever is easy" — interpreted as **server-driven defaults only in Phase 2**; admin endpoint deferred to Wave 5+. Sub-PRD recommendation aligns; no deviation.

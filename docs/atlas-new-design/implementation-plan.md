@@ -155,18 +155,18 @@ This list is the **complete set** of open product questions from all 5 sub-PRDs.
 | 9   | Branched-conversations cascade                                | **Delete branch → parent untouched; delete parent → branches survive with dead link** (per cross-audit §5.3)                            |
 | 10  | Cross-conversation depth default                              | **Per-user `chats.default_depth` KV; null fallback to "balanced"** (sub-PRD recommendation + cross-audit §2.1 branded `ReasoningDepth`) |
 
-### Phase 2 Home (8 questions from sub-PRD §16)
+### Phase 2 Home (8 questions from sub-PRD §16) — orchestrator-approved 2026-05-17
 
-| #   | Question                                     | Decision                                                                                  |
-| --- | -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| 1   | Activity window length                       | **24h default; user-configurable Wave 4+**                                                |
-| 2   | New-tenant empty state                       | **Empty page + "New chat" CTA**; tour deferred                                            |
-| 3   | Today's focus selection                      | **Automatic top-3 by composite score (server-side)**; user-pinning Wave 4+                |
-| 4   | Upcoming meetings with no calendar connector | **Replace section with "Connect a calendar →" CTA**                                       |
-| 5   | Greeting personalization                     | **IdP `given_name` → first token of `name` → email local-part → "" (never 'Atlas user')** |
-| 6   | Section order                                | **Fixed in Phase 2; per-user reorder Wave 4+**                                            |
-| 7   | Quick-action customization                   | **Server-driven defaults; admin UI Wave 5+**                                              |
-| 8   | SSE drop-off behaviour                       | **Silent retry with exponential backoff**                                                 |
+| #   | Question                                     | Decision                                                                                                                   |
+| --- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Activity window length                       | **24h default AND user-configurable in Phase 2** (per-user KV `home.activity_window_hours`; allowed values 6/12/24/48/168) |
+| 2   | New-tenant empty state                       | **Empty page + "New chat" CTA**; no guided tour                                                                            |
+| 3   | Today's focus selection                      | **Automatic top-3 by composite score (server-side)**; user-pinning Wave 4+                                                 |
+| 4   | Upcoming meetings with no calendar connector | **One-row CTA replacing the section: "Connect a calendar to see today's meetings →"**                                      |
+| 5   | Greeting personalization                     | **IdP `given_name` → first token of IdP `name` → "Good morning." (no name)**. Email local-part NOT used as a fallback.     |
+| 6   | Section order                                | **Fixed in Phase 2**; per-user reorder Wave 4+                                                                             |
+| 7   | Quick-action customization                   | **Server-driven defaults; no admin UI in Phase 2** (smallest feasible scope per "do whatever is easy")                     |
+| 8   | SSE drop-off behaviour                       | **Silent retry, exponential backoff 1s → 30s, no user-visible "paused" indicator**                                         |
 
 ### Phase 3 Todos (9 questions from sub-PRD §16)
 
