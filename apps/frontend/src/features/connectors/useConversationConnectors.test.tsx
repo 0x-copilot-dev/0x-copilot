@@ -13,10 +13,27 @@
  */
 
 import type { Conversation } from "@enterprise-search/api-types";
+import {
+  DocumentPresenceSignal,
+  PresenceSignalProvider,
+} from "@enterprise-search/chat-surface";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useConversationConnectors } from "./useConversationConnectors";
+
+// Wrap renderHook calls so the hook reads a real PresenceSignal backed
+// by document. The visibilitychange events dispatched in flushVisibility
+// then reach the hook via the port instead of being silently swallowed
+// by the tolerant ALWAYS_VISIBLE default in the provider context.
+function withPresenceSignal({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <PresenceSignalProvider signal={new DocumentPresenceSignal()}>
+      {children}
+    </PresenceSignalProvider>
+  );
+}
 
 const IDENTITY = { orgId: "org_pr12", userId: "user_pr12" } as const;
 
@@ -129,8 +146,9 @@ describe("useConversationConnectors · visibilitychange refetch (PR 1.2.1)", () 
         ),
       );
     const seed = conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z");
-    const { result } = renderHook(() =>
-      useConversationConnectors(seed, IDENTITY),
+    const { result } = renderHook(
+      () => useConversationConnectors(seed, IDENTITY),
+      { wrapper: withPresenceSignal },
     );
 
     setVisibility("hidden");
@@ -151,8 +169,9 @@ describe("useConversationConnectors · visibilitychange refetch (PR 1.2.1)", () 
       jsonResponse(conversation({ drive: ["read"] }, stamp)),
     );
     const seed = conversation({ slack: ["read"] }, stamp);
-    const { result } = renderHook(() =>
-      useConversationConnectors(seed, IDENTITY),
+    const { result } = renderHook(
+      () => useConversationConnectors(seed, IDENTITY),
+      { wrapper: withPresenceSignal },
     );
 
     await flushVisibility();
@@ -167,11 +186,13 @@ describe("useConversationConnectors · visibilitychange refetch (PR 1.2.1)", () 
       .mockResolvedValue(
         jsonResponse(conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z")),
       );
-    const { unmount } = renderHook(() =>
-      useConversationConnectors(
-        conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z"),
-        IDENTITY,
-      ),
+    const { unmount } = renderHook(
+      () =>
+        useConversationConnectors(
+          conversation({ slack: ["read"] }, "2026-05-05T00:00:00Z"),
+          IDENTITY,
+        ),
+      { wrapper: withPresenceSignal },
     );
     unmount();
     await flushVisibility();

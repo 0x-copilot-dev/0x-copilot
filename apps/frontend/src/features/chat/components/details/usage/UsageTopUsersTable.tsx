@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 
 import { formatMicroUsd } from "../../../utils/formatMicroUsd";
+import { formatTokens } from "./format";
 import {
   pickTopUsers,
   type UsageRankBy,
@@ -130,7 +131,7 @@ function UserRow({
         ) : null}
       </td>
       <td>{row.runs_count}</td>
-      <td>{`${row.total.toLocaleString()} tok`}</td>
+      <td>{formatTokens(row.total)}</td>
       {showCosts ? <td>{formatMicroUsd(row.cost_micro_usd)}</td> : null}
     </tr>
   );

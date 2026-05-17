@@ -23,7 +23,6 @@ import type { ConnectorState } from "../connectors/useConnectors";
 import type { SkillState } from "../skills/useSkills";
 import type { RequestIdentity } from "../../api/config";
 import type { UserProfileState } from "../me/useUserProfile";
-import type { UserPreferencesState } from "../me/useUserPreferences";
 // PR 8.1 — ACCOUNT group sections.
 import { Appearance } from "./sections/Appearance";
 import { Notifications } from "./sections/Notifications";
@@ -43,6 +42,7 @@ import { WorkspaceSettings } from "./WorkspaceSettings";
 // PR 8.1 — top chrome reads workspace name + member count.
 import { useWorkspace, useWorkspaceMembers } from "./useWorkspace";
 import "./workspace.css";
+import { errorMessage } from "../../utils/errors";
 
 const DEFAULT_SKILL_MARKDOWN = `---
 name: custom-workflow
@@ -197,7 +197,6 @@ export function SettingsScreen({
   skills,
   identity,
   profile,
-  preferences,
   initialSection = "profile",
   dataResidency,
   onBackToChat,
@@ -213,13 +212,13 @@ export function SettingsScreen({
    */
   identity?: RequestIdentity;
   /**
-   * Hydrated user profile + preferences from the app shell.
-   * Optional so legacy callers that mount SettingsScreen without
-   * threading these (tests, storybook) keep working — the affected
-   * sections render a soft-disabled state when the state is absent.
+   * Hydrated user profile from the app shell. Optional so legacy callers
+   * that mount SettingsScreen without threading it (tests, storybook)
+   * keep working — the affected sections render a soft-disabled state
+   * when absent. Preferences are read from `UserPreferencesProvider`
+   * directly by the panels that need them (PRD 04), no prop threading.
    */
   profile?: UserProfileState;
-  preferences?: UserPreferencesState;
   initialSection?: SettingsSection;
   /**
    * Read-only deployment region label rendered in the Privacy & data
@@ -299,15 +298,11 @@ export function SettingsScreen({
           {activeSection === "profile" && profile ? (
             <Profile profile={profile} />
           ) : null}
-          {activeSection === "appearance" && preferences && profile ? (
-            <Appearance preferences={preferences} profile={profile} />
+          {activeSection === "appearance" && profile ? (
+            <Appearance profile={profile} />
           ) : null}
-          {activeSection === "shortcuts" && preferences ? (
-            <Shortcuts preferences={preferences} />
-          ) : null}
-          {activeSection === "notifications" && preferences ? (
-            <Notifications preferences={preferences} />
-          ) : null}
+          {activeSection === "shortcuts" ? <Shortcuts /> : null}
+          {activeSection === "notifications" ? <Notifications /> : null}
           {activeSection === "api-keys" ? <ApiKeys /> : null}
           {activeSection === "workspace" && identity ? (
             <WorkspaceSettings identity={identity} isAdmin={isAdmin} />
@@ -880,9 +875,7 @@ function ManualAddForm({
         await connectors.authenticate(server.server_id);
       }
     } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : "Could not add connector.",
-      );
+      setFormError(errorMessage(err, "Could not add connector."));
     } finally {
       setSubmitting(false);
     }
@@ -1343,8 +1336,4 @@ function oauthClientFromForm({
       : {}),
     ...(trimmedTokenEndpoint ? { token_endpoint: trimmedTokenEndpoint } : {}),
   };
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
 }

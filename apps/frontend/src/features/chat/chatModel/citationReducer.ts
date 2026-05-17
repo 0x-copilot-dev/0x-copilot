@@ -23,7 +23,7 @@ import {
   upsertCitation,
   upsertCitations,
   type CitationRegistryByRun,
-} from "./citationsRegistry";
+} from "@enterprise-search/chat-surface";
 
 export function applyCitationEvent(
   registry: CitationRegistryByRun,

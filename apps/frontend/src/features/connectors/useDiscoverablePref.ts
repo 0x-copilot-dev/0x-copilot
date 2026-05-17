@@ -26,7 +26,12 @@
 // next setEnabled retries the PATCH; that is the same end-state as
 // localStorage was, just without the cross-device persistence.
 
+import {
+  useKeyValueStore,
+  type KeyValueStore,
+} from "@enterprise-search/chat-surface";
 import { useCallback, useEffect, useState } from "react";
+
 import { getMyPreferences, updateMyPreferences } from "../../api/meApi";
 
 const LEGACY_PREFIX = "enterprise.discoverable.";
@@ -45,18 +50,18 @@ const SHARED: SharedState = {
 };
 
 let bootstrapPromise: Promise<void> | null = null;
+// The store the active bootstrap was initialized with. Captured here so
+// the retry-after-persist-failure path can re-run bootstrap with the
+// same substrate-bound store without re-threading through the call
+// chain. There's only one store per app in practice.
+let activeStore: KeyValueStore | null = null;
 
-function readLegacyLocalOverrides(): Overrides {
-  if (typeof window === "undefined") {
-    return {};
-  }
+function readLegacyLocalOverrides(store: KeyValueStore): Overrides {
   const out: Overrides = {};
   try {
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-      if (key === null || !key.startsWith(LEGACY_PREFIX)) continue;
+    for (const key of store.keys(LEGACY_PREFIX)) {
       const slug = key.slice(LEGACY_PREFIX.length);
-      const raw = window.localStorage.getItem(key);
+      const raw = store.get(key);
       if (raw === "on") out[slug] = true;
       else if (raw === "off") out[slug] = false;
     }
@@ -66,11 +71,13 @@ function readLegacyLocalOverrides(): Overrides {
   return out;
 }
 
-function clearLegacyLocalOverrides(slugs: readonly string[]): void {
-  if (typeof window === "undefined") return;
+function clearLegacyLocalOverrides(
+  store: KeyValueStore,
+  slugs: readonly string[],
+): void {
   try {
     for (const slug of slugs) {
-      window.localStorage.removeItem(LEGACY_PREFIX + slug);
+      store.set(LEGACY_PREFIX + slug, null);
     }
   } catch {
     /* see read */
@@ -88,7 +95,7 @@ function readOverrides(prefs: {
   return { ...(prefs.discoverable_connectors?.overrides ?? {}) };
 }
 
-async function bootstrap(): Promise<void> {
+async function bootstrap(store: KeyValueStore): Promise<void> {
   try {
     const prefs = await getMyPreferences();
     SHARED.overrides = readOverrides(prefs);
@@ -97,7 +104,7 @@ async function bootstrap(): Promise<void> {
     // in the backend are PATCHed across, then deleted. The merge is
     // intentionally backend-wins so a deliberate later flip on a
     // different device is not overwritten by stale local state.
-    const legacy = readLegacyLocalOverrides();
+    const legacy = readLegacyLocalOverrides(store);
     const toMigrate: Overrides = {};
     for (const [slug, value] of Object.entries(legacy)) {
       if (!(slug in SHARED.overrides)) {
@@ -110,7 +117,7 @@ async function bootstrap(): Promise<void> {
       });
       SHARED.overrides = readOverrides(updated);
     }
-    clearLegacyLocalOverrides(Object.keys(legacy));
+    clearLegacyLocalOverrides(store, Object.keys(legacy));
   } catch {
     // Bootstrap failure (older backend, network blip, etc.) leaves
     // SHARED.overrides empty — the hook will report catalog defaults
@@ -120,9 +127,10 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-function ensureBootstrapped(): Promise<void> {
+function ensureBootstrapped(store: KeyValueStore): Promise<void> {
   if (bootstrapPromise === null) {
-    bootstrapPromise = bootstrap();
+    activeStore = store;
+    bootstrapPromise = bootstrap(store);
   }
   return bootstrapPromise;
 }
@@ -157,9 +165,13 @@ async function persist(slug: string, enabled: boolean): Promise<void> {
     });
   } catch {
     // Network failure — revert by re-fetching via bootstrap. Cheap and
-    // keeps the UI honest about server state.
+    // keeps the UI honest about server state. Re-uses the store the
+    // active bootstrap was initialized with; if bootstrap never ran
+    // (no hook has mounted yet) we skip the retry.
     bootstrapPromise = null;
-    void ensureBootstrapped();
+    if (activeStore !== null) {
+      void ensureBootstrapped(activeStore);
+    }
   }
 }
 
@@ -184,6 +196,7 @@ export function useDiscoverablePref(
   slug: string,
   catalogDefault: boolean,
 ): DiscoverablePref {
+  const kvStore = useKeyValueStore();
   const [override, setOverride] = useState<boolean | undefined>(() =>
     slug in SHARED.overrides ? SHARED.overrides[slug] : undefined,
   );
@@ -195,14 +208,14 @@ export function useDiscoverablePref(
       setOverride(slug in next ? next[slug] : undefined);
     };
     SHARED.listeners.add(onChange);
-    void ensureBootstrapped().then(() => {
+    void ensureBootstrapped(kvStore).then(() => {
       if (!cancelled) onChange(SHARED.overrides);
     });
     return () => {
       cancelled = true;
       SHARED.listeners.delete(onChange);
     };
-  }, [slug]);
+  }, [slug, kvStore]);
 
   const setEnabled = useCallback(
     (next: boolean) => {
@@ -225,4 +238,5 @@ export function _resetDiscoverablePrefForTests(): void {
   SHARED.overrides = {};
   SHARED.listeners.clear();
   bootstrapPromise = null;
+  activeStore = null;
 }

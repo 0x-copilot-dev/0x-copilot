@@ -26,10 +26,12 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import {
+  humanizeConnector,
+  SourceFavicon,
+  sourceFreshnessLabel,
+} from "@enterprise-search/chat-surface";
 import { createPortal } from "react-dom";
-import { humanizeConnector } from "./connectorLabel";
-import { SourceFavicon } from "./SourceFavicon";
-import { sourceFreshnessLabel } from "./sourceFreshness";
 
 const OPEN_DELAY_MS = 200;
 const CLOSE_DELAY_MS = 100;

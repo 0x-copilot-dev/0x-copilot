@@ -6,6 +6,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 
 import type {
   UpdateUserPreferencesRequest,
@@ -22,6 +23,14 @@ vi.mock("../../api/meApi", () => ({
 }));
 
 import { useUserPreferences } from "./useUserPreferences";
+import { UserPreferencesProvider } from "./UserPreferencesContext";
+
+// PRD 04 collapsed the hook into a shared provider — every caller now
+// renders inside <UserPreferencesProvider>. Wrap renderHook so the
+// hook resolves the context instead of throwing.
+function withProvider({ children }: { children: ReactNode }) {
+  return <UserPreferencesProvider>{children}</UserPreferencesProvider>;
+}
 
 const SEED: UserPreferences = {
   appearance: {
@@ -53,7 +62,9 @@ beforeEach(() => {
 describe("useUserPreferences", () => {
   it("hydrates from GET", async () => {
     mockGet.mockResolvedValueOnce(SEED);
-    const { result } = renderHook(() => useUserPreferences());
+    const { result } = renderHook(() => useUserPreferences(), {
+      wrapper: withProvider,
+    });
     expect(result.current.loading).toBe(true);
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.data).toEqual(SEED);
@@ -67,7 +78,9 @@ describe("useUserPreferences", () => {
     };
     mockPut.mockResolvedValueOnce(next);
 
-    const { result } = renderHook(() => useUserPreferences());
+    const { result } = renderHook(() => useUserPreferences(), {
+      wrapper: withProvider,
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await act(async () => {
@@ -80,7 +93,9 @@ describe("useUserPreferences", () => {
     mockGet.mockResolvedValueOnce(SEED);
     mockPut.mockRejectedValueOnce(new Error("invalid_request"));
 
-    const { result } = renderHook(() => useUserPreferences());
+    const { result } = renderHook(() => useUserPreferences(), {
+      wrapper: withProvider,
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     let caught: unknown = null;

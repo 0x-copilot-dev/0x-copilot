@@ -1,14 +1,23 @@
 // PR F3 — sidebar pin / unpin state.
 //
 // Backend's `UpdateConversationRequest` doesn't yet accept a `metadata`
-// field, so we keep pinned state client-side in localStorage keyed by
-// user_id. Pinned threads collapse into a Pinned group at the top of
-// the sidebar via `groupConversations(..., pinnedIds)`.
+// field, so we keep pinned state client-side keyed by user_id. Pinned
+// threads collapse into a Pinned group at the top of the sidebar via
+// `groupConversations(..., pinnedIds)`.
+//
+// Persistence routes through `KeyValueStore` (the substrate-agnostic
+// port in @enterprise-search/chat-surface) — on web that's
+// `LocalStorageKeyValueStore`; on desktop the extension host backs the
+// same interface. No window.localStorage references live here.
 //
 // When the backend gains a typed `metadata.pinned` column we can swap
 // this hook to a server-driven fetch with no consumer changes — the
 // `togglePinned(id)` signature stays the same.
 
+import {
+  useKeyValueStore,
+  type KeyValueStore,
+} from "@enterprise-search/chat-surface";
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY_PREFIX = "atlas:pinned:";
@@ -20,12 +29,12 @@ function storageKey(userId: string | null): string | null {
   return `${STORAGE_KEY_PREFIX}${userId}`;
 }
 
-function readPinned(userId: string | null): Set<string> {
+function readPinned(store: KeyValueStore, userId: string | null): Set<string> {
   const key = storageKey(userId);
-  if (!key || typeof window === "undefined") {
+  if (!key) {
     return new Set();
   }
-  const raw = window.localStorage.getItem(key);
+  const raw = store.get(key);
   if (!raw) {
     return new Set();
   }
@@ -42,12 +51,16 @@ function readPinned(userId: string | null): Set<string> {
   }
 }
 
-function writePinned(userId: string | null, pinned: ReadonlySet<string>): void {
+function writePinned(
+  store: KeyValueStore,
+  userId: string | null,
+  pinned: ReadonlySet<string>,
+): void {
   const key = storageKey(userId);
-  if (!key || typeof window === "undefined") {
+  if (!key) {
     return;
   }
-  window.localStorage.setItem(key, JSON.stringify([...pinned]));
+  store.set(key, JSON.stringify([...pinned]));
 }
 
 export interface UsePinnedConversationsResult {
@@ -58,14 +71,17 @@ export interface UsePinnedConversationsResult {
 export function usePinnedConversations(
   userId: string | null,
 ): UsePinnedConversationsResult {
+  const store = useKeyValueStore();
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() =>
-    readPinned(userId),
+    readPinned(store, userId),
   );
 
-  // Re-read when the bearer's user changes (workspace switch).
+  // Re-read when the bearer's user changes (workspace switch). The store
+  // itself is a stable singleton from the ChatShell provider, so it can
+  // also be in the dep array without churn.
   useEffect(() => {
-    setPinnedIds(readPinned(userId));
-  }, [userId]);
+    setPinnedIds(readPinned(store, userId));
+  }, [store, userId]);
 
   const togglePinned = useCallback(
     (conversationId: string, nextPinned: boolean) => {
@@ -76,11 +92,11 @@ export function usePinnedConversations(
         } else {
           next.delete(conversationId);
         }
-        writePinned(userId, next);
+        writePinned(store, userId, next);
         return next;
       });
     },
-    [userId],
+    [store, userId],
   );
 
   return { pinnedIds, togglePinned };

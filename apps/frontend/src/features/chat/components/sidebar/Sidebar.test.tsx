@@ -27,9 +27,21 @@ vi.mock("../../../auth/AuthContext", () => ({
 
 vi.mock("../../../../api/meApi", () => ({
   listMyWorkspaces: vi.fn(async () => ({ workspaces: [] })),
+  getMyProfile: vi.fn(async () => {
+    throw new Error("getMyProfile not configured for this test");
+  }),
+  updateMyProfile: vi.fn(async () => {
+    throw new Error("updateMyProfile not configured for this test");
+  }),
 }));
 
 import { Sidebar } from "./Sidebar";
+import { UserProfileProvider } from "../../../me/UserProfileContext";
+import type { ReactElement } from "react";
+
+function renderWithProvider(ui: ReactElement) {
+  return render(<UserProfileProvider>{ui}</UserProfileProvider>);
+}
 
 const EMPTY_LIVE: ReadonlySet<string> = new Set();
 
@@ -53,7 +65,7 @@ describe("Sidebar", () => {
   it("renders a New chat button that fires onStartNewChat", async () => {
     const onStartNewChat = vi.fn();
     const user = userEvent.setup();
-    render(
+    renderWithProvider(
       <Sidebar
         collapsed={false}
         conversations={conversations}
@@ -71,7 +83,7 @@ describe("Sidebar", () => {
   });
 
   it("renders the search field with aria-controls of the list region", () => {
-    render(
+    renderWithProvider(
       <Sidebar
         collapsed={false}
         conversations={conversations}
@@ -90,7 +102,7 @@ describe("Sidebar", () => {
   });
 
   it("⌘K (or Ctrl+K) focuses the search input — proves the keymap binding wires up", async () => {
-    render(
+    renderWithProvider(
       <Sidebar
         collapsed={false}
         conversations={conversations}
@@ -123,7 +135,7 @@ describe("Sidebar", () => {
       identity: null as never,
       logout: vi.fn(async () => undefined),
     });
-    render(
+    renderWithProvider(
       <Sidebar
         collapsed={false}
         conversations={[]}

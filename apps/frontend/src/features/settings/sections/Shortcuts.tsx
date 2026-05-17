@@ -1,7 +1,7 @@
 import { Button, Card, Field } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
-import type { UserPreferencesState } from "../../me/useUserPreferences";
+import { useUserPreferences } from "../../me/useUserPreferences";
 
 /**
  * Settings → You → Shortcuts.
@@ -62,11 +62,8 @@ const CATEGORY_ORDER: ReadonlyArray<ShortcutEntry["category"]> = [
   "Approvals",
 ];
 
-export function Shortcuts({
-  preferences,
-}: {
-  preferences: UserPreferencesState;
-}): ReactElement {
+export function Shortcuts(): ReactElement {
+  const preferences = useUserPreferences();
   const data = preferences.data;
   const overrides = data?.shortcuts.overrides ?? {};
   const [recording, setRecording] = useState<string | null>(null);

@@ -24,9 +24,13 @@ const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
 const mockGetMyProfile = vi.fn(async () => {
   throw new Error("getMyProfile not configured for this test");
 });
+const mockUpdateMyProfile = vi.fn(async () => {
+  throw new Error("updateMyProfile not configured for this test");
+});
 vi.mock("../../api/meApi", () => ({
   listMyWorkspaces: () => mockListMyWorkspaces(),
   getMyProfile: () => mockGetMyProfile(),
+  updateMyProfile: () => mockUpdateMyProfile(),
 }));
 
 const mockSwitchWorkspace = vi.fn(async (_orgId: string) => undefined);
@@ -44,6 +48,7 @@ vi.mock("../auth/AuthContext", () => ({
 }));
 
 import { AssistantThreadList } from "./components/thread/AssistantThreadList";
+import { UserProfileProvider } from "../me/UserProfileContext";
 
 const conversations: Conversation[] = [
   {
@@ -90,19 +95,21 @@ describe("workspace switch wiring (PR 3.5 / G4)", () => {
 
     const user = userEvent.setup();
     render(
-      <AssistantThreadList
-        activeConversationId={null}
-        liveConversationIds={new Set<string>()}
-        collapsed={false}
-        conversations={conversations}
-        loading={false}
-        onOpenSettings={vi.fn()}
-        onRefresh={vi.fn()}
-        onSwitchToThread={vi.fn()}
-        onStartNewChat={vi.fn()}
-        onToggleSidebar={vi.fn()}
-        onSwitchWorkspace={handleSwitch}
-      />,
+      <UserProfileProvider>
+        <AssistantThreadList
+          activeConversationId={null}
+          liveConversationIds={new Set<string>()}
+          collapsed={false}
+          conversations={conversations}
+          loading={false}
+          onOpenSettings={vi.fn()}
+          onRefresh={vi.fn()}
+          onSwitchToThread={vi.fn()}
+          onStartNewChat={vi.fn()}
+          onToggleSidebar={vi.fn()}
+          onSwitchWorkspace={handleSwitch}
+        />
+      </UserProfileProvider>,
     );
 
     // Open user-card popover.

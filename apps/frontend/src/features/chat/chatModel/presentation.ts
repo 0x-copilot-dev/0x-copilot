@@ -77,10 +77,16 @@ export function patchToolPartPresentation(
   });
 }
 
-export function presentationFromValue(
-  value: unknown,
+/**
+ * Canonical record → RuntimeEventPresentation parser. Both
+ * `presentationFromValue` (event-level payload) and
+ * `presentationFromArgs` (tool-part args.presentation) call this with
+ * the right inner record. Returns `null` when the required fields
+ * (title, status_label, kind) are missing.
+ */
+export function parsePresentationRecord(
+  record: Record<string, unknown>,
 ): RuntimeEventPresentation | null {
-  const record = asRecord(value);
   const title = stringValue(record.title);
   const statusLabel = stringValue(record.status_label);
   const kind = stringValue(record.kind);
@@ -95,24 +101,43 @@ export function presentationFromValue(
     group_key: stringValue(record.group_key),
     primary_entity: stringValue(record.primary_entity),
     action_label: stringValue(record.action_label),
-    result_preview: Array.isArray(record.result_preview)
-      ? record.result_preview.flatMap((item) => {
-          const row = asRecord(item);
-          const rowTitle = stringValue(row.title);
-          return rowTitle
-            ? [
-                {
-                  title: rowTitle,
-                  subtitle: stringValue(row.subtitle),
-                  url: stringValue(row.url),
-                  badge: stringValue(row.badge),
-                },
-              ]
-            : [];
-        })
-      : [],
+    result_preview: parsePresentationRows(record.result_preview),
     debug_label: stringValue(record.debug_label),
   };
+}
+
+/**
+ * Parse a `result_preview` array into the shape required by the
+ * presentation envelope. Tolerant of non-array inputs and rows that
+ * are missing the required `title` field (those are dropped).
+ */
+export function parsePresentationRows(
+  value: unknown,
+): RuntimeEventPresentation["result_preview"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const row = asRecord(item);
+    const title = stringValue(row.title);
+    if (!title) {
+      return [];
+    }
+    return [
+      {
+        title,
+        subtitle: stringValue(row.subtitle),
+        url: stringValue(row.url),
+        badge: stringValue(row.badge),
+      },
+    ];
+  });
+}
+
+export function presentationFromValue(
+  value: unknown,
+): RuntimeEventPresentation | null {
+  return parsePresentationRecord(asRecord(value));
 }
 
 export function isInternalCheckpointDelta(delta: string): boolean {

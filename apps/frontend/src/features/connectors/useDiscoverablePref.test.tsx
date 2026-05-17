@@ -9,13 +9,17 @@
 //    instances rendering the same slug.
 //  - localStorage migration: legacy entries get PATCHed and cleared.
 
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type {
   UpdateUserPreferencesRequest,
   UserPreferences,
 } from "@enterprise-search/api-types";
+import {
+  KeyValueStoreProvider,
+  LocalStorageKeyValueStore,
+} from "@enterprise-search/chat-surface";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGet = vi.fn<() => Promise<UserPreferences>>();
 const mockPut =
@@ -98,6 +102,19 @@ beforeEach(() => {
   installInMemoryLocalStorage();
 });
 
+// Wrapper that provides a KeyValueStore backed by the in-memory
+// localStorage stub installed above. The hook now reads/writes through
+// useKeyValueStore() instead of touching window.localStorage directly;
+// LocalStorageKeyValueStore delegates to whatever globalThis.localStorage
+// points at via its deferred-lookup pattern, so the stub still drives it.
+function withKvStore({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <KeyValueStoreProvider store={new LocalStorageKeyValueStore()}>
+      {children}
+    </KeyValueStoreProvider>
+  );
+}
+
 afterEach(() => {
   _resetDiscoverablePrefForTests();
 });
@@ -105,7 +122,9 @@ afterEach(() => {
 describe("useDiscoverablePref", () => {
   it("falls back to the catalog default while bootstrap is in flight", async () => {
     mockGet.mockResolvedValueOnce(BASE);
-    const { result } = renderHook(() => useDiscoverablePref("linear", true));
+    const { result } = renderHook(() => useDiscoverablePref("linear", true), {
+      wrapper: withKvStore,
+    });
     expect(result.current.enabled).toBe(true);
     expect(result.current.overridden).toBe(false);
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
@@ -113,7 +132,12 @@ describe("useDiscoverablePref", () => {
 
   it("returns the user override after bootstrap when present", async () => {
     mockGet.mockResolvedValueOnce(withOverrides({ atlassian: false }));
-    const { result } = renderHook(() => useDiscoverablePref("atlassian", true));
+    const { result } = renderHook(
+      () => useDiscoverablePref("atlassian", true),
+      {
+        wrapper: withKvStore,
+      },
+    );
     await waitFor(() => {
       expect(result.current.overridden).toBe(true);
     });
@@ -123,7 +147,9 @@ describe("useDiscoverablePref", () => {
   it("setEnabled PATCHes the backend with the per-slug override", async () => {
     mockGet.mockResolvedValueOnce(BASE);
     mockPut.mockResolvedValueOnce(withOverrides({ linear: false }));
-    const { result } = renderHook(() => useDiscoverablePref("linear", true));
+    const { result } = renderHook(() => useDiscoverablePref("linear", true), {
+      wrapper: withKvStore,
+    });
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
     act(() => {
       result.current.setEnabled(false);
@@ -142,8 +168,12 @@ describe("useDiscoverablePref", () => {
   it("propagates writes to other hook instances watching the same slug", async () => {
     mockGet.mockResolvedValueOnce(BASE);
     mockPut.mockResolvedValueOnce(withOverrides({ notion: false }));
-    const a = renderHook(() => useDiscoverablePref("notion", true));
-    const b = renderHook(() => useDiscoverablePref("notion", true));
+    const a = renderHook(() => useDiscoverablePref("notion", true), {
+      wrapper: withKvStore,
+    });
+    const b = renderHook(() => useDiscoverablePref("notion", true), {
+      wrapper: withKvStore,
+    });
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
     act(() => {
       a.result.current.setEnabled(false);
@@ -169,8 +199,12 @@ describe("useDiscoverablePref", () => {
       withOverrides({ asana: false, linear: false }),
     );
 
-    const asana = renderHook(() => useDiscoverablePref("asana", true));
-    const linear = renderHook(() => useDiscoverablePref("linear", true));
+    const asana = renderHook(() => useDiscoverablePref("asana", true), {
+      wrapper: withKvStore,
+    });
+    const linear = renderHook(() => useDiscoverablePref("linear", true), {
+      wrapper: withKvStore,
+    });
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
 
     act(() => {
@@ -202,7 +236,9 @@ describe("useDiscoverablePref", () => {
       withOverrides({ linear: false, notion: true }),
     );
 
-    const { result } = renderHook(() => useDiscoverablePref("linear", true));
+    const { result } = renderHook(() => useDiscoverablePref("linear", true), {
+      wrapper: withKvStore,
+    });
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledOnce();
     });
@@ -229,7 +265,9 @@ describe("useDiscoverablePref", () => {
     window.localStorage.setItem("enterprise.discoverable.linear", "off");
     mockGet.mockResolvedValueOnce(withOverrides({ linear: true }));
 
-    const { result } = renderHook(() => useDiscoverablePref("linear", true));
+    const { result } = renderHook(() => useDiscoverablePref("linear", true), {
+      wrapper: withKvStore,
+    });
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
     expect(mockPut).not.toHaveBeenCalled();
     await waitFor(() => {

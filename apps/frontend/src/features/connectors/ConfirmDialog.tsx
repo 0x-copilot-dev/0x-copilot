@@ -9,6 +9,7 @@
 import { Button } from "@enterprise-search/design-system";
 import { type ReactElement, type ReactNode, useState } from "react";
 import { Modal } from "../settings/Modal";
+import { errorMessage } from "../../utils/errors";
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -42,7 +43,7 @@ export function ConfirmDialog({
       await onConfirm();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      setError(errorMessage(err, "Action failed."));
     } finally {
       setSubmitting(false);
     }

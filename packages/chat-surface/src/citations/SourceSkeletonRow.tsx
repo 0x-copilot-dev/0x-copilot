@@ -1,12 +1,10 @@
-// PR 3.7.1 — single shimmer row shown while a source-producing tool is
-// in flight and the Sources tab has no real rows yet.
+// Shimmer row shown while a source-producing tool is in flight and the
+// Sources surface has no real rows yet. Mirrors `<SourceRow />`'s visual
+// footprint so the first real row slides into the same position without
+// a layout flash.
 //
-// Mirrors the visual footprint of `<SourceRow />` — same Card chrome,
-// same chip slot — so when the first real row arrives it slides into the
-// same position without a layout flash.
-//
-// One row max, regardless of how many tool calls are running. The label
-// is the only thing that varies (driven by the parent).
+// Pure presentation: design-system primitives only, no substrate
+// touchpoints. Same shape on every substrate.
 
 import { Badge, Card } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";

@@ -10,12 +10,12 @@ import type {
 } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import {
-  assertOk,
-  correlationHeaders,
   httpDelete,
   httpGet,
+  httpJson,
   httpPatchQuery,
   httpPost,
+  httpPostQuery,
 } from "./http";
 
 export async function listMcpServers(
@@ -46,12 +46,8 @@ export function createMcpServer(
 
 // PR 4.4.6 — catalog endpoint is org-agnostic; we bypass ``httpGet`` so
 // no ``org_id`` / ``user_id`` query params are appended.
-export async function listMcpCatalog(): Promise<McpCatalogResponse> {
-  const response = await fetch("/v1/mcp/catalog", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as McpCatalogResponse;
+export function listMcpCatalog(): Promise<McpCatalogResponse> {
+  return httpJson<McpCatalogResponse>("GET", "/v1/mcp/catalog");
 }
 
 export function installMcpServer(
@@ -103,41 +99,27 @@ export function startMcpAuth(
   );
 }
 
-export async function skipMcpAuth(
+export function skipMcpAuth(
   serverId: string,
   identity: RequestIdentity,
 ): Promise<McpServer> {
-  const params = new URLSearchParams({
-    org_id: identity.orgId,
-    user_id: identity.userId,
-  });
-  const response = await fetch(
-    `/v1/mcp/servers/${serverId}/auth/skip?${params}`,
-    { method: "POST", headers: correlationHeaders() },
+  return httpPostQuery<McpServer>(
+    `/v1/mcp/servers/${serverId}/auth/skip`,
+    undefined,
+    identity,
   );
-  await assertOk(response);
-  return (await response.json()) as McpServer;
 }
 
-export async function completeMcpOAuth(
+export function completeMcpOAuth(
   state: string,
   code?: string | null,
   error?: string | null,
   errorDescription?: string | null,
 ): Promise<McpServer> {
-  const params = new URLSearchParams({ state });
-  if (code) {
-    params.set("code", code);
-  }
-  if (error) {
-    params.set("error", error);
-  }
-  if (errorDescription) {
-    params.set("error_description", errorDescription);
-  }
-  const response = await fetch(`/v1/mcp/oauth/callback?${params}`, {
-    headers: correlationHeaders(),
+  return httpJson<McpServer>("GET", "/v1/mcp/oauth/callback", undefined, {
+    state,
+    code: code ?? undefined,
+    error: error ?? undefined,
+    error_description: errorDescription ?? undefined,
   });
-  await assertOk(response);
-  return (await response.json()) as McpServer;
 }

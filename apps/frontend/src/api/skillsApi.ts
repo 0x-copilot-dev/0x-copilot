@@ -5,8 +5,7 @@ import type {
   UpdateSkillRequest,
 } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
-import { identityParams } from "./config";
-import { assertOk, httpDelete, httpGet, httpPost, jsonHeaders } from "./http";
+import { httpDelete, httpGet, httpPost, httpPutQuery } from "./http";
 
 export async function listSkills(identity: RequestIdentity): Promise<Skill[]> {
   const payload = await httpGet<SkillListResponse>("/v1/skills", identity);
@@ -24,21 +23,12 @@ export function createSkill(
   });
 }
 
-export async function updateSkill(
+export function updateSkill(
   skillId: string,
   payload: UpdateSkillRequest,
   identity: RequestIdentity,
 ): Promise<Skill> {
-  const response = await fetch(
-    `/v1/skills/${skillId}?${identityParams(identity)}`,
-    {
-      method: "PUT",
-      headers: jsonHeaders(),
-      body: JSON.stringify(payload),
-    },
-  );
-  await assertOk(response);
-  return (await response.json()) as Skill;
+  return httpPutQuery<Skill>(`/v1/skills/${skillId}`, payload, identity);
 }
 
 export function deleteSkill(

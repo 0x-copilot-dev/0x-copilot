@@ -1,4 +1,4 @@
-import { assertOk, correlationHeaders } from "./http";
+import { httpJson, httpMultipart } from "./http";
 
 /**
  * Server-stored avatar pipeline (PR 8.3). Upload sends multipart;
@@ -18,19 +18,9 @@ export async function uploadMyAvatar(
 ): Promise<AvatarUploadResponse> {
   const form = new FormData();
   form.append("file", blob, filename);
-  const response = await fetch("/v1/me/avatar", {
-    method: "POST",
-    headers: correlationHeaders(),
-    body: form,
-  });
-  await assertOk(response);
-  return (await response.json()) as AvatarUploadResponse;
+  return httpMultipart<AvatarUploadResponse>("/v1/me/avatar", form);
 }
 
 export async function deleteMyAvatar(): Promise<void> {
-  const response = await fetch("/v1/me/avatar", {
-    method: "DELETE",
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
+  await httpJson<void>("DELETE", "/v1/me/avatar");
 }

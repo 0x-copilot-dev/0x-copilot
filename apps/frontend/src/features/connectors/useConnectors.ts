@@ -15,6 +15,7 @@ import {
   startMcpAuth,
   updateMcpServer,
 } from "../../api/mcpApi";
+import { notifyWorkspaceConnectorsChanged } from "./invalidation";
 
 export interface ConnectorState {
   servers: McpServer[];
@@ -64,6 +65,7 @@ export function useConnectors(
           oauthClient,
         );
         await refresh();
+        notifyWorkspaceConnectorsChanged();
         return server;
       },
       async installFromCatalog(
@@ -77,6 +79,7 @@ export function useConnectors(
             oauthClient,
           );
           await refresh();
+          notifyWorkspaceConnectorsChanged();
           return server;
         } catch (err) {
           throw classifyMcpError({ kind: "slug", slug }, err);
@@ -85,10 +88,12 @@ export function useConnectors(
       async removeServer(serverId: string): Promise<void> {
         await deleteMcpServer(serverId, requireIdentity(identity));
         await refresh();
+        notifyWorkspaceConnectorsChanged();
       },
       async setEnabled(serverId: string, enabled: boolean): Promise<void> {
         await updateMcpServer(serverId, { enabled }, requireIdentity(identity));
         await refresh();
+        notifyWorkspaceConnectorsChanged();
       },
       async setDisplayName(
         serverId: string,
@@ -100,6 +105,7 @@ export function useConnectors(
           requireIdentity(identity),
         );
         await refresh();
+        notifyWorkspaceConnectorsChanged();
         return server;
       },
       async authenticate(serverId: string): Promise<void> {
@@ -113,6 +119,7 @@ export function useConnectors(
       async skipAuth(serverId: string): Promise<void> {
         await skipMcpAuth(serverId, requireIdentity(identity));
         await refresh();
+        notifyWorkspaceConnectorsChanged();
       },
     }),
     [identity, refresh],

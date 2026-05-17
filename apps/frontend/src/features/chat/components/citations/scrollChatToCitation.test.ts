@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   scrollChatToCitation,
   scrollChatToEvent,
-} from "./scrollChatToCitation";
+} from "@enterprise-search/chat-surface";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 beforeEach(() => {
   vi.useFakeTimers();

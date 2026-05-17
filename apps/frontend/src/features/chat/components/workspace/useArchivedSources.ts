@@ -21,6 +21,7 @@ import {
   seedSourceMap,
   type SourceEntryMap,
 } from "../../chatModel/sourcesReducer";
+import { errorMessage } from "../../../../utils/errors";
 
 export interface ArchivedSourcesState {
   sources: SourceEntryMap;
@@ -64,7 +65,7 @@ export function useArchivedSources(
         if (cancelled) {
           return;
         }
-        setError(err instanceof Error ? err.message : "Could not load sources");
+        setError(errorMessage(err, "Could not load sources"));
       })
       .finally(() => {
         if (!cancelled) {

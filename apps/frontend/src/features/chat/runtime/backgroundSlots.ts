@@ -8,7 +8,7 @@ import {
 import {
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "../chatModel/citationsRegistry";
+} from "@enterprise-search/chat-surface";
 import { applyRuntimeEvent, type ChatItem } from "../chatModel";
 import {
   applySourceEvent,

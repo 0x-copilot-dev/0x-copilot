@@ -32,6 +32,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
 import { ToolUsePolicyPanel } from "./ToolUsePolicyPanel";
+import { errorMessage } from "../../../utils/errors";
 
 const SAVE_DEBOUNCE_MS = 300;
 const SYSTEM_PROMPT_MAX = 8 * 1024;
@@ -126,9 +127,7 @@ export function ModelAndBehavior({
         };
         save(request).catch((err: unknown) => {
           setSubmitError(
-            err instanceof Error
-              ? err.message
-              : "Could not save behavior overrides.",
+            errorMessage(err, "Could not save behavior overrides."),
           );
         });
       }, SAVE_DEBOUNCE_MS);

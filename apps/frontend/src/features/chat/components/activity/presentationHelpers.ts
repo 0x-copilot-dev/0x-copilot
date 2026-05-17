@@ -1,5 +1,9 @@
 import type { RuntimeEventPresentation } from "@enterprise-search/api-types";
-import { asRecord, stringValue } from "../../utils/jsonUtils";
+import {
+  parsePresentationRecord,
+  parsePresentationRows,
+} from "../../chatModel/presentation";
+import { asRecord } from "../../utils/jsonUtils";
 import type { ActivityVariant } from "./types";
 
 export function activityVariantForPresentation(
@@ -20,45 +24,8 @@ export function activityVariantForPresentation(
 export function presentationFromArgs(
   args: Record<string, unknown>,
 ): RuntimeEventPresentation | null {
-  const raw = asRecord(args.presentation);
-  const title = stringValue(raw.title);
-  const status = stringValue(raw.status_label);
-  const kind = stringValue(raw.kind);
-  if (!title || !status || !kind) {
-    return null;
-  }
-  return {
-    title,
-    summary: stringValue(raw.summary),
-    status_label: status as RuntimeEventPresentation["status_label"],
-    kind: kind as RuntimeEventPresentation["kind"],
-    group_key: stringValue(raw.group_key),
-    primary_entity: stringValue(raw.primary_entity),
-    action_label: stringValue(raw.action_label),
-    result_preview: presentationRows(raw.result_preview),
-    debug_label: stringValue(raw.debug_label),
-  };
+  return parsePresentationRecord(asRecord(args.presentation));
 }
 
-export function presentationRows(
-  value: unknown,
-): RuntimeEventPresentation["result_preview"] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const row = asRecord(item);
-    const title = stringValue(row.title);
-    if (!title) {
-      return [];
-    }
-    return [
-      {
-        title,
-        subtitle: stringValue(row.subtitle),
-        url: stringValue(row.url),
-        badge: stringValue(row.badge),
-      },
-    ];
-  });
-}
+// Re-export to preserve the import path call sites use today.
+export const presentationRows = parsePresentationRows;

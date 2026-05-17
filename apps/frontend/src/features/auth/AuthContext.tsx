@@ -46,10 +46,17 @@ import {
   configureUnauthorizedHandler,
   UnauthorizedError,
 } from "../../api/http";
+import {
+  useKeyValueStore,
+  useSecretStorage,
+  type KeyValueStore,
+  type SecretStorage,
+} from "@enterprise-search/chat-surface";
+
 import { stripMagicLinkTokenFromUrl } from "../../app/authUrlHygiene";
 import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";
-
-const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
+import { BEARER_STORAGE_KEY } from "./storageKeys";
+import { errorMessage } from "../../utils/errors";
 
 /**
  * W0.1 — In dev, ensure a bearer exists before the first /v1/auth/session
@@ -57,10 +64,10 @@ const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
  * (possibly newly-minted) bearer or ``null`` if minting failed or we're
  * not in dev mode. Production builds tree-shake the dev IdP module.
  */
-async function _devEnsureBearer(): Promise<string | null> {
+async function _devEnsureBearer(store: KeyValueStore): Promise<string | null> {
   if (!import.meta.env.DEV) return null;
   try {
-    const slug = loadActivePersonaSlug();
+    const slug = loadActivePersonaSlug(store);
     const result = await mintDevBearer(slug);
     return result.bearer;
   } catch {
@@ -152,6 +159,18 @@ export function AuthProvider({
   children,
   persistBearer = true,
 }: AuthProviderProps): ReactElement {
+  // Two substrate-portable stores. The split is the contract — the type
+  // system rejects accidental misuse:
+  //   - kvStore (KeyValueStore) — non-secret prefs (persona slug for
+  //     the dev IdP). Inspectable in devtools is acceptable here.
+  //   - secrets (SecretStorage) — bearer tokens. Same shape as the KV
+  //     store today (web reference impl wraps localStorage), but the
+  //     distinct interface lets the desktop substrate route this to
+  //     the OS keychain via VS Code's SecretStorage API later without
+  //     touching any callsite.
+  const kvStore = useKeyValueStore();
+  const secrets = useSecretStorage();
+
   const [state, setState] = useState<AuthState>({
     status: "initial",
     identity: null,
@@ -160,7 +179,9 @@ export function AuthProvider({
     error: null,
   });
 
-  const bearerRef = useRef<string | null>(_loadStoredBearer(persistBearer));
+  const bearerRef = useRef<string | null>(
+    _loadStoredBearer(secrets, persistBearer),
+  );
 
   // Hand the bearer to the API client so every authApi call can attach
   // it. Re-runs on bearer change.
@@ -171,21 +192,16 @@ export function AuthProvider({
   const setBearer = useCallback(
     (value: string | null) => {
       bearerRef.current = value;
-      if (!persistBearer || typeof window === "undefined") {
+      if (!persistBearer) {
         return;
       }
-      try {
-        if (value === null) {
-          window.localStorage.removeItem(BEARER_STORAGE_KEY);
-        } else {
-          window.localStorage.setItem(BEARER_STORAGE_KEY, value);
-        }
-      } catch {
-        // Quota / opaque-origin storage failure — fall through with the
-        // in-memory copy so the session keeps working for this tab.
-      }
+      // SecretStorage swallows substrate errors (private-mode quota,
+      // opaque origins, …) internally — the in-memory bearerRef above
+      // keeps the session working for this tab even if persistence
+      // fails.
+      secrets.set(BEARER_STORAGE_KEY, value);
     },
-    [persistBearer],
+    [persistBearer, secrets],
   );
 
   // W0.1 — in dev, a 401 means the bearer is missing or stale. Mint a
@@ -196,7 +212,7 @@ export function AuthProvider({
   // builds tree-shake _devEnsureBearer.
   const _devReauthAndRestoreSession =
     useCallback(async (): Promise<boolean> => {
-      const minted = await _devEnsureBearer();
+      const minted = await _devEnsureBearer(kvStore);
       if (!minted) return false;
       setBearer(minted);
       try {
@@ -212,7 +228,7 @@ export function AuthProvider({
       } catch {
         return false;
       }
-    }, [setBearer]);
+    }, [kvStore, setBearer]);
 
   // Register the 401 interceptor so any other API helper (agentApi,
   // mcpApi, skillsApi, etc.) that sees a 401 attempts a silent dev
@@ -250,7 +266,7 @@ export function AuthProvider({
         error: null,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "auth probe failed";
+      const message = errorMessage(err, "auth probe failed");
       // Authoritative 401 detection: every API helper routes 401s through
       // `assertOk` → `throw new UnauthorizedError(...)`. Sniffing message
       // text was brittle (it broke when the facade started returning a
@@ -311,7 +327,7 @@ export function AuthProvider({
         }
         await refresh();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "login failed";
+        const message = errorMessage(err, "login failed");
         setBearer(null);
         setState({
           status: "anonymous",
@@ -371,8 +387,7 @@ export function AuthProvider({
         });
         return result;
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "could not consume magic link";
+        const message = errorMessage(err, "could not consume magic link");
         setBearer(null);
         setState({
           status: "anonymous",
@@ -402,8 +417,7 @@ export function AuthProvider({
         setBearer(result.bearer_token);
         await refresh();
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "could not select workspace";
+        const message = errorMessage(err, "could not select workspace");
         setState({
           status: "workspace_pick",
           identity: null,
@@ -491,13 +505,12 @@ export function useAuth(): AuthContextValue {
   return value;
 }
 
-function _loadStoredBearer(persistBearer: boolean): string | null {
-  if (!persistBearer || typeof window === "undefined") {
+function _loadStoredBearer(
+  secrets: SecretStorage,
+  persistBearer: boolean,
+): string | null {
+  if (!persistBearer) {
     return null;
   }
-  try {
-    return window.localStorage.getItem(BEARER_STORAGE_KEY);
-  } catch {
-    return null;
-  }
+  return secrets.get(BEARER_STORAGE_KEY);
 }

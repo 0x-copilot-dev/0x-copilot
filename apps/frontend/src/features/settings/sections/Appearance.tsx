@@ -1,6 +1,5 @@
 import type {
   AppearancePreferences,
-  UpdateUserPreferencesRequest,
   UpdateUserProfileRequest,
   UserProfileAccent,
   UserProfileDensity,
@@ -9,18 +8,17 @@ import type {
 } from "@enterprise-search/api-types";
 import {
   ACCENT_SCHEMES,
-  type AccentScheme,
   Card,
   Field,
   TextInput,
-  type ThemeScheme,
   classNames,
-  useTheme,
 } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { UserPreferencesState } from "../../me/useUserPreferences";
+import { useEffect, useState } from "react";
+
+import { useAppearance } from "../../appearance/AppearanceContext";
 import type { UserProfileState } from "../../me/useUserProfile";
+import { errorMessage } from "../../../utils/errors";
 
 const THEME_OPTIONS: ReadonlyArray<{ id: UserProfileTheme; label: string }> = [
   { id: "system", label: "System" },
@@ -47,96 +45,31 @@ const REDUCE_MOTION_OPTIONS: ReadonlyArray<{
   { id: "off", label: "Always animate", hint: "Override OS reduce-motion." },
 ];
 
-const SAVE_DEBOUNCE_MS = 300;
-
 /**
  * Settings → You → Appearance.
  *
- * Theme + accent + density + reduce-motion. Local clicks recolor the
- * page live (via ``useThemeSync`` + ``data-density`` / ``data-reduce-
- * motion`` attributes), then a debounced PUT persists. The 300 ms debounce
- * coalesces rapid swatch clicks into one network round-trip.
+ * Theme + accent + density + reduce-motion. Clicks call
+ * `useAppearance().set(...)` which:
+ *   1. updates the design-system ThemeProvider + `<html>` data attrs
+ *      synchronously (instant repaint),
+ *   2. queues a 300 ms debounced server save.
+ *
+ * No local state, no duplicate "what does theme mean visually" logic —
+ * the AppearanceProvider (PRD 04) owns all writes.
  */
 export function Appearance({
-  preferences,
   profile,
 }: {
-  preferences: UserPreferencesState;
   /**
-   * PR 8.1 — Locale moved from Profile → Appearance ("Region & language").
-   * Optional so legacy callers without a profile hook still render the
-   * theme/accent/density block above. The card is omitted when absent.
+   * PR 8.1 — Locale ("Region & language") sits in this panel because
+   * it controls display formatting. Persisted via the user-profile
+   * endpoint, not the appearance preferences endpoint.
    */
   profile?: UserProfileState;
 }): ReactElement {
-  const data = preferences.data;
-  const debounceRef = useRef<number | null>(null);
-  // Optimistic theme update — the previous flow waited for a 300 ms
-  // debounce + server round-trip before any visual change, which made
-  // swatch clicks feel broken (and silently failed if the network was
-  // down). Pull setScheme/setAccent from the provider so the click
-  // re-themes instantly; the debounced save then persists. If the save
-  // fails, useThemeSync will reconcile back to the persisted value on
-  // the next preferences refresh.
-  const { setScheme, setAccent } = useTheme();
+  const appearance = useAppearance();
 
-  // Cancel any pending debounced save on unmount so a stray timeout
-  // doesn't fire after the section is closed.
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current !== null) {
-        window.clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-
-  const applyAppearanceLocally = useCallback(
-    (patch: Partial<AppearancePreferences>): void => {
-      if (typeof document === "undefined") {
-        return;
-      }
-      const root = document.documentElement;
-      if (patch.theme !== undefined) {
-        // Mirror useThemeSync's "system" → "dark" mapping.
-        const scheme: ThemeScheme =
-          patch.theme === "light" || patch.theme === "slate"
-            ? patch.theme
-            : "dark";
-        setScheme(scheme);
-      }
-      if (patch.accent !== undefined) {
-        setAccent(patch.accent as AccentScheme);
-      }
-      if (patch.density !== undefined) {
-        root.dataset.density = patch.density;
-      }
-      if (patch.reduce_motion !== undefined) {
-        root.dataset.reduceMotion = patch.reduce_motion;
-      }
-    },
-    [setScheme, setAccent],
-  );
-
-  const scheduleSave = useCallback(
-    (patch: UpdateUserPreferencesRequest) => {
-      // Apply the visual change immediately. Server save is debounced.
-      if (patch.appearance !== undefined) {
-        applyAppearanceLocally(patch.appearance);
-      }
-      if (debounceRef.current !== null) {
-        window.clearTimeout(debounceRef.current);
-      }
-      debounceRef.current = window.setTimeout(() => {
-        debounceRef.current = null;
-        void preferences.save(patch).catch(() => {
-          // The hook already surfaces the error; nothing to do here.
-        });
-      }, SAVE_DEBOUNCE_MS);
-    },
-    [preferences, applyAppearanceLocally],
-  );
-
-  if (preferences.loading && data === null) {
+  if (appearance.loading && appearance.appearance === null) {
     return (
       <div className="settings-section">
         <h2>Appearance</h2>
@@ -147,18 +80,18 @@ export function Appearance({
     );
   }
 
-  if (data === null) {
+  if (appearance.appearance === null) {
     return (
       <div className="settings-section">
         <h2>Appearance</h2>
         <Card>
-          <p>{preferences.error ?? "Preferences are unavailable right now."}</p>
+          <p>{appearance.error ?? "Preferences are unavailable right now."}</p>
         </Card>
       </div>
     );
   }
 
-  const appearance = data.appearance;
+  const current = appearance.appearance;
 
   return (
     <div className="settings-section">
@@ -177,14 +110,12 @@ export function Appearance({
                 key={option.id}
                 type="button"
                 role="radio"
-                aria-checked={appearance.theme === option.id}
+                aria-checked={current.theme === option.id}
                 className={classNames(
                   "me-radio-pill",
-                  appearance.theme === option.id && "me-radio-pill--active",
+                  current.theme === option.id && "me-radio-pill--active",
                 )}
-                onClick={() =>
-                  scheduleSave({ appearance: { theme: option.id } })
-                }
+                onClick={() => appearance.set({ theme: option.id })}
                 title={`Use ${option.label} theme`}
               >
                 {option.label}
@@ -208,11 +139,9 @@ export function Appearance({
                 id={scheme.id as UserProfileAccent}
                 label={scheme.label}
                 swatch={scheme.swatch}
-                active={appearance.accent === scheme.id}
+                active={current.accent === scheme.id}
                 onPick={() =>
-                  scheduleSave({
-                    appearance: { accent: scheme.id as UserProfileAccent },
-                  })
+                  appearance.set({ accent: scheme.id as UserProfileAccent })
                 }
               />
             ))}
@@ -226,14 +155,12 @@ export function Appearance({
                 key={option.id}
                 type="button"
                 role="radio"
-                aria-checked={appearance.density === option.id}
+                aria-checked={current.density === option.id}
                 className={classNames(
                   "me-radio-pill",
-                  appearance.density === option.id && "me-radio-pill--active",
+                  current.density === option.id && "me-radio-pill--active",
                 )}
-                onClick={() =>
-                  scheduleSave({ appearance: { density: option.id } })
-                }
+                onClick={() => appearance.set({ density: option.id })}
                 title={`Use ${option.label.toLowerCase()} spacing`}
               >
                 {option.label}
@@ -252,15 +179,13 @@ export function Appearance({
                 key={option.id}
                 type="button"
                 role="radio"
-                aria-checked={appearance.reduce_motion === option.id}
+                aria-checked={current.reduce_motion === option.id}
                 className={classNames(
                   "me-radio-pill",
-                  appearance.reduce_motion === option.id &&
+                  current.reduce_motion === option.id &&
                     "me-radio-pill--active",
                 )}
-                onClick={() =>
-                  scheduleSave({ appearance: { reduce_motion: option.id } })
-                }
+                onClick={() => appearance.set({ reduce_motion: option.id })}
                 title={option.hint}
               >
                 {option.label}
@@ -269,8 +194,8 @@ export function Appearance({
           </div>
         </Field>
 
-        {preferences.error ? (
-          <p className="app-error">{preferences.error}</p>
+        {appearance.error ? (
+          <p className="app-error">{appearance.error}</p>
         ) : null}
       </Card>
 
@@ -279,12 +204,6 @@ export function Appearance({
   );
 }
 
-/**
- * PR 8.1 — Locale ("Region & language") moved from Profile → Appearance
- * because it controls display formatting (date / number / list) rather
- * than identity. Persists via the user-profile endpoint, separate from
- * the theme/accent preferences hook used above.
- */
 function RegionAndLanguage({
   profile,
 }: {
@@ -295,8 +214,6 @@ function RegionAndLanguage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-sync from the server snapshot when it changes underneath the
-  // form (e.g. another tab saved). Same pattern as the Profile section.
   useEffect(() => {
     setLocale(profile.data?.locale ?? "");
   }, [profile.data]);
@@ -313,7 +230,7 @@ function RegionAndLanguage({
       setSaving(true);
       await profile.save(patch);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save locale.");
+      setError(errorMessage(err, "Could not save locale."));
     } finally {
       setSaving(false);
     }

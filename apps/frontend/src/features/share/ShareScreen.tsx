@@ -24,6 +24,9 @@
 // (clamped server-side), and returns the new conversation id. The
 // recipient lands on it via ``/?conversationId=…``.
 
+import { formatDateTime } from "../../utils/dateFormat";
+import { errorMessage } from "../../utils/errors";
+
 import { Badge, Button, Card } from "@enterprise-search/design-system";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 import "./share-screen.css";
@@ -79,7 +82,7 @@ export function ShareScreen({
         if (cancelled) return;
         setState({
           kind: "error",
-          message: toMessage(err, "Could not load share"),
+          message: errorMessage(err, "Could not load share"),
         });
       }
     }
@@ -99,7 +102,7 @@ export function ShareScreen({
       });
       onForked(response.conversation_id);
     } catch (err) {
-      setForkError(toMessage(err, "Could not fork conversation"));
+      setForkError(errorMessage(err, "Could not fork conversation"));
     } finally {
       setForking(false);
     }
@@ -160,7 +163,7 @@ export function ShareScreen({
           <p className="share-screen__sub">
             Shared by <strong>{sharedBy}</strong> ·{" "}
             <time dateTime={view.share.snapshot_at}>
-              {formatTimestamp(view.share.snapshot_at)}
+              {formatDateTime(view.share.snapshot_at)}
             </time>
           </p>
         </div>
@@ -226,7 +229,7 @@ function SharedMessage({
           {labelForRole(message.role)}
         </span>
         <time dateTime={message.created_at}>
-          {formatTimestamp(message.created_at)}
+          {formatDateTime(message.created_at)}
         </time>
       </header>
       <div className="shared-message__body">
@@ -337,21 +340,4 @@ function blockedBody(reason: RecipientPreview["reason"]): string {
     case "ok":
       return "The preview returned an unexpected state. Try refreshing.";
   }
-}
-
-function formatTimestamp(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function toMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
 }

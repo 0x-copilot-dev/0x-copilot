@@ -9,10 +9,13 @@ import { useCallback, useId, useState, type ReactElement } from "react";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
 import { SubagentActivityList } from "../tools/SubagentActivityList";
 import { useElapsedSeconds } from "../tools/useElapsedSeconds";
-import type {
-  SubagentCardViewModel,
-  SubagentPauseReason,
-} from "./subagentCardViewModel";
+import {
+  formatSubagentDuration,
+  pauseAriaLabel,
+  pauseFullLabel,
+  pauseJumpLabel,
+} from "./labels";
+import type { SubagentCardViewModel } from "./subagentCardViewModel";
 
 export interface FleetSubagentRowProps {
   view: SubagentCardViewModel;
@@ -42,7 +45,7 @@ export function FleetSubagentRow({
   const elapsedSeconds = useElapsedSeconds(!view.terminal, view.startedAt);
   const elapsedLabel =
     view.terminal && view.durationMs !== null
-      ? formatDuration(view.durationMs)
+      ? formatSubagentDuration(view.durationMs)
       : `${elapsedSeconds}s`;
   const isPaused = view.status === "paused";
   const fillFraction = view.terminal
@@ -114,9 +117,9 @@ export function FleetSubagentRow({
           <Badge
             tone="warning"
             className="subagent-fleet-row__paused-chip"
-            aria-label={`Paused, ${ariaLabelForPause(view.pauseReason)}`}
+            aria-label={`Paused, ${pauseAriaLabel(view.pauseReason)}`}
           >
-            Paused · {labelForPause(view.pauseReason)}
+            Paused · {pauseFullLabel(view.pauseReason)}
           </Badge>
         ) : null}
         <span className="subagent-fleet-row__elapsed">
@@ -152,7 +155,7 @@ export function FleetSubagentRow({
                 onJumpToApproval!(view.pauseSourceEventId!);
               }}
             >
-              Review {jumpLabelForPause(view.pauseReason)} →
+              Review {pauseJumpLabel(view.pauseReason)} →
             </button>
           ) : null}
         </div>
@@ -176,52 +179,4 @@ function indicatorGlyph(status: SubagentCardViewModel["status"]): string {
     case "paused":
       return "⏸";
   }
-}
-
-function labelForPause(reason: SubagentPauseReason | undefined): string {
-  switch (reason) {
-    case "approval":
-      return "waiting on approval";
-    case "mcp_auth":
-      return "waiting on connector";
-    case "ask_a_question":
-      return "waiting for answer";
-    default:
-      return "waiting";
-  }
-}
-
-function ariaLabelForPause(reason: SubagentPauseReason | undefined): string {
-  switch (reason) {
-    case "approval":
-      return "waiting on approval";
-    case "mcp_auth":
-      return "waiting on connector authentication";
-    case "ask_a_question":
-      return "waiting for user answer";
-    default:
-      return "waiting";
-  }
-}
-
-function jumpLabelForPause(reason: SubagentPauseReason | undefined): string {
-  switch (reason) {
-    case "approval":
-      return "approval";
-    case "mcp_auth":
-      return "connector auth";
-    case "ask_a_question":
-      return "question";
-    default:
-      return "approval";
-  }
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds - minutes * 60);
-  return `${minutes}m ${remainder}s`;
 }

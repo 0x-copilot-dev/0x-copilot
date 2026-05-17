@@ -19,6 +19,7 @@ import {
   getMyNotificationPreferences,
   updateMyNotificationPreferences,
 } from "../../../api/meApi";
+import { errorMessage } from "../../../utils/errors";
 
 const EVENT_ORDER: ReadonlyArray<NotificationEventKind> = [
   "long_task_finished",
@@ -65,9 +66,7 @@ export function NotificationsV2Panel(): ReactElement {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Could not load preferences.",
-        );
+        setError(errorMessage(err, "Could not load preferences."));
       });
     return () => {
       cancelled = true;
@@ -97,9 +96,7 @@ export function NotificationsV2Panel(): ReactElement {
       }).then(
         (response) => setSnapshot(response),
         (err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not save preference.",
-          ),
+          setError(errorMessage(err, "Could not save preference.")),
       );
     },
     [snapshot],
@@ -117,9 +114,7 @@ export function NotificationsV2Panel(): ReactElement {
       updateMyNotificationPreferences({ quiet_hours: merged }).then(
         (response) => setSnapshot(response),
         (err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not save quiet hours.",
-          ),
+          setError(errorMessage(err, "Could not save quiet hours.")),
       );
     },
     [snapshot],

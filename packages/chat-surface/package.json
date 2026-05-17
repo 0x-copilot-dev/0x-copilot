@@ -6,20 +6,28 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint src"
   },
   "peerDependencies": {
     "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "streamdown": "^2.0.0"
   },
   "dependencies": {
+    "@enterprise-search/api-types": "0.1.0",
     "@enterprise-search/chat-transport": "0.1.0",
+    "@enterprise-search/design-system": "0.1.0",
     "unified": "^11.0.0",
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
     "@types/mdast": "^4.0.0",
     "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
     "typescript": "6.0.3"
   }
 }

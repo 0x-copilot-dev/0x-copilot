@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { humanizeConnector } from "./connectorLabel";
+import { humanizeConnector } from "@enterprise-search/chat-surface";
 
 describe("humanizeConnector", () => {
   it.each([

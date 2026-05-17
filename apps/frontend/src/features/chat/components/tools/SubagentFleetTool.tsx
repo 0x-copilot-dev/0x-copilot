@@ -14,15 +14,13 @@ import type {
 } from "../../runtime/types";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
 import { FleetSubagentRow } from "../subagents/FleetSubagentRow";
-import {
-  subagentCardFromArgs,
-  type SubagentCardStatus,
-} from "../subagents/subagentCardViewModel";
+import { subagentCardFromArgs } from "../subagents/subagentCardViewModel";
 import { SubagentFleetCard } from "../messages/SubagentFleetCard";
 import { useSubagentFleetContext } from "../subagents/SubagentFleetContext";
-import { scrollChatToEvent } from "../citations/scrollChatToCitation";
+import { scrollChatToEvent } from "@enterprise-search/chat-surface";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
+import { isTerminalStatus } from "../../chatModel/subagentStatus";
 
 type RawNestedChild = {
   readonly type?: string;
@@ -32,12 +30,6 @@ type RawNestedChild = {
   readonly status?: MessagePartStatus;
   readonly isError?: boolean;
 };
-
-const NON_TERMINAL: ReadonlySet<SubagentCardStatus> = new Set([
-  "queued",
-  "running",
-  "paused",
-]);
 
 /** PR 3.2.7 — extra props plumbed by `MessageParts.tsx` so the in-thread
  *  fleet card can render paused chrome from the workspace reducer's
@@ -120,10 +112,10 @@ export function SubagentFleetTool(
       child.isError,
       pauseOverlay,
     );
-    if (NON_TERMINAL.has(view.status)) {
-      running += 1;
-    } else {
+    if (isTerminalStatus(view.status)) {
       done += 1;
+    } else {
+      running += 1;
     }
     const progress = numberValue(childArgs.progress);
     const activities =

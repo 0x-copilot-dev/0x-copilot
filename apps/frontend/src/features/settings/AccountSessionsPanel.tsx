@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { listAccountSessions, revokeAccountSession } from "../../api/authApi";
 import type { AccountSession } from "@enterprise-search/api-types";
+import { formatDateTime } from "../../utils/dateFormat";
+import { errorMessage } from "../../utils/errors";
 
 export function AccountSessionsPanel(): ReactElement {
   const [sessions, setSessions] = useState<AccountSession[]>([]);
@@ -32,7 +34,7 @@ export function AccountSessionsPanel(): ReactElement {
     try {
       setSessions(await listAccountSessions());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "could not list sessions");
+      setError(errorMessage(err, "could not list sessions"));
     } finally {
       setLoading(false);
     }
@@ -49,7 +51,7 @@ export function AccountSessionsPanel(): ReactElement {
         await revokeAccountSession(sessionId);
         await reload();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "could not revoke");
+        setError(errorMessage(err, "could not revoke"));
       } finally {
         setRevoking(null);
       }
@@ -121,8 +123,8 @@ export function AccountSessionsPanel(): ReactElement {
                 </p>
                 <p className="sessions-panel__row-detail">
                   {session.client_ip ? `${session.client_ip} · ` : ""}
-                  Signed in {_formatTimestamp(session.created_at)} · expires{" "}
-                  {_formatTimestamp(session.expires_at)}
+                  Signed in {formatDateTime(session.created_at)} · expires{" "}
+                  {formatDateTime(session.expires_at)}
                 </p>
               </div>
               <Button
@@ -141,24 +143,4 @@ export function AccountSessionsPanel(): ReactElement {
       </ul>
     </section>
   );
-}
-
-function _formatTimestamp(iso: string): string {
-  // Tolerant of both ``Z`` and ``+00:00`` suffixes; falls back to the
-  // raw string when the value isn't an ISO timestamp.
-  try {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) {
-      return iso;
-    }
-    return date.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
 }

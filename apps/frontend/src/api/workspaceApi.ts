@@ -21,13 +21,11 @@ import type {
 } from "@enterprise-search/api-types";
 import type { RequestIdentity } from "./config";
 import {
-  assertOk,
-  correlationHeaders,
   httpDelete,
   httpGet,
+  httpJson,
   httpPatchQuery,
   httpPostQuery,
-  jsonHeaders,
 } from "./http";
 
 // ---------------------------------------------------------------------------
@@ -136,19 +134,13 @@ export function revokeInvitation(
 }
 
 /** Public, no-auth accept. Only the token rides the URL. */
-export async function acceptInvitation(
+export function acceptInvitation(
   token: string,
 ): Promise<AcceptInvitationResponse> {
-  const response = await fetch(
+  return httpJson<AcceptInvitationResponse>(
+    "POST",
     `/v1/auth/invitations/${encodeURIComponent(token)}/accept`,
-    {
-      method: "POST",
-      headers: { ...jsonHeaders(), ...correlationHeaders() },
-      body: "",
-    },
   );
-  await assertOk(response);
-  return (await response.json()) as AcceptInvitationResponse;
 }
 
 // ---------------------------------------------------------------------------

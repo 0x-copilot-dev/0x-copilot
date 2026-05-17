@@ -23,7 +23,7 @@ import type { CitationSourceRef } from "@enterprise-search/api-types";
 
 import { CitationChip } from "./CitationChip";
 import { CitationsProvider } from "./citationsContext";
-import { upsertCitation } from "../../chatModel/citationsRegistry";
+import { upsertCitation } from "@enterprise-search/chat-surface";
 
 function citation(
   overrides: Partial<CitationSourceRef> = {},

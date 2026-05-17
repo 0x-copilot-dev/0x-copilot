@@ -43,6 +43,7 @@ import { isAuthenticated } from "../authStateDisplay";
 import type { ConnectorState } from "../useConnectors";
 import { useMcpCatalog } from "../useMcpCatalog";
 import { useDiscoverablePref } from "../useDiscoverablePref";
+import { errorMessage } from "../../../utils/errors";
 
 export interface McpOverlayProps {
   open: boolean;
@@ -344,7 +345,7 @@ function CatalogCard({
         // Auth-server doesn't advertise discovery — open the form.
         setSetupOpen(true);
       } else {
-        setError(err instanceof Error ? err.message : "Could not install.");
+        setError(errorMessage(err, "Could not install."));
       }
     } finally {
       setPending(false);
@@ -364,7 +365,7 @@ function CatalogCard({
       await connectors.authenticate(server.server_id);
       setSetupOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not install.");
+      setError(errorMessage(err, "Could not install."));
     } finally {
       setPending(false);
     }
@@ -666,7 +667,7 @@ function CustomUrlCard({
         await connectors.authenticate(server.server_id);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add server.");
+      setError(errorMessage(err, "Could not add server."));
     } finally {
       setPending(false);
     }

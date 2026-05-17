@@ -2,7 +2,7 @@ import type {
   UpdateWorkspaceMfaPolicyRequest,
   WorkspaceMfaPolicy,
 } from "@enterprise-search/api-types";
-import { assertOk, correlationHeaders, jsonHeaders } from "./http";
+import { httpJson } from "./http";
 
 /**
  * Admin-only — read / write the workspace's MFA enforcement row
@@ -10,22 +10,12 @@ import { assertOk, correlationHeaders, jsonHeaders } from "./http";
  * and the FE renders the section read-only.
  */
 
-export async function getWorkspaceMfaPolicy(): Promise<WorkspaceMfaPolicy> {
-  const response = await fetch("/v1/workspace/mfa-policy", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as WorkspaceMfaPolicy;
+export function getWorkspaceMfaPolicy(): Promise<WorkspaceMfaPolicy> {
+  return httpJson<WorkspaceMfaPolicy>("GET", "/v1/workspace/mfa-policy");
 }
 
-export async function updateWorkspaceMfaPolicy(
+export function updateWorkspaceMfaPolicy(
   patch: UpdateWorkspaceMfaPolicyRequest,
 ): Promise<WorkspaceMfaPolicy> {
-  const response = await fetch("/v1/workspace/mfa-policy", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as WorkspaceMfaPolicy;
+  return httpJson<WorkspaceMfaPolicy>("PUT", "/v1/workspace/mfa-policy", patch);
 }

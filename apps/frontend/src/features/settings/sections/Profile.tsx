@@ -14,6 +14,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { AvatarUploadError, fileToAvatarBlob } from "./avatarPipeline";
 import { deleteMyAvatar, uploadMyAvatar } from "../../../api/avatarApi";
 import { MfaPanel } from "./MfaPanel";
+import { errorMessage } from "../../../utils/errors";
 
 /** Mirrors the server-side cap in `me_profile.py::_BIO_MAX_LEN`. */
 const BIO_MAX_CHARS = 600;
@@ -50,7 +51,7 @@ export function Profile({
   const [avatarUrlOpen, setAvatarUrlOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
   const auth = useAuth();
 
   useEffect(() => {
@@ -79,14 +80,12 @@ export function Profile({
     patch.bio = bio.trim() === "" ? null : bio.trim();
 
     try {
-      setErrorMessage(null);
+      setErrorText(null);
       setSaving(true);
       await profile.save(patch);
       setSavedAt(new Date().toISOString());
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : "Could not save profile.",
-      );
+      setErrorText(errorMessage(err, "Could not save profile."));
     } finally {
       setSaving(false);
     }
@@ -118,9 +117,7 @@ export function Profile({
       setAvatarError(
         err instanceof AvatarUploadError
           ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Could not upload that image.",
+          : errorMessage(err, "Could not upload that image."),
       );
     } finally {
       setAvatarBusy(false);
@@ -164,9 +161,7 @@ export function Profile({
       setAvatarUrl("");
       await profile.refresh().catch(() => undefined);
     } catch (err) {
-      setAvatarError(
-        err instanceof Error ? err.message : "Could not remove the photo.",
-      );
+      setAvatarError(errorMessage(err, "Could not remove the photo."));
     } finally {
       setAvatarBusy(false);
     }
@@ -356,7 +351,7 @@ export function Profile({
             />
           </Field>
 
-          {errorMessage ? <p className="app-error">{errorMessage}</p> : null}
+          {errorText ? <p className="app-error">{errorText}</p> : null}
 
           <div className="me-form__actions">
             <Button type="submit" disabled={saving} title="Save profile">

@@ -3,13 +3,15 @@
 // The catalog is org-agnostic and small (~13 entries). Fetched once on
 // mount of the consumer (typically the McpOverlay modal). Refresh is
 // exposed for the modal's manual Refresh button. Identity is **not**
-// required — the endpoint is org-agnostic — but we keep the hook on
-// the same useResource shape as ``useConnectors`` so it composes the
+// required — the endpoint is org-agnostic — but we keep the shape
+// aligned with the rest of the data hooks so consumers compose the
 // same way in tests.
 
 import type { McpCatalogEntry } from "@enterprise-search/api-types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+
 import { listMcpCatalog } from "../../api/mcpApi";
+import { useRecord } from "../../api/useResource";
 
 export interface CatalogState {
   entries: McpCatalogEntry[];
@@ -19,26 +21,13 @@ export interface CatalogState {
 }
 
 export function useMcpCatalog(): CatalogState {
-  const [entries, setEntries] = useState<McpCatalogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setLoading(true);
-      const response = await listMcpCatalog();
-      setEntries([...response.entries]);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load catalog.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  return { entries, loading, error, refresh };
+  const fetcher = useCallback(
+    async () => [...(await listMcpCatalog()).entries],
+    [],
+  );
+  const { data, loading, error, refresh } = useRecord(
+    fetcher,
+    "Could not load catalog.",
+  );
+  return { entries: data ?? [], loading, error, refresh };
 }

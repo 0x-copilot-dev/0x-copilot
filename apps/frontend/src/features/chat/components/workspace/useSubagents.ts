@@ -16,6 +16,7 @@ import {
   seedSubagentMap,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
+import { errorMessage } from "../../../../utils/errors";
 
 export interface SubagentsState {
   subagents: SubagentSnapshotMap;
@@ -65,9 +66,7 @@ export function useSubagents(
         if (cancelled) {
           return;
         }
-        setError(
-          err instanceof Error ? err.message : "Could not load subagents",
-        );
+        setError(errorMessage(err, "Could not load subagents"));
       })
       .finally(() => {
         if (!cancelled) {

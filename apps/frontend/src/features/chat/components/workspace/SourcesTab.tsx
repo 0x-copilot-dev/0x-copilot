@@ -20,9 +20,11 @@ import {
   type SourceConnectorGroup,
   type SourceEntryMap,
 } from "../../chatModel/sourcesReducer";
-import { humanizeConnector } from "../citations/connectorLabel";
+import {
+  humanizeConnector,
+  SourceSkeletonRow,
+} from "@enterprise-search/chat-surface";
 import { SourceRow } from "../citations/SourceRow";
-import { SourceSkeletonRow } from "../citations/SourceSkeletonRow";
 
 const GROUP_THRESHOLD = 5;
 

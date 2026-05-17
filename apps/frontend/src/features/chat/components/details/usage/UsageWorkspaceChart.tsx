@@ -37,6 +37,7 @@ import {
   selectPlanLimit,
   type ChartUnit,
 } from "./usageWorkspaceData";
+import { formatTokens } from "./format";
 import { usagePalette } from "./usagePalette";
 import { formatMicroUsd } from "../../../utils/formatMicroUsd";
 
@@ -168,7 +169,7 @@ function planLimitLabel(value: number, unit: ChartUnit): string {
   if (unit === "usd") {
     return `Plan limit · ${formatMicroUsd(value * 1_000_000)}`;
   }
-  return `Plan limit · ${value.toLocaleString()} tok`;
+  return `Plan limit · ${formatTokens(value)}`;
 }
 
 function axisFormat(value: number, unit: ChartUnit): string {
@@ -188,7 +189,7 @@ function tooltipFormat(value: number, unit: ChartUnit): [string, string] {
   if (unit === "usd") {
     return [formatMicroUsd(value * 1_000_000), "Cost"];
   }
-  return [`${value.toLocaleString()} tok`, "Tokens"];
+  return [formatTokens(value), "Tokens"];
 }
 
 function tooltipStyle(): React.CSSProperties {

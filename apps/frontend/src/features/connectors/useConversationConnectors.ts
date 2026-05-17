@@ -2,12 +2,16 @@ import type {
   Conversation,
   ConversationConnectorScopes,
 } from "@enterprise-search/api-types";
+import { usePresenceSignal } from "@enterprise-search/chat-surface";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RequestIdentity } from "../../api/config";
+
 import {
   getConversation,
   updateConversationConnectorScopes,
 } from "../../api/agentApi";
+import type { RequestIdentity } from "../../api/config";
+import { errorMessage } from "../../utils/errors";
+import { useWorkspaceConnectorsChanged } from "./invalidation";
 
 /**
  * PR 1.2 — single source of truth for the per-chat connector scope popover.
@@ -85,9 +89,7 @@ export function useConversationConnectors(
         }
       } catch (err) {
         setScopes(previous);
-        setError(
-          err instanceof Error ? err.message : "Could not update connectors",
-        );
+        setError(errorMessage(err, "Could not update connectors"));
         throw err;
       } finally {
         setLoading(false);
@@ -96,51 +98,58 @@ export function useConversationConnectors(
     [conversation, identity, scopes],
   );
 
-  // PR 1.2.1 — multi-tab reconciliation. Refetch the conversation when
-  // the tab becomes visible again; if the server's connectors_updated_at
-  // is strictly newer than what we last observed, replace local scopes.
-  // Skipped while a PATCH is in flight (loading guard) so the optimistic
-  // flip is never clobbered by a stale GET landing first.
-  useEffect(() => {
-    if (
-      typeof document === "undefined" ||
-      conversation === null ||
-      identity === null
-    ) {
-      return undefined;
+  // Refetch the conversation and apply server-side scopes if the
+  // server's connectors_updated_at is strictly newer than what we
+  // last observed. Skipped while a PATCH is in flight (loading guard)
+  // so the optimistic flip is never clobbered by a stale GET landing
+  // first. Used by both the visibility-change reconciliation and the
+  // workspace-connectors invalidation channel.
+  const reconcileFromServer = useCallback(() => {
+    if (conversation === null || identity === null || loadingRef.current) {
+      return;
     }
     const conversationId = conversation.conversation_id;
+    void getConversation(conversationId, identity)
+      .then((fresh) => {
+        const serverUpdated = fresh.connectors_updated_at ?? null;
+        const localUpdated = lastUpdatedAtRef.current;
+        // Strictly-newer comparison: equal timestamps mean no work,
+        // older server state means our optimistic UI is ahead and
+        // shouldn't be overwritten.
+        if (serverUpdated && (!localUpdated || serverUpdated > localUpdated)) {
+          setScopes(fresh.enabled_connectors ?? {});
+          lastUpdatedAtRef.current = serverUpdated;
+        }
+      })
+      .catch(() => {
+        // Reconciliation failures are silent — the user already has
+        // working state and connectivity issues surface elsewhere.
+      });
+  }, [conversation?.conversation_id, identity]);
 
-    const onVisible = (): void => {
-      if (document.visibilityState !== "visible" || loadingRef.current) {
+  // PR 1.2.1 — multi-tab reconciliation. Refetch on tab visibility.
+  // Subscribed via the PresenceSignal port — on web that's backed by
+  // `document.visibilityState`, on desktop by VS Code's window focus
+  // events. No direct `document` reference here.
+  const presence = usePresenceSignal();
+  useEffect(() => {
+    if (conversation === null || identity === null) {
+      return undefined;
+    }
+    return presence.subscribe((state) => {
+      if (state !== "visible") {
         return;
       }
-      void getConversation(conversationId, identity)
-        .then((fresh) => {
-          const serverUpdated = fresh.connectors_updated_at ?? null;
-          const localUpdated = lastUpdatedAtRef.current;
-          // Strictly-newer comparison: equal timestamps mean no work,
-          // older server state means our optimistic UI is ahead and
-          // shouldn't be overwritten.
-          if (
-            serverUpdated &&
-            (!localUpdated || serverUpdated > localUpdated)
-          ) {
-            setScopes(fresh.enabled_connectors ?? {});
-            lastUpdatedAtRef.current = serverUpdated;
-          }
-        })
-        .catch(() => {
-          // Reconciliation failures are silent — the user already has
-          // working state and connectivity issues surface elsewhere.
-        });
-    };
+      reconcileFromServer();
+    });
+  }, [conversation?.conversation_id, identity, presence, reconcileFromServer]);
 
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [conversation?.conversation_id, identity]);
+  // Workspace-level connector changes (admin disables/installs a
+  // server elsewhere in the tab) invalidate this hook's notion of
+  // "what's available." Refetch the conversation so the popover
+  // reflects the post-change scope and we don't keep offering tools
+  // from a connector the admin just disabled.
+  useWorkspaceConnectorsChanged(reconcileFromServer);
 
   return { scopes, loading, error, patch };
 }

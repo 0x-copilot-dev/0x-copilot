@@ -20,7 +20,10 @@ import type {
   RuntimeEventEnvelope,
 } from "@enterprise-search/api-types";
 import { applyCitationEvent } from "./citationReducer";
-import { citationsForRun, emptyCitationRegistry } from "./citationsRegistry";
+import {
+  citationsForRun,
+  emptyCitationRegistry,
+} from "@enterprise-search/chat-surface";
 import { applySourceEvent, emptySourceMap } from "./sourcesReducer";
 
 const RUN_ID = "run_invariant_1";

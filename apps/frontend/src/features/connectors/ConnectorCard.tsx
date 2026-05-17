@@ -15,6 +15,7 @@ import type { McpServer } from "@enterprise-search/api-types";
 import { type ReactElement, useState } from "react";
 import { authStateDisplay } from "./authStateDisplay";
 import type { ConnectorState } from "./useConnectors";
+import { errorMessage } from "../../utils/errors";
 
 interface ConnectorCardProps {
   server: McpServer;
@@ -56,7 +57,7 @@ export function ConnectorCard({
       setError(null);
       await fn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      setError(errorMessage(err, "Action failed."));
     } finally {
       setPending(null);
     }

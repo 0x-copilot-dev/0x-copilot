@@ -66,6 +66,15 @@ export function toolResultValue(payload: Record<string, unknown>): unknown {
   );
 }
 
+// Base set: keys stripped from the *persisted* `argsText` (consumed by
+// partFactories / presentation.ts). These are streaming/lifecycle/state
+// noise that should never make it into either argsText or the rendered
+// "Visible args" JSON block.
+//
+// `presentation` is the transport-level UI envelope (title, status_label,
+// kind, debug_label, …) — it is NOT part of the tool's logical input and
+// should never be rendered inside the "Tool details → Input" JSON block.
+// It stays on `args` so `presentationFromArgs` can still read it.
 export const hiddenToolArgKeys = new Set([
   "status",
   "summary",
@@ -77,14 +86,29 @@ export const hiddenToolArgKeys = new Set([
   "approval_kind",
   "auth_url",
   "display_name",
+  "presentation",
   "server_id",
   "server_name",
   "source_tool_call_id",
-  // `presentation` is the transport-level UI envelope (title, status_label,
-  // kind, debug_label, …) — it is NOT part of the tool's logical input and
-  // should never be rendered inside the "Tool details → Input" JSON block.
-  // It stays on `args` so `presentationFromArgs` can still read it.
-  "presentation",
+]);
+
+// Display-only extras: kept in persisted `argsText` (so debug surfaces
+// and test fixtures can see which MCP tool an args_delta targeted) but
+// hidden from the rendered "Visible args" UI strip.
+//
+//   - `tool_name` — the called MCP tool name (e.g. "clickup_filter_tasks").
+//     MCP relay calls carry it on the args envelope so the user knows
+//     which sub-tool was hit; chatModel.test.ts pins that argsText
+//     retains it.
+//   - `native_interrupt_id` — host-injected interrupt routing id;
+//     useful for debugging but visually noisy.
+//
+// Layered (not duplicated) so the base set above stays the single source
+// of truth and an addition to it propagates here automatically.
+export const hiddenToolArgKeysForVisibleDisplay = new Set([
+  ...hiddenToolArgKeys,
+  "native_interrupt_id",
+  "tool_name",
 ]);
 
 export const hiddenApprovalArgKeys = new Set([

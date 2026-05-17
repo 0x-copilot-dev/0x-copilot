@@ -5,6 +5,7 @@
 // sequence of POST / PATCH / DELETE calls.
 
 import type { McpServer } from "@enterprise-search/api-types";
+import { errorMessage } from "../../utils/errors";
 
 export interface JsonConfigEntry {
   /** Stable server id. Required for updates / deletes. Omit for creates. */
@@ -61,7 +62,7 @@ export function parseConfig(text: string): JsonConfig {
     raw = JSON.parse(text);
   } catch (err) {
     throw new JsonConfigError(
-      `Invalid JSON: ${err instanceof Error ? err.message : "parse error"}`,
+      `Invalid JSON: ${errorMessage(err, "parse error")}`,
     );
   }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {

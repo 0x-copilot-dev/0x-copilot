@@ -10,6 +10,10 @@
  * gated by ``import.meta.env.DEV``.
  */
 
+import {
+  useKeyValueStore,
+  useSecretStorage,
+} from "@enterprise-search/chat-surface";
 import { useEffect, useState, type ReactElement } from "react";
 
 import {
@@ -19,14 +23,22 @@ import {
   persistActivePersonaSlug,
   type DevPersonaSummary,
 } from "../../../auth/devIdp";
-
-const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
+import { BEARER_STORAGE_KEY } from "../../../auth/storageKeys";
+import { errorMessage } from "../../../../utils/errors";
 
 export function DevPersonaSwitcher(): ReactElement | null {
   if (!import.meta.env.DEV) return null;
 
+  // Two distinct stores by intent:
+  //   - kvStore (KeyValueStore) — non-secret persona-slug preference.
+  //   - secrets (SecretStorage) — bearer the page reload hands off to.
+  // The type split is the enforcement; the runtime backing happens to be
+  // the same on web today (localStorage), but mistakes between the two
+  // are caught at typecheck.
+  const kvStore = useKeyValueStore();
+  const secrets = useSecretStorage();
   const [personas, setPersonas] = useState<DevPersonaSummary[]>([]);
-  const [active, setActive] = useState<string>(loadActivePersonaSlug());
+  const [active, setActive] = useState<string>(loadActivePersonaSlug(kvStore));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,7 +49,7 @@ export function DevPersonaSwitcher(): ReactElement | null {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "failed to load");
+          setError(errorMessage(err, "failed to load"));
         }
       });
     return () => {
@@ -49,12 +61,12 @@ export function DevPersonaSwitcher(): ReactElement | null {
     if (slug === active) return;
     try {
       const result = await mintDevBearer(slug);
-      window.localStorage.setItem(BEARER_STORAGE_KEY, result.bearer);
-      persistActivePersonaSlug(slug);
+      secrets.set(BEARER_STORAGE_KEY, result.bearer);
+      persistActivePersonaSlug(kvStore, slug);
       setActive(slug);
       window.location.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "mint failed");
+      setError(errorMessage(err, "mint failed"));
     }
   };
 

@@ -21,6 +21,7 @@ import type {
 } from "@enterprise-search/api-types";
 import { getWorkspaceDefaults, putWorkspaceDefaults } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
+import { errorMessage } from "../../utils/errors";
 
 export interface UseWorkspaceDefaultsResult {
   defaults: WorkspaceDefaultsResponse | null;
@@ -53,11 +54,7 @@ export function useWorkspaceDefaults(
         if (cancelled) {
           return;
         }
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not load workspace defaults",
-        );
+        setError(errorMessage(err, "Could not load workspace defaults"));
       })
       .finally(() => {
         if (!cancelled) {
@@ -98,11 +95,7 @@ export function useWorkspaceDefaults(
         setDefaults(updated);
       } catch (err) {
         setDefaults(previous);
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not save workspace defaults",
-        );
+        setError(errorMessage(err, "Could not save workspace defaults"));
         throw err;
       }
     },

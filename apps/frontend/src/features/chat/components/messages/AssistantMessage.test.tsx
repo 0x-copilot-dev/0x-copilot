@@ -57,7 +57,7 @@ vi.mock("./AssistantMessageFooter", () => ({
 import { AssistantMessage } from "./AssistantMessage";
 import { CitationsProvider } from "../citations/citationsContext";
 import { applyCitationEvent } from "../../chatModel/citationReducer";
-import { emptyCitationRegistry } from "../../chatModel/citationsRegistry";
+import { emptyCitationRegistry } from "@enterprise-search/chat-surface";
 
 const RUN_ID = "run_a";
 const CONVERSATION_ID = "conv_a";

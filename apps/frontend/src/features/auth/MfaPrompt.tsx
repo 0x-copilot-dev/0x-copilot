@@ -21,6 +21,7 @@ import {
   verifyMfaChallenge,
 } from "../../api/authApi";
 import { useAuth } from "./AuthContext";
+import { errorMessage } from "../../utils/errors";
 
 type Step = "choose" | "totp" | "webauthn" | "recovery";
 
@@ -69,7 +70,7 @@ export function MfaPrompt({ rpId, onComplete }: MfaPromptProps): ReactElement {
       });
       await auth.completeMfa();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "verify failed");
+      setError(errorMessage(err, "verify failed"));
     } finally {
       setSubmitting(false);
     }
@@ -83,7 +84,7 @@ export function MfaPrompt({ rpId, onComplete }: MfaPromptProps): ReactElement {
       await consumeRecoveryCode(recoveryCode);
       await auth.completeMfa();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "recovery failed");
+      setError(errorMessage(err, "recovery failed"));
     } finally {
       setSubmitting(false);
     }
@@ -117,7 +118,7 @@ export function MfaPrompt({ rpId, onComplete }: MfaPromptProps): ReactElement {
       });
       await auth.completeMfa();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "WebAuthn failed");
+      setError(errorMessage(err, "WebAuthn failed"));
     } finally {
       setSubmitting(false);
     }

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { getMyBudgets, getOrgUsage } from "../../../../../api/agentApi";
 import type { RequestIdentity } from "../../../../../api/config";
+import { errorMessage } from "../../../../../utils/errors";
 
 export interface UseUsageOrgState {
   loading: boolean;
@@ -81,7 +82,7 @@ export function useUsageOrg(
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "could not load usage");
+        setError(errorMessage(err, "could not load usage"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

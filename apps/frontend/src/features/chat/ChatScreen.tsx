@@ -96,7 +96,7 @@ import {
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "./chatModel/citationsRegistry";
+} from "@enterprise-search/chat-surface";
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
@@ -105,7 +105,7 @@ import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorksp
 import {
   scrollChatToCitation,
   scrollChatToEvent,
-} from "./components/citations/scrollChatToCitation";
+} from "@enterprise-search/chat-surface";
 import { SourcePreviewProvider } from "./components/citations/SourcePreview";
 import { SubagentFleetProvider } from "./components/subagents/SubagentFleetContext";
 import { listSources } from "../../api/agentApi";
@@ -144,6 +144,7 @@ import { useAuth } from "../auth/AuthContext";
 import { usePinnedConversations } from "./sidebar/usePinnedConversations";
 import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
 import { useBackgroundChatStreams } from "./runtime/useBackgroundChatStreams";
+import { errorMessage } from "../../utils/errors";
 
 type SubmitMessageOptions = {
   parentMessageId?: string | null;
@@ -428,9 +429,7 @@ export function ChatScreen({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setSourcesError(
-          err instanceof Error ? err.message : "Could not load sources",
-        );
+        setSourcesError(errorMessage(err, "Could not load sources"));
       })
       .finally(() => {
         if (!cancelled) setSourcesLoading(false);
@@ -2009,10 +2008,6 @@ async function replayEventsForMessages(
     }),
   );
   return { eventsByRunId, replayFailed };
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
 }
 
 function textFromAppendMessage(message: AppendMessage): string {

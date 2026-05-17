@@ -8,7 +8,7 @@ import {
   citationsByOrdinal,
   citationsForRun,
   emptyCitationRegistry,
-} from "./citationsRegistry";
+} from "@enterprise-search/chat-surface";
 
 const RUN_ID = "run_cite_1";
 const CONVERSATION_ID = "conv_cite_1";

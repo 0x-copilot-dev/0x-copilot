@@ -22,15 +22,25 @@ import { useConnectors } from "../features/connectors/useConnectors";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
-import { useThemeSync } from "../features/me/useThemeSync";
-import { useUserPreferences } from "../features/me/useUserPreferences";
+import { AppearanceProvider } from "../features/appearance/AppearanceContext";
+import { UserPreferencesProvider } from "../features/me/UserPreferencesContext";
 import { useUserProfile } from "../features/me/useUserProfile";
+import { UserProfileProvider } from "../features/me/UserProfileContext";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
-import { ChatShell } from "@enterprise-search/chat-surface";
+import {
+  ChatShell,
+  DocumentPresenceSignal,
+  KeyValueStoreProvider,
+  LocalStorageKeyValueStore,
+  SecretStorageProvider,
+  WebSecretStorage,
+  useKeyValueStore,
+} from "@enterprise-search/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import type { AppRoute } from "./routes";
+import { errorMessage } from "../utils/errors";
 
 /**
  * The org slug LoginScreen falls back to when the URL doesn't carry one.
@@ -45,11 +55,29 @@ const DEFAULT_ORG_ID =
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 
 export default function App(): ReactElement {
+  // Construct the substrate-side KeyValueStore here (not inside
+  // EnterpriseSearchApp) so AuthProvider's `useKeyValueStore()` resolves
+  // to the real store. AuthProvider sits above EnterpriseSearchApp; if
+  // the provider were only mounted inside ChatShell, AuthProvider would
+  // pull the context's no-op default and the dev IdP would always mint
+  // for the DEFAULT persona instead of the one the user picked in
+  // DevPersonaSwitcher. Same instance flows down to ChatShell so the
+  // entire tree shares one substrate-bound store.
+  const [keyValueStore] = useState(() => new LocalStorageKeyValueStore());
+  // SecretStorage is hoisted alongside KeyValueStore (above AuthProvider)
+  // for the same reason — AuthContext consumes useSecretStorage() during
+  // the initial bearer load, well before ChatShell mounts. Same instance,
+  // single substrate-bound source of truth for secret values.
+  const [secretStorage] = useState(() => new WebSecretStorage());
   return (
     <ThemeProvider defaultScheme="dark">
-      <AuthProvider>
-        <AuthGate />
-      </AuthProvider>
+      <KeyValueStoreProvider store={keyValueStore}>
+        <SecretStorageProvider store={secretStorage}>
+          <AuthProvider>
+            <AuthGate />
+          </AuthProvider>
+        </SecretStorageProvider>
+      </KeyValueStoreProvider>
     </ThemeProvider>
   );
 }
@@ -124,12 +152,18 @@ function AuthGate(): ReactElement {
   }
 
   return (
-    <EnterpriseSearchApp
-      identity={{
-        orgId: auth.identity.org_id,
-        userId: auth.identity.user_id,
-      }}
-    />
+    <UserProfileProvider>
+      <UserPreferencesProvider>
+        <AppearanceProvider>
+          <EnterpriseSearchApp
+            identity={{
+              orgId: auth.identity.org_id,
+              userId: auth.identity.user_id,
+            }}
+          />
+        </AppearanceProvider>
+      </UserPreferencesProvider>
+    </UserProfileProvider>
   );
 }
 
@@ -164,17 +198,28 @@ function EnterpriseSearchApp({
 }): ReactElement {
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
-  // PR 4.1 — server-side profile + preferences. One round-trip each at
-  // app boot; ``useThemeSync`` mirrors appearance into ThemeProvider +
-  // <html> attrs so density/reduce-motion apply globally.
+  // PR 4.1 — server-side profile snapshot for the sidebar greeting +
+  // Settings forms. Preferences (theme, accent, density, reduce_motion,
+  // notifications, shortcuts) come from `UserPreferencesProvider` one
+  // layer up — `AppearanceProvider` owns the appearance write path
+  // (PRD 04: design-system ThemeProvider + document.documentElement
+  // attrs + debounced server save).
   const profile = useUserProfile();
-  const preferences = useUserPreferences();
-  useThemeSync(preferences.data);
   // Routing goes through the Router port (packages/chat-surface). HashRouter
   // owns every window.history / popstate / hashchange interaction on web;
   // the desktop substrate will swap in its own implementation without any
   // App.tsx changes.
   const [router] = useState(() => new HashRouter());
+  // The KeyValueStore is constructed at the top-level App component
+  // (so AuthProvider can see it). Pull it from context here to pass
+  // through to ChatShell — same instance, single source of truth.
+  const keyValueStore = useKeyValueStore();
+  // PresenceSignal is local to EnterpriseSearchApp — AuthProvider doesn't
+  // need it (nothing in auth listens for tab visibility), so we don't have
+  // to hoist it the way KeyValueStore was hoisted. Constructed once via
+  // useState; reads through globalThis.document each call so jsdom and
+  // the real DOM both work.
+  const [presenceSignal] = useState(() => new DocumentPresenceSignal());
   const [route, setRoute] = useState<AppRoute>(() => {
     // PR 4.3 — One-shot migration of legacy ``/settings/<section>`` URLs
     // into the hashed form. Runs at most once per session because the
@@ -266,11 +311,7 @@ function EnterpriseSearchApp({
         }
       } catch (err) {
         if (!cancelled) {
-          setOauthStatus(
-            err instanceof Error
-              ? err.message
-              : "Connector authentication failed.",
-          );
+          setOauthStatus(errorMessage(err, "Connector authentication failed."));
           router.navigate({ screen: "chat" }, { replace: true });
         }
       }
@@ -290,7 +331,6 @@ function EnterpriseSearchApp({
         skills={skills}
         identity={identity}
         profile={profile}
-        preferences={preferences}
         initialSection={route.section}
         onBackToChat={() => router.navigate({ screen: "chat" })}
         onSectionChange={(section) =>
@@ -329,11 +369,16 @@ function EnterpriseSearchApp({
 
   // Every screen mounts inside ChatShell so any descendant — including
   // future components migrated into chat-surface — can reach the active
-  // Transport and Router via hooks instead of singletons. The transport
-  // is a stable module singleton; the router is the local HashRouter
-  // instance.
+  // Transport, Router, and KeyValueStore via hooks instead of singletons
+  // or window globals. The transport is a stable module singleton; the
+  // router and the KV store are local instances stable across renders.
   return (
-    <ChatShell transport={getAppTransport()} router={router}>
+    <ChatShell
+      transport={getAppTransport()}
+      router={router}
+      keyValueStore={keyValueStore}
+      presenceSignal={presenceSignal}
+    >
       {body}
     </ChatShell>
   );

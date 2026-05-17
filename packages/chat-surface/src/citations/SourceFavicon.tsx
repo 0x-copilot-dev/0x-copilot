@@ -1,4 +1,4 @@
-// PR 3.7 — connector / favicon glyph for source rows.
+// Connector / favicon glyph for source rows.
 //
 // Three-tier fallback chain:
 //   1. Real URL → host favicon via Google's s2 service (browser-cached).

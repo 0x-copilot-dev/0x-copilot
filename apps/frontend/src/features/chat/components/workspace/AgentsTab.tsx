@@ -26,7 +26,7 @@ import {
   subagentsByRecency,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
-import { scrollChatToEvent } from "../citations/scrollChatToCitation";
+import { scrollChatToEvent } from "@enterprise-search/chat-surface";
 import { SubagentCard } from "../subagents/SubagentCard";
 import { subagentCardFromEntry } from "../subagents/subagentCardViewModel";
 import type {

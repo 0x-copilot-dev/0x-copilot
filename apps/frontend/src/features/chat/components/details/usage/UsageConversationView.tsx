@@ -19,6 +19,8 @@ import { useCallback, useEffect, useState } from "react";
 import { getMyTopConversations, getMyUsage } from "../../../../../api/agentApi";
 import type { RequestIdentity } from "../../../../../api/config";
 import { formatMicroUsd } from "../../../utils/formatMicroUsd";
+import { errorMessage } from "../../../../../utils/errors";
+import { formatTokens } from "./format";
 
 export interface UsageConversationViewProps {
   identity: RequestIdentity;
@@ -50,7 +52,7 @@ export function UsageConversationView({
         setTopConversations(top);
       } catch (err) {
         if (signal.aborted) return;
-        setError(err instanceof Error ? err.message : "could not load usage");
+        setError(errorMessage(err, "could not load usage"));
       } finally {
         if (!signal.aborted) setLoading(false);
       }
@@ -288,8 +290,4 @@ function Metric({
       <dd>{formatTokens(value)}</dd>
     </div>
   );
-}
-
-function formatTokens(value: number): string {
-  return `${value.toLocaleString()} tok`;
 }

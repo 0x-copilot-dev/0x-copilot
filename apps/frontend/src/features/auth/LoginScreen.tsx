@@ -43,6 +43,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { discoverAuth, startMagicLink } from "../../api/authApi";
 import { useAuth } from "./AuthContext";
+import { errorMessage } from "../../utils/errors";
 
 const DEBOUNCE_MS = 450;
 const MAGIC_LINK_CALLBACK_PATH = "/auth/magic-link/callback";
@@ -242,8 +243,7 @@ function EmailStep({
         })
         .catch((err: unknown) => {
           if (controller.signal.aborted) return;
-          const message =
-            err instanceof Error ? err.message : "could not look up domain";
+          const message = errorMessage(err, "could not look up domain");
           setDiscovery({ kind: "error", message });
         });
     }, DEBOUNCE_MS);
@@ -292,7 +292,7 @@ function EmailStep({
             "Your workspace requires single sign-on. Contact your admin.",
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : "login failed";
+        const message = errorMessage(err, "login failed");
         setSubmitError(message);
       } finally {
         setSubmitting(false);
@@ -577,8 +577,7 @@ function MagicLinkCallbackStep({
         // (stripping ?token=) is owned by AuthContext.consumeMagicLink
         // so the call site only handles errors.
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "could not consume link";
+        const message = errorMessage(err, "could not consume link");
         setError(message);
       }
     })();
@@ -636,8 +635,7 @@ function WorkspacePickStep(): ReactElement {
     try {
       await auth.selectWorkspaceFromPick(org_id);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "could not select workspace";
+      const message = errorMessage(err, "could not select workspace");
       setError(message);
     } finally {
       setSubmittingOrg(null);

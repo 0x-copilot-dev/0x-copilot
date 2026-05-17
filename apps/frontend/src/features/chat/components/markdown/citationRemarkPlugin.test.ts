@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkStringify from "remark-stringify";
 import {
   CITATION_HREF_PREFIX,
   CITATION_ORDINAL_HREF_PREFIX,
-  remarkCitations,
-} from "./citationRemarkPlugin";
+  createRemarkCitations,
+} from "@enterprise-search/chat-surface";
+import remarkParse from "remark-parse";
+import remarkStringify from "remark-stringify";
+import { unified } from "unified";
+import { describe, expect, it } from "vitest";
+
+// Shared plugin instance with no debug sink — the tests assert mdast
+// rewriting, not the diagnostic callback.
+const remarkCitations = createRemarkCitations();
 
 function transform(input: string): string {
   return unified()

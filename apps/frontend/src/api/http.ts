@@ -223,3 +223,44 @@ export async function httpDelete(
     query: buildQuery(identity, extra),
   });
 }
+
+/**
+ * Method + path + optional body through the transport singleton, with
+ * no identity gating. Use when the endpoint authenticates from the
+ * bearer alone (`/v1/me/*`, `/v1/auth/*`) and doesn't take
+ * `org_id`/`user_id` query params. See PRD 05 for the migration that
+ * converged the api/* modules onto this helper.
+ *
+ * Pass `query` for endpoints with arbitrary query parameters (e.g.
+ * OAuth callbacks that thread `state`/`code` through the URL).
+ */
+export async function httpJson<T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+  query?: Record<string, string | undefined>,
+): Promise<T> {
+  return getAppTransport().request<T>({ method, path, body, query });
+}
+
+/**
+ * Multipart upload (avatar). The transport always JSON-serialises `body`,
+ * so multipart goes through raw fetch — but with the same bearer +
+ * correlation + 401 plumbing as everything else, lifted from the
+ * shared singleton so per-feature uploaders never re-derive it.
+ */
+export async function httpMultipart<T>(
+  path: string,
+  form: FormData,
+): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: correlationHeaders(),
+    body: form,
+  });
+  await assertOk(response);
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+}

@@ -32,6 +32,7 @@ import {
   rotateWorkspaceApiKey,
 } from "../../../api/meApi";
 import { useAuth } from "../../auth/AuthContext";
+import { errorMessage } from "../../../utils/errors";
 
 /** API surface for one scope. Lets the body stay scope-agnostic. */
 interface ApiKeysOps {
@@ -158,7 +159,7 @@ function ApiKeysBody({
         setError(null);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not load keys.");
+        setError(errorMessage(err, "Could not load keys."));
       });
   }, [ops]);
 
@@ -186,7 +187,7 @@ function ApiKeysBody({
         refresh();
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not create key.");
+        setError(errorMessage(err, "Could not create key."));
       })
       .finally(() => setBusy(false));
   }, [draftLabel, ops, refresh]);
@@ -197,9 +198,7 @@ function ApiKeysBody({
         .revoke(api_key_id)
         .then(() => refresh())
         .catch((err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not revoke key.",
-          ),
+          setError(errorMessage(err, "Could not revoke key.")),
         );
     },
     [ops, refresh],
@@ -218,9 +217,7 @@ function ApiKeysBody({
           refresh();
         })
         .catch((err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not rotate key.",
-          ),
+          setError(errorMessage(err, "Could not rotate key.")),
         );
     },
     [ops, refresh],

@@ -25,8 +25,10 @@ import type { Parent, PhrasingContent, Root, Text } from "mdast";
 import type { Plugin } from "unified";
 import { visit } from "unist-util-visit";
 
-export const CITATION_HREF_PREFIX = "#cite:";
-export const CITATION_ORDINAL_HREF_PREFIX = "#cite-ord:";
+import {
+  CITATION_HREF_PREFIX,
+  CITATION_ORDINAL_HREF_PREFIX,
+} from "./citationHrefs";
 
 // Combined pattern: matches either `[c<base36>]` or `[[<digits>]]`.
 // The two captures are mutually exclusive — exactly one of group 1

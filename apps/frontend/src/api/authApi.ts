@@ -18,49 +18,32 @@ import type {
   MagicLinkStartResponse,
   MfaChallengeRequest,
   MfaChallengeResponse,
-  MfaFactorListResponse,
-  MfaFactorSummary,
   MfaVerifyRequest,
   MfaVerifyResponse,
   SessionSelectRequest,
   SessionSelectResponse,
-  TotpConfirmRequest,
-  TotpEnrollResponse,
 } from "@enterprise-search/api-types";
 
-import { assertOk, correlationHeaders, jsonHeaders } from "./http";
+import { httpJson } from "./http";
 
 // Bearer attachment lives in `./http` (configureAuthBearerProvider) so
 // every API helper picks up the active session, not just authApi. The
 // re-export keeps AuthProvider's existing import surface stable.
 export { configureAuthBearerProvider } from "./http";
 
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: correlationHeaders() });
-  await assertOk(response);
-  return (await response.json()) as T;
+// Thin per-method wrappers that route through the shared transport
+// singleton (see PRD 05). Kept as local names so the rest of this
+// module's call sites stay legible.
+function get<T>(path: string): Promise<T> {
+  return httpJson<T>("GET", path);
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  await assertOk(response);
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  const text = await response.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+function post<T>(path: string, body?: unknown): Promise<T> {
+  return httpJson<T>("POST", path, body);
 }
 
 async function del(path: string): Promise<void> {
-  const response = await fetch(path, {
-    method: "DELETE",
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
+  await httpJson<void>("DELETE", path);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,34 +112,14 @@ export async function revokeAccountSession(sessionId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// MFA
+// MFA — login-time challenge/verify only
 // ---------------------------------------------------------------------------
-
-export async function listMfaFactors(): Promise<MfaFactorSummary[]> {
-  const data = await get<MfaFactorListResponse>("/v1/auth/mfa/factors");
-  return data.factors;
-}
-
-export async function enrollTotp(
-  displayName: string,
-): Promise<TotpEnrollResponse> {
-  return post<TotpEnrollResponse>("/v1/auth/mfa/factors/totp/enroll", {
-    display_name: displayName,
-  });
-}
-
-export async function confirmTotp(
-  payload: TotpConfirmRequest,
-): Promise<{ factor_id: string; enabled: boolean }> {
-  return post<{ factor_id: string; enabled: boolean }>(
-    "/v1/auth/mfa/factors/totp/confirm",
-    payload,
-  );
-}
-
-export async function disableMfaFactor(factorId: string): Promise<void> {
-  await del(`/v1/auth/mfa/factors/${encodeURIComponent(factorId)}`);
-}
+//
+// Caller-scoped factor management (list / enroll / confirm / disable) is in
+// `src/api/mfaApi.ts` and hits `/v1/me/mfa/*`. The two surfaces are
+// intentionally distinct: `/v1/auth/mfa/*` is the pre-session login dance
+// (challenge + verify + recovery), `/v1/me/mfa/*` is the post-session
+// enrollment UI in Settings. Don't add factor-CRUD shims here.
 
 export async function issueMfaChallenge(
   payload: MfaChallengeRequest,

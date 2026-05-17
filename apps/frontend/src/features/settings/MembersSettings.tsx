@@ -34,6 +34,7 @@ import type {
 import type { RequestIdentity } from "../../api/config";
 import { Modal } from "./Modal";
 import { useInvitations, useWorkspaceMembers } from "./useWorkspace";
+import { errorMessage } from "../../utils/errors";
 
 const ROLE_LABELS: Record<WorkspaceRoleName, string> = {
   admin: "Admin",
@@ -203,7 +204,7 @@ function MemberRow({
       await onChangeRole(member.user_id, next);
       setMenuOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update role");
+      setError(errorMessage(err, "Could not update role"));
     } finally {
       setPending(false);
     }
@@ -217,7 +218,7 @@ function MemberRow({
       setConfirmingRemove(false);
       setMenuOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove member");
+      setError(errorMessage(err, "Could not remove member"));
     } finally {
       setPending(false);
     }
@@ -382,7 +383,7 @@ function InviteForm({
       const finalResponse = await onCreated(created);
       setResponse(finalResponse);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not invite");
+      setError(errorMessage(err, "Could not invite"));
     } finally {
       setPending(false);
     }

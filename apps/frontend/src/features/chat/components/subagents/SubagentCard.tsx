@@ -16,6 +16,11 @@ import type { ReactElement } from "react";
 import { ActivityStatusIcon } from "../activity/ActivityStatusIcon";
 import { SubagentActivityList } from "../tools/SubagentActivityList";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
+import {
+  formatSubagentDuration,
+  pauseJumpLabel,
+  pauseShortLabel,
+} from "./labels";
 import type {
   SubagentCardStatus,
   SubagentCardViewModel,
@@ -107,7 +112,7 @@ export function SubagentCard({
           className="subagent-card__jump-to-approval"
           onClick={() => onJumpToApproval!(view.pauseSourceEventId!)}
         >
-          Review {jumpLabelForPause(view.pauseReason)} →
+          Review {pauseJumpLabel(view.pauseReason)} →
         </button>
       ) : null}
       <details
@@ -169,34 +174,6 @@ function labelForStatus(view: SubagentCardViewModel): string {
   }
 }
 
-function pauseShortLabel(
-  reason: NonNullable<SubagentCardViewModel["pauseReason"]>,
-): string {
-  switch (reason) {
-    case "approval":
-      return "approval";
-    case "mcp_auth":
-      return "connector";
-    case "ask_a_question":
-      return "answer";
-  }
-}
-
-function jumpLabelForPause(
-  reason: SubagentCardViewModel["pauseReason"],
-): string {
-  switch (reason) {
-    case "approval":
-      return "approval";
-    case "mcp_auth":
-      return "connector auth";
-    case "ask_a_question":
-      return "question";
-    default:
-      return "approval";
-  }
-}
-
 function toneForStatus(
   status: SubagentCardStatus,
 ): "neutral" | "accent" | "success" | "warning" | "danger" {
@@ -246,7 +223,7 @@ function metaText(view: SubagentCardViewModel): string {
     return view.startedAt ? "working…" : "starting…";
   }
   const duration =
-    view.durationMs !== null ? formatDuration(view.durationMs) : null;
+    view.durationMs !== null ? formatSubagentDuration(view.durationMs) : null;
   switch (view.status) {
     case "completed":
       return duration ? `Completed in ${duration}` : "Done";
@@ -257,13 +234,4 @@ function metaText(view: SubagentCardViewModel): string {
     case "timed_out":
       return duration ? `Timed out · ${duration}` : "Timed out";
   }
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds - minutes * 60);
-  return `${minutes}m ${remainder}s`;
 }

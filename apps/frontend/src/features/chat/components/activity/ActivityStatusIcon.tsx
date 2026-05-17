@@ -1,25 +1,17 @@
 import type { ReactElement } from "react";
 
+import { statusClassification } from "../../utils/toolLabels";
+
 export function ActivityStatusIcon({
   status,
 }: {
   status: string;
 }): ReactElement {
-  const normalized = status.toLowerCase();
-  if (
-    normalized === "running" ||
-    normalized === "starting" ||
-    normalized === "working" ||
-    normalized === "still working" ||
-    normalized === "waiting"
-  ) {
+  const { kind } = statusClassification(status);
+  if (kind === "running") {
     return <span className="aui-activity-item__spinner" />;
   }
-  if (
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "could not complete"
-  ) {
+  if (kind === "error") {
     return <span className="aui-activity-item__mark">!</span>;
   }
   return <span className="aui-activity-item__mark">✓</span>;

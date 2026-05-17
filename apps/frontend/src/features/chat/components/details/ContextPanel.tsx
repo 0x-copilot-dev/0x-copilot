@@ -28,6 +28,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { getConversationContext } from "../../../../api/agentApi";
 import type { RequestIdentity } from "../../../../api/config";
+import { formatTimeShort } from "../../../../utils/dateFormat";
+import { errorMessage } from "../../../../utils/errors";
+import { formatTokens } from "./usage/format";
 
 export interface ContextPanelProps {
   conversationId: string;
@@ -50,7 +53,7 @@ export function ContextPanel({
     try {
       setData(await getConversationContext(conversationId, identity));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "could not load context");
+      setError(errorMessage(err, "could not load context"));
     } finally {
       setLoading(false);
     }
@@ -288,7 +291,7 @@ function ContextCompressionList({
         {rows.map((row, index) => (
           <li key={`${row.at}-${index}`}>
             <strong>{row.strategy}</strong> · {formatTokens(row.before)} →{" "}
-            {formatTokens(row.after)} ({_formatTimestamp(row.at)})
+            {formatTokens(row.after)} ({formatTimeShort(row.at)})
           </li>
         ))}
       </ul>
@@ -321,21 +324,4 @@ function Metric({
       <dd>{display}</dd>
     </div>
   );
-}
-
-function formatTokens(value: number): string {
-  return `${value.toLocaleString()} tok`;
-}
-
-function _formatTimestamp(iso: string): string {
-  try {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return iso;
-    return date.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
 }

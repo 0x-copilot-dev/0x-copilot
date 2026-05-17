@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isLiveConnector, sourceFreshnessLabel } from "./sourceFreshness";
+import {
+  isLiveConnector,
+  sourceFreshnessLabel,
+} from "@enterprise-search/chat-surface";
 
 describe("isLiveConnector", () => {
   it.each(["salesforce", "snowflake", "datadog", "intercom", "pagerduty"])(

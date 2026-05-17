@@ -18,6 +18,7 @@ import {
   serializeServers,
 } from "./jsonConfig";
 import type { ConnectorState } from "./useConnectors";
+import { errorMessage } from "../../utils/errors";
 
 export function JsonEditorPanel({
   connectors,
@@ -62,9 +63,7 @@ export function JsonEditorPanel({
       setParseError(
         err instanceof JsonConfigError
           ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Could not parse JSON.",
+          : errorMessage(err, "Could not parse JSON."),
       );
     }
   }
@@ -96,9 +95,7 @@ export function JsonEditorPanel({
       }
       await connectors.refresh();
     } catch (err) {
-      setApplyError(
-        err instanceof Error ? err.message : "Could not apply changes.",
-      );
+      setApplyError(errorMessage(err, "Could not apply changes."));
       throw err;
     } finally {
       setSubmitting(false);

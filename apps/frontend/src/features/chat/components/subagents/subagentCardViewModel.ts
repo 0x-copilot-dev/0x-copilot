@@ -14,6 +14,10 @@ import type {
   SubagentEntry,
   SubagentLifecycleStatus,
 } from "@enterprise-search/api-types";
+import {
+  isTerminalStatus,
+  normaliseLifecycleStatus,
+} from "../../chatModel/subagentStatus";
 import { asRecord, stringValue, truncateText } from "../../utils/jsonUtils";
 import { formatAgentName } from "../../utils/toolLabels";
 
@@ -102,35 +106,14 @@ function deriveFullResult(...candidates: Array<string | null>): string | null {
   return null;
 }
 
-const TERMINAL_STATUSES: ReadonlySet<SubagentCardStatus> = new Set([
-  "completed",
-  "cancelled",
-  "failed",
-  "timed_out",
-]);
-
-function isTerminalStatus(status: SubagentCardStatus): boolean {
-  return TERMINAL_STATUSES.has(status);
-}
-
 function normaliseStatus(
   raw: string | null,
   isError: boolean,
 ): SubagentCardStatus {
-  const lc = raw?.toLowerCase() ?? "";
-  if (isError || lc === "failed" || lc === "error") return "failed";
-  if (lc === "cancelled" || lc === "canceled") return "cancelled";
-  if (lc === "timed_out" || lc === "timeout") return "timed_out";
-  if (lc === "completed" || lc === "succeeded" || lc === "success") {
-    return "completed";
-  }
-  if (lc === "queued") return "queued";
-  // PR 3.2.7 — preserve the paused literal that `subagentReducer`
-  // projects into `SubagentEntry.status`. Otherwise `subagentCardFromEntry`
-  // would silently downgrade paused entries to "running" and the row /
-  // card would never see the paused chrome.
-  if (lc === "paused") return "paused";
-  return "running";
+  // PR 3.2.7 — `paused` is preserved by the canonical normaliser so
+  // `subagentCardFromEntry` never silently downgrades paused entries
+  // to "running" (which would hide the paused chrome).
+  return normaliseLifecycleStatus(raw, isError);
 }
 
 /** Build a view model from the in-thread `run_subagent` tool part's

@@ -1,84 +1,45 @@
 /**
- * W0.1 — Dev IdP client.
+ * W0.1 — Dev IdP persona persistence.
  *
- * Two endpoints, both proxied by the facade in development only:
- *   - GET  /v1/dev/personas              — list personas (FE switcher).
- *   - POST /v1/dev/identity/mint         — mint a real HMAC bearer.
- *
- * Production builds tree-shake everything in this module — every caller
- * is guarded by ``import.meta.env.DEV``.
+ * The HTTP client moved to `src/api/devIdpApi.ts` so all `fetch`-callers
+ * live under `api/*` (frontend CLAUDE.md). This module keeps only the
+ * substrate-portable persona-slug persistence; the API module is the
+ * single owner of the wire calls.
  */
 
-export interface DevPersonaSummary {
-  slug: string;
-  display_name: string;
-  primary_email: string;
-  org_id: string;
-  org_slug: string;
-  roles: string[];
-  permission_scopes: string[];
-}
+import type { KeyValueStore } from "@enterprise-search/chat-surface";
 
-export interface DevMintResponse {
-  bearer: string;
-  expires_at: string;
-  persona_slug: string;
-  identity: {
-    org_id: string;
-    user_id: string;
-    display_name: string;
-    primary_email: string;
-    roles: string[];
-    permission_scopes: string[];
-  };
-}
+import { PERSONA_SLUG_STORAGE_KEY } from "./storageKeys";
 
 const DEFAULT_PERSONA_SLUG = "sarah_acme";
-const PERSONA_SLUG_STORAGE_KEY = "enterprise.dev.persona_slug";
 
 /** Read the most-recently-selected persona slug, falling back to the default. */
-export function loadActivePersonaSlug(): string {
-  if (typeof window === "undefined") return DEFAULT_PERSONA_SLUG;
+export function loadActivePersonaSlug(store: KeyValueStore): string {
   try {
-    return (
-      window.localStorage.getItem(PERSONA_SLUG_STORAGE_KEY) ??
-      DEFAULT_PERSONA_SLUG
-    );
+    return store.get(PERSONA_SLUG_STORAGE_KEY) ?? DEFAULT_PERSONA_SLUG;
   } catch {
     return DEFAULT_PERSONA_SLUG;
   }
 }
 
-export function persistActivePersonaSlug(slug: string): void {
-  if (typeof window === "undefined") return;
+export function persistActivePersonaSlug(
+  store: KeyValueStore,
+  slug: string,
+): void {
   try {
-    window.localStorage.setItem(PERSONA_SLUG_STORAGE_KEY, slug);
+    store.set(PERSONA_SLUG_STORAGE_KEY, slug);
   } catch {
-    // localStorage failure (private browsing, quota): mint will still
-    // succeed but the choice won't persist across reloads.
+    // Substrate storage failure (private browsing, quota): mint will
+    // still succeed but the choice won't persist across reloads.
   }
 }
 
-export async function listDevPersonas(): Promise<DevPersonaSummary[]> {
-  const r = await fetch("/v1/dev/personas", { credentials: "same-origin" });
-  if (!r.ok) {
-    throw new Error(`dev IdP /personas failed: ${r.status}`);
-  }
-  const body = (await r.json()) as { personas: DevPersonaSummary[] };
-  return body.personas ?? [];
-}
-
-export async function mintDevBearer(
-  personaSlug: string,
-): Promise<DevMintResponse> {
-  const r = await fetch("/v1/dev/identity/mint", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ persona_slug: personaSlug }),
-  });
-  if (!r.ok) {
-    throw new Error(`dev IdP /mint failed: ${r.status}`);
-  }
-  return (await r.json()) as DevMintResponse;
-}
+// Re-exports for backward compatibility — callers can keep importing
+// `mintDevBearer` / `listDevPersonas` from here while we move them
+// over to the api module in a follow-up sweep.
+export {
+  listDevPersonas,
+  mintDevBearer,
+  type DevMintResponse,
+  type DevPersonaSummary,
+} from "../../api/devIdpApi";

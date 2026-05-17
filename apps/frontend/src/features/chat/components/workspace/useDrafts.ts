@@ -34,6 +34,7 @@ import {
   upsertDraft,
   type DraftRegistryByConversation,
 } from "../../chatModel/draftsRegistry";
+import { errorMessage } from "../../../../utils/errors";
 
 export interface DraftsState {
   registry: DraftRegistryByConversation;
@@ -88,7 +89,7 @@ export function useDrafts(
         if (cancelled) {
           return;
         }
-        setError(err instanceof Error ? err.message : "Could not load drafts");
+        setError(errorMessage(err, "Could not load drafts"));
       })
       .finally(() => {
         if (!cancelled) {

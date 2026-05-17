@@ -17,6 +17,7 @@
 import type { SubagentEntry } from "@enterprise-search/api-types";
 import { useMemo } from "react";
 import { isToolCallPart } from "../../chatModel/recordHelpers";
+import { normaliseLifecycleStatus } from "../../chatModel/subagentStatus";
 import type { ChatItem } from "../../chatModel/types";
 import {
   subagentActivityRecords,
@@ -167,16 +168,7 @@ function statusFromArgs(
   args: Record<string, unknown>,
   isError: boolean | undefined,
 ): SubagentEntry["status"] {
-  if (isError) return "failed";
-  const raw = stringValue(args.status)?.toLowerCase();
-  if (raw === "completed" || raw === "success" || raw === "succeeded") {
-    return "completed";
-  }
-  if (raw === "failed" || raw === "error") return "failed";
-  if (raw === "cancelled" || raw === "canceled") return "cancelled";
-  if (raw === "timed_out" || raw === "timeout") return "timed_out";
-  if (raw === "queued") return "queued";
-  return "running";
+  return normaliseLifecycleStatus(stringValue(args.status), isError ?? false);
 }
 
 function earliestTimestamp(

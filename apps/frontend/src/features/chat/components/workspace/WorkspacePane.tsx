@@ -19,6 +19,7 @@ import { useId, type ReactElement } from "react";
 
 import type { SourceEntryMap } from "../../chatModel/sourcesReducer";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
+import { isRunningStatus } from "../../chatModel/subagentStatus";
 import type {
   SubagentActivitiesByTask,
   SubagentHistoryGroup,
@@ -252,7 +253,7 @@ function agentsBadge(subagents: SubagentSnapshotMap): ReactElement | undefined {
   }
   let running = 0;
   for (const entry of subagents.values()) {
-    if (entry.status === "running" || entry.status === "queued") {
+    if (isRunningStatus(entry.status)) {
       running += 1;
     }
   }

@@ -12,6 +12,7 @@ import { Card, Field, classNames } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { getMyToolUsePolicy, updateMyToolUsePolicy } from "../../../api/meApi";
+import { errorMessage } from "../../../utils/errors";
 
 const KINDS = ["read", "write", "destructive"] as const;
 const MODES = ["auto", "ask", "require", "block"] as const;
@@ -58,7 +59,7 @@ export function ToolUsePolicyPanel(): ReactElement {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Could not load policy.");
+        setError(errorMessage(err, "Could not load policy."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -99,9 +100,7 @@ export function ToolUsePolicyPanel(): ReactElement {
           setSubmitError(null);
         },
         (err: unknown) => {
-          setSubmitError(
-            err instanceof Error ? err.message : "Could not save policy.",
-          );
+          setSubmitError(errorMessage(err, "Could not save policy."));
         },
       );
     },

@@ -4,7 +4,7 @@ import type {
 } from "@enterprise-search/api-types";
 import { Card, Switch } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
-import type { UserPreferencesState } from "../../me/useUserPreferences";
+import { useUserPreferences } from "../../me/useUserPreferences";
 import { NotificationsV2Panel } from "./NotificationsV2Panel";
 
 const EVENT_LABELS: Record<NotificationEvent, { label: string; hint: string }> =
@@ -55,11 +55,8 @@ const CHANNEL_ORDER: ReadonlyArray<NotificationChannel> = [
  * because each cell is a single boolean — no cancel-and-discard
  * intent the user might want.
  */
-export function Notifications({
-  preferences,
-}: {
-  preferences: UserPreferencesState;
-}): ReactElement {
+export function Notifications(): ReactElement {
+  const preferences = useUserPreferences();
   const data = preferences.data;
 
   if (preferences.loading && data === null) {

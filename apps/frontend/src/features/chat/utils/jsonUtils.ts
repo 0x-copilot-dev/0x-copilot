@@ -1,3 +1,5 @@
+import { hiddenToolArgKeysForVisibleDisplay } from "../chatModel/payloadHelpers";
+
 export type SearchSource = {
   title: string;
   link: string | null;
@@ -132,11 +134,6 @@ export function formatNumber(value: number): string {
     : value.toFixed(2).replace(/\.?0+$/, "");
 }
 
-export function formatDateTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
 export function formatArgLabel(key: string): string {
   return key.replaceAll("_", " ");
 }
@@ -144,25 +141,6 @@ export function formatArgLabel(key: string): string {
 export function shouldRenderBlockValue(value: string): boolean {
   return value.includes("\n") || value.length > 120;
 }
-
-const hiddenToolArgKeys = new Set([
-  "status",
-  "summary",
-  "delta",
-  "deltas",
-  "event_type",
-  "action_id",
-  "approval_id",
-  "approval_kind",
-  "auth_url",
-  "display_name",
-  "native_interrupt_id",
-  "presentation",
-  "server_id",
-  "server_name",
-  "source_tool_call_id",
-  "tool_name",
-]);
 
 export function parseToolArgs(
   argsText: string,
@@ -178,7 +156,11 @@ export function visibleToolArgEntries(
   args: Record<string, unknown>,
 ): Array<[string, unknown]> {
   return Object.entries(args).filter(([key, entry]) => {
-    return !hiddenToolArgKeys.has(key) && entry !== null && entry !== undefined;
+    return (
+      !hiddenToolArgKeysForVisibleDisplay.has(key) &&
+      entry !== null &&
+      entry !== undefined
+    );
   });
 }
 

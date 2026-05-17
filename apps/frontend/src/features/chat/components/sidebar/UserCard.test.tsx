@@ -16,9 +16,13 @@ const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
 const mockGetMyProfile = vi.fn(async () => {
   throw new Error("getMyProfile not configured for this test");
 });
+const mockUpdateMyProfile = vi.fn(async () => {
+  throw new Error("updateMyProfile not configured for this test");
+});
 vi.mock("../../../../api/meApi", () => ({
   listMyWorkspaces: () => mockListMyWorkspaces(),
   getMyProfile: () => mockGetMyProfile(),
+  updateMyProfile: () => mockUpdateMyProfile(),
 }));
 
 const mockUseAuth = vi.fn();
@@ -42,6 +46,11 @@ vi.mock("@enterprise-search/design-system", () => ({
 }));
 
 import { UserCard } from "./UserCard";
+import { UserProfileProvider } from "../../../me/UserProfileContext";
+
+function renderWithProvider(ui: ReactElement) {
+  return render(<UserProfileProvider>{ui}</UserProfileProvider>);
+}
 
 const baseIdentity = {
   org_id: "org_acme",
@@ -60,7 +69,7 @@ function setIdentity(): void {
 describe("UserCard", () => {
   it("renders nothing when identity is null", () => {
     mockUseAuth.mockReturnValue({ identity: null, logout: vi.fn() });
-    const { container } = render(
+    const { container } = renderWithProvider(
       <UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />,
     );
     expect(container.firstChild).toBeNull();
@@ -70,7 +79,9 @@ describe("UserCard", () => {
     setIdentity();
     mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const user = userEvent.setup();
-    render(<UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />);
+    renderWithProvider(
+      <UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />,
+    );
     expect(screen.queryByTestId("user-menu")).toBeNull();
     await user.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByTestId("user-menu")).toBeInTheDocument();
@@ -84,7 +95,9 @@ describe("UserCard", () => {
     });
     mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const user = userEvent.setup();
-    render(<UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />);
+    renderWithProvider(
+      <UserCard onOpenSettings={vi.fn()} onSwitchWorkspace={vi.fn()} />,
+    );
     await user.click(screen.getByRole("button", { expanded: false }));
     await user.click(screen.getByRole("button", { name: /Sign out/i }));
     expect(logout).toHaveBeenCalledOnce();
@@ -95,7 +108,7 @@ describe("UserCard", () => {
     mockListMyWorkspaces.mockResolvedValue({ workspaces: [] });
     const onOpenSettings = vi.fn();
     const user = userEvent.setup();
-    render(
+    renderWithProvider(
       <UserCard onOpenSettings={onOpenSettings} onSwitchWorkspace={vi.fn()} />,
     );
     await user.click(screen.getByRole("button", { expanded: false }));
@@ -132,7 +145,7 @@ describe("UserCard", () => {
     });
     const onSwitchWorkspace = vi.fn();
     const user = userEvent.setup();
-    render(
+    renderWithProvider(
       <UserCard
         onOpenSettings={vi.fn()}
         onSwitchWorkspace={onSwitchWorkspace}

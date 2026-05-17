@@ -56,6 +56,38 @@ It should not own tenant auth, billing/admin state, product persistence, or app-
 Implemented. Owns stable TypeScript schemas and public contracts between apps
 and services. Generated clients are target direction, not current behavior.
 
+### `packages/chat-transport`
+
+Implemented. Owns the substrate-portable `Transport` port — HTTP request
+
+- Server-Sent Event subscription — used by every app surface that talks to
+  `backend-facade`. Ships the web implementation (`WebTransport`, deferred-lookup
+  `fetch`) so the host app only constructs an instance and feeds it to chat-surface.
+  The desktop substrate will ship a parallel `WebviewTransport` (postMessage RPC to
+  the VS Code extension host) without any change to chat-surface or features.
+
+Boundary: this package must not import from any app, service, or design surface.
+Auth (`UnauthorizedError`), domain envelopes (`RuntimeEventEnvelope` via
+`api-types`), and HTTP framing live here. Bearer storage does NOT — secrets are
+out of scope; the host substrate owns them.
+
+### `packages/chat-surface`
+
+Implemented. Owns the substrate-portable chat UI primitives — message renderers
+(`PlainText`, `Reasoning`, citation chips), the streaming-cursor contract, the
+citation remark plugin, and the cross-cutting ports (`Router`, `KeyValueStore`,
+`PresenceSignal`) plus their `ChatShell` mount. Components are headless and
+prop-driven; substrate-coupled state (context lookups, web portals) lives in
+the consuming app's `features/` as a thin adapter that resolves data via hooks
+and delegates rendering to chat-surface.
+
+Boundary: enforced by ESLint — chat-surface cannot reference bare browser
+primitives (`window.*`, `document.*`, `localStorage`, `fetch`, …) or import from
+any `apps/*`. The package's own web reference implementations (e.g.
+`LocalStorageKeyValueStore`) intentionally use `globalThis.X` member access; the
+prefix marks "I know this is a substrate touchpoint." Anything beyond that
+exception goes through a port.
+
 ### `packages/shared-config`
 
 Planned. Owns shared lint, formatting, testing, Docker, and CI config when that

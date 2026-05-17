@@ -19,6 +19,7 @@ import { type ReactElement, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { authStateDisplay, isAuthenticated } from "./authStateDisplay";
 import type { ConnectorState } from "./useConnectors";
+import { errorMessage } from "../../utils/errors";
 
 interface ConnectorRowProps {
   server: McpServer;
@@ -58,7 +59,7 @@ export function ConnectorRow({
       setRowError(null);
       await fn();
     } catch (err) {
-      setRowError(err instanceof Error ? err.message : "Action failed.");
+      setRowError(errorMessage(err, "Action failed."));
     } finally {
       setPending(null);
     }

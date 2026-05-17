@@ -1,9 +1,9 @@
-// PR 8.0.1 — source freshness label heuristic.
+// Source freshness label heuristic.
 //
 // Live connectors (Salesforce, Snowflake, Datadog, Intercom, PagerDuty)
 // return "current as of read-time" — there is no document modification
 // time the way Notion / Drive have one. The source row footer flips to
-// `Live data` for these so users understand the temporal contract of
+// "Live data" for these so users understand the temporal contract of
 // each citation without reading a manual.
 //
 // v1 uses a slug heuristic; a future `freshness_kind: "live" | "snapshot"`

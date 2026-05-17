@@ -41,6 +41,7 @@ import {
 import type { RequestIdentity } from "../../../api/config";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
 import { PrivacyOverridesPanel } from "./PrivacyOverridesPanel";
+import { errorMessage } from "../../../utils/errors";
 
 const RETENTION_LABELS: Readonly<Record<RetentionKind, string>> = {
   messages: "Messages",
@@ -126,11 +127,7 @@ function TrainingOptOutCard({
       try {
         await save(request);
       } catch (err: unknown) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not save training opt-out.",
-        );
+        setError(errorMessage(err, "Could not save training opt-out."));
       } finally {
         setBusy(false);
       }
@@ -197,11 +194,7 @@ function RetentionSummaryCard({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Could not load retention summary.",
-          );
+          setError(errorMessage(err, "Could not load retention summary."));
         }
       })
       .finally(() => {
@@ -261,7 +254,7 @@ function ExportCard({ identity }: { identity: RequestIdentity }): ReactElement {
       const response = await requestWorkspaceExport(identity);
       setResult(response);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not queue export.");
+      setError(errorMessage(err, "Could not queue export."));
     } finally {
       setBusy(false);
     }
@@ -316,9 +309,7 @@ function DeleteAllCard({
     } catch (err: unknown) {
       // 501 surface — the message is the doc-required copy verbatim.
       setMessage(
-        err instanceof Error
-          ? err.message
-          : "Workspace deletion is gated. Contact support.",
+        errorMessage(err, "Workspace deletion is gated. Contact support."),
       );
     } finally {
       setBusy(false);

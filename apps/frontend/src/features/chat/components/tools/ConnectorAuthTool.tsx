@@ -1,7 +1,8 @@
 import type { ToolCallMessagePartProps } from "../../runtime/types";
 import { Button } from "@enterprise-search/design-system";
 import { useState, type ReactElement } from "react";
-import { asRecord, formatDateTime, stringValue } from "../../utils/jsonUtils";
+import { formatDateTime } from "../../../../utils/dateFormat";
+import { asRecord, stringValue } from "../../utils/jsonUtils";
 import { safeConnectorDisplayName } from "../../utils/toolLabels";
 import { ActivityCard } from "../activity/ActivityCard";
 import { presentationFromArgs } from "../activity/presentationHelpers";

@@ -35,7 +35,7 @@ import {
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "../../chatModel/citationsRegistry";
+} from "@enterprise-search/chat-surface";
 import {
   anyLinkForOrdinalInRun,
   emptyCitationLinkRegistry,

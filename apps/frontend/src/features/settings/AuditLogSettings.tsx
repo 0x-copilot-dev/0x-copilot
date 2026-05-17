@@ -19,6 +19,8 @@ import {
   Field,
   TextInput,
 } from "@enterprise-search/design-system";
+import { formatDateTime } from "../../utils/dateFormat";
+import { errorMessage } from "../../utils/errors";
 import {
   type FormEvent,
   type ReactElement,
@@ -84,7 +86,7 @@ export function AuditLogSettings({
         setHasMore(response.has_more);
         setDegradedStreams(response.degraded_streams ?? []);
       } catch (err) {
-        setError(toMessage(err, "Could not load audit events"));
+        setError(errorMessage(err, "Could not load audit events"));
       } finally {
         setLoading(false);
       }
@@ -271,7 +273,7 @@ function AuditRow({ event }: { event: AuditEvent }): ReactElement {
     <tr>
       <td>
         <time dateTime={event.created_at} title={event.created_at}>
-          {formatTimestamp(event.created_at)}
+          {formatDateTime(event.created_at)}
         </time>
       </td>
       <td>
@@ -324,20 +326,6 @@ function badgeToneForOutcome(
   }
 }
 
-function formatTimestamp(iso: string): string {
-  // Lean on the user's locale + the user's timezone (Settings →
-  // Profile sets a tz; the browser already respects it via Intl).
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function toIsoOrEmpty(value: string): string {
   // ``datetime-local`` produces a naive timestamp in the user's local
   // tz (no offset). The backend wants RFC 3339; we suffix Z so the
@@ -345,9 +333,4 @@ function toIsoOrEmpty(value: string): string {
   // typically reason in UTC, so this is the least-surprise default.
   if (!value) return "";
   return `${value}:00Z`;
-}
-
-function toMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
 }

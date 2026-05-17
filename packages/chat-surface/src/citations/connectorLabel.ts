@@ -1,4 +1,4 @@
-// PR 3.7 — humanise connector slugs for the Sources tab + chip tooltips.
+// Humanise connector slugs for the Sources tab + chip tooltips.
 //
 // Connector slugs come from the runtime untouched (`web_search`,
 // `notion`, `google_drive`, `pagerduty-incidents`). Showing them raw in

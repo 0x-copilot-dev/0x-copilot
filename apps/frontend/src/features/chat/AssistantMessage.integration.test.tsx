@@ -64,7 +64,7 @@ vi.mock("./components/messages/AssistantMessageFooter", () => ({
 import { AssistantMessage } from "./components/messages/AssistantMessage";
 import { CitationsProvider } from "./components/citations/citationsContext";
 import { applyCitationEvent } from "./chatModel/citationReducer";
-import { emptyCitationRegistry } from "./chatModel/citationsRegistry";
+import { emptyCitationRegistry } from "@enterprise-search/chat-surface";
 import { chatItemsToThreadMessages } from "./chatModel/conversion";
 import type { ChatItem } from "./chatModel/types";
 

@@ -19,6 +19,7 @@ import {
 } from "@enterprise-search/design-system";
 import type { Draft, DraftStatus } from "@enterprise-search/api-types";
 import { useEffect, useState, type ReactElement } from "react";
+import { errorMessage } from "../../../../utils/errors";
 
 export interface DraftTabProps {
   draft: Draft | null;
@@ -121,9 +122,7 @@ export function DraftTab({
       });
       setDirty(false);
     } catch (err: unknown) {
-      setActionError(
-        err instanceof Error ? err.message : "Couldn’t save changes",
-      );
+      setActionError(errorMessage(err, "Couldn’t save changes"));
     } finally {
       setPending(null);
     }
@@ -142,9 +141,7 @@ export function DraftTab({
       });
       setDirty(false);
     } catch (err: unknown) {
-      setActionError(
-        err instanceof Error ? err.message : "Couldn’t send draft",
-      );
+      setActionError(errorMessage(err, "Couldn’t send draft"));
     } finally {
       setPending(null);
     }
@@ -160,9 +157,7 @@ export function DraftTab({
       await onDiscard({ expected_version: draft.version });
       setDirty(false);
     } catch (err: unknown) {
-      setActionError(
-        err instanceof Error ? err.message : "Couldn’t discard draft",
-      );
+      setActionError(errorMessage(err, "Couldn’t discard draft"));
     } finally {
       setPending(null);
     }
@@ -176,7 +171,7 @@ export function DraftTab({
     >
       <Card>
         <header className="atlas-workspace-draft-tab__header">
-          <Badge tone={badgeToneForStatus(draft.status)}>
+          <Badge tone={draftStatusBadgeTone(draft.status)}>
             {statusLabel(draft.status)}
           </Badge>
           <span className="atlas-workspace-draft-tab__version">
@@ -265,7 +260,7 @@ export function DraftTab({
   );
 }
 
-function badgeToneForStatus(
+function draftStatusBadgeTone(
   status: DraftStatus,
 ): "neutral" | "accent" | "success" | "warning" | "danger" {
   switch (status) {

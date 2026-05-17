@@ -14,6 +14,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { formatTimeShort } from "../../../../utils/dateFormat";
 import { useApprovalFocus } from "../../approval/ApprovalFocusContext";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
 import {
@@ -560,15 +561,4 @@ function readApprovalParams(value: unknown): McpApprovalParam[] {
     out.push({ label, value: display, hint });
   }
   return out;
-}
-
-function formatTimeShort(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
 }

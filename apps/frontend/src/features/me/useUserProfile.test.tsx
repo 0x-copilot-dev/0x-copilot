@@ -22,7 +22,13 @@ vi.mock("../../api/meApi", () => ({
   updateMyProfile: (patch: UpdateUserProfileRequest) => mockPut(patch),
 }));
 
+import type { ReactNode } from "react";
 import { useUserProfile } from "./useUserProfile";
+import { UserProfileProvider } from "./UserProfileContext";
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <UserProfileProvider>{children}</UserProfileProvider>
+);
 
 const SEED: UserProfile = {
   user_id: "usr_sarah",
@@ -46,7 +52,7 @@ beforeEach(() => {
 describe("useUserProfile", () => {
   it("hydrates from GET", async () => {
     mockGet.mockResolvedValueOnce(SEED);
-    const { result } = renderHook(() => useUserProfile());
+    const { result } = renderHook(() => useUserProfile(), { wrapper });
     expect(result.current.loading).toBe(true);
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.data).toEqual(SEED);
@@ -58,7 +64,7 @@ describe("useUserProfile", () => {
     const next: UserProfile = { ...SEED, title: "Director, Marketing Ops" };
     mockPut.mockResolvedValueOnce(next);
 
-    const { result } = renderHook(() => useUserProfile());
+    const { result } = renderHook(() => useUserProfile(), { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await act(async () => {
@@ -71,7 +77,7 @@ describe("useUserProfile", () => {
     mockGet.mockResolvedValueOnce(SEED);
     mockPut.mockRejectedValueOnce(new Error("invalid_timezone"));
 
-    const { result } = renderHook(() => useUserProfile());
+    const { result } = renderHook(() => useUserProfile(), { wrapper });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     let caught: unknown = null;

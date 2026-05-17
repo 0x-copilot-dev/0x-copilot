@@ -14,211 +14,145 @@ import type {
   UserProfile,
   WorkspaceListResponse,
 } from "@enterprise-search/api-types";
-import { assertOk, correlationHeaders, jsonHeaders } from "./http";
+import { httpJson } from "./http";
 
 /**
- * Caller-scoped reads + writes under `/v1/me/*`.
+ * Caller-scoped reads + writes under `/v1/me/*` and `/v1/workspace/api-keys/*`.
  *
  * Identity is the bearer header — the facade derives the user from the
- * verified session, so no body / params for identity. PR 4.1 adds the
- * profile + preferences sidecars; PR 2.2 already wired the workspaces
- * endpoint.
+ * verified session, so no body / params for identity. Every endpoint
+ * here goes through `httpJson` so bearer + correlation + 401 plumbing
+ * stays a single behaviour shared with the rest of the api/* modules.
  */
-export async function listMyWorkspaces(): Promise<WorkspaceListResponse> {
-  const response = await fetch("/v1/me/workspaces", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as WorkspaceListResponse;
+
+export function listMyWorkspaces(): Promise<WorkspaceListResponse> {
+  return httpJson<WorkspaceListResponse>("GET", "/v1/me/workspaces");
 }
 
-export async function getMyProfile(): Promise<UserProfile> {
-  const response = await fetch("/v1/me/profile", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as UserProfile;
+export function getMyProfile(): Promise<UserProfile> {
+  return httpJson<UserProfile>("GET", "/v1/me/profile");
 }
 
-export async function updateMyProfile(
+export function updateMyProfile(
   patch: UpdateUserProfileRequest,
 ): Promise<UserProfile> {
-  const response = await fetch("/v1/me/profile", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as UserProfile;
+  return httpJson<UserProfile>("PUT", "/v1/me/profile", patch);
 }
 
-export async function getMyPreferences(): Promise<UserPreferences> {
-  const response = await fetch("/v1/me/preferences", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as UserPreferences;
+export function getMyPreferences(): Promise<UserPreferences> {
+  return httpJson<UserPreferences>("GET", "/v1/me/preferences");
 }
 
-export async function updateMyPreferences(
+export function updateMyPreferences(
   patch: UpdateUserPreferencesRequest,
 ): Promise<UserPreferences> {
-  const response = await fetch("/v1/me/preferences", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as UserPreferences;
+  return httpJson<UserPreferences>("PUT", "/v1/me/preferences", patch);
 }
 
 // PR B1 / 8.0.3d — tool-use policy (per-user override).
-export async function getMyToolUsePolicy(): Promise<ToolUsePolicyResponse> {
-  const response = await fetch("/v1/me/policies/tool-use", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as ToolUsePolicyResponse;
+export function getMyToolUsePolicy(): Promise<ToolUsePolicyResponse> {
+  return httpJson<ToolUsePolicyResponse>("GET", "/v1/me/policies/tool-use");
 }
 
-export async function updateMyToolUsePolicy(
+export function updateMyToolUsePolicy(
   patch: UpdateToolUsePolicyRequest,
 ): Promise<ToolUsePolicyResponse> {
-  const response = await fetch("/v1/me/policies/tool-use", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as ToolUsePolicyResponse;
+  return httpJson<ToolUsePolicyResponse>(
+    "PUT",
+    "/v1/me/policies/tool-use",
+    patch,
+  );
 }
 
 // PR B2 / 8.0.3f — privacy & data settings (per-user override).
-export async function getMyPrivacySettings(): Promise<PrivacySettingsResponse> {
-  const response = await fetch("/v1/me/policies/privacy", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as PrivacySettingsResponse;
+export function getMyPrivacySettings(): Promise<PrivacySettingsResponse> {
+  return httpJson<PrivacySettingsResponse>("GET", "/v1/me/policies/privacy");
 }
 
-export async function updateMyPrivacySettings(
+export function updateMyPrivacySettings(
   patch: UpdatePrivacySettingsRequest,
 ): Promise<PrivacySettingsResponse> {
-  const response = await fetch("/v1/me/policies/privacy", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as PrivacySettingsResponse;
+  return httpJson<PrivacySettingsResponse>(
+    "PUT",
+    "/v1/me/policies/privacy",
+    patch,
+  );
 }
 
 // PR B4 / 8.0.3e — typed notification preferences + quiet hours.
-export async function getMyNotificationPreferences(): Promise<NotificationPreferencesResponse> {
-  const response = await fetch("/v1/me/notifications", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as NotificationPreferencesResponse;
+export function getMyNotificationPreferences(): Promise<NotificationPreferencesResponse> {
+  return httpJson<NotificationPreferencesResponse>(
+    "GET",
+    "/v1/me/notifications",
+  );
 }
 
-export async function updateMyNotificationPreferences(
+export function updateMyNotificationPreferences(
   patch: UpdateNotificationPreferencesRequest,
 ): Promise<NotificationPreferencesResponse> {
-  const response = await fetch("/v1/me/notifications", {
-    method: "PUT",
-    headers: jsonHeaders(),
-    body: JSON.stringify(patch),
-  });
-  await assertOk(response);
-  return (await response.json()) as NotificationPreferencesResponse;
+  return httpJson<NotificationPreferencesResponse>(
+    "PUT",
+    "/v1/me/notifications",
+    patch,
+  );
 }
 
 // PR B3 / 8.0.3g — personal API keys (atlas_pk_*).
-export async function listMyApiKeys(): Promise<ApiKeyListResponse> {
-  const response = await fetch("/v1/me/api-keys", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as ApiKeyListResponse;
+export function listMyApiKeys(): Promise<ApiKeyListResponse> {
+  return httpJson<ApiKeyListResponse>("GET", "/v1/me/api-keys");
 }
 
-export async function createMyApiKey(
+export function createMyApiKey(
   request: CreateApiKeyRequest,
 ): Promise<CreateApiKeyResponse> {
-  const response = await fetch("/v1/me/api-keys", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(request),
-  });
-  await assertOk(response);
-  return (await response.json()) as CreateApiKeyResponse;
+  return httpJson<CreateApiKeyResponse>("POST", "/v1/me/api-keys", request);
 }
 
 export async function revokeMyApiKey(apiKeyId: string): Promise<void> {
-  const response = await fetch(
+  await httpJson<void>(
+    "DELETE",
     `/v1/me/api-keys/${encodeURIComponent(apiKeyId)}`,
-    {
-      method: "DELETE",
-      headers: correlationHeaders(),
-    },
   );
-  await assertOk(response);
 }
 
-export async function rotateMyApiKey(
+export function rotateMyApiKey(
   apiKeyId: string,
 ): Promise<CreateApiKeyResponse> {
-  const response = await fetch(
+  return httpJson<CreateApiKeyResponse>(
+    "POST",
     `/v1/me/api-keys/${encodeURIComponent(apiKeyId)}/rotate`,
-    {
-      method: "POST",
-      headers: correlationHeaders(),
-    },
   );
-  await assertOk(response);
-  return (await response.json()) as CreateApiKeyResponse;
 }
 
 // PR 8.3 — workspace-issued admin tokens. Same wire shape as the
 // personal endpoints; backend gates on ``admin:users``.
 
-export async function listWorkspaceApiKeys(): Promise<ApiKeyListResponse> {
-  const response = await fetch("/v1/workspace/api-keys", {
-    headers: correlationHeaders(),
-  });
-  await assertOk(response);
-  return (await response.json()) as ApiKeyListResponse;
+export function listWorkspaceApiKeys(): Promise<ApiKeyListResponse> {
+  return httpJson<ApiKeyListResponse>("GET", "/v1/workspace/api-keys");
 }
 
-export async function createWorkspaceApiKey(
+export function createWorkspaceApiKey(
   request: CreateApiKeyRequest,
 ): Promise<CreateApiKeyResponse> {
-  const response = await fetch("/v1/workspace/api-keys", {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify(request),
-  });
-  await assertOk(response);
-  return (await response.json()) as CreateApiKeyResponse;
+  return httpJson<CreateApiKeyResponse>(
+    "POST",
+    "/v1/workspace/api-keys",
+    request,
+  );
 }
 
 export async function revokeWorkspaceApiKey(apiKeyId: string): Promise<void> {
-  const response = await fetch(
+  await httpJson<void>(
+    "DELETE",
     `/v1/workspace/api-keys/${encodeURIComponent(apiKeyId)}`,
-    { method: "DELETE", headers: correlationHeaders() },
   );
-  await assertOk(response);
 }
 
-export async function rotateWorkspaceApiKey(
+export function rotateWorkspaceApiKey(
   apiKeyId: string,
 ): Promise<CreateApiKeyResponse> {
-  const response = await fetch(
+  return httpJson<CreateApiKeyResponse>(
+    "POST",
     `/v1/workspace/api-keys/${encodeURIComponent(apiKeyId)}/rotate`,
-    { method: "POST", headers: correlationHeaders() },
   );
-  await assertOk(response);
-  return (await response.json()) as CreateApiKeyResponse;
 }

@@ -4,6 +4,13 @@
 // Reads/writes via `/v1/workspace/mfa-policy`. Backend enforces
 // ADMIN_USERS; the FE hides the Save button when the user isn't an
 // admin and renders the form disabled.
+//
+// PRD 05 — load + save + cancellation come from `useWorkspaceMfaPolicy`
+// (the same `useMutableRecord` shape that backs `useWorkspace` and
+// `useWorkspaceDefaults`). The form keeps a local edit buffer
+// (`mfaRequired`, `stepUp`) seeded from the server snapshot; on Save
+// we call the hook's `save()` and let the hook own the busy/error
+// surface.
 
 import {
   Button,
@@ -14,10 +21,8 @@ import {
 } from "@enterprise-search/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
-import {
-  getWorkspaceMfaPolicy,
-  updateWorkspaceMfaPolicy,
-} from "../../api/workspaceMfaApi";
+
+import { useWorkspaceMfaPolicy } from "./useWorkspaceMfaPolicy";
 
 const STEP_UP_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 900, label: "15 minutes" },
@@ -31,52 +36,35 @@ export function WorkspaceMfaSettings({
 }: {
   isAdmin: boolean;
 }): ReactElement {
+  const policy = useWorkspaceMfaPolicy();
+
+  // Local edit buffer — distinct from the server snapshot so the user
+  // can flip the switch / change the dropdown without each click
+  // firing a save. Reseeded whenever the server snapshot lands or
+  // refreshes underneath us (e.g. another admin saved in parallel).
   const [mfaRequired, setMfaRequired] = useState(false);
   const [stepUp, setStepUp] = useState(900);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    getWorkspaceMfaPolicy()
-      .then((policy) => {
-        if (cancelled) return;
-        setMfaRequired(policy.mfa_required);
-        setStepUp(policy.step_up_window_seconds);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        // 403 for non-admins; show the section in read-only with a
-        // soft message instead of pushing them to a different page.
-        setError(
-          err instanceof Error ? err.message : "Could not load MFA policy.",
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (policy.data === null) return;
+    setMfaRequired(policy.data.mfa_required);
+    setStepUp(policy.data.step_up_window_seconds);
+  }, [policy.data]);
 
   async function onSave(): Promise<void> {
     if (!isAdmin) return;
     setBusy(true);
-    setError(null);
     try {
-      const next = await updateWorkspaceMfaPolicy({
+      await policy.save({
         mfa_required: mfaRequired,
         step_up_window_seconds: stepUp,
       });
-      setMfaRequired(next.mfa_required);
-      setStepUp(next.step_up_window_seconds);
       setSavedAt(new Date().toISOString());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save policy.");
+    } catch {
+      // `useMutableRecord` already routes the error into `policy.error`;
+      // nothing to do here.
     } finally {
       setBusy(false);
     }
@@ -94,7 +82,7 @@ export function WorkspaceMfaSettings({
         </div>
       </header>
 
-      {loading ? (
+      {policy.loading && policy.data === null ? (
         <p className="settings-meta">Loading policy…</p>
       ) : (
         <>
@@ -127,7 +115,7 @@ export function WorkspaceMfaSettings({
             </Select>
           </Field>
 
-          {error ? <p className="app-error">{error}</p> : null}
+          {policy.error ? <p className="app-error">{policy.error}</p> : null}
 
           {isAdmin ? (
             <div className="me-form__actions">

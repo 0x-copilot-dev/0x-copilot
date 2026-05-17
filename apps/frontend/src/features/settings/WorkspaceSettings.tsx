@@ -20,6 +20,7 @@ import { type FormEvent, type ReactElement, useEffect, useState } from "react";
 import type { RequestIdentity } from "../../api/config";
 import { useWorkspace } from "./useWorkspace";
 import { WorkspaceMfaSettings } from "./WorkspaceMfaSettings";
+import { errorMessage } from "../../utils/errors";
 
 export function WorkspaceSettings({
   identity,
@@ -89,7 +90,7 @@ export function WorkspaceSettings({
       await save(patch);
       setSavedAt(Date.now());
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Save failed");
+      setSaveError(errorMessage(err, "Save failed"));
     } finally {
       setSaving(false);
     }

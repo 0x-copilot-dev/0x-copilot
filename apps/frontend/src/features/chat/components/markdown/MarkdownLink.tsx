@@ -1,16 +1,14 @@
-import { markdownLinkLabel } from "@enterprise-search/chat-surface";
-import type { AnchorHTMLAttributes, ReactElement } from "react";
-
 import {
-  CitationChip,
   citationIdFromHref,
   isCitationHref,
-} from "../citations/CitationChip";
-import {
-  OrdinalCitationChip,
   isOrdinalCitationHref,
+  markdownLinkLabel,
   ordinalFromHref,
-} from "../citations/OrdinalCitationChip";
+} from "@enterprise-search/chat-surface";
+import type { AnchorHTMLAttributes, ReactElement } from "react";
+
+import { CitationChip } from "../citations/CitationChip";
+import { OrdinalCitationChip } from "../citations/OrdinalCitationChip";
 
 export function MarkdownLink({
   children,

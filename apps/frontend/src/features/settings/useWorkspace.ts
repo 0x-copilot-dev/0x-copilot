@@ -3,8 +3,14 @@
 // Three small hooks, all single-fetch + manual refresh in the same shape as
 // `useWorkspaceDefaults` (PR 3.5). No global cache layer; the Settings page
 // hydrates once and refreshes only on user-driven mutations.
+//
+// Each hook delegates the fetch / loading / error / cancellation plumbing
+// to `useRecord` (see api/useResource.ts) and layers its own mutators
+// on top. Field names (`workspace`, `members`, `invitations`, `digest`)
+// are kept distinct from `data` so the call sites in Settings read
+// naturally.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import type {
   BillingDigest,
   CreateInvitationRequest,
@@ -15,6 +21,7 @@ import type {
   UpdateWorkspaceSettingsRequest,
   WorkspaceSettings,
 } from "@enterprise-search/api-types";
+
 import {
   createInvitation,
   getBillingDigest,
@@ -27,6 +34,8 @@ import {
   revokeInvitation,
 } from "../../api/workspaceApi";
 import type { RequestIdentity } from "../../api/config";
+import { useRecord } from "../../api/useResource";
+import { errorMessage } from "../../utils/errors";
 
 // ---------------------------------------------------------------------------
 // Workspace branding
@@ -41,39 +50,18 @@ export interface UseWorkspaceResult {
 }
 
 export function useWorkspace(identity: RequestIdentity): UseWorkspaceResult {
-  const [workspace, setWorkspace] = useState<WorkspaceSettings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getWorkspace(identity);
-      setWorkspace(data);
-    } catch (err) {
-      setError(toMessage(err, "Could not load workspace"));
-    } finally {
-      setLoading(false);
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void load().catch(() => {
-      if (cancelled) return;
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+  const fetcher = useCallback(() => getWorkspace(identity), [identity]);
+  const { data, loading, error, refresh, setData } = useRecord(
+    fetcher,
+    "Could not load workspace",
+  );
 
   const save = useCallback(
     async (body: UpdateWorkspaceSettingsRequest): Promise<void> => {
-      const previous = workspace;
+      const previous = data;
       // Optimistic — same shape as useWorkspaceDefaults.
       if (previous) {
-        setWorkspace({
+        setData({
           ...previous,
           display_name: body.display_name ?? previous.display_name,
           slug: body.slug ?? previous.slug,
@@ -82,20 +70,21 @@ export function useWorkspace(identity: RequestIdentity): UseWorkspaceResult {
             : previous.metadata,
         });
       }
-      setError(null);
       try {
         const updated = await patchWorkspace(body, identity);
-        setWorkspace(updated);
+        setData(updated);
       } catch (err) {
-        setWorkspace(previous);
-        setError(toMessage(err, "Could not save workspace"));
-        throw err;
+        setData(previous);
+        // Rethrow so the caller can show its own error UI; setData has
+        // already rolled the optimistic write back. The hook's `error`
+        // surface is reserved for load failures.
+        throw new Error(errorMessage(err, "Could not save workspace"));
       }
     },
-    [identity, workspace],
+    [identity, data, setData],
   );
 
-  return { workspace, loading, error, save, refresh: load };
+  return { workspace: data, loading, error, save, refresh };
 }
 
 // ---------------------------------------------------------------------------
@@ -117,26 +106,14 @@ export interface UseWorkspaceMembersResult {
 export function useWorkspaceMembers(
   identity: RequestIdentity,
 ): UseWorkspaceMembersResult {
-  const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await listWorkspaceMembers(identity);
-      setMembers(response.members);
-    } catch (err) {
-      setError(toMessage(err, "Could not load members"));
-    } finally {
-      setLoading(false);
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const fetcher = useCallback(
+    () => listWorkspaceMembers(identity).then((r) => r.members),
+    [identity],
+  );
+  const { data, loading, error, refresh, setData } = useRecord(
+    fetcher,
+    "Could not load members",
+  );
 
   const changeRole = useCallback(
     async (
@@ -145,33 +122,38 @@ export function useWorkspaceMembers(
     ): Promise<void> => {
       try {
         const updated = await patchWorkspaceMember(userId, { role }, identity);
-        setMembers((current) =>
-          current.map((m) => (m.user_id === userId ? updated : m)),
+        setData((current) =>
+          (current ?? []).map((m) => (m.user_id === userId ? updated : m)),
         );
       } catch (err) {
-        setError(toMessage(err, "Could not update role"));
-        throw err;
+        throw new Error(errorMessage(err, "Could not update role"));
       }
     },
-    [identity],
+    [identity, setData],
   );
 
   const remove = useCallback(
     async (userId: string): Promise<void> => {
-      const previous = members;
-      setMembers((current) => current.filter((m) => m.user_id !== userId));
+      const previous = data;
+      setData((current) => (current ?? []).filter((m) => m.user_id !== userId));
       try {
         await removeWorkspaceMember(userId, identity);
       } catch (err) {
-        setMembers(previous);
-        setError(toMessage(err, "Could not remove member"));
-        throw err;
+        setData(previous);
+        throw new Error(errorMessage(err, "Could not remove member"));
       }
     },
-    [identity, members],
+    [identity, data, setData],
   );
 
-  return { members, loading, error, refresh: load, changeRole, remove };
+  return {
+    members: data ?? [],
+    loading,
+    error,
+    refresh,
+    changeRole,
+    remove,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -190,26 +172,14 @@ export interface UseInvitationsResult {
 export function useInvitations(
   identity: RequestIdentity,
 ): UseInvitationsResult {
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await listInvitations(identity);
-      setInvitations(response.invitations);
-    } catch (err) {
-      setError(toMessage(err, "Could not load invitations"));
-    } finally {
-      setLoading(false);
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const fetcher = useCallback(
+    () => listInvitations(identity).then((r) => r.invitations),
+    [identity],
+  );
+  const { data, loading, error, refresh, setData } = useRecord(
+    fetcher,
+    "Could not load invitations",
+  );
 
   const create = useCallback(
     async (
@@ -217,7 +187,7 @@ export function useInvitations(
     ): Promise<CreateInvitationResponse> => {
       try {
         const response = await createInvitation(body, identity);
-        setInvitations((current) => [
+        setData((current) => [
           {
             invite_id: response.invite_id,
             email: response.email,
@@ -227,35 +197,40 @@ export function useInvitations(
             created_at: response.created_at,
             expires_at: response.expires_at,
           },
-          ...current,
+          ...(current ?? []),
         ]);
         return response;
       } catch (err) {
-        setError(toMessage(err, "Could not create invitation"));
-        throw err;
+        throw new Error(errorMessage(err, "Could not create invitation"));
       }
     },
-    [identity],
+    [identity, setData],
   );
 
   const revoke = useCallback(
     async (inviteId: string): Promise<void> => {
-      const previous = invitations;
-      setInvitations((current) =>
-        current.filter((i) => i.invite_id !== inviteId),
+      const previous = data;
+      setData((current) =>
+        (current ?? []).filter((i) => i.invite_id !== inviteId),
       );
       try {
         await revokeInvitation(inviteId, identity);
       } catch (err) {
-        setInvitations(previous);
-        setError(toMessage(err, "Could not revoke invitation"));
-        throw err;
+        setData(previous);
+        throw new Error(errorMessage(err, "Could not revoke invitation"));
       }
     },
-    [identity, invitations],
+    [identity, data, setData],
   );
 
-  return { invitations, loading, error, refresh: load, create, revoke };
+  return {
+    invitations: data ?? [],
+    loading,
+    error,
+    refresh,
+    create,
+    revoke,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -270,37 +245,12 @@ export interface UseBillingResult {
 }
 
 export function useBilling(identity: RequestIdentity): UseBillingResult {
-  const [digest, setDigest] = useState<BillingDigest | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getBillingDigest(identity);
-      setDigest(data);
-    } catch (err) {
-      setError(toMessage(err, "Could not load billing"));
-    } finally {
-      setLoading(false);
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  return { digest, loading, error, refresh: load };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function toMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
+  const fetcher = useCallback(() => getBillingDigest(identity), [identity]);
+  const { data, loading, error, refresh } = useRecord(
+    fetcher,
+    "Could not load billing",
+  );
+  return { digest: data, loading, error, refresh };
 }
 
 function mergeMetadata(

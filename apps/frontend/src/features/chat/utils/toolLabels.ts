@@ -53,78 +53,98 @@ export function formatAgentName(value: string): string {
   return humanizeIdentifier(value);
 }
 
-export function isWebSearchTool(toolName: string | undefined): boolean {
+export type ToolFamily =
+  | "web_search"
+  | "project_search"
+  | "list_files"
+  | "read_file"
+  | "shell"
+  | "other";
+
+// Single source of truth for "what kind of tool is this". Every
+// title-formatter (toolDisplayName, toolRunningTitle, toolCompletedTitle,
+// inlineMcpToolTitle) branches on the classification rather than
+// re-implementing the same alternation. New tool families are added in
+// exactly one place.
+export function classifyTool(toolName: string | null | undefined): ToolFamily {
   const normalized = toolName?.trim().toLowerCase() ?? "";
-  return (
+  if (
     normalized === "web_search" ||
     normalized === "duckduckgo_search" ||
     normalized === "duckduckgo_search_results" ||
     normalized === "search_web"
-  );
-}
-
-export function isProjectSearchTool(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
-  return (
-    normalized === "grep" ||
-    normalized === "rg" ||
-    normalized === "search_files" ||
-    normalized === "file_search"
-  );
-}
-
-export function toolDisplayName(toolName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (normalized === "ls" || normalized === "list_files") {
-    return "List files";
-  }
-  if (isWebSearchTool(normalized)) {
-    return "Search web";
+  ) {
+    return "web_search";
   }
   if (
     normalized === "grep" ||
     normalized === "rg" ||
     normalized === "search_files" ||
-    normalized === "file_search" ||
-    normalized === "list_files"
+    normalized === "file_search"
   ) {
-    return "Search project files";
+    return "project_search";
+  }
+  if (normalized === "ls" || normalized === "list_files") {
+    return "list_files";
   }
   if (normalized === "read_file") {
-    return "Read file";
+    return "read_file";
   }
   if (normalized === "shell") {
-    return "Run command";
+    return "shell";
   }
-  return humanizeIdentifier(toolName || "tool");
+  return "other";
+}
+
+export function isWebSearchTool(toolName: string | undefined): boolean {
+  return classifyTool(toolName) === "web_search";
+}
+
+export function isProjectSearchTool(toolName: string): boolean {
+  return classifyTool(toolName) === "project_search";
+}
+
+export function toolDisplayName(toolName: string): string {
+  switch (classifyTool(toolName)) {
+    case "list_files":
+      return "List files";
+    case "web_search":
+      return "Search web";
+    case "project_search":
+      return "Search project files";
+    case "read_file":
+      return "Read file";
+    case "shell":
+      return "Run command";
+    case "other":
+      return humanizeIdentifier(toolName || "tool");
+  }
 }
 
 function toolRunningTitle(toolName: string, displayName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (isWebSearchTool(normalized)) {
-    return "Searching the web";
+  switch (classifyTool(toolName)) {
+    case "web_search":
+      return "Searching the web";
+    case "project_search":
+      return "Searching project files";
+    case "list_files":
+      return "Listing files";
+    default:
+      return `Running ${displayName}`;
   }
-  if (isProjectSearchTool(normalized)) {
-    return "Searching project files";
-  }
-  if (normalized === "ls" || normalized === "list_files") {
-    return "Listing files";
-  }
-  return `Running ${displayName}`;
 }
 
 function toolCompletedTitle(toolName: string, displayName: string): string {
-  const normalized = toolName.trim().toLowerCase();
-  if (isWebSearchTool(normalized)) {
-    return "Searched the web";
+  switch (classifyTool(toolName)) {
+    case "web_search":
+      return "Searched the web";
+    case "project_search":
+      return "Searched project files";
+    case "list_files":
+      return "Listed files";
+    default:
+      return displayName;
   }
-  if (isProjectSearchTool(normalized)) {
-    return "Searched project files";
-  }
-  if (normalized === "ls" || normalized === "list_files") {
-    return "Listed files";
-  }
-  return displayName;
 }
 
 export function inlineToolTitle(
@@ -199,37 +219,58 @@ export function toolStatusLabel(status: string, isError?: boolean): string {
   return "Done";
 }
 
-export function badgeToneForStatus(
-  status: string,
-): "neutral" | "success" | "warning" | "danger" | "accent" {
+export type StatusKind = "running" | "error" | "done" | "neutral";
+export type StatusTone =
+  | "neutral"
+  | "success"
+  | "warning"
+  | "danger"
+  | "accent";
+
+const RUNNING_STATUS_WORDS = new Set([
+  "starting",
+  "working",
+  "still working",
+  "waiting",
+  "running",
+  "action required",
+  "waiting for permission",
+]);
+
+const ERROR_STATUS_WORDS = new Set(["could not complete", "error", "failed"]);
+
+const DONE_STATUS_WORDS = new Set([
+  "complete",
+  "completed",
+  "done",
+  "resolved",
+]);
+
+/**
+ * Single source of truth for "what does this status string mean
+ * visually". Returns both the badge tone (used in chrome) and the
+ * icon kind (used by ActivityStatusIcon) so the two surfaces can never
+ * disagree on whether a status is running, errored, or done.
+ */
+export function statusClassification(status: string): {
+  kind: StatusKind;
+  tone: StatusTone;
+} {
   const normalized = status.toLowerCase();
-  if (
-    normalized === "complete" ||
-    normalized === "completed" ||
-    normalized === "done" ||
-    normalized === "resolved"
-  ) {
-    return "success";
+  if (DONE_STATUS_WORDS.has(normalized)) {
+    return { kind: "done", tone: "success" };
   }
-  if (
-    normalized === "starting" ||
-    normalized === "working" ||
-    normalized === "still working" ||
-    normalized === "waiting" ||
-    normalized === "running" ||
-    normalized === "action required" ||
-    normalized === "waiting for permission"
-  ) {
-    return "warning";
+  if (RUNNING_STATUS_WORDS.has(normalized)) {
+    return { kind: "running", tone: "warning" };
   }
-  if (
-    normalized === "could not complete" ||
-    normalized === "error" ||
-    normalized === "failed"
-  ) {
-    return "danger";
+  if (ERROR_STATUS_WORDS.has(normalized)) {
+    return { kind: "error", tone: "danger" };
   }
-  return "neutral";
+  return { kind: "neutral", tone: "neutral" };
+}
+
+export function badgeToneForStatus(status: string): StatusTone {
+  return statusClassification(status).tone;
 }
 
 export function toolActionName(toolName: string | null): string {

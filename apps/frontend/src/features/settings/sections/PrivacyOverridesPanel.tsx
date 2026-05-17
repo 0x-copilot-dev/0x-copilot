@@ -22,6 +22,7 @@ import {
   getMyPrivacySettings,
   updateMyPrivacySettings,
 } from "../../../api/meApi";
+import { errorMessage } from "../../../utils/errors";
 
 const REGIONS: ReadonlyArray<{ id: DataResidencyRegion; label: string }> = [
   { id: "us-east-1", label: "US (us-east-1)" },
@@ -45,9 +46,7 @@ export function PrivacyOverridesPanel(): ReactElement {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Could not load privacy.",
-        );
+        setError(errorMessage(err, "Could not load privacy."));
       });
     return () => {
       cancelled = true;
@@ -72,9 +71,7 @@ export function PrivacyOverridesPanel(): ReactElement {
       updateMyPrivacySettings(patch).then(
         (response) => setSnapshot(response),
         (err: unknown) =>
-          setError(
-            err instanceof Error ? err.message : "Could not save privacy.",
-          ),
+          setError(errorMessage(err, "Could not save privacy.")),
       );
     },
     [snapshot],

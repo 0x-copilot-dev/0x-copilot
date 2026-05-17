@@ -8,8 +8,9 @@
 import type {
   RuntimeEventEnvelope,
   SubagentEntry,
-  SubagentLifecycleStatus,
 } from "@enterprise-search/api-types";
+
+import { isResumableStatus, normaliseTerminalStatus } from "./subagentStatus";
 
 export type SubagentSnapshotMap = ReadonlyMap<string, SubagentEntry>;
 
@@ -18,22 +19,6 @@ const SUBAGENT_PROGRESS = "subagent_progress";
 const SUBAGENT_COMPLETED = "subagent_completed";
 const SUBAGENT_PAUSED = "subagent_paused";
 const SUBAGENT_RESUMED = "subagent_resumed";
-
-// `paused` is intentionally NOT a running state — fleet-row "is anything
-// running" checks should classify a paused subagent as not running so the
-// progress bar freezes and the chrome flips to amber.
-const RUNNING_STATES: ReadonlySet<SubagentLifecycleStatus> = new Set([
-  "queued",
-  "running",
-]);
-
-// Statuses that a `subagent_resumed` event is allowed to flip back to
-// `running`. Terminal states win — a completed/cancelled/failed subagent
-// stays terminal even if a stray resume arrives (e.g. mid-replay).
-const RESUMABLE_STATES: ReadonlySet<SubagentLifecycleStatus> = new Set([
-  "queued",
-  "paused",
-]);
 
 export function emptySubagentMap(): SubagentSnapshotMap {
   return new Map();
@@ -68,9 +53,7 @@ export function applySubagentEvent(
   return next;
 }
 
-export function isRunningStatus(status: SubagentLifecycleStatus): boolean {
-  return RUNNING_STATES.has(status);
-}
+export { isRunningStatus } from "./subagentStatus";
 
 export function subagentsByRecency(
   current: SubagentSnapshotMap,
@@ -141,7 +124,7 @@ function onCompleted(
     payloadDurationMs(event) ?? durationFromStarted(startedAt, completedAt);
   return {
     ...base,
-    status: terminalStatus(event),
+    status: normaliseTerminalStatus(event.status),
     completed_at: completedAt,
     duration_ms: duration,
     result_summary: event.summary ?? base.result_summary,
@@ -186,7 +169,7 @@ function onResumed(
   ) {
     return base;
   }
-  if (!RESUMABLE_STATES.has(base.status)) {
+  if (!isResumableStatus(base.status)) {
     return base;
   }
   return {
@@ -277,17 +260,6 @@ function subagentName(event: RuntimeEventEnvelope): string | null {
     return raw.length > 0 ? raw : null;
   }
   return null;
-}
-
-function terminalStatus(event: RuntimeEventEnvelope): SubagentLifecycleStatus {
-  const raw = (event.status ?? "").toLowerCase();
-  if (raw === "cancelled") {
-    return "cancelled";
-  }
-  if (raw === "failed") {
-    return "failed";
-  }
-  return "completed";
 }
 
 function payloadDurationMs(event: RuntimeEventEnvelope): number | null {

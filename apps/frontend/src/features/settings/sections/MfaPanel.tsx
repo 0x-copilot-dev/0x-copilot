@@ -37,6 +37,7 @@ import {
   webauthnRegisterStart,
 } from "../../../api/mfaApi";
 import { decodeCreationOptions, encodeAttestation } from "./webauthnCodec";
+import { errorMessage } from "../../../utils/errors";
 
 type Phase =
   | { kind: "idle" }
@@ -59,7 +60,7 @@ export function MfaPanel(): ReactElement {
       const response = await listMyMfaFactors();
       setFactors(response.factors);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load factors.");
+      setError(errorMessage(err, "Could not load factors."));
     } finally {
       setLoading(false);
     }
@@ -79,7 +80,7 @@ export function MfaPanel(): ReactElement {
       setPhase({ kind: "confirm", pending: result });
       setCode("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Enrollment failed.");
+      setError(errorMessage(err, "Enrollment failed."));
     } finally {
       setBusy(false);
     }
@@ -98,9 +99,7 @@ export function MfaPanel(): ReactElement {
       setCode("");
       await refresh();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Code rejected. Try again.",
-      );
+      setError(errorMessage(err, "Code rejected. Try again."));
     } finally {
       setBusy(false);
     }
@@ -113,9 +112,7 @@ export function MfaPanel(): ReactElement {
       await disableMfaFactor(factorId);
       await refresh();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not disable factor.",
-      );
+      setError(errorMessage(err, "Could not disable factor."));
     } finally {
       setBusy(false);
     }
@@ -160,9 +157,9 @@ export function MfaPanel(): ReactElement {
     } catch (err) {
       // ``DOMException`` covers user-cancel, timeout, security errors.
       const message =
-        err instanceof DOMException || err instanceof Error
+        err instanceof DOMException
           ? err.message
-          : "Security key enrollment failed.";
+          : errorMessage(err, "Security key enrollment failed.");
       setError(message);
     } finally {
       setBusy(false);

@@ -1,6 +1,7 @@
 import type { Workspace } from "@enterprise-search/api-types";
 import { useEffect, useState, type ReactElement } from "react";
 import { listMyWorkspaces } from "../../../../api/meApi";
+import { errorMessage } from "../../../../utils/errors";
 
 /**
  * Workspace switcher list — rendered inside UserCard's popover (PR 2.2).
@@ -33,8 +34,7 @@ export function WorkspacePicker({
         if (cancelled) {
           return;
         }
-        const message =
-          err instanceof Error ? err.message : "Could not load workspaces";
+        const message = errorMessage(err, "Could not load workspaces");
         setState({ kind: "error", message });
       });
     return () => {
