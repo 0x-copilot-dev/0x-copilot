@@ -6,9 +6,25 @@ export {
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./TcSurfaceMount";
 
 // === Phase 2-B thread-canvas ===
-export { ThreadCanvas, type ThreadCanvasProps } from "./ThreadCanvas";
+export {
+  ThreadCanvas,
+  type ThreadCanvasProps,
+  type ThreadMode,
+} from "./ThreadCanvas";
 export { TcTabs, type TcTabsProps, type TcTab } from "./TcTabs";
 // === end Phase 2-B ===
+
+// === Phase 1 P1-B2 event projector hook ===
+export {
+  useEventProjector,
+  type ActivityConsumer,
+  type ChatConsumer,
+  type EventProjection,
+  type SurfaceConsumer,
+  type SwimlanesConsumer,
+  type TimelineConsumer,
+} from "./useEventProjector";
+// === end Phase 1 P1-B2 ===
 
 // === Phase 2-C swimlanes ===
 export {
