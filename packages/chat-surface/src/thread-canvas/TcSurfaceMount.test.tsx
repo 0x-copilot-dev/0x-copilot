@@ -13,8 +13,10 @@ import type { PendingDiff } from "../surfaces/types";
 import {
   TcSurfaceMount,
   __setRenderBudgetClockForTests,
+  reduceTo,
   type PendingDiffHandle,
 } from "./TcSurfaceMount";
+import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 
 const stubTransport = {} as unknown as Transport;
 
@@ -284,5 +286,70 @@ describe("TcSurfaceMount", () => {
       "data-tier",
       "tier3",
     );
+  });
+});
+
+function makeToolResultEvent(
+  sequenceNo: number,
+  uri: string,
+  state: Record<string, unknown>,
+): RuntimeEventEnvelope {
+  return {
+    event_id: `evt-${sequenceNo}`,
+    run_id: "run-1",
+    conversation_id: "conv-1",
+    sequence_no: sequenceNo,
+    event_type: "tool_result",
+    activity_kind: "tool",
+    payload: { surface_uri: uri, state },
+    created_at: new Date(1_700_000_000_000 + sequenceNo * 1000).toISOString(),
+  };
+}
+
+describe("TcSurfaceMount.reduceTo (client-side time-travel)", () => {
+  it("returns the surface payload at the given sequence_no", () => {
+    const events = [
+      makeToolResultEvent(0, "sheet://acme", { rows: 1 }),
+      makeToolResultEvent(1, "sheet://acme", { rows: 2 }),
+      makeToolResultEvent(2, "sheet://acme", { rows: 3 }),
+    ];
+    expect(reduceTo(events, 0, "sheet://acme")).toEqual({ rows: 1 });
+    expect(reduceTo(events, 1, "sheet://acme")).toEqual({ rows: 2 });
+    expect(reduceTo(events, 2, "sheet://acme")).toEqual({ rows: 3 });
+  });
+
+  it("ignores events past the cursor (time-travel)", () => {
+    const events = [
+      makeToolResultEvent(0, "sheet://acme", { rows: 1, columns: 1 }),
+      makeToolResultEvent(5, "sheet://acme", { rows: 10 }),
+    ];
+    expect(reduceTo(events, 0, "sheet://acme")).toEqual({
+      rows: 1,
+      columns: 1,
+    });
+    expect(reduceTo(events, 5, "sheet://acme")).toEqual({
+      rows: 10,
+      columns: 1,
+    });
+  });
+
+  it("returns undefined for an unknown surface URI", () => {
+    const events = [makeToolResultEvent(0, "sheet://acme", { rows: 1 })];
+    expect(reduceTo(events, 0, "sheet://other")).toBeUndefined();
+  });
+
+  it("returns undefined when no event has been observed before the cursor", () => {
+    const events = [makeToolResultEvent(5, "sheet://acme", { rows: 1 })];
+    expect(reduceTo(events, 2, "sheet://acme")).toBeUndefined();
+  });
+
+  it("replay of the same events produces the same state (idempotent)", () => {
+    const events = [
+      makeToolResultEvent(0, "sheet://acme", { rows: 1 }),
+      makeToolResultEvent(1, "sheet://acme", { rows: 2 }),
+    ];
+    const a = reduceTo(events, 1, "sheet://acme");
+    const b = reduceTo(events, 1, "sheet://acme");
+    expect(a).toEqual(b);
   });
 });

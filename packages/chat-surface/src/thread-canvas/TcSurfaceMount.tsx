@@ -7,12 +7,14 @@ import {
   type ReactNode,
 } from "react";
 
+import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
 import type { Transport } from "@enterprise-search/chat-transport";
 
 import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { resolveAdapter } from "../surfaces/SurfaceRegistry";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
+import { projectAt, type SurfacePayload } from "./eventProjector";
 
 const RENDER_BUDGET_MS = 100;
 const TIER3_URI = `${TIER3_SCHEME}://`;
@@ -36,6 +38,31 @@ export function __setRenderBudgetClockForTests(clock: Clock | null): void {
 export interface PendingDiffHandle<TDiff = unknown> {
   readonly diff: TDiff;
   readonly meta: PendingDiff;
+}
+
+/**
+ * Client-side time-travel: derive the surface state at a past
+ * `sequence_no` by replaying events through the projector. No backend
+ * snapshot call — Phase 1 Q1 decision (impl-plan §3) chose client-side
+ * reducers; this is the canonical entry point.
+ *
+ * Returns `undefined` when the URI never had a recorded payload at or
+ * before the cursor. Callers (typically `TcSurfaceMount` itself or a
+ * mini-timeline scrubber) treat `undefined` as "render the empty
+ * placeholder" — there is no committed state yet at that moment in
+ * time.
+ *
+ * Pure function; safe to call inside `useMemo` keyed by
+ * `[events.length, sequenceNo]`. Internally delegates to the projector
+ * so the surface-mount's view of surface state matches the chat side
+ * and the swimlanes exactly.
+ */
+export function reduceTo(
+  events: readonly RuntimeEventEnvelope[],
+  sequenceNo: number,
+  surfaceUri: string,
+): SurfacePayload | undefined {
+  return projectAt(events, sequenceNo).surfaceState.get(surfaceUri);
 }
 
 export interface TcSurfaceMountProps {

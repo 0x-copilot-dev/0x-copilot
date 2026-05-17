@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { createRef, type ReactNode } from "react";
 
 import type {
   Session,
@@ -12,7 +12,7 @@ import type {
 } from "@enterprise-search/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
-import { Composer } from "./Composer";
+import { Composer, type ComposerHandle } from "./Composer";
 
 function makeTransport(
   resolver: (req: TypedRequest) => Promise<unknown> = () =>
@@ -281,5 +281,246 @@ describe("Composer", () => {
     expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
       /Deep/,
     );
+  });
+
+  /* --- Phase 1 P1-B extras --- */
+
+  describe("forwardRef + ComposerHandle", () => {
+    it("exposes setText / getText / clear / focus via the forwarded ref", () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      expect(ref.current).not.toBeNull();
+      ref.current?.setText("hello world");
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      expect(ta.value).toBe("hello world");
+      expect(ref.current?.getText()).toBe("hello world");
+      ref.current?.clear();
+      expect(ta.value).toBe("");
+    });
+
+    it("focus() moves keyboard focus to the textarea", () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      expect(document.activeElement).not.toBe(ta);
+      ref.current?.focus();
+      expect(document.activeElement).toBe(ta);
+    });
+  });
+
+  describe("topBarSlot + inlineActions", () => {
+    it("renders host-supplied topBarSlot above the textarea", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            topBarSlot={<div data-testid="host-topbar">pills</div>}
+          />,
+        ),
+      );
+      expect(screen.getByTestId("composer-topbar-slot")).toBeInTheDocument();
+      expect(screen.getByTestId("host-topbar")).toBeInTheDocument();
+    });
+
+    it("renders host-supplied inlineActions between attach and Tools", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            inlineActions={
+              <button type="button" data-testid="host-connectors">
+                connectors
+              </button>
+            }
+          />,
+        ),
+      );
+      expect(screen.getByTestId("composer-inline-actions")).toBeInTheDocument();
+      expect(screen.getByTestId("host-connectors")).toBeInTheDocument();
+    });
+
+    it("does not render either slot when the prop is absent", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      expect(
+        screen.queryByTestId("composer-topbar-slot"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("composer-inline-actions"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe('mode="edit"', () => {
+    it("hides Tools / Model / attach / mic and shows Save + Cancel", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            mode="edit"
+            initialText="prior"
+            onSave={() => {}}
+            onCancel={() => {}}
+          />,
+        ),
+      );
+      expect(
+        screen.queryByTestId("composer-tools-toggle"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("composer-model-toggle"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId("composer-attach")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("composer-mic")).not.toBeInTheDocument();
+      expect(screen.getByTestId("composer-edit-save")).toBeInTheDocument();
+      expect(screen.getByTestId("composer-edit-cancel")).toBeInTheDocument();
+    });
+
+    it("pre-fills the textarea with initialText", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            mode="edit"
+            initialText="prior text"
+            onSave={() => {}}
+          />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      expect(ta.value).toBe("prior text");
+    });
+
+    it("calls onSave when Save is clicked, not onSend", () => {
+      const onSend = vi.fn();
+      const onSave = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={onSend}
+            mode="edit"
+            initialText="hello"
+            onSave={onSave}
+            onCancel={() => {}}
+          />,
+        ),
+      );
+      fireEvent.click(screen.getByTestId("composer-edit-save"));
+      expect(onSave).toHaveBeenCalledWith("hello");
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("calls onCancel when Cancel is clicked or Escape pressed", () => {
+      const onCancel = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            mode="edit"
+            initialText="hi"
+            onSave={() => {}}
+            onCancel={onCancel}
+          />,
+        ),
+      );
+      fireEvent.click(screen.getByTestId("composer-edit-cancel"));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(screen.getByTestId("composer-textarea"), {
+        key: "Escape",
+      });
+      expect(onCancel).toHaveBeenCalledTimes(2);
+    });
+
+    it("retains the hint row in edit mode but flips the send label to save", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            mode="edit"
+            initialText="x"
+            onSave={() => {}}
+          />,
+        ),
+      );
+      const hint = screen.getByTestId("composer-hint");
+      expect(hint).toBeInTheDocument();
+      expect(hint).toHaveTextContent(/save/);
+    });
+  });
+
+  describe("onSkillCommand (/ skills)", () => {
+    it("emits onSkillCommand when input starts with /slug and Enter is pressed", () => {
+      const onSkillCommand = vi.fn();
+      const onSend = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={onSend} onSkillCommand={onSkillCommand} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "/summarize today" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSkillCommand).toHaveBeenCalledWith("summarize", "today");
+      expect(onSend).not.toHaveBeenCalled();
+      expect(ta.value).toBe("");
+    });
+
+    it("passes empty args when only the slash + slug is typed", () => {
+      const onSkillCommand = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} onSkillCommand={onSkillCommand} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "/clear" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSkillCommand).toHaveBeenCalledWith("clear", "");
+    });
+
+    it("does not treat '/foo' inside the middle of a message as a skill command", () => {
+      const onSkillCommand = vi.fn();
+      const onSend = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={onSend} onSkillCommand={onSkillCommand} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, {
+        target: { value: "check https://example.com/path now" },
+      });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSkillCommand).not.toHaveBeenCalled();
+      expect(onSend).toHaveBeenCalledWith("check https://example.com/path now");
+    });
+
+    it("falls through to onSend when onSkillCommand is not wired", () => {
+      const onSend = vi.fn();
+      render(withTransport(makeTransport(), <Composer onSend={onSend} />));
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "/summarize today" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("/summarize today");
+    });
   });
 });

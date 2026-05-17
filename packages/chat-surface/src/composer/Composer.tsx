@@ -1,10 +1,14 @@
 import {
+  forwardRef,
   useCallback,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
+  type ForwardedRef,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 
@@ -31,6 +35,30 @@ import { ToolPicker } from "./ToolPicker";
  * - Model button = single popover with Model rows + Fast/Balanced/Deep
  *   depth grid. */
 
+/**
+ * Composer mode.
+ *
+ * - `"compose"` (default) — full toolbar: Tools, Model · Depth, attach, mic, send.
+ * - `"edit"` — chats-canvas-prd §15 EditComposer absorbed: textarea + Save +
+ *   Cancel. Tools/Model/attach/mic are hidden because editing a prior message
+ *   is structurally a "fix this text" intent, not a re-pick of skills/depth.
+ *   Existing call sites that don't pass `mode` continue rendering compose.
+ */
+export type ComposerMode = "compose" | "edit";
+
+/**
+ * Imperative handle exposed via `forwardRef`. Hosts that need to drive the
+ * composer programmatically (skill picker writing into the textarea, "Insert
+ * citation here" actions, …) call methods on this. The data model stays
+ * inside the component; the handle is the cross-cutting affordance.
+ */
+export interface ComposerHandle {
+  readonly focus: () => void;
+  readonly clear: () => void;
+  readonly setText: (text: string) => void;
+  readonly getText: () => string;
+}
+
 export interface ComposerProps {
   readonly onSend: (text: string) => void;
   readonly onCancel?: () => void;
@@ -41,6 +69,37 @@ export interface ComposerProps {
   readonly initialTools?: ReadonlyArray<string>;
   readonly initialDepth?: Depth;
   readonly portalTarget?: HTMLElement;
+  /**
+   * Composer mode (chats-canvas-prd §15). `"edit"` collapses the toolbar
+   * and relabels Send → Save. Default `"compose"`.
+   */
+  readonly mode?: ComposerMode;
+  /**
+   * Caller-rendered region above the textarea. Used by ChatScreen to
+   * surface selected-skills pills, attachment chips, or a "/skill"
+   * preview without forking the Composer. ARIA grouping is the caller's
+   * job — the Composer just hosts the slot.
+   */
+  readonly topBarSlot?: ReactNode;
+  /**
+   * Caller-rendered inline actions, placed between the attach button and
+   * the Tools toggle. Used by ChatScreen for the per-chat connectors
+   * button (chats-canvas-prd §15 — "Hosted at the call site").
+   */
+  readonly inlineActions?: ReactNode;
+  /**
+   * Handler for `/`-skill commands. Called when the user types `/` at a
+   * word boundary and either presses Enter or otherwise submits a skill
+   * shortcut. The `skill` argument is the slug (the token after the
+   * leading `/`); `args` is the remainder of the input (trimmed). The
+   * skill picker UI itself is a host concern — the Composer just emits
+   * the event.
+   */
+  readonly onSkillCommand?: (skill: string, args: string) => void;
+  /** Initial value of the textarea — used by `mode="edit"`. */
+  readonly initialText?: string;
+  /** Save action for edit mode. Receives the edited text. */
+  readonly onSave?: (text: string) => void;
 }
 
 interface MentionTriggerState {
@@ -51,7 +110,10 @@ interface MentionTriggerState {
 const DEFAULT_MODEL = "claude-opus-4-7";
 const DEFAULT_DEPTH: Depth = "balanced";
 
-export function Composer(props: ComposerProps): ReactNode {
+function ComposerInner(
+  props: ComposerProps,
+  ref: ForwardedRef<ComposerHandle>,
+): ReactElement {
   const {
     onSend,
     onCancel,
@@ -62,9 +124,17 @@ export function Composer(props: ComposerProps): ReactNode {
     initialTools,
     initialDepth = DEFAULT_DEPTH,
     portalTarget,
+    mode = "compose",
+    topBarSlot,
+    inlineActions,
+    onSkillCommand,
+    initialText,
+    onSave,
   } = props;
 
-  const [text, setText] = useState("");
+  const isEdit = mode === "edit";
+
+  const [text, setText] = useState(initialText ?? "");
   const [model, setModel] = useState(initialModel);
   const [depth, setDepth] = useState<Depth>(initialDepth);
   const [tools, setTools] = useState<ReadonlyArray<string>>(initialTools ?? []);
@@ -72,6 +142,28 @@ export function Composer(props: ComposerProps): ReactNode {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [mention, setMention] = useState<MentionTriggerState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  /* Imperative handle for hosts that need to write into the composer
+   * programmatically (skill-picker workspace pane, citation injector, …).
+   * The data model stays inside the component; the handle is the
+   * cross-cutting affordance — see chats-canvas-prd §15 ComposerHandle row. */
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: (): void => {
+        textareaRef.current?.focus();
+      },
+      clear: (): void => {
+        setText("");
+        setMention(null);
+      },
+      setText: (next: string): void => {
+        setText(next);
+      },
+      getText: (): string => text,
+    }),
+    [text],
+  );
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -108,9 +200,48 @@ export function Composer(props: ComposerProps): ReactNode {
     setMention(detectMention(next, caret));
   };
 
+  const detectSkillCommand = useCallback(
+    (value: string): { skill: string; args: string } | null => {
+      // A "/skill" command is the entire input starting with "/" followed by
+      // a slug (alphanumeric + dash/underscore), optionally followed by args.
+      // We intentionally restrict to "input starts with /" — slashes inside
+      // the middle of a message (URLs, paths) must not trigger the picker.
+      const trimmed = value.trimStart();
+      if (!trimmed.startsWith("/")) {
+        return null;
+      }
+      const body = trimmed.slice(1);
+      const match = /^([a-zA-Z][\w-]*)(?:\s+([\s\S]*))?$/.exec(body);
+      if (match === null) {
+        return null;
+      }
+      return { skill: match[1], args: (match[2] ?? "").trim() };
+    },
+    [],
+  );
+
   const send = (): void => {
     const trimmed = text.trim();
     if (trimmed.length === 0 || disabled || running) {
+      return;
+    }
+    /* "/skill ..." submissions exit through onSkillCommand if the host
+     * wired it; otherwise they fall through to the normal send path so
+     * the input isn't lost. */
+    if (onSkillCommand) {
+      const cmd = detectSkillCommand(trimmed);
+      if (cmd !== null) {
+        onSkillCommand(cmd.skill, cmd.args);
+        setText("");
+        setMention(null);
+        return;
+      }
+    }
+    if (isEdit) {
+      onSave?.(trimmed);
+      // Don't clear in edit mode — host decides whether to keep, close,
+      // or replace the composer after Save.
+      setMention(null);
       return;
     }
     onSend(trimmed);
@@ -133,6 +264,9 @@ export function Composer(props: ComposerProps): ReactNode {
       }
       if (mention !== null) {
         setMention(null);
+      }
+      if (isEdit) {
+        onCancel?.();
       }
     }
   };
@@ -171,9 +305,15 @@ export function Composer(props: ComposerProps): ReactNode {
     <div
       data-testid="composer"
       data-running={running ? "true" : undefined}
+      data-mode={mode}
       style={containerStyle}
       aria-disabled={disabled}
     >
+      {topBarSlot !== undefined ? (
+        <div data-testid="composer-topbar-slot" style={topBarSlotStyle}>
+          {topBarSlot}
+        </div>
+      ) : null}
       <textarea
         ref={textareaRef}
         value={text}
@@ -188,93 +328,133 @@ export function Composer(props: ComposerProps): ReactNode {
           handleTextChange(target.value, target.selectionStart ?? 0);
         }}
         rows={2}
-        aria-label="Message"
+        aria-label={isEdit ? "Edit message" : "Message"}
         style={textareaStyle}
         data-testid="composer-textarea"
       />
       <div style={toolbarStyle}>
         <div style={toolbarLeftStyle}>
-          {/* Attach. Icon-only; the design composer shows attach as part
-           * of the thin action row alongside Tools. The host wires the
-           * filepicker (out of scope here) — for now this is a visual
-           * affordance with a no-op onClick. */}
-          <button
-            type="button"
-            aria-label="Attach a file"
-            title="Attach a file"
-            data-testid="composer-attach"
-            style={iconButtonStyle(false)}
-          >
-            <PlusIcon />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setToolPickerOpen((v) => !v);
-              setModelPickerOpen(false);
-            }}
-            aria-pressed={toolPickerOpen}
-            aria-label="Tools"
-            data-testid="composer-tools-toggle"
-            style={pillButtonStyle(toolPickerOpen)}
-          >
-            <WrenchIcon />
-            <span>
-              {tools.length > 0 ? `Tools · ${tools.length}` : "Tools"}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setModelPickerOpen((v) => !v);
-              setToolPickerOpen(false);
-            }}
-            aria-pressed={modelPickerOpen}
-            aria-label="Model and depth"
-            data-testid="composer-model-toggle"
-            style={pillButtonStyle(modelPickerOpen)}
-          >
-            <span style={modelDotStyle(depth)} aria-hidden="true" />
-            <span>
-              {modelLabel}
-              <span style={modelDepthSepStyle}> · </span>
-              {depthLabel}
-            </span>
-          </button>
+          {isEdit ? null : (
+            <>
+              {/* Attach. Icon-only; the design composer shows attach as part
+               * of the thin action row alongside Tools. The host wires the
+               * filepicker (out of scope here) — for now this is a visual
+               * affordance with a no-op onClick. */}
+              <button
+                type="button"
+                aria-label="Attach a file"
+                title="Attach a file"
+                data-testid="composer-attach"
+                style={iconButtonStyle(false)}
+              >
+                <PlusIcon />
+              </button>
+              {inlineActions !== undefined ? (
+                <div
+                  data-testid="composer-inline-actions"
+                  style={inlineActionsStyle}
+                >
+                  {inlineActions}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setToolPickerOpen((v) => !v);
+                  setModelPickerOpen(false);
+                }}
+                aria-pressed={toolPickerOpen}
+                aria-label="Tools"
+                data-testid="composer-tools-toggle"
+                style={pillButtonStyle(toolPickerOpen)}
+              >
+                <WrenchIcon />
+                <span>
+                  {tools.length > 0 ? `Tools · ${tools.length}` : "Tools"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModelPickerOpen((v) => !v);
+                  setToolPickerOpen(false);
+                }}
+                aria-pressed={modelPickerOpen}
+                aria-label="Model and depth"
+                data-testid="composer-model-toggle"
+                style={pillButtonStyle(modelPickerOpen)}
+              >
+                <span style={modelDotStyle(depth)} aria-hidden="true" />
+                <span>
+                  {modelLabel}
+                  <span style={modelDepthSepStyle}> · </span>
+                  {depthLabel}
+                </span>
+              </button>
+            </>
+          )}
         </div>
         <div style={toolbarRightStyle}>
-          <button
-            type="button"
-            aria-label="Voice input"
-            title="Voice input"
-            data-testid="composer-mic"
-            style={iconButtonStyle(false)}
-          >
-            <MicIcon />
-          </button>
-          {running ? (
-            <button
-              type="button"
-              onClick={() => onCancel?.()}
-              aria-label="Stop"
-              title="Stop"
-              data-testid="composer-cancel"
-              style={cancelButtonStyle}
-            >
-              <StopIcon />
-            </button>
+          {isEdit ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onCancel?.()}
+                aria-label="Cancel edit"
+                title="Cancel"
+                data-testid="composer-edit-cancel"
+                style={cancelButtonStyle}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={send}
+                disabled={!canSend}
+                aria-label="Save edit"
+                title="Save"
+                data-testid="composer-edit-save"
+                style={saveButtonStyle(canSend)}
+              >
+                Save
+              </button>
+            </>
           ) : (
-            <button
-              type="button"
-              onClick={send}
-              disabled={!canSend}
-              aria-label="Send"
-              title="Send"
-              data-testid="composer-send"
-              style={sendButtonStyle(canSend)}
-            >
-              <SendIcon />
-            </button>
+            <>
+              <button
+                type="button"
+                aria-label="Voice input"
+                title="Voice input"
+                data-testid="composer-mic"
+                style={iconButtonStyle(false)}
+              >
+                <MicIcon />
+              </button>
+              {running ? (
+                <button
+                  type="button"
+                  onClick={() => onCancel?.()}
+                  aria-label="Stop"
+                  title="Stop"
+                  data-testid="composer-cancel"
+                  style={cancelButtonStyle}
+                >
+                  <StopIcon />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={send}
+                  disabled={!canSend}
+                  aria-label="Send"
+                  title="Send"
+                  data-testid="composer-send"
+                  style={sendButtonStyle(canSend)}
+                >
+                  <SendIcon />
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -282,7 +462,7 @@ export function Composer(props: ComposerProps): ReactNode {
        * is active. See ComposerProps doc comment. */}
       <div style={hintRowStyle} data-testid="composer-hint">
         <span style={hintItemStyle}>
-          <kbd style={kbdStyle}>↵</kbd> send
+          <kbd style={kbdStyle}>↵</kbd> {isEdit ? "save" : "send"}
         </span>
         <span style={hintSepStyle} aria-hidden="true" />
         <span style={hintItemStyle}>
@@ -293,10 +473,10 @@ export function Composer(props: ComposerProps): ReactNode {
           <kbd style={kbdStyle}>/</kbd> skills
         </span>
         <span style={hintTrailingStyle}>
-          {modelLabel} · Sources cited inline
+          {isEdit ? "Editing" : `${modelLabel} · Sources cited inline`}
         </span>
       </div>
-      {toolPickerOpen ? (
+      {!isEdit && toolPickerOpen ? (
         <div style={popoverHostStyle}>
           <ToolPicker
             open={true}
@@ -307,7 +487,7 @@ export function Composer(props: ComposerProps): ReactNode {
           />
         </div>
       ) : null}
-      {modelPickerOpen ? (
+      {!isEdit && modelPickerOpen ? (
         <div style={popoverHostStyle}>
           <ModelPicker
             open={true}
@@ -334,6 +514,16 @@ export function Composer(props: ComposerProps): ReactNode {
     </div>
   );
 }
+
+/**
+ * Public Composer — `forwardRef` so hosts can call `ref.current.setText(…)`
+ * and friends (chats-canvas-prd §15 ComposerHandle). Existing call sites
+ * that don't pass a ref keep working unchanged.
+ */
+export const Composer = forwardRef<ComposerHandle, ComposerProps>(
+  ComposerInner,
+);
+Composer.displayName = "Composer";
 
 function labelForModel(id: string): string {
   if (id === "claude-opus-4-7") {
@@ -568,15 +758,44 @@ const cancelButtonStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 32,
+  minWidth: 32,
   height: 32,
   background: "var(--color-surface-muted)",
   color: "var(--color-text)",
   border: "1px solid var(--color-border)",
   borderRadius: 8,
-  padding: 0,
-  fontSize: 14,
+  padding: "0 10px",
+  fontSize: 12,
   cursor: "pointer",
+};
+
+const saveButtonStyle = (enabled: boolean): CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: 32,
+  height: 32,
+  background: enabled ? "var(--color-accent)" : "var(--color-surface-muted)",
+  color: enabled ? "var(--color-accent-contrast)" : "var(--color-text-subtle)",
+  border: "none",
+  borderRadius: 8,
+  padding: "0 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: enabled ? "pointer" : "not-allowed",
+});
+
+const topBarSlotStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 6,
+  minHeight: 0,
+};
+
+const inlineActionsStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
 };
 
 const hintRowStyle: CSSProperties = {
