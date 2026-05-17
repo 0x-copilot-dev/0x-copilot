@@ -15,15 +15,29 @@ what exists on disk.
 Implemented. Owns the web work surface: search experience, agent interaction,
 source review, admin screens, and web-specific UX. It talks to `backend-facade`.
 
-### `apps/mac`
+### `apps/desktop`
 
-Planned. Owns the macOS client: desktop search, executive workflows,
-notifications, and macOS-specific capabilities. It talks to `backend-facade`.
+Planned. Single cross-platform Electron client for macOS and Windows (Linux for
+CI verification only). Owns: window lifecycle, OIDC + loopback callback, OS
+keychain integration (`safeStorage`, per-`(workspace_id, server)` ciphertext
+files), HTTP + SSE bridge with bearer injection, IPC channel (Zod-validated),
+deep-link handler (`enterprise://`), tier-2 adapter loader (dynamic `import`
+with AST allowlist + sandbox), `electron-updater`, `crashReporter`.
 
-### `apps/windows`
+The renderer mounts `packages/chat-surface` unchanged — same React tree as
+`apps/frontend`. Per-SaaS rendering is delegated to `packages/surface-renderers`
+(tier-1 hand-built) and to agent-generated tier-2 adapters persisted under
+`{userData}/adapters/`. Tier-3 fallback (`GenericStructuredDiff`) lives in
+`packages/chat-surface`.
 
-Planned. Owns the Windows desktop client: enterprise desktop workflows, native
-shell integration, and distribution concerns. It talks to `backend-facade`.
+It talks to `backend-facade` only. Bearer tokens never leave main. See
+[desktop-app.md](desktop-app.md) for the architecture spec and
+[../plan/desktop/PRD.md](../plan/desktop/PRD.md) for the execution plan.
+
+Supersedes the planned `apps/mac` and `apps/windows` entries (D2 in the PRD —
+single Electron app, OS specifics in `apps/desktop/build/{mac,windows,linux}/`).
+Substrate decision (custom Electron vs VS Code extension vs Code – OSS fork)
+is gated on Phase S spike outcome before Phase 0 starts.
 
 ### `services/backend-facade`
 
@@ -58,13 +72,14 @@ and services. Generated clients are target direction, not current behavior.
 
 ### `packages/chat-transport`
 
-Implemented. Owns the substrate-portable `Transport` port — HTTP request
-
-- Server-Sent Event subscription — used by every app surface that talks to
-  `backend-facade`. Ships the web implementation (`WebTransport`, deferred-lookup
-  `fetch`) so the host app only constructs an instance and feeds it to chat-surface.
-  The desktop substrate will ship a parallel `WebviewTransport` (postMessage RPC to
-  the VS Code extension host) without any change to chat-surface or features.
+Implemented. Owns the substrate-portable `Transport` port — HTTP request +
+Server-Sent Event subscription — used by every app surface that talks to
+`backend-facade`. Ships the web implementation (`WebTransport`, deferred-lookup
+`fetch`) so the host app only constructs an instance and feeds it to
+chat-surface. The desktop substrate ships a parallel `IpcTransport` (typed
+`window.bridge` channel to the Electron main process) without any change to
+chat-surface or feature code. Spike-prep also ships a `MockTransport` (in
+`src/mock/`) for testing and the substrate spike.
 
 Boundary: this package must not import from any app, service, or design surface.
 Auth (`UnauthorizedError`), domain envelopes (`RuntimeEventEnvelope` via
@@ -81,12 +96,41 @@ prop-driven; substrate-coupled state (context lookups, web portals) lives in
 the consuming app's `features/` as a thin adapter that resolves data via hooks
 and delegates rendering to chat-surface.
 
+Additionally owns (added in spike-prep, frozen in Phase 4): the
+`SaaSRendererAdapter` contract, `SurfaceRegistry`, the host `TcSurfaceMount`
+(which resolves adapters and renders Approve / Reject controls around their
+output), the tier-3 `GenericStructuredDiff` fallback, the URI scheme parser,
+and `TcInlineDiff` (the generic inline-annotation primitive). Tier-1 renderers
+live in `packages/surface-renderers`; tier-2 adapters live at runtime under
+`{userData}/adapters/`. All three tiers implement the same adapter contract.
+
 Boundary: enforced by ESLint — chat-surface cannot reference bare browser
 primitives (`window.*`, `document.*`, `localStorage`, `fetch`, …) or import from
 any `apps/*`. The package's own web reference implementations (e.g.
 `LocalStorageKeyValueStore`) intentionally use `globalThis.X` member access; the
 prefix marks "I know this is a substrate touchpoint." Anything beyond that
 exception goes through a port.
+
+### `packages/surface-renderers`
+
+Planned (scaffolded in spike-prep with the Email renderer). Hosts tier-1
+hand-built `SaaSRendererAdapter` implementations: one folder per scheme
+(`email/`, `salesforce/`, `sheets/`, `slides/`). Each module exports an
+adapter that implements `renderCurrent` and `renderDiff` as pure functions of
+state. The package's `index.ts` calls `registerAdapter(...)` for each scheme
+at bootstrap.
+
+Boundary: pure-render only. ESLint rule (Phase 4 agent 4A extends the
+chat-surface rule) bans imports / references to `Transport`, `fetch`,
+`XMLHttpRequest`, `EventSource`, `window`, `document`, `localStorage`,
+`sessionStorage`, dynamic `import` of non-allowlisted modules. Side effects
+live in the host (`TcSurfaceMount` in chat-surface). Same boundary applies to
+tier-2 agent-generated adapters; for those it is enforced by an AST scanner
+in `apps/desktop/main/adapters/` (Phase 6).
+
+This is not a public extension API. Third parties don't write tier-1 adapters.
+SaaS the org hasn't shipped tier-1 for are covered by agent-generated tier-2
+(Phase 6) or by tier-3 fallback in chat-surface.
 
 ### `packages/shared-config`
 

@@ -1,620 +1,340 @@
 # Desktop App Architecture (macOS + Windows)
 
-Status: proposal · Owner: TBD · Last updated: 2026-05-14
+Status: **proposal — substrate pending Phase S spike** · Owner: TBD · Last updated: 2026-05-17
 
-This document specifies the architecture for the Mac and Windows desktop builds of the product, built on a Code – OSS fork. The desktop app is a third client of `backend-facade:8200` alongside the existing web app; no new backend services are introduced.
+This document specifies the architecture for the Mac and Windows desktop client of the Atlas / enterprise-search product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
 
-Related docs:
+This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` is replaced by the PRD and will be removed in Phase 0.
 
-- [service-boundaries.md](service-boundaries.md) — must be updated when `apps/desktop`, `packages/chat-surface`, and `packages/chat-transport` are introduced
-- [runtime-stream-handshake.md](runtime-stream-handshake.md) — SSE event/`sequence_no` contract; the desktop SSE bridge consumes this unchanged
-- [multi-tenant-deployment.md](multi-tenant-deployment.md) — workspace/tenancy semantics that the desktop workspace switcher exposes
+Working substrate recommendation: **custom Electron** (one `BrowserWindow` mounting `packages/chat-surface`). The decision is empirically validated in [Phase S](../plan/desktop/PRD.md#phase-s--substrate-spike-sub-phases-s0--s1--s2) before anything else builds.
+
+Related architecture docs:
+
+- [service-boundaries.md](service-boundaries.md) — package/app ownership; updated in Phase 0 to register `apps/desktop` and `packages/surface-renderers`.
+- [runtime-stream-handshake.md](runtime-stream-handshake.md) — SSE `sequence_no` contract; the desktop transport consumes this unchanged.
+- [multi-tenant-deployment.md](multi-tenant-deployment.md) — workspace/tenancy semantics surfaced by the desktop's active-workspace gate.
 
 ## 1. Goals & non-goals
 
 ### Goals
 
-- Native desktop apps for macOS and Windows that share the existing product surface
-- Chat is the primary surface; the editor area dual-uses for agent artifact viewing (MCPs, tool definitions, tool results, skills, conversations, subagent transcripts, workspaces)
-- Reuse the existing `apps/frontend` React UI — no parallel implementation
-- Single source of truth for API contracts (`@enterprise-search/api-types`), design tokens (`@enterprise-search/design-system`), and chat UI components (new `@enterprise-search/chat-surface`)
-- Production-grade OIDC auth and OS-keychain secret storage from day one
-- Two distribution channels: direct download (auto-update) and MDM-managed (auto-update disabled)
-- Rebaseable against upstream Code – OSS without compounding maintenance pain
+- macOS + Windows builds, signed and notarized, with auto-update on `stable` and IT-managed updates on `enterprise-mdm`.
+- One React tree (`packages/chat-surface`) for chat, layout, destinations, and per-SaaS renderers — byte-identical between `apps/frontend` (web) and `apps/desktop` (renderer).
+- Production-grade OIDC + OS keychain from day one (no dev-IdP code in shipped binaries).
+- Renderer architecture that **scales to 100+ SaaS** without 100+ hand-built renderers — see §4 (three-tier adapter strategy).
+- Inline diff approval that matches the Atlas design's PENDING-block UX, regardless of which renderer tier resolved.
+- Swimlane timeline scrubbing of agent-applied changes per surface (Time Machine; see §5.5).
+- Single source of truth for: routing, keybindings, URI scheme parsing, Transport contract.
 
-### Non-goals (explicit)
+### Non-goals
 
-- No marketplace VS Code extension form factor in this phase; workbench customization is too heavy to share with a vanilla VS Code host. Re-evaluate post-MVP.
-- No new backend services. `backend-facade:8200` remains the only contract surface.
-- No local file editing as a product feature in phase 1. The editor area is reserved for agent artifacts.
-- No Linux desktop in the release matrix (CI builds it for verification only).
-- No multi-window product workflows in phase 1. One window per user session.
-- No mobile/web parity expansion. The web app stays as-is and inherits the new transport abstraction as a side effect.
+- No fork of VS Code / Code – OSS / Monaco (substrate decision; see §3).
+- No iframe of SaaS web apps as the primary surface model. A `<webview>` escape hatch is permitted per renderer for long-tail edge cases (D23 in PRD).
+- No filesystem-editing surface in the renderer (the renderer area is for agent artifacts).
+- No Linux release. Linux is CI verification only.
+- No multi-window per user session; no multi-account per session.
+- No desktop-side LLM provider keys. Provider calls remain server-side via `services/ai-backend`.
+- No third-party developer extension marketplace. Tier-2 adapters are agent-generated and quality-gated server-side, not authored by humans outside the org.
 
-## 2. Principles (and the decisions they justify)
+## 2. Principles → decisions
 
-| #   | Principle                                              | Practical implication                                                                                                                                                                                                                                     |
-| --- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | **Single source of truth for UI**                      | One React tree for chat, message rendering, and artifact viewers. Lives in `packages/chat-surface`. Both web and desktop mount it. If the same visual exists in two places, one of them is wrong.                                                         |
-| P2  | **Substrate-agnostic surface**                         | The React UI never knows whether it's in a browser tab or a webview. All HTTP/SSE/auth/native-bridge concerns go through a `Transport` port. Any direct `fetch` or `window.*` reference in `chat-surface` is a code smell.                                |
-| P3  | **Webview is untrusted**                               | The bearer token never leaves the extension main process. RPC validated against Zod schemas at the boundary. Webview-originated requests get the same scrutiny as a public web request.                                                                   |
-| P4  | **Patches are debt**                                   | Every patched line of `code-oss/` core is a merge conflict at every rebase. If a feature can be a built-in extension contribution, it must be. A patch is acceptable only when no extension API can deliver the affordance _and_ the patch is ≤ 30 lines. |
-| P5  | **Idempotent build, reproducible release**             | Same git SHA + same toolchain versions → byte-identical installer (modulo signing). Any nondeterminism (timestamps, randomized embedded URLs) gets pinned.                                                                                                |
-| P6  | **No leaky abstractions across deployable boundaries** | The desktop app is a client of `backend-facade`. It never imports `services/*/src` or another deployable's internals. Cross-component sharing is `packages/*` only.                                                                                       |
-| P7  | **Defaults over configuration**                        | The app opens to a working chat. No first-run wizard. Configurable knobs require an obvious good default; if I can't pick one, the knob shouldn't exist yet.                                                                                              |
+| Principle                  | What it forces                                                                                                                                                                                                                                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **DRY**                    | One React tree across web + desktop. One Transport contract. One URI scheme module. One keybinding registry. One adapter contract serving tier-1, tier-2, and tier-3.                                                                                                                                                |
+| **Substitution**           | `Transport`, `SurfaceHost`, `Router`, `KeyValueStore`, `PresenceSignal`, `SaaSRendererAdapter` are ports. Web and desktop swap implementations; surface code never branches on substrate. Adapters swap behind `SurfaceRegistry.resolveAdapter`.                                                                     |
+| **Simple & elegant**       | Thin Electron shell (main + preload + renderer). No fork, no patches, no rebase pipeline, no webview-RPC protocol version. Each port has the smallest API.                                                                                                                                                           |
+| **Single source of truth** | Routing lives in `chat-surface` only. Keybindings in one registry. The artifact URI scheme is parsed in one module imported by both ends. The Transport contract is the only way the renderer talks to the backend. The adapter contract is the only way the host talks to any renderer (tier-1, tier-2, or tier-3). |
 
-## 3. Decisions
+## 3. Substrate decision (pending Phase S)
 
-| #   | Decision point           | Choice                                                                                           | Rationale                                                                                                                             | Rejected alternatives                                                                                                                                          |
-| --- | ------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | Distribution form        | Forked Code – OSS standalone app                                                                 | Workbench customization (custom URI schemes, default editor replacement, sidebar takeover) is hostile to vanilla VS Code coexistence. | Marketplace extension only (insufficient control); both forms simultaneously (constrains the fork by the extension's coexistence rules). Reconsider after MVP. |
-| D2  | Cross-platform structure | Single `apps/desktop`                                                                            | Code – OSS is already cross-platform; OS differences live in `build/` configs.                                                        | Separate `apps/mac` + `apps/windows` (doubles maintenance for no benefit).                                                                                     |
-| D3  | React UI sharing         | New `packages/chat-surface`                                                                      | DRY. Single component tree consumed by web and desktop.                                                                               | Duplicate the chat shell into the extension (parallel implementation, drift inevitable).                                                                       |
-| D4  | Transport coupling       | `Transport` port + two impls (web `fetch`/`EventSource`, desktop postMessage RPC)                | Substitution principle. Enables future native transports without UI changes.                                                          | Direct `fetch` everywhere with conditional desktop overrides (leaky, untestable).                                                                              |
-| D5  | Token storage            | OS keychain via VS Code `SecretStorage`                                                          | Webviews must not hold raw tokens; keychain is the production-grade store.                                                            | localStorage (insufficient; cleartext on disk).                                                                                                                |
-| D6  | Auth flow (desktop)      | OIDC authorization-code flow via system browser → loopback callback                              | Production-grade from day one.                                                                                                        | Dev-IdP bearer minting (development-only flow; baking it into a signed binary is a security smell).                                                            |
-| D7  | Patches vs extensions    | Extension-first; patches ≤ 30 lines and audited                                                  | Rebase tax.                                                                                                                           | Liberal patches (compounds at every upstream merge).                                                                                                           |
-| D8  | Artifact representation  | URI scheme + custom editor + tree provider                                                       | Free reuse of VS Code's tab/split/peek/command-palette/quick-open infrastructure.                                                     | Modal panels or hardcoded sidebar layouts (reinvents primitives VS Code already ships).                                                                        |
-| D9  | Webview density          | One full webview per chat tab; one shared lightweight webview for non-chat viewers               | Chromium per-context cost is real once many artifact tabs are open.                                                                   | Per-tab webview universally (memory bloat); single webview for everything (chat state lost when switching tabs).                                               |
-| D10 | Workspace concept        | Map 1:1 to existing backend workspace                                                            | Avoid introducing a new abstraction.                                                                                                  | Treat "VS Code workspace" as a separate desktop concept (two truths, sync nightmare).                                                                          |
-| D11 | Update mechanism         | Squirrel auto-update on `stable`; disabled on `enterprise-mdm`                                   | Standard VS Code pattern, retargeted to our update server. MDM disables for IT control.                                               | Manual install only (poor UX); third-party updater (more moving parts).                                                                                        |
-| D12 | Code signing             | Apple Developer ID Application + notarization; Windows EV cert on hardware token                 | Unavoidable for production desktop distribution.                                                                                      | Self-signed/unsigned (Gatekeeper/SmartScreen will block); shared software cert (key extraction risk).                                                          |
-| D13 | Upstream rebase cadence  | Pin to a Code – OSS minor tag; weekly rebase to patch tip during active dev, monthly when stable | Drift between rebases is the worst — small frequent rebases beat large rare ones.                                                     | Pin forever (security tax); track upstream tip (constant breakage).                                                                                            |
-| D14 | Telemetry                | Strip Microsoft's; add our own scoped to product events, opt-out at install                      | Customer trust + privacy contract.                                                                                                    | Inherit VS Code's (sends data to Microsoft endpoints; non-starter).                                                                                            |
-| D15 | Crash reporting          | Native crash dumps to our endpoint; renderer JS errors opt-in only                               | Native dumps catch Electron/fork bugs; JS error reporting requires user consent.                                                      | Third-party (Sentry/Bugsnag) — possible later; not in MVP.                                                                                                     |
-| D16 | Multi-account            | Single account per window; multi-window allowed in phase 5+                                      | Keep MVP simple; matches the existing web app surface.                                                                                | Multi-account-in-one-window (UX complexity not yet warranted).                                                                                                 |
+The substrate options were custom Electron, VS Code marketplace extension, and Code – OSS fork. After iterating on the design and applying the four principles to its actual primitives (not by analogy to Cursor / Claude Code), the working recommendation is **custom Electron + `packages/chat-surface` mounted in a single `BrowserWindow`**.
 
-## 4. The artifact model
+The decision is **empirically validated by Phase S** of the PRD before anything else builds. Both Electron and a VS Code extension variant are built around the same shared renderer code (`packages/surface-renderers/email`) and the substrate cost is measured (LOC, build complexity, dev experience, visual fidelity, security boundary). Whichever wins commits the spec.
 
-The load-bearing idea: every product object is a URI with a content provider, custom editor, tree provider, and command set. This makes the editor area an _artifact viewer_ and gives us VS Code's tabs, splits, peek, quick-open, and command palette for free.
+Reasoning summary (full chain in [project-desktop-substrate-direction](../../.claude/projects/-Users-parthpahwa-Documents-work-enterprise-search/memory/project_desktop_substrate_direction.md)):
 
-| URI scheme    | Example                              | Editor                                        | Tree home             | Editable              |
-| ------------- | ------------------------------------ | --------------------------------------------- | --------------------- | --------------------- |
-| `chat`        | `chat://{conversation_id}`           | Full webview → `chat-surface` `ChatShell`     | Chats sidebar         | N/A (live surface)    |
-| `convo`       | `convo://{conversation_id}`          | Lightweight webview → `TranscriptView`        | Chats sidebar         | No                    |
-| `run`         | `run://{run_id}`                     | Lightweight webview → `RunView`               | Runs sidebar          | No                    |
-| `subagent`    | `subagent://{run_id}/{subagent_id}`  | Lightweight webview → `SubagentView`          | Run inspector (right) | No                    |
-| `tool-result` | `tool-result://{run_id}/{step_id}`   | Lightweight webview → `ToolResultView`        | Run inspector (right) | No                    |
-| `mcp`         | `mcp://{server_id}`                  | Lightweight webview → `McpCardView`           | MCPs sidebar          | Limited (auth, scope) |
-| `mcp-tool`    | `mcp-tool://{server_id}/{tool_name}` | Lightweight webview → `McpToolView`           | MCPs sidebar (child)  | No                    |
-| `skill`       | `skill://{skill_id}`                 | Lightweight webview → `SkillBundleView`       | Skills sidebar        | Phase 5               |
-| `workspace`   | `workspace://{workspace_id}`         | Lightweight webview → `WorkspaceSettingsView` | Workspaces sidebar    | Yes                   |
+- **DRY** is a wash — VS Code's claimed reuse (diff editor, tabs, tree, command palette) doesn't apply: our diffs are inline annotations on structured forms (not text-line diffs), tab strips are segment controls (not editor groups), only Chats has a tree, command palette is ~150 LOC.
+- **Substitution** favors Electron — fewer mount layers, no webview-RPC contract to version.
+- **Single source of truth** favors Electron decisively — fork splits routing/keybindings/lifecycle into VS Code's authority + ours.
+- **Simple & elegant** favors Electron decisively — order-of-magnitude less surface area (no code-oss subtree, no patches, no rebase pipeline, no webview-RPC, no Squirrel).
+- The Cursor / Claude Code precedent doesn't transplant — their primary artifact is source code (Monaco diff is the right tool); ours is structured business data (inline annotation on rendered forms is the right tool). Surface resemblance, not architectural fit.
 
-Each scheme is registered by `enterprise-chat-core` (content provider + tree data provider) and `enterprise-chat-ui` (custom editor provider) at activation.
+What would flip back to fork:
 
-```ts
-// packages/chat-surface/src/uri/schemes.ts
-export const ARTIFACT_SCHEMES = {
-  chat: "chat",
-  conversation: "convo",
-  run: "run",
-  subagent: "subagent",
-  toolResult: "tool-result",
-  mcp: "mcp",
-  mcpTool: "mcp-tool",
-  skill: "skill",
-  workspace: "workspace",
-} as const;
+1. A real plan to ship a third-party developer extension marketplace (extension model becomes product value). Not in the Atlas design.
+2. Source-code editing becomes a primary artifact (Monaco diff + code intelligence become load-bearing). Not in the Atlas design.
 
-export type ArtifactScheme =
-  (typeof ARTIFACT_SCHEMES)[keyof typeof ARTIFACT_SCHEMES];
+## 4. Renderer strategy — three tiers
 
-export function parseArtifactUri(raw: string): ArtifactRef {
-  /* … */
-}
-export function buildArtifactUri(ref: ArtifactRef): string {
-  /* … */
-}
+The renderer architecture answers "how do we cover 100+ SaaS without building 100+ renderers?" by tiering. All three tiers implement the same `SaaSRendererAdapter` contract (§7); the host doesn't know or care which tier resolved.
+
+```
+                        host (TcSurfaceMount)
+                        │
+                        │ resolveAdapter('email://draft-7')
+                        ▼
+       ┌────────────────────────────────────────────┐
+       │ Tier 1 — hand-built first-party adapters   │
+       │ packages/surface-renderers/{email,sf,…}    │
+       │ Pixel-perfect, design-system aligned.      │
+       └──────────────────┬─────────────────────────┘
+                          │ no match
+                          ▼
+       ┌────────────────────────────────────────────┐
+       │ Tier 2 — agent-generated adapters          │
+       │ {userData}/adapters/{scheme}-v{n}.js       │
+       │ Code-genned from constrained layout        │
+       │ templates (form / table / kanban /         │
+       │ definition-list). Sandboxed render-only.   │
+       └──────────────────┬─────────────────────────┘
+                          │ no match, or render error
+                          ▼
+       ┌────────────────────────────────────────────┐
+       │ Tier 3 — GenericStructuredDiff             │
+       │ Always works. Renders the MCP tool-call    │
+       │ payload as resource id + field diff +      │
+       │ "Open in {SaaS}" link.                     │
+       └────────────────────────────────────────────┘
 ```
 
-URI parsing and formatting live in `chat-surface` so the web app and desktop produce identical references (e.g. deep links pasted from one surface open correctly in the other).
+### 4.1 Tier 1 — hand-built first-party adapters
+
+For the named SaaS in the design: Email, Salesforce (Opportunity), Sheets, Slides. Each is a React component module in `packages/surface-renderers/{scheme}/` that exports a `SaaSRendererAdapter` implementation. Pixel-perfect; tightly aligned with the design system.
+
+Lives in: `packages/surface-renderers/src/{scheme}/`.
+
+### 4.2 Tier 2 — agent-generated adapters
+
+For the long tail (HubSpot, Linear, Monday, Notion, Zendesk, Intercom, Asana, Pipedrive, …). When the user opens an artifact whose scheme has no tier-1 adapter and no working tier-2 adapter on disk, the host:
+
+1. Renders tier-3 immediately (no waiting).
+2. Emits `adapter.generation.requested(scheme, sample_state)` to backend.
+3. Backend agent picks a layout template (form / table / kanban / definition-list) and generates an adapter source string per §7.
+4. Quality gate (§9 in PRD; six checks Q1–Q6) validates the source.
+5. Adapter persisted to `{userData}/adapters/{scheme}-v{n}.js`.
+6. Host hot-swaps into `SurfaceRegistry`. Next render uses tier-2.
+
+Lives in: persisted to `{app.getPath('userData')}/adapters/`, loaded dynamically. Source-of-truth for the catalog is the local audit log + Phase 7's server-side shared registry.
+
+Sharing across tenants is Phase 7: a successful adapter (zero render errors over N=10 sessions + zero user-reported issues) enters a server-side review queue; on human approval, it propagates to other tenants who haven't opted out.
+
+### 4.3 Tier 3 — `GenericStructuredDiff`
+
+The safety net. A React component in `packages/chat-surface/src/surfaces/GenericStructuredDiff.tsx` that renders any MCP tool-call payload as a structured diff card — resource id, field changes (old → new), reasoning text, "Open in {SaaS}" deep link. The right-rail PENDING DIFF card from the design.
+
+Implements `SaaSRendererAdapter` with `scheme: '*'`; resolved last in `SurfaceRegistry.resolveAdapter`. Always available; covers any SaaS the agent has an MCP tool for.
+
+### 4.4 Why this tiered model
+
+- **Coverage from day one.** Tier-3 handles every SaaS the agent has an MCP tool for. The user never hits "we don't support this".
+- **Quality where it matters.** Tier-1 reserved for high-value workflows where the visual treatment is worth the engineering investment.
+- **Long-tail amortized.** Tier-2 lets us cover SaaS we don't ship a renderer for without dedicated engineering time per SaaS.
+- **One contract, three implementations.** The host code is the same regardless of which tier wins. DRY at the contract level.
+- **Provenance auditable.** `metadata.origin ∈ { first-party, agent-generated, community }` is on every adapter; visible in audit logs.
 
 ## 5. Component architecture
 
 Three logical layers, top to bottom:
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Shell — apps/desktop/code-oss (forked Code – OSS)                       │
-│  • product.json branding + update URL + default open editor              │
-│  • patches/  (audited, ≤ 30 lines each, listed in patches/series)        │
-└─────────────────────────────┬────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ apps/desktop (Electron)                                             │
+│  main (Node)                                                        │
+│   - window lifecycle, native menus, deep-link handler               │
+│   - OIDC authorization-code + PKCE (loopback callback)              │
+│   - safeStorage adapter (per-(workspace_id, server) ciphertext)     │
+│   - HTTP + SSE pump (bearer attached here, never in renderer)       │
+│   - IPC handlers (Zod-validated)                                    │
+│   - tier-2 adapter loader (vm module + AST allowlist + sandbox)     │
+│   - electron-updater                                                │
+│   - crashReporter                                                   │
+│  preload                                                            │
+│   - contextBridge exposing typed window.bridge channel (no token)   │
+│  renderer (Chromium)                                                │
+│   - mounts <ChatShell transport={IpcTransport} ... />               │
+└─────────────────────────────┬───────────────────────────────────────┘
+                              │ chat-surface bundle (same bytes as web)
                               │
-┌─────────────────────────────┴────────────────────────────────────────────┐
-│  Bundled extensions — apps/desktop/extensions/                           │
-│                                                                          │
-│  enterprise-chat-core      enterprise-chat-ui                            │
-│  • OIDC client             • Custom editors (chat://, run://, …)         │
-│  • SecretStorage           • Activity bar / sidebar trees                │
-│  • Transport RPC bridge    • Auxiliary bar Run Inspector view            │
-│  • SSE pump                • Status bar items                            │
-│  • URI content providers   • Command palette commands                    │
-│  • Workspace state sync    • Webview entrypoint that mounts chat-surface │
-│                                                                          │
-│  (no UI)                   (mounts webviews; calls into core via RPC)    │
-└─────────────────────────────┬────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────┴────────────────────────────────────────────┐
-│  Shared packages — packages/                                             │
-│  • chat-surface (NEW)      React components (chat, viewers, inspector)  │
-│  • chat-transport (NEW)    Transport interface + WebTransport +          │
-│                            WebviewTransport + RPC protocol               │
-│  • api-types (existing)    TS contracts to backend-facade                │
-│  • design-system (exist.)  Primitives + tokens                           │
-└─────────────────────────────┬────────────────────────────────────────────┘
+┌─────────────────────────────┴───────────────────────────────────────┐
+│ packages/                                                           │
+│  chat-surface           shell + destinations + ThreadCanvas +       │
+│                         composer + palette + ports +                │
+│                         SurfaceRegistry + tier-3 GenericStructured  │
+│                         Diff + host TcSurfaceMount                  │
+│  chat-transport         Transport + WebTransport + IpcTransport     │
+│                         + MockTransport (for spike + tests)         │
+│  surface-renderers      Tier-1 hand-built: email / salesforce /     │
+│                         sheets / slides. Each implements            │
+│                         SaaSRendererAdapter.                        │
+│  api-types              existing                                    │
+│  design-system          existing                                    │
+└─────────────────────────────┬───────────────────────────────────────┘
                               │ HTTPS / SSE
                               ▼
                   backend-facade:8200 (unchanged)
+                              │
+                  backend, ai-backend (unchanged except for
+                  Phase 6 generateRenderAdapter capability and
+                  Phase 7 adapter-registry module)
 ```
 
-**Why two extensions and not one?** The boundary between long-lived security-sensitive code (auth, transport, secret storage) and frequently-changing UI contributions matters. `enterprise-chat-core` gets stricter review and slower release; `enterprise-chat-ui` can iterate fast. They communicate via typed in-process APIs, not via RPC.
+### 5.1 Why no separate "extensions"
 
-## 6. Transport contract
+Earlier drafts split the chat into `enterprise-chat-core` (auth + transport) and `enterprise-chat-ui` (custom editors + trees) as bundled VS Code extensions. With the Electron substrate, that split is replaced by main-process modules (`main/auth/`, `main/transport-bridge/`, `main/adapters/`) and renderer-side packages (`chat-surface`, `surface-renderers`). One less indirection layer, one less IPC contract to version, single source of truth for routing.
 
-The chat surface speaks to a single port:
+### 5.2 Per-SaaS renderers as packages, not extensions
+
+`packages/surface-renderers/` is one npm workspace, not N extensions. Each scheme is a folder; each exports a `SaaSRendererAdapter`. They register into `SurfaceRegistry` via a single `registerAll()` call at bootstrap. Build-time tree-shaking handles dead-code elimination.
+
+This is _not_ a public extension API. Third parties don't write tier-1 adapters. The closest analog is the agent code-gen pipeline (tier-2) — that's the supported path for adding SaaS the org hasn't shipped tier-1 for.
+
+### 5.3 Window model
+
+Single `BrowserWindow`. Decision D9 in PRD. Match the Atlas design (one workspace, one window). Multi-window deferred indefinitely.
+
+### 5.4 Surface model
+
+The `ThreadCanvas` component owns a CSS grid:
+
+```
+┌──────────────────────────────┬──────────────┐
+│ TcTabs  |  TcSurfaceMount    │   TcChat     │
+├──────────────────────────────┴──────────────┤
+│ TcSwimlanes  (per-surface bead timeline)    │
+└─────────────────────────────────────────────┘
+```
+
+`TcSurfaceMount` is the host. It:
+
+1. Reads the active artifact URI from the route.
+2. Calls `SurfaceRegistry.resolveAdapter(uri)` — returns a tier-1, tier-2, or tier-3 adapter.
+3. Calls `transport.request` to fetch current state (MCP or backend API).
+4. Calls `transport.subscribeServerSentEvents` to listen for agent proposed diffs.
+5. Calls `adapter.renderCurrent(state)` and `adapter.renderDiff(diff)` — wrapped in error boundary + 100 ms timeout.
+6. Renders Approve / Reject / Suggest-changes buttons around the adapter output.
+7. On approve, calls MCP via transport.
+8. On render error, marks the adapter version broken (if tier-2) and falls back to tier-3.
+
+The adapter never knows about transport, MCP, approve, or reject. **Pure render of state to JSX. D28 in PRD.**
+
+### 5.5 Time Machine
+
+The swimlane (`TcSwimlanes`, bottom of `ThreadCanvas`) is the Time Machine surface. Per-surface bead timeline (one lane per active SaaS), playhead, transport controls, keyboard nav, "Snap to now", pinned beads, "Branch from here" and "Restore this state" actions when scrubbed off-now. `TcChat` shows ghost-message previews when the swimlane is scrubbed off-now (subscribes via context).
+
+There is no separate `time-machine://` URI scheme and no separate destination. Decision D25 in PRD.
+
+## 6. Streaming & data flow
+
+Renderer ↔ main IPC carries every privileged operation. Bearer tokens never enter the renderer.
+
+```
+renderer (chat-surface)            main process              backend-facade
+─────────────────────────          ────────────              ──────────────
+transport.request(req)
+  → IPC 'transport.request'
+                                  attaches bearer from
+                                  active workspace's secret
+                                  storage; verifies workspace
+                                  gate matches session JWT
+                                                          ─→ HTTP request
+                                                          ←─ response
+  ← IPC response
+
+transport.subscribeServerSentEvents
+  → IPC 'transport.subscribe...'
+                                  opens fetch stream with
+                                  bearer; parses SSE frames
+                                                          ─→ GET /v1/...
+                                                          ←─ text/event-stream
+                                  ← IPC 'stream-event' (per event)
+handler(event)                    tracks highest sequence_no
+                                  on reconnect: resume from
+                                  highest sequence_no
+                                  → IPC 'stream-event' (cont'd)
+```
+
+Reconnect logic lives in main. The renderer assumes the stream is reliable. The `RuntimeEventEnvelope` shape that `runtime_api` emits is what the renderer's handler receives — no schema translation.
+
+## 7. Frozen contracts (subset)
+
+Full signatures in the PRD §3.3. The load-bearing ones:
 
 ```ts
-// packages/chat-transport/src/transport.ts
+// SaaSRendererAdapter — pure render only. No transport, no MCP, no fetch.
+export interface SaaSRendererAdapter<TResource = unknown, TDiff = unknown> {
+  readonly scheme: string;
+  readonly matches: (uri: string) => boolean;
+  readonly renderCurrent: (state: TResource) => React.ReactElement;
+  readonly renderDiff: (diff: TDiff) => React.ReactElement;
+  readonly metadata: {
+    readonly origin: "first-party" | "agent-generated" | "community";
+    readonly generatedAt?: string;
+    readonly generatorModel?: string;
+    readonly schemaVersion: number;
+  };
+}
+
+// SurfaceRegistry — resolves URI → adapter. Tier-3 has scheme='*' (matched last).
+export function registerAdapter(adapter: SaaSRendererAdapter): void;
+export function resolveAdapter(uri: string): SaaSRendererAdapter | null;
+export function unregisterAdapter(scheme: string, version?: number): void;
+export function markBroken(
+  scheme: string,
+  version: number,
+  reason: string,
+): void;
+
+// Transport (existing, on-disk; used unchanged by IpcTransport).
 export interface Transport {
-  /** RPC-style request over HTTPS. */
   request<TRes>(req: TypedRequest): Promise<TRes>;
-
-  /** Resumable server-sent stream subscription. */
-  subscribeRunStream(
-    runId: string,
-    afterSequence: number | undefined,
-    handler: (event: RuntimeEventEnvelope) => void,
-    signal: AbortSignal,
-  ): Promise<void>;
-
-  getSession(): Promise<Session | null>;
-  reauthenticate(): Promise<Session>;
+  subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription;
+  getSession(): Session;
   capabilities(): TransportCapabilities;
 }
-
-export interface TransportCapabilities {
-  readonly substrate: "web" | "desktop-webview";
-  readonly nativeSecretStorage: boolean;
-  readonly fileSystemAccess: boolean; // false in phase 1
-  readonly clipboardWrite: boolean;
-  readonly openExternal: boolean;
-}
 ```
-
-Two implementations:
-
-- **`WebTransport`** (`packages/chat-transport/src/web/`) — `fetch` + cookie-based session + SSE via `fetch` stream reader (avoids `EventSource`'s header limitation). Used by `apps/frontend`.
-- **`WebviewTransport`** (`packages/chat-transport/src/webview/`) — `postMessage` RPC. Used inside desktop webviews. The matching `ExtensionTransportBridge` lives in `enterprise-chat-core` and translates RPCs into real HTTPS/SSE calls with the bearer attached from `SecretStorage`.
-
-RPC protocol (schema-validated both directions):
-
-```ts
-// packages/chat-transport/src/webview/rpc-protocol.ts
-export const RpcRequest = z.discriminatedUnion("method", [
-  z.object({
-    id: z.string(),
-    method: z.literal("transport.request"),
-    params: TypedRequestSchema,
-  }),
-  z.object({
-    id: z.string(),
-    method: z.literal("transport.subscribeRunStream"),
-    params: z.object({
-      runId: z.string(),
-      afterSequence: z.number().optional(),
-    }),
-  }),
-  z.object({
-    id: z.string(),
-    method: z.literal("transport.cancelSubscription"),
-    params: z.object({ subscriptionId: z.string() }),
-  }),
-  z.object({
-    id: z.string(),
-    method: z.literal("transport.getSession"),
-    params: z.object({}),
-  }),
-  z.object({
-    id: z.string(),
-    method: z.literal("transport.reauthenticate"),
-    params: z.object({}),
-  }),
-]);
-
-export const RpcResponse = z.union([
-  z.object({ id: z.string(), ok: z.literal(true), result: z.unknown() }),
-  z.object({ id: z.string(), ok: z.literal(false), error: RpcErrorSchema }),
-]);
-
-export const RpcEvent = z.object({
-  type: z.literal("stream-event"),
-  subscriptionId: z.string(),
-  event: RuntimeEventEnvelopeSchema,
-});
-
-export const PROTOCOL_VERSION = 1;
-```
-
-Every RPC carries an `id`; the extension rejects unknown methods or schema failures with a typed error. SSE events flow as `RpcEvent` messages on the same channel. Protocol mismatches are loud, not silent.
-
-## 7. Workbench customization plan
-
-**Allowed via `product.json`:**
-
-- App name, icon, bundle ID, URL handlers
-- Update server URL and channel name
-- Default open editor (point at `chat://welcome`)
-- Telemetry endpoint (none initially — we don't ship MS telemetry)
-- Disabled features list (e.g. interactive playground, walkthroughs)
-
-**Allowed via bundled extensions:**
-
-- Custom URI providers + custom editors (see §4)
-- Tree views in activity bar + sidebar
-- Auxiliary bar view (Run Inspector)
-- Status bar items
-- Commands + keybindings
-- Welcome content for empty states
-- Quick-open contributions (e.g. "Go to chat…", "Go to run…")
-
-**Patches (audited, listed in `apps/desktop/patches/series`):**
-
-- Rebrand any "Visual Studio Code" strings not covered by `product.json`
-- Hide File menu items that don't apply (`Open Folder`, `Open Workspace from File`, `New Window from Profile`, …)
-- Change default activity bar order to put Chats first
-- Remove the upstream "Get Started" walkthrough page
-- Override the default welcome editor to `chat://welcome`
-
-**Forbidden patches:**
-
-- Patches to the editor engine (Monaco)
-- Patches that change extension API surface area
-- Patches that diverge from upstream architecture in any way that makes upstream merges harder
-
-Each patch carries a `# Why:` header explaining the reason; `apps/desktop/patches/README.md` is the index.
 
 ## 8. Auth & secret handling
 
-**Desktop OIDC flow:**
+Decision D24 in PRD; reasoning in PRD §6.7.
 
-1. Extension activates; checks `SecretStorage` for `access_token` + `refresh_token`
-2. If access token absent or expired beyond refresh window:
-   1. Spin up a single-use loopback HTTP server bound to `127.0.0.1:{ephemeral_port}`
-   2. Open system browser to `https://app.acme.com/auth/desktop?client_id=…&redirect_uri=http://127.0.0.1:{port}/cb&code_challenge=…&state=…`
-   3. Browser auth completes; redirects back to loopback with `?code=…&state=…`
-   4. Extension verifies `state`, exchanges `code` + PKCE verifier for tokens at backend's token endpoint
-   5. Tokens stored in `SecretStorage`; loopback server shut down
-3. Access token short-lived (15 min); refresh token rotated on every use
-4. On 401 from `backend-facade`: refresh once; on refresh failure, re-launch flow
+**Per-`(workspace_id, server)` secret storage.** Tokens stored at `{userData}/secrets/{workspace_id}/{server_kind}/{server_id}.bin`, each encrypted with Electron `safeStorage`. Main exposes a scoped API: `getSecret(workspace_id, server_kind, server_id)` / `setSecret(...)` / `deleteSecret(...)` / `deleteWorkspaceSecrets(workspace_id)`. No global accessor; no cross-workspace lookup.
 
-**Logout:** clear `SecretStorage`, close all webviews, return to login view.
+**Active-workspace gate.** Every IPC method that ends in a secret-storage call carries the active `workspace_id` from the renderer; main rejects mismatches against the session JWT's `workspace_id` claim. Prevents a compromised renderer from requesting workspace B's secrets while the session is bound to workspace A.
 
-**Multi-tenant (workspace switch):** the session JWT carries a `workspace_id` claim. Switching workspace calls `POST /v1/me/active-workspace`; backend issues a new session bound to the new workspace. No full re-auth.
+**OIDC.** Authorization code + PKCE via the OS browser → loopback `127.0.0.1:{port}/cb`. Tokens stored per-workspace in `safeStorage`. Access tokens short-lived (15 min); refresh tokens rotated on every use. On 401: refresh once; on refresh failure, re-launch the flow.
 
-**Web app:** keeps its existing session machinery. Dev-IdP minting stays for `apps/frontend` dev; production web uses real OIDC via cookie-based session at the web origin. No auth code is shared between web and desktop — they're substrate-specific by design.
+**`safeStorage` availability.** On Linux without a Secret Service provider (gnome-keyring / kwallet), `safeStorage.isEncryptionAvailable()` returns false and the app refuses to start in production builds. CI / dev fallback uses an unencrypted store with a loud warning banner.
 
-## 9. Streaming & SSE bridging
+## 9. Telemetry, crash, logging
 
-Webviews can't open `EventSource` to arbitrary origins under VS Code's CSP, and `EventSource` can't carry custom headers anyway. The flow:
+- **Telemetry**: custom event pipeline scoped to product events (app launch, chat opened, run started, run completed, adapter lifecycle events). Never includes chat content. Opt-out at install + in Settings. Default depends on channel: `stable` defaults on with first-launch consent dialog; `enterprise-mdm` defaults off and is MDM-controlled.
+- **Crash reporting**: Electron `crashReporter` posts native dumps to our endpoint with minimal context (version, OS, arch). Never includes user content. Renderer JS errors opt-in only.
+- **Logging**: structured logs to platform-standard locations (`~/Library/Logs/Enterprise/<version>/` on macOS, `%APPDATA%\Enterprise\logs\` on Windows). "Reveal Logs" command in the palette. "Send Diagnostics" command bundles logs for support tickets.
+- **Audit log (local SQLite)**: every adapter lifecycle event (install, hot-swap, broken-mark, regen-success, harvest-to-review) — for tier-2 forensics.
 
-```
-webview                       extension (core)              backend-facade
-───────                       ───────────────               ──────────────
-transport.subscribeRunStream
-  → postMessage RPC
-                              ExtensionTransportBridge
-                                opens fetch stream with Bearer
-                                                       ─────→ GET /v1/agent/runs/{id}/stream
-                                                              ?after_sequence=N
-                              parses each SSE event ←─────  (text/event-stream)
-  ←── postMessage 'stream-event'
-handler(event)                 tracks highest sequence_no
-                              on disconnect: reconnect from
-                                highest sequence_no
-                              fans out to multiple webview
-                                subscribers if applicable
-```
+## 10. Distribution
 
-Reconnect logic lives in _one place_ — the extension. The React surface assumes the stream is reliable. The same `RuntimeEventEnvelope` shape that `runtime_api` already emits is what the webview's handler receives; no schema translation.
+- **Build matrix**: macOS x86_64 + arm64 (Universal lipo), Windows x86_64 (Windows arm64 built, not yet shipped), Linux x86_64 (CI verification only).
+- **Signing**: Apple Developer ID Application + notarization (notarytool); Windows EV cert on hardware token. Signing material never on PR/dev runners.
+- **Channels**: `stable` (electron-updater enabled) and `enterprise-mdm` (auto-update disabled via build flag; IT pushes updates via MDM).
+- **Update server (Phase 8)**: stateless, reads manifests from object storage; force-upgrade flag (`minSupportedVersion`); graceful degradation on unreachable.
 
-## 10. Repo layout (proposed deltas)
+## 11. Risks
 
-```
-apps/
-  frontend/                       MODIFIED → uses chat-surface + WebTransport
-  desktop/                        NEW
-    .gitignore
-    package.json
-    README.md
-    code-oss/                     git subtree of microsoft/vscode at pinned tag
-    product/
-      product.json
-      icons/
-      branding/
-    patches/
-      series
-      0001-rebrand-about-dialog.patch
-      0002-hide-file-open-folder.patch
-      ...
-      README.md
-    extensions/
-      enterprise-chat-core/
-        package.json
-        src/
-          extension.ts
-          auth/
-            oidc-client.ts
-            loopback-server.ts
-            secret-storage.ts
-          transport/
-            bridge.ts             webview RPC server
-            sse-pump.ts           SSE → postMessage fanout
-          uri/
-            chat-provider.ts
-            run-provider.ts
-            tool-result-provider.ts
-            mcp-provider.ts
-            skill-provider.ts
-            workspace-provider.ts
-          state/
-            workspace-sync.ts
-        tsconfig.json
-      enterprise-chat-ui/
-        package.json
-        src/
-          extension.ts
-          editors/
-            chat-editor.ts
-            run-editor.ts
-            tool-result-editor.ts
-            mcp-card-editor.ts
-            ...
-          views/
-            chats-tree.ts
-            workspaces-tree.ts
-            mcps-tree.ts
-            skills-tree.ts
-            runs-tree.ts
-            run-inspector.ts      auxiliary bar
-          status-bar/
-            persona-item.ts
-            connectors-item.ts
-            tokens-item.ts
-          commands/
-            new-chat.ts
-            switch-workspace.ts
-            ...
-          webview/
-            entrypoint.html       loads chat-surface bundle
-            preload.ts
-        media/                    built chat-surface bundle copied here
-        tsconfig.json
-    build/
-      mac/
-        entitlements.plist
-        Info.plist.template
-        notarize.ts
-      windows/
-        wix.xml                   MSI definition
-        sign.ps1
-      linux/                      CI verification only
-      update-server/
-        channel.json.template
-    scripts/
-      rebase-upstream.sh
-      build.sh
-      package.ts
-      sign.ts
-      release.ts
+- **R1** Tier-1 coverage of SaaS long-tail fields (custom SF objects, conditional Sheets formulas). Mitigation: tier-2 + tier-3 are the safety nets; `<webview>` escape hatch for genuine outliers.
+- **R2** Tier-2 generated UI security surface (dynamic code loading). Mitigation: AST allowlist, sandbox with no privileged objects (D29), render-with-timeout + error boundary, tier-3 fallback. Adapter purity (D28) is the most important — adapters have nothing privileged to call. Phase 6 includes a focused security review before merge.
+- **R3** Tier-2 community-shared adapters trust model (Phase 7). Mitigation: server-side review pipeline; tenant-level opt-out; AST allowlist enforced on download; `metadata.origin === 'community'` visible in audit logs.
+- **R4** OIDC provider identity (first-party vs vendor). Resolve before Phase 5.
+- **R5** `safeStorage` on Linux requires a Secret Service provider. App refuses to run if absent; confirm acceptable for Linux dev/CI.
+- **R6** Update server hosting. Phase 8 assumes object-store-backed; confirm ownership.
 
-packages/
-  chat-surface/                   NEW
-    package.json
-    src/
-      index.ts
-      shell/
-        ChatShell.tsx
-        ChatLayout.tsx
-      messages/
-        MessageList.tsx
-        MessageRenderer.tsx
-      composer/
-        Composer.tsx
-      artifacts/
-        TranscriptView.tsx
-        RunView.tsx
-        SubagentView.tsx
-        ToolResultView.tsx
-        McpCardView.tsx
-        McpToolView.tsx
-        SkillBundleView.tsx
-        WorkspaceSettingsView.tsx
-      inspector/
-        RunInspector.tsx
-        ToolCallList.tsx
-        SubagentList.tsx
-        CitationsList.tsx
-        ApprovalsQueue.tsx
-      uri/
-        schemes.ts
-        parsers.ts
-      providers/
-        TransportProvider.tsx
-        SessionProvider.tsx
-    tsconfig.json
-    vite.config.ts                builds an embeddable bundle
+## 12. Glossary
 
-  chat-transport/                 NEW
-    package.json
-    src/
-      transport.ts                interface
-      types.ts                    TypedRequest, Session, RuntimeEventEnvelope
-      web/
-        WebTransport.ts
-        sse.ts                    fetch-based SSE reader
-      webview/
-        WebviewTransport.ts       client (in webview)
-        rpc-protocol.ts           Zod schemas shared with extension
-        ExtensionTransportBridge.ts   server (in extension)
-    tsconfig.json
-```
-
-The planned but unimplemented `apps/mac` and `apps/windows` directories are dropped from the plan. Cross-platform differences live in `apps/desktop/build/{mac,windows}/`.
-
-## 11. Build, signing, distribution
-
-**Build matrix:**
-
-- macOS x86_64
-- macOS arm64
-- macOS Universal (lipo from the two above) ← shipped artifact
-- Windows x86_64 ← shipped artifact
-- Windows arm64 (built, not yet shipped)
-- Linux x86_64 (CI verification only)
-
-**Signing:**
-
-- macOS: Developer ID Application certificate; notarization via `xcrun notarytool`; Hardened Runtime enabled; entitlements minimal (V8 JIT, library validation; no allow-unsigned)
-- Windows: EV code-signing cert on a hardware token, attached to a dedicated release runner; Authenticode timestamp from a known TSA
-
-CI: every PR builds Linux + unsigned Mac/Windows binaries. Releases run on isolated runners with signing material; signing material never reaches PR/dev runners.
-
-**Two channels per OS:**
-
-- `stable` — direct download; Squirrel auto-update enabled
-- `enterprise-mdm` — same source, `product.json` flips `enableAutoUpdate: false`; IT pushes updates via Jamf/Intune
-
-**Distribution endpoints (target shape):**
-
-```
-https://desktop.acme.com/download/{channel}/{os}/{arch}/latest   → 302 to versioned URL
-https://desktop.acme.com/update/{channel}/{os}/{arch}/manifest.json  → Squirrel manifest
-https://desktop.acme.com/releases/{channel}/{version}/notes.md
-```
-
-**Update server design:**
-
-- Stateless; reads manifests from object storage (S3/GCS); no database
-- Release pipeline writes manifests as the last step of a successful sign+notarize
-- Force-upgrade flag (`minSupportedVersion`) — clients below the minimum see a blocking dialog until they update; used for security releases
-- Graceful degradation: update endpoint unreachable does not block app launch
-
-## 12. Rebase strategy
-
-- Pin to a Code – OSS minor tag at start (selected at phase 1 kickoff; likely the most recent LTS-equivalent minor)
-- Track upstream via `git subtree` pull into `apps/desktop/code-oss/`
-- Patches applied via quilt-style script during build, ordered by `apps/desktop/patches/series`
-- Weekly during active dev: pull upstream tip of pinned minor → reapply patches → smoke test → fix any breakage → commit
-- Monthly during stable: consider minor-version bump → larger rebase → broader smoke test
-- A patch that breaks two rebases in a row gets rewritten as an extension contribution or accepted as ongoing cost with an explicit owner
-
-A CI gate fails the build if `apps/desktop/patches/` exceeds an agreed line count or patch count without an accompanying CHANGELOG entry.
-
-## 13. Telemetry, crash, logging
-
-**Telemetry:**
-
-- Strip Microsoft telemetry endpoints entirely (patched out in build script — listed in `patches/`)
-- Custom event pipeline scoped to product events: app launch, chat opened, run started, run completed, errors with stack but never with chat content
-- Opt-out at install time and via Settings; default depends on channel (`stable` defaults on with consent dialog at first launch; `enterprise-mdm` defaults off and is MDM-controlled)
-
-**Crash reporting:**
-
-- Electron crash reporter posts native dumps to our crash endpoint with minimal context (app version, OS version, CPU arch); never includes user content
-- Renderer JS errors captured only with explicit consent
-
-**Logging:**
-
-- Structured logs to platform-standard locations: `~/Library/Logs/Enterprise/<version>/` on macOS, `%APPDATA%\Enterprise\logs\` on Windows
-- "Reveal Logs" command in command palette
-- No automatic log shipping; a "Send Diagnostics" command bundles logs into a zip the user can attach to support tickets
-
-## 14. Phased delivery
-
-Each phase has explicit exit criteria. No phase rolls forward without sign-off.
-
-### Phase 0 — Refactor for substitution (web app unchanged from user's perspective)
-
-- Create `packages/chat-transport` with `Transport` interface and `WebTransport` impl
-- Create `packages/chat-surface`; migrate chat shell + message rendering + composer + existing right-panel inspector from `apps/frontend`
-- `apps/frontend` consumes both packages; all `fetch`/SSE calls routed through `WebTransport`
-- Update `docs/architecture/service-boundaries.md` to record the new shared packages
-- **Exit criteria:** web app passes existing tests + manual smoke; `apps/frontend/src/` has zero direct API calls outside the transport; bundle size deltas reviewed
-
-### Phase 1 — Desktop shell
-
-- Vendor Code – OSS into `apps/desktop/code-oss/` via git subtree at pinned tag
-- Add `apps/desktop/product/` branding + icons + `product.json`
-- Add minimal patch series (rebrand, hide File menu items, set default editor)
-- Build pipelines for Mac (universal) and Windows (MSI) — signing wired but not yet executed in CI; unsigned binaries for dev
-- App launches with branding, shows blank workbench, opens placeholder welcome editor
-- **Exit criteria:** Mac + Windows installers download, install, launch, show branded empty workbench; CI builds reproducibly
-
-### Phase 2 — Bundled chat MVP
-
-- `enterprise-chat-core`: OIDC client + loopback server + SecretStorage; transport RPC bridge; `chat://` URI provider
-- `enterprise-chat-ui`: custom editor for `chat://`, Chats tree view in left sidebar, persona status bar item
-- Webview entrypoint loads built `chat-surface` bundle and mounts `ChatShell` with `WebviewTransport`
-- End-to-end: launch → log in (system browser OIDC) → see chats → open chat → send → stream response
-- Right sidebar is a stub view; status bar shows persona only
-- **Exit criteria:** smoke test passes on Mac + Windows; tokens stored in OS keychain (verified by inspecting keychain); webview has zero direct network access (verified by CSP + traffic capture); reconnect-on-network-blip works
-
-### Phase 3 — Run inspector + run/tool/subagent artifacts
-
-- Auxiliary bar `RunInspector` view (tool calls, subagents, citations, approvals)
-- `run://`, `subagent://`, `tool-result://` URI providers + custom editors
-- Click in inspector → opens artifact tab in editor area, pinned next to chat
-- Approval interactions (approve/reject pending tool call) from inspector
-- **Exit criteria:** full agent run observable end-to-end without leaving the app; approvals round-trip correctly; many-tab perf measured (target: ≤ 500 MB resident with 10 artifact tabs open)
-
-### Phase 4 — MCP / Skill / Workspace surfaces
-
-- `mcp://`, `mcp-tool://`, `skill://`, `workspace://` URI providers + editors + sidebar trees
-- Workspace switcher in status bar
-- MCP install/auth/uninstall via the MCP card editor
-- Skill bundles browseable read-only
-- **Exit criteria:** product parity with the web app's MCP/skills/workspace surfaces; visual fidelity verified against the web app
-
-### Phase 5 — Distribution hardening
-
-- Update server live with both `stable` and `enterprise-mdm` channels
-- Signing runners operational; every release signed + notarized
-- Force-upgrade mechanism tested end-to-end
-- Crash reporting endpoint live and validated
-- Telemetry event schema agreed with privacy/legal; consent dialog wired
-- Pre-flight release checklist documented at `apps/desktop/RELEASE.md`
-- **Exit criteria:** `stable` release to internal users; MDM pilot deployment validated by IT
-
-## 15. Risks (open, monitored)
-
-| #   | Risk                                                                    | Mitigation                                                                                                                                              | Validates by                         |
-| --- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| R1  | Webview perf with many artifact tabs                                    | Shared lightweight webview for viewers, full webview only for chat                                                                                      | Phase 3 perf gate (10 tabs ≤ 500 MB) |
-| R2  | Patch drift against upstream                                            | Weekly rebase + CI gate on patch line count                                                                                                             | Phase 1 onward                       |
-| R3  | OIDC complexity (device binding, multi-tenant claims, refresh rotation) | Dedicated mini-spec before phase 2 codifies the flows                                                                                                   | Phase 2 sign-off                     |
-| R4  | VS Code muscle memory ("Open File…", terminal, …)                       | Welcome content + command palette curation; "Open File" returns a friendly not-in-scope message                                                         | UX review in phase 3                 |
-| R5  | Update server reliability                                               | Object-store-backed manifests, no DB, CDN-cached; graceful degradation on unreachable                                                                   | Phase 5 chaos test                   |
-| R6  | MDM channel divergence                                                  | Same source tree, different `product.json` flag; never fork for MDM                                                                                     | CI invariant from phase 5            |
-| R7  | Webview RPC protocol drift                                              | Zod schemas in `chat-transport/src/webview/rpc-protocol.ts` shared between webview and extension; `PROTOCOL_VERSION` constant; mismatch rejected loudly | Phase 2 onward                       |
-| R8  | Code-signing key compromise                                             | Hardware tokens; signing-only runners; key rotation runbook                                                                                             | Phase 5 readiness review             |
-| R9  | Hidden direct API calls in `chat-surface`                               | Lint rule banning `fetch`/`window.*` in `packages/chat-surface/src/`                                                                                    | Phase 0 CI                           |
-
-## 16. Open questions (resolve in dependent specs)
-
-- **Q1** OIDC provider identity — first-party (extends `services/backend`) or vendor (Auth0/WorkOS/Okta)? Determines token shape, federation, and the device-binding story.
-- **Q2** Workspace switching semantics — one session with workspace claims, or one cached session per workspace?
-- **Q3** Offline behavior — read-only browse of cached conversations, or "no network, no app"?
-- **Q4** Skill editing — read-only in MVP, or Monaco-edited skill bundles (`.md`/`.yaml`) in phase 5?
-- **Q5** Update-success telemetry — do we report install/update outcomes back to the update server for fleet health?
-- **Q6** Crash reporter endpoint — owned or vendored (Sentry/Bugsnag) for MVP?
-- **Q7** Future third-party extension API — do we eventually expose an extension surface for partner integrations? If yes, the bundled extensions should be modeled as first-class examples of that API from the start.
-
-## 17. Glossary
-
-- **Code – OSS** — the open-source distribution of VS Code (MIT-licensed; no Microsoft branding/marketplace by default).
-- **Workbench** — VS Code's UI shell: activity bar, sidebar, editor area, panel, auxiliary bar, status bar.
-- **Auxiliary bar / secondary sidebar** — the right-hand sidebar (`workbench.action.toggleAuxiliaryBar`).
-- **Custom editor** — a webview-backed editor registered for a URI scheme or file glob.
-- **Webview** — an isolated Chromium context within the workbench, communicating with the extension host via `postMessage`.
-- **SecretStorage** — VS Code API backed by OS keychain (macOS Keychain, Windows Credential Manager).
-- **Squirrel** — the auto-update framework VS Code ships with (Squirrel.Mac and Squirrel.Windows).
+- **Tier-1 adapter** — hand-built first-party `SaaSRendererAdapter` for a named SaaS (Email, Salesforce, Sheets, Slides).
+- **Tier-2 adapter** — agent-generated `SaaSRendererAdapter` for a long-tail SaaS, persisted to `{userData}/adapters/`, sandboxed render-only.
+- **Tier-3** — `GenericStructuredDiff`, the always-available fallback that renders any MCP tool-call payload generically.
+- **Host (TcSurfaceMount)** — the chat-surface component that resolves the adapter for a URI, fetches state via Transport, renders the adapter's output, and surrounds it with Approve / Reject / Suggest-changes controls.
+- **Pure-render discipline** — adapters have no transport, no MCP, no fetch, no `window`. All actions live in the host. The structural guarantee that makes tier-2 sandboxing tractable.
+- **Time Machine** — the swimlane / scrubber inside `ThreadCanvas`. Not a separate destination or URI.
+- **Active-workspace gate** — main-process check that the renderer's requested `workspace_id` matches the session JWT's claim, before any secret-storage operation.
+- **Workbench / Code – OSS / VS Code fork** — substrate options rejected pending Phase S spike outcome.
