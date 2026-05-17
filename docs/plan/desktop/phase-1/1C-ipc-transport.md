@@ -79,11 +79,14 @@ Staff-engineer cuts that shape this work:
 
 ## Status
 
-- Status: in-progress
+- Status: done (FR-12 shipped as a `TransportBridge` class rather than a
+  `createTransportForWindow` factory — semantically equivalent; see
+  audit note)
 - Agent slug: `ipc-transport`
 - Branch: `desktop/phase-1-ipc-transport`
 - Worktree: `.claude/worktrees/agent-aed6ec5d539b1decb`
 - Created: 2026-05-17
+- Audited: 2026-05-17
 
 ## Scope
 
@@ -125,16 +128,16 @@ Staff-engineer cuts that shape this work:
 
 ## Functional requirements
 
-- [ ] FR-1 — `IpcTransport` implements `Transport` from
+- [x] FR-1 — `IpcTransport` implements `Transport` from
       `@enterprise-search/chat-transport` (the on-disk shape: synchronous
       `subscribeServerSentEvents`, synchronous `getSession`, synchronous
       `capabilities`).
-- [ ] FR-2 — `IpcTransport.request<T>(req)` calls
+- [x] FR-2 — `IpcTransport.request<T>(req)` calls
       `bridge.ipc.invoke('transport.request', payload)` where `payload` is
       the `TypedRequest` minus `signal` (signal is renderer-local;
       `AbortSignal` doesn't structured-clone across IPC; production needs a
       token-based cancel side channel, flagged for Phase 5).
-- [ ] FR-3 — `IpcTransport.subscribeServerSentEvents(opts)` returns
+- [x] FR-3 — `IpcTransport.subscribeServerSentEvents(opts)` returns
       synchronously with a `{ close }` handle. Internally:
       (a) generate `subscriptionId` via `crypto.randomUUID()` (or
       configurable test seam), (b) synchronously register
@@ -142,26 +145,26 @@ Staff-engineer cuts that shape this work:
       `invoke('transport.subscribe', { subscriptionId, path, query,
 eventName })`, (d) on invoke rejection, dispatch `onError` via the
       same path a backend SSE error would take, then evict the record.
-- [ ] FR-4 — `close()` evicts the record and fires
+- [x] FR-4 — `close()` evicts the record and fires
       `invoke('transport.unsubscribe', { subscriptionId })`. Best-effort;
       no error surface (the on-disk `SseSubscription.close` returns void).
-- [ ] FR-5 — `IpcTransport.getSession()` returns the
+- [x] FR-5 — `IpcTransport.getSession()` returns the
       `bootstrapSession` passed at construction (Phase 1 stub:
       `{ bearer: null }`).
-- [ ] FR-6 — `IpcTransport.capabilities()` returns the
+- [x] FR-6 — `IpcTransport.capabilities()` returns the
       `bootstrapCapabilities` passed at construction (Phase 1 stub:
       `substrate: 'desktop-webview'`, the four boolean flags reflect what
       the desktop substrate will actually expose by Phase 8; for Phase 1
       they're `nativeSecretStorage: true, fileSystemAccess: false,
 clipboardWrite: false, openExternal: false`).
-- [ ] FR-7 — A single `bridge.ipc.on('stream-event', ...)` listener is
+- [x] FR-7 — A single `bridge.ipc.on('stream-event', ...)` listener is
       installed in the `IpcTransport` constructor. Every stream-event for
       every active subscription routes through this one listener.
-- [ ] FR-8 — Stream events for unknown `subscriptionId` are buffered for
+- [x] FR-8 — Stream events for unknown `subscriptionId` are buffered for
       one microtask and re-dispatched. After microtask flush, still-unknown
       events are dropped silently. Buffer cap: 16 entries. Belt-and-suspenders
       against the S1-B `<StrictMode>` race pattern.
-- [ ] FR-9 — `apps/desktop/main/ipc/handlers.registerIpcHandlers({
+- [x] FR-9 — `apps/desktop/main/ipc/handlers.registerIpcHandlers({
 ipcMain, bridge, logger? })` registers four handlers:
       `transport.request`, `transport.subscribe`, `transport.unsubscribe`,
       `transport.session-snapshot` (returns the cached session +
@@ -169,21 +172,27 @@ ipcMain, bridge, logger? })` registers four handlers:
       round-trip if it ever needs to refresh post-construction). Returns a
       teardown function that removes all handlers AND closes any active
       subscriptions.
-- [ ] FR-10 — Every handler validates incoming params with Zod from
+- [x] FR-10 — Every handler validates incoming params with Zod from
       `rpc-protocol.ts`. On validation failure, throws `IpcValidationError`
       which propagates as a rejected promise across IPC.
-- [ ] FR-11 — Main-side subscription tracking via
+- [x] FR-11 — Main-side subscription tracking via
       `Map<subscriptionId, { webContentsId, underlying: SseSubscription }>`.
       A renderer-specific cleanup
       (`bridge.unsubscribeForWebContents(webContentsId)`) is exported so
       Agent 1-A can wire it to the `webContents.on('destroyed', …)` event
       from `window.ts`.
-- [ ] FR-12 — `apps/desktop/main/transport-bridge.ts` exports
-      `createTransportForWindow(webContents)` which returns a `Transport`
-      configured to push stream-events to that webContents'
-      `stream-event` channel. Phase 1: backs onto `MockTransport`. Phase 5
-      swaps for the real HTTP+SSE pump with bearer injection.
-- [ ] FR-13 — `packages/chat-transport/src/index.ts` gains a Phase 1-C
+- [x] FR-12 — `apps/desktop/main/transport-bridge.ts` ships the
+      main-side wrapper as a `TransportBridge` class (constructor:
+      `(emit: StreamEventEmitter, opts?: { transport?: Transport })`,
+      defaulting `transport` to `new MockTransport()`). _Shape divergence
+      from the PRD's `createTransportForWindow(webContents)` factory_:
+      the bridge takes an injected `StreamEventEmitter` callback (which
+      Agent 1-A wires to `webContents.send(CHANNELS.streamEvent, …)`)
+      and tracks per-`webContentsId` subscriptions internally — same
+      job, factored as a long-lived bridge per main process rather than
+      one-per-window. Phase 5 swaps the default `MockTransport` for the
+      real HTTP+SSE pump with bearer injection.
+- [x] FR-13 — `packages/chat-transport/src/index.ts` gains a Phase 1-C
       delimited block exporting `IpcTransport`, `IpcTransportConfig`, and
       the channel-name constants + types. No other edits to the existing
       block.
@@ -320,23 +329,31 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void;
 
 ## Done criteria
 
-- [ ] All FRs met.
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-transport`
+- [x] All FRs met (FR-12 shipped as `TransportBridge` class; see note).
+- [x] `npm run typecheck --workspace @enterprise-search/chat-transport`
       passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [ ] `npm test --workspace @enterprise-search/chat-transport` passes
-      (existing tests + new `IpcTransport` suite).
-- [ ] `npm test --workspace @enterprise-search/desktop` passes (new
-      `handlers` suite).
-- [ ] `npm run lint --workspace @enterprise-search/desktop` passes (Phase
-      0's ESLint config is unchanged; I do not edit it).
-- [ ] No imports outside scope.
-- [ ] No bare browser primitives in `IpcTransport` (renderer-side code):
+- [x] `npm run typecheck --workspace @enterprise-search/desktop` passes.
+- [x] `npm test --workspace @enterprise-search/chat-transport` passes
+      (existing tests + new `IpcTransport` suite — 13 cases).
+- [x] `npm test --workspace @enterprise-search/desktop` passes (new
+      `handlers` + `TransportBridge` suites — 20 cases).
+- [x] `npm run lint --workspace @enterprise-search/desktop` passes (Phase
+      0's ESLint config is unchanged; not edited).
+- [x] No imports outside scope.
+- [x] No bare browser primitives in `IpcTransport` (renderer-side code):
       `globalThis.crypto.randomUUID` is the only one, prefixed with
       `globalThis.` per PRD §6.5; or the `randomId` test seam overrides it.
-- [ ] `IpcTransport` does not import from `electron`.
-- [ ] `handlers.ts` / `transport-bridge.ts` may import from `electron`
+- [x] `IpcTransport` does not import from `electron`.
+- [x] `handlers.ts` / `transport-bridge.ts` may import from `electron`
       (main process is Node).
+
+### Carried forward to Phase 5
+
+- Token-based cancellation side channel for `AbortSignal` parity (OQ-4).
+- Real HTTP+SSE pump replaces `MockTransport` as the bridge's default
+  transport, with per-`(workspace_id, server)` bearer injection.
+- `transport.session-snapshot` likely yields to `transport.reauthenticate`
+  on first 401 (OQ-2).
 
 ## Notes for orchestrator review
 

@@ -45,11 +45,12 @@ carries over with minor adjustments.
 
 ## Status
 
-- Status: in-progress
+- Status: done (integration with 1C live; 1D `HashRouter` displacement still pending — see audit note)
 - Agent slug: electron-shell
 - Branch: desktop/phase-1-electron-shell
 - Worktree: .claude/worktrees/agent-af113cdf24ed9014a
 - Created: 2026-05-17
+- Audited: 2026-05-17
 
 ## Scope
 
@@ -146,18 +147,18 @@ react-jsx`, excludes `main/**` and `preload/**`.
 
 ## Functional requirements
 
-- [ ] FR-1: `npm run build --workspace @enterprise-search/desktop`
+- [x] FR-1: `npm run build --workspace @enterprise-search/desktop`
       produces `out/main/index.js`, `out/preload/bridge.js`,
       `out/renderer/bootstrap.js`, and `out/renderer/index.html`.
-- [ ] FR-2: `app.setName('Atlas')` runs before `whenReady`.
+- [x] FR-2: `app.setName('Atlas')` runs before `whenReady`.
       `protocol.registerSchemesAsPrivileged` for `app://` runs before
       `whenReady`. `app.whenReady().then(...)` constructs a single
       `BrowserWindow` via `createMainWindow()`.
-- [ ] FR-3: The window is created with `contextIsolation: true`,
+- [x] FR-3: The window is created with `contextIsolation: true`,
       `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`,
       and a `preload` path resolved off `__dirname`. 1200×800 default
       size, dark background, hidden until `ready-to-show`.
-- [ ] FR-4: The renderer is loaded from `app://app/index.html` (not
+- [x] FR-4: The renderer is loaded from `app://app/index.html` (not
       `file://`). The protocol handler serves files only from the
       renderer output dir; URLs that escape the dir return 404. Every
       served response carries
@@ -166,33 +167,35 @@ react-jsx`, excludes `main/**` and `preload/**`.
       one source. `connect-src 'none'` is the load-bearing claim — a
       manual DevTools `fetch('https://example.com')` test must fail
       (documented in README).
-- [ ] FR-5: The `crashReporter` is started during `whenReady` with
+- [x] FR-5: The `crashReporter` is started during `whenReady` with
       `uploadToServer: false` (stubbed for Phase 1; Phase 8 wires
       `submitURL`).
-- [ ] FR-6: `app.setAsDefaultProtocolClient('enterprise')` is called
+- [x] FR-6: `app.setAsDefaultProtocolClient('enterprise')` is called
       during `whenReady`. macOS `open-url` and Windows `second-instance`
       handlers parse the incoming URL and `console.log` the parsed
       route; renderer-side routing arrives with Agent 1-C / 1-D at
       integration time.
-- [ ] FR-7: `preload/bridge.ts` exposes `window.bridge.ipc.invoke` and
-      `window.bridge.ipc.on`. Both throw a "not yet wired (Phase 1-C)"
-      error until 1-C populates the channel allowlist. The exposed
-      surface matches what 1-C's
-      `packages/chat-transport/src/ipc/window-bridge.ts` will reference.
-- [ ] FR-8: `renderer/bootstrap.tsx` constructs `MockTransport` once,
+- [x] FR-7: `preload/bridge.ts` exposes `window.bridge.ipc.invoke` and
+      `window.bridge.ipc.on`. _Integration with 1C is live_ — the
+      "not yet wired" stub has been replaced by real `isAllowedChannel()`
+      validation and real `ipcRenderer.invoke/on` plumbing. The exposed
+      surface matches `packages/chat-transport/src/ipc/window-bridge.ts`.
+- [x] FR-8: `renderer/bootstrap.tsx` constructs the transport once,
       then `StubRouter`, `MemoryKeyValueStore`, `StubPresenceSignal`, and
       renders the ChatShell mount with the placeholder child inside
-      `#root`. NO `<StrictMode>` wrapper (S2 friction note 5 — the
-      spike-prep `EmailRenderer`'s `hasMounted` guard interacts badly;
-      Phase 4-a fixes the renderer side).
-- [ ] FR-9: Lifecycle: `window-all-closed` quits on non-darwin;
+      `#root`. NO `<StrictMode>` wrapper (S2 friction note 5).
+      _Integration update:_ uses real `IpcTransport` (not `MockTransport`)
+      with `PHASE1_BOOTSTRAP_SESSION` + `PHASE1_BOOTSTRAP_CAPABILITIES`;
+      1C merge happened in-tree. **Pending:** 1D's `HashRouter`
+      displacement of `StubRouter` (Phase 2 integration window).
+- [x] FR-9: Lifecycle: `window-all-closed` quits on non-darwin;
       `activate` re-creates the window on darwin if none.
       `web-contents-created` denies navigation off `app://` and denies
       all new windows.
-- [ ] FR-10: `npm run typecheck --workspace @enterprise-search/desktop`
+- [x] FR-10: `npm run typecheck --workspace @enterprise-search/desktop`
       passes. `npm run lint --workspace @enterprise-search/desktop`
       passes. `npm run test --workspace @enterprise-search/desktop`
-      passes.
+      passes (36 tests across 4 files).
 
 ## Non-functional requirements
 
@@ -297,17 +300,19 @@ throw new Error(...)` guard, matching the spike-prep pattern.
 
 ## Done criteria
 
-- [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes
-- [ ] `npm run lint --workspace @enterprise-search/desktop` passes
-- [ ] `npm run test --workspace @enterprise-search/desktop` passes
-- [ ] `npm run build --workspace @enterprise-search/desktop` produces
+- [x] All FRs met
+- [x] `npm run typecheck --workspace @enterprise-search/desktop` passes
+- [x] `npm run lint --workspace @enterprise-search/desktop` passes
+- [x] `npm run test --workspace @enterprise-search/desktop` passes
+- [x] `npm run build --workspace @enterprise-search/desktop` produces
       all four output files (main, preload, renderer bootstrap, renderer
       html)
-- [ ] No files outside the in-scope list above
-- [ ] No `electron` import in renderer source
-- [ ] No `window` / `document` reference in main source
-- [ ] CSP constant referenced from exactly one source (the protocol
+- [x] No files outside the in-scope list above (1C's `main/ipc/**` and
+      `main/transport-bridge.ts` are in-scope for 1C, not this agent;
+      no violation)
+- [x] No `electron` import in renderer source
+- [x] No `window` / `document` reference in main source
+- [x] CSP constant referenced from exactly one source (the protocol
       handler module); tests import the same constant
 
 ## Notes for orchestrator review

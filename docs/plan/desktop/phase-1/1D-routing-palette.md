@@ -37,11 +37,12 @@ is a Phase 1-B / Phase 3 concern. Phase 1-D ships the 9 entries that
 
 ## Status
 
-- Status: in-progress
+- Status: done
 - Agent slug: `routing-palette`
 - Branch: `desktop/phase-1-routing-palette`
 - Worktree: `.claude/worktrees/agent-a93c261122dd8ff31`
 - Created: 2026-05-17
+- Audited: 2026-05-17
 
 ## Scope
 

@@ -39,11 +39,12 @@ menu + fullscreen toggle UX-detail are Phase 3 (per
 
 ## Status
 
-- Status: in-progress
+- Status: done
 - Agent slug: `chat-shell-layout`
 - Branch: `desktop/phase-1-chat-shell-layout`
 - Worktree: `.claude/worktrees/agent-a688f15171739eac0`
 - Created: 2026-05-17
+- Audited: 2026-05-17
 
 ## Scope
 
@@ -90,14 +91,14 @@ menu + fullscreen toggle UX-detail are Phase 3 (per
 
 ## Functional requirements
 
-- [ ] FR-1: `AppRail` renders 11 destination buttons (`home`, `chats`,
+- [x] FR-1: `AppRail` renders 11 destination buttons (`home`, `chats`,
       `agents`, `library`, `inbox`, `tools`, `projects`, `todos`,
       `connectors`, `team`, `memory`). Each button is
       `<button type="button">` (keyboard reachable), has an `aria-label`
       of the destination's human-readable name, has an inline SVG glyph,
       exposes `data-destination={slug}` for tests, and exposes
       `aria-current="page"` when active.
-- [ ] FR-2: Clicking an `AppRail` button calls `router.navigate(...)` for
+- [x] FR-2: Clicking an `AppRail` button calls `router.navigate(...)` for
       the destinations whose `ArtifactRoute` shape is already on disk
       (`chats` → `{ kind: 'chat', conversationId: '' }`); for the other
       ten destinations, the click is a navigate-noop in this phase (a
@@ -105,39 +106,39 @@ menu + fullscreen toggle UX-detail are Phase 3 (per
       The behavior is uniform — all 11 buttons are interactive; ten
       simply navigate to nothing today, by design and per orchestrator
       direction.
-- [ ] FR-3: `AppRail` derives its `active` highlight from
+- [x] FR-3: `AppRail` derives its `active` highlight from
       `router.current()` and the same router's `subscribe(...)` (cleanup
       on unmount). The active highlight is data-state and a visual
       treatment, not just a className; tests assert via
       `aria-current="page"`.
-- [ ] FR-4: `ContextPanel` renders a flat `<ul>` of three placeholder
+- [x] FR-4: `ContextPanel` renders a flat `<ul>` of three placeholder
       filter rows for the active destination. Header is the
       destination's human-readable name. Phase 3 replaces the body with
       per-destination filter lists.
-- [ ] FR-5: `Topbar` renders a breadcrumb derived from the active route
+- [x] FR-5: `Topbar` renders a breadcrumb derived from the active route
       (e.g. `chats / —` when the chat route is empty,
       `chats / {conversationId}` when set; for other destinations the
       breadcrumb shows just the destination name). A placeholder
       mode-toggle `<button>` renders next to the breadcrumb (no behavior
       yet); the "more menu" and "fullscreen toggle" are Phase 3.
-- [ ] FR-6: `RightRail` renders a header "Atlas conversation" and a
+- [x] FR-6: `RightRail` renders a header "Atlas conversation" and a
       placeholder list. It exposes a single toggle button on its left
       edge; its open/close state is local to `ChatShell` (a single
       `useState`). When closed, the grid collapses the right column to
       `0` and the toggle button reappears as a chevron-style "expand"
       affordance.
-- [ ] FR-7: `ChatShell` renders the grid `52px 224px 1fr 380px` (or
+- [x] FR-7: `ChatShell` renders the grid `52px 224px 1fr 380px` (or
       `52px 224px 1fr 0` when the right rail is collapsed). Existing
       `children` prop is preserved — host apps still pass children and
       they render in the center column (above the `DestinationOutlet`
       stub, which only shows when `children` is absent). This keeps the
       existing `apps/frontend` integration green and gives 1D's route
       table a place to plug in later.
-- [ ] FR-8: `DestinationOutlet` (internal to `ChatShell`) renders the
+- [x] FR-8: `DestinationOutlet` (internal to `ChatShell`) renders the
       destination name as a stub, e.g.
       `<div>chats: {conversationId ?? '—'}</div>` for `chats`,
       `<div>home</div>` for `home`, etc.
-- [ ] FR-9: Public exports: append a delimited Phase 1-B block in
+- [x] FR-9: Public exports: append a delimited Phase 1-B block in
       `packages/chat-surface/src/index.ts` re-exporting `AppRail`,
       `ContextPanel`, `Topbar`, `RightRail` from `./shell`. Existing
       `ChatShell` export stays unchanged.
@@ -280,20 +281,30 @@ export function RightRail(props: {
 
 ## Done criteria
 
-- [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface`
+- [x] All FRs met
+- [x] `npm run typecheck --workspace @enterprise-search/chat-surface`
       passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
-- [ ] No imports outside scope
-- [ ] No bare browser primitives (`window` / `document` / `fetch` /
+- [x] `npm test --workspace @enterprise-search/chat-surface` passes
+- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [x] No imports outside scope
+- [x] No bare browser primitives (`window` / `document` / `fetch` /
       `localStorage` / `history` / `location`) anywhere in this scope —
       enforced by the existing ESLint rule
-- [ ] No new third-party dependency
-- [ ] `packages/chat-surface/src/index.ts` only gains the delimited
+- [x] No new third-party dependency
+- [x] `packages/chat-surface/src/index.ts` only gains the delimited
       Phase 1-B block; all pre-existing exports are untouched
-- [ ] `npm run typecheck --workspace @enterprise-search/surface-renderers`
+- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers`
       still passes (deprecated `SurfaceRendererProps` continues to live)
+
+### Deferred / carried forward
+
+- **Open Q1 (ArtifactRoute coverage gap)** remains open: 8 of 11
+  destinations have no `ArtifactRoute` kind yet. Breadcrumb falls
+  back to destination label; navigation is a noop for those tiles.
+  Resolution belongs to Phase 3 (or a 1D follow-up that widens the
+  route union).
+- Per-destination filter lists, real mode-toggle behavior, more menu,
+  fullscreen toggle, design-system palette tokens — all Phase 3.
 
 ## Notes for orchestrator review
 
