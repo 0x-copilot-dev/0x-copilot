@@ -551,14 +551,17 @@ class RuntimeRunHandler:
                 region="global",
                 at=datetime.now(timezone.utc),
             )
-            request_options = command.runtime_context.model_profile
+            model_profile = command.runtime_context.model_profile
             # Conservative proxy: 4 chars/token × configured input window.
             # Over-estimating delays a true Deny; it never silently busts a hard cap.
-            max_input_tokens = getattr(request_options, "max_input_tokens", None)
-            prompt_chars = (max_input_tokens or 0) * 4
+            # ``max_input_tokens`` and ``max_output_tokens`` are first-class
+            # fields on ``ModelConfig`` — depth-scaled values land here via
+            # ``DepthBudgetTable.apply`` at run-create, so this is the single
+            # read site for the post-mapped output cap.
+            prompt_chars = model_profile.max_input_tokens * 4
             estimate = BudgetEstimator.estimate(
                 prompt_chars=prompt_chars,
-                max_output_tokens=getattr(request_options, "max_output_tokens", None),
+                max_output_tokens=model_profile.max_output_tokens,
                 pricing=pricing,
             )
             return await self.budget_enforcer.preflight(

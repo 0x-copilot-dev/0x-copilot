@@ -9,13 +9,21 @@ from agent_runtime.execution.contracts import (
     ModelReasoningConfig,
     RuntimeErrorCode,
 )
+from agent_runtime.execution.depth import DepthBudgetTable, ReasoningDepth
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
 
 
 @dataclass(frozen=True)
 class ModelSelection:
-    """Request-level model selection before defaults are applied."""
+    """Request-level model selection before defaults are applied.
+
+    ``reasoning_depth`` is the user-facing Fast/Balanced/Deep handle from
+    the composer. The resolver translates it into scaled
+    timeout/output-token/tool-call-budget values on the returned
+    :class:`ModelConfig` via :class:`DepthBudgetTable` — the single
+    application point for the depth → budget mapping.
+    """
 
     provider: str | None = None
     model_name: str | None = None
@@ -24,6 +32,7 @@ class ModelSelection:
     max_input_tokens: int | None = None
     supports_streaming: bool | None = None
     reasoning: ModelReasoningConfig | None = None
+    reasoning_depth: ReasoningDepth | None = None
 
 
 class ModelConfigResolver:
@@ -38,7 +47,14 @@ class ModelConfigResolver:
         *,
         require_credentials: bool = True,
     ) -> ModelConfig:
-        """Return a complete model config after provider credential validation."""
+        """Return a complete model config after provider credential validation.
+
+        Applies :class:`DepthBudgetTable` exactly once when the selection
+        carries a ``reasoning_depth``. Downstream callers (the worker,
+        budget estimator, deep-agent builder) read the already-scaled
+        values straight off the returned ``ModelConfig`` — they MUST
+        NOT re-apply the mapping.
+        """
 
         selected = selection or ModelSelection()
         provider = self._normalize_provider(
@@ -54,11 +70,12 @@ class ModelConfigResolver:
                 retryable=False,
             )
         default_model = self.settings.default_model
-        return ModelConfig(
+        base = ModelConfig(
             provider=provider,
             model_name=selected.model_name or default_model.model_name,
             max_input_tokens=selected.max_input_tokens
             or default_model.max_input_tokens,
+            max_output_tokens=default_model.max_output_tokens,
             timeout_seconds=selected.timeout_seconds or default_model.timeout_seconds,
             temperature=(
                 selected.temperature
@@ -75,7 +92,12 @@ class ModelConfigResolver:
                 if selected.reasoning is not None
                 else default_model.reasoning
             ),
+            # Inherit the deployment-wide tool-call budget from settings;
+            # depth scales it below. Keeps a single source of truth so an
+            # operator that bumps the env var also bumps Deep's ceiling.
+            tool_call_budget=self.settings.execution.tool_call_budget,
         )
+        return DepthBudgetTable.apply(base, selected.reasoning_depth)
 
     @classmethod
     def _normalize_provider(cls, provider: str) -> str:

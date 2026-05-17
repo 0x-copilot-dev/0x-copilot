@@ -165,15 +165,38 @@ class ModelReasoningConfig(RuntimeContract):
 
 
 class ModelConfig(RuntimeContract):
-    """Model settings selected before the runtime is constructed."""
+    """Model settings selected before the runtime is constructed.
+
+    ``max_output_tokens`` and ``tool_call_budget`` are post-mapping fields:
+    they may be scaled by :class:`~agent_runtime.execution.depth.DepthBudgetTable`
+    when the request carries a ``reasoning_depth``. Defaults preserve the
+    behaviour from before depth wiring landed.
+    """
 
     provider: str
     model_name: str = Field(min_length=1, max_length=200)
     max_input_tokens: PositiveInt = Field(le=2_000_000)
+    # Optional baseline cap on completion tokens. ``None`` means "let the
+    # provider apply its default"; depth multipliers only scale a numeric
+    # baseline — they never invent a value. The budgets estimator already
+    # tolerated this field via ``getattr``; declaring it here makes the
+    # contract explicit and the wire shape stable.
+    max_output_tokens: PositiveInt | None = Field(default=None, le=2_000_000)
     timeout_seconds: float = Field(gt=0, le=600)
     temperature: float = Field(ge=0, le=2)
     supports_streaming: bool = True
     reasoning: ModelReasoningConfig | None = None
+    # Per-run cap on repeat invocations of any single tool, scaled by
+    # reasoning depth. Default of ``5`` mirrors the historical literal used
+    # in ``deep_agent_builder.format_web_subagent_suffix`` (the constant
+    # ``_DEFAULT_TOOL_CALL_BUDGET``); keeping the same number here means
+    # existing call sites that omit a value see identical prompt wording.
+    tool_call_budget: PositiveInt = Field(default=5, le=100)
+    # The depth selection that produced this config, when one was supplied.
+    # Stored as a string so it round-trips cleanly through ``model_dump``
+    # / persistence without importing the enum here (which would create
+    # a cycle with the depth module). Validated downstream where used.
+    reasoning_depth: str | None = Field(default=None, max_length=32)
 
     @field_validator("provider")
     @classmethod

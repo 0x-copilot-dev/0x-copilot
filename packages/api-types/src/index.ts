@@ -1246,6 +1246,15 @@ export interface RuntimeRequestContext {
   feature_flags?: string[];
 }
 
+/**
+ * User-selectable reasoning depth — the Fast / Balanced / Deep composer
+ * picker maps 1:1 to this literal union. The runtime translates depth into
+ * timeout, max_output_tokens, and tool-call-budget multipliers (see
+ * `services/ai-backend/src/agent_runtime/execution/depth.py`). When omitted,
+ * the runtime applies its default behavior (equivalent to `balanced`).
+ */
+export type ReasoningDepth = "fast" | "balanced" | "deep";
+
 export interface CreateRunRequest {
   conversation_id: string;
   org_id: string;
@@ -1254,6 +1263,11 @@ export interface CreateRunRequest {
   content_format?: string;
   idempotency_key?: string | null;
   model?: ModelSelectionRequest | null;
+  /**
+   * Per-turn reasoning depth. Optional — when null/absent the runtime keeps
+   * the model's configured defaults (no regression vs. pre-depth behaviour).
+   */
+  reasoning_depth?: ReasoningDepth | null;
   content?: RunContentPart[];
   attachments?: RunAttachmentRequest[];
   quote?: RunQuoteMetadata | null;

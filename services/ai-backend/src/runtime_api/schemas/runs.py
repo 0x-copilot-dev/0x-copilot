@@ -20,6 +20,7 @@ from agent_runtime.execution.contracts import (
     RuntimeContract,
     RuntimeErrorEnvelope,
 )
+from agent_runtime.execution.depth import ReasoningDepth
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
@@ -200,6 +201,12 @@ class CreateRunRequest(RuntimeContract):
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
     idempotency_key: str | None = None
     model: ModelSelectionRequest | None = None
+    # Composer's Fast / Balanced / Deep selection for this turn. Allowlisted
+    # to the three :class:`ReasoningDepth` literals — anything else is a
+    # 422 at the API boundary. Optional; when omitted the runtime keeps
+    # its current defaults (semantically equivalent to ``balanced`` but
+    # without forcing the field onto the wire).
+    reasoning_depth: ReasoningDepth | None = None
     content: tuple[RunContentPartRequest, ...] = ()
     attachments: tuple[RunAttachmentRequest, ...] = ()
     quote: RunQuoteRequest | None = None
