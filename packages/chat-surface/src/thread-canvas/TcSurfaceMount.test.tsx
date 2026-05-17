@@ -1,6 +1,6 @@
 import { createElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import type { Transport } from "@enterprise-search/chat-transport";
 
@@ -49,17 +49,17 @@ describe("TcSurfaceMount", () => {
     __setRenderBudgetClockForTests(null);
   });
 
-  it("renders the null-state fallback when no adapter is registered", () => {
+  it("renders the placeholder when no adapter is registered", () => {
     render(<TcSurfaceMount uri="email://draft-1" transport={stubTransport} />);
-    const fallback = screen.getByTestId("tc-surface-mount-fallback");
-    expect(fallback).toBeInTheDocument();
-    expect(fallback).toHaveTextContent(/no adapter registered for email/i);
+    const placeholder = screen.getByTestId("surface-placeholder");
+    expect(placeholder).toBeInTheDocument();
+    expect(placeholder).toHaveTextContent(/no renderer registered for email/i);
   });
 
-  it("includes the scheme name in the fallback when URI is malformed", () => {
+  it("includes the scheme name in the placeholder when URI is malformed", () => {
     render(<TcSurfaceMount uri="not-a-uri" transport={stubTransport} />);
-    const fallback = screen.getByTestId("tc-surface-mount-fallback");
-    expect(fallback).toHaveTextContent(/unknown scheme/i);
+    const placeholder = screen.getByTestId("surface-placeholder");
+    expect(placeholder).toHaveTextContent(/unknown scheme/i);
   });
 
   it("renders the adapter's renderCurrent output when one is registered", () => {
@@ -71,7 +71,7 @@ describe("TcSurfaceMount", () => {
   it("falls back when adapter.renderCurrent throws synchronously", () => {
     registerAdapter(adapterThatThrows("boom"));
     render(<TcSurfaceMount uri="email://draft-1" transport={stubTransport} />);
-    expect(screen.getByTestId("tc-surface-mount-fallback")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-placeholder")).toBeInTheDocument();
     expect(warnSpy).toHaveBeenCalled();
   });
 
@@ -80,10 +80,52 @@ describe("TcSurfaceMount", () => {
     __setRenderBudgetClockForTests(() => ticks.shift() ?? 0);
     registerAdapter(adapterRenderingText("slow content"));
     render(<TcSurfaceMount uri="email://draft-1" transport={stubTransport} />);
-    expect(screen.getByTestId("tc-surface-mount-fallback")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-placeholder")).toBeInTheDocument();
     expect(screen.queryByText("slow content")).not.toBeInTheDocument();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringMatching(/exceeded 100ms render budget/),
     );
+  });
+
+  it("does not render Approve/Reject controls when no pendingDiff", () => {
+    registerAdapter(adapterRenderingText("current"));
+    render(<TcSurfaceMount uri="email://draft-1" transport={stubTransport} />);
+    expect(
+      screen.queryByTestId("tc-surface-mount-actions"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders Approve/Reject controls outside the adapter output when pendingDiff is non-null", () => {
+    registerAdapter(adapterRenderingText("current"));
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    render(
+      <TcSurfaceMount
+        uri="email://draft-1"
+        transport={stubTransport}
+        pendingDiff={{ field: "subject" }}
+        onApprove={onApprove}
+        onReject={onReject}
+      />,
+    );
+    expect(screen.getByTestId("tc-surface-mount-actions")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
+    fireEvent.click(screen.getByTestId("tc-surface-mount-reject"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onReject).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders Approve/Reject controls over the placeholder when no adapter but pendingDiff present", () => {
+    render(
+      <TcSurfaceMount
+        uri="unknown://x"
+        transport={stubTransport}
+        pendingDiff={{ field: "subject" }}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("surface-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("tc-surface-mount-actions")).toBeInTheDocument();
   });
 });
