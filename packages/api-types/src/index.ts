@@ -3311,3 +3311,36 @@ export interface AdapterRegistryOptOutResponse {
   opted_out: boolean;
   updated_at: string;
 }
+
+// === Phase 0.5 shared primitives ===
+// Branded IDs (single declaration site — see ./brands.ts).
+export type {
+  AgentId,
+  ApprovalId,
+  ConnectorId,
+  ConversationId,
+  InboxItemId,
+  LibraryDatasetId,
+  LibraryEntityId,
+  LibraryFileId,
+  LibraryItemId,
+  LibraryPageId,
+  MeetingExternalId,
+  MemoryItemId,
+  ProjectId,
+  RoutineId,
+  RunId,
+  SkillId,
+  SubagentId,
+  TenantId,
+  TodoExtractionId,
+  TodoId,
+  ToolId,
+  ToolResultId,
+  UserId,
+} from "./brands";
+
+// Cross-destination references and partial-failure section wrapper
+// (single declaration site — see ./refs.ts).
+export type { ItemKind, ItemRef, ItemRefSnapshot, SectionResult } from "./refs";
+// === end Phase 0.5 ===
