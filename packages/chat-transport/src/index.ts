@@ -19,3 +19,27 @@ export {
   type EmailFixturePendingDiff,
   type MockTransportConfig,
 } from "./mock";
+
+// === Phase 1-C IPC transport ===
+export {
+  IpcTransport,
+  type IpcTransportConfig,
+  CHANNELS,
+  CHANNEL_VALUES,
+  IpcValidationError,
+  isAllowedChannel,
+  EmptyParamsSchema,
+  StreamEventKindSchema,
+  StreamEventPayloadSchema,
+  TransportRequestParamsSchema,
+  TransportSubscribeParamsSchema,
+  TransportUnsubscribeParamsSchema,
+  type ChannelName,
+  type StreamEventKind,
+  type StreamEventPayload,
+  type TransportRequestParams,
+  type TransportSubscribeParams,
+  type TransportUnsubscribeParams,
+  type WindowBridge,
+} from "./ipc";
+// === end Phase 1-C ===
