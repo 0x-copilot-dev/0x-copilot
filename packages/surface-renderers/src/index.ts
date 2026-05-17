@@ -8,6 +8,10 @@ import { registerSalesforceAdapter } from "./salesforce";
 import { registerSheetAdapter } from "./sheet";
 // === end Phase 4-E ===
 
+// === Phase 4-F tier1-slides ===
+import { registerSlideAdapter } from "./slide";
+// === end Phase 4-F ===
+
 export {
   emailAdapter,
   registerEmailAdapter,
@@ -45,6 +49,20 @@ export {
 } from "./sheet";
 // === end Phase 4-E ===
 
+// === Phase 4-F tier1-slides ===
+export {
+  SlideRenderer,
+  SlideDiff,
+  slideAdapter,
+  registerSlideAdapter,
+  type Slide,
+  type SlideBullet,
+  type SlideRendererProps,
+  type SlideDiffPayload,
+  type SlideDiffProps,
+} from "./slide";
+// === end Phase 4-F ===
+
 export function registerAll(): void {
   registerEmailAdapter();
   // === Phase 4-D salesforce ===
@@ -53,4 +71,7 @@ export function registerAll(): void {
   // === Phase 4-E tier1-sheets ===
   registerSheetAdapter();
   // === end Phase 4-E ===
+  // === Phase 4-F tier1-slides ===
+  registerSlideAdapter();
+  // === end Phase 4-F ===
 }
