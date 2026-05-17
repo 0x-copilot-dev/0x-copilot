@@ -1,4 +1,24 @@
 export type { ArtifactRoute, NavigateOptions, Router } from "./routing/router";
+export {
+  ARTIFACT_SCHEMES,
+  buildArtifactUri,
+  isArtifactScheme,
+  parseArtifactUri,
+  type ArtifactScheme,
+  type ParsedArtifactUri,
+} from "./routing/uri";
+export {
+  clearRegistry,
+  registerSurface,
+  resolveSurface,
+  type PendingDiff,
+  type SurfaceRendererProps,
+} from "./surfaces";
+export {
+  TcInlineDiff,
+  type InlineDiffState,
+  type TcInlineDiffProps,
+} from "./thread-canvas";
 export { TransportProvider, useTransport } from "./providers/TransportProvider";
 export { RouterProvider, useRouter } from "./providers/RouterProvider";
 export {
