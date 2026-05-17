@@ -425,6 +425,77 @@ Every port is provided by the host (frontend or desktop) via a React provider at
 
 Destinations call `usePort("badge")` / `usePort("notification")` etc. Never `if (window…)`.
 
+### 5.5 Token-usage tracking — every LLM call is accounted and traceable
+
+**Requirement (new, system-level):** every LLM call made by Atlas — from a chat run, a todo-extraction, a routine fire, a memory-retrieval, anything — must:
+
+1. **Tag itself with a source**: `source: { kind, id }` where `kind ∈ ItemKind` (cross-audit §1.1) and `id` is the canonical entity ID. Example tags: `{ kind: "run", id: <run_id> }`, `{ kind: "todo_extraction", id: <extraction_id> }`, `{ kind: "routine", id: <routine_id> }`, `{ kind: "memory_retrieval", id: <retrieval_id> }`.
+
+2. **Record usage**: a `token_usage` row per LLM call (or per-streamed-completion in the streaming case) in a new Postgres table `llm_token_usage` in `services/backend`:
+
+   ```sql
+   CREATE TABLE llm_token_usage (
+     id              BIGSERIAL PRIMARY KEY,
+     tenant_id       UUID NOT NULL,
+     user_id         UUID,                          -- nullable for system-triggered calls
+     source_kind     TEXT NOT NULL,                 -- ItemKind value
+     source_id       TEXT NOT NULL,                 -- entity id
+     model           TEXT NOT NULL,                 -- e.g. "claude-opus-4-7"
+     provider        TEXT NOT NULL,                 -- "anthropic" | "openai" | "google"
+     input_tokens    INTEGER NOT NULL DEFAULT 0,
+     output_tokens   INTEGER NOT NULL DEFAULT 0,
+     cached_tokens   INTEGER NOT NULL DEFAULT 0,
+     cost_usd_micro  BIGINT  NOT NULL DEFAULT 0,    -- micro-USD; computed via per-model pricing table
+     started_at      TIMESTAMPTZ NOT NULL,
+     completed_at    TIMESTAMPTZ NOT NULL,
+     request_id      TEXT NOT NULL                  -- OTel trace_id correlation
+   );
+   CREATE INDEX llm_token_usage_tenant_ts ON llm_token_usage (tenant_id, started_at DESC);
+   CREATE INDEX llm_token_usage_source ON llm_token_usage (tenant_id, source_kind, source_id);
+   CREATE INDEX llm_token_usage_user ON llm_token_usage (tenant_id, user_id, started_at DESC) WHERE user_id IS NOT NULL;
+   ```
+
+3. **Be queryable** via `/v1/usage`:
+
+   ```
+   GET /v1/usage?from=<iso>&to=<iso>&group_by=source_kind|user_id|model|day
+   → { rows: [{ group, input_tokens, output_tokens, cached_tokens, cost_usd_micro, call_count }, …], totals: {...} }
+   ```
+
+   - Owner-only by default; tenant admins see all-users rollup.
+   - Drill-down: `/v1/usage/sources?source_kind=todo_extraction&from=…&to=…` returns per-extraction rows.
+
+4. **Be enforced at a single integration point**: all model invocation in `services/ai-backend` (and any other service making LLM calls — backend's todo-extractor, routine pipeline) goes through `agent_runtime/observability/llm_call_tracker.py` (NEW). It wraps every provider client call:
+
+   ```python
+   async with track_llm_call(source=Source(kind="todo_extraction", id=extraction_id),
+                              model=cfg.model,
+                              request_id=ctx.request_id) as tracker:
+       response = await provider.invoke(...)
+       tracker.record(response.usage)
+   ```
+
+   Direct provider client calls outside `track_llm_call` are an ESLint-equivalent CI failure for Python (pre-commit hook or test).
+
+5. **Owner & ship in Phase 0.6 — Token Usage Tracking** (NEW prerequisite, runs in parallel with Phase 0.5 Shared Primitives):
+   - `services/backend/src/backend_app/usage/` (NEW route module + Postgres schema)
+   - `services/backend-facade/src/backend_facade/usage_routes.py` (NEW)
+   - `packages/api-types/src/usage.ts` (NEW)
+   - `services/ai-backend/src/agent_runtime/observability/llm_call_tracker.py` (NEW; wraps every provider call)
+   - Migration: instrument the existing run pipeline's LLM calls to flow through the tracker (single integration point in `deep_agent_builder.py`)
+   - CI guard: import-graph check that no provider SDK is imported outside `llm_call_tracker.py`
+   - Tests: every existing run-test asserts that one or more `llm_token_usage` rows land per run; cross-tenant isolation; per-source query correctness; cost computation per pricing table
+
+6. **Tenant isolation**: every query filters `tenant_id` first.
+
+7. **PII**: NEVER record message content. Only token counts + source IDs.
+
+8. **Retention**: token-usage rows retained 730 days (audit + billing window). Hard-deleted in tenant-level GDPR-delete.
+
+**Consumers (mandatory):** Phase 3 Todos extraction, Phase 5 Routines runs, Phase 1 Chats runs (existing path, instrumented in 0.6), Phase 6 Library indexing (when it lands), Phase 11 Memory retrieval (when it lands), and any future LLM-calling code path.
+
+**Dispatch:** Phase 0.6 is a single agent (see implementation-plan.md §2 for the new row). It runs in parallel with Phase 0.5 Shared Primitives. Neither has a Phase 1+ dependency, so destinations gate on `Phase 0.5 AND Phase 0.6 both merged`.
+
 ---
 
 ## 6. Decision summary table (for impl agents — quick reference)
@@ -507,6 +578,17 @@ Implications for P4-A impl:
 ### 9.4 Phase 1 Chats canvas — all 10 sub-PRD recommendations accepted as binding
 
 See [implementation-plan.md](implementation-plan.md) §3 (Phase 1) for the full table. No deviations.
+
+### 9.6 Phase 3 Todos — all 9 questions resolved (4 deviations from sub-PRD recs)
+
+See [implementation-plan.md](implementation-plan.md) §3 (Phase 3) for the full table. Four deviations:
+
+- **Q2 Recurring todos** — **IN Phase 3** (sub-PRD recommended Wave 4 deferral; orchestrator pulled forward). Spec: cron-spec on Todo + materialization worker in ai-backend. Series UNIQUE on `(series_id, due_date)` for idempotent re-fires. See implementation-plan §11.1.
+- **Q3 Subtasks** — **IN Phase 3** (sub-PRD recommended Wave 5 deferral; orchestrator pulled forward). One level of nesting; no infinite tree. Parent.done computed from children. Cascade-delete to children. See implementation-plan §11.2.
+- **Q6 Project default** — **context-aware**, more specific than sub-PRD's "current project if applicable, else Unfiled". Three rules: project-detail view → that project's id; /todos direct → null; inline-add → inherits TodosPanel's active project filter.
+- **Q9 LLM prompt + budget** — **Impl-C proposes; orchestrator approves before merge**, AND every LLM call must flow through the new system-level token-usage tracker (§5.5 above). Sub-PRD's specific prompt/budget recommendation is a starting point but not pre-approved.
+
+**Scope impact on P3-A and P3-B:** the addition of recurring + subtasks expands Phase 3 by an estimated 30-40% (extra schema, materialization worker, parent/child UI, cascade rules, tests). Impl-A and Impl-B briefs are extended accordingly; no extra agent needed unless the implementation surfaces complexity that warrants an Impl-C carve-out for the materializer.
 
 ### 9.5 Phase 2 Home — all 8 questions resolved (3 deviations from sub-PRD recs)
 
