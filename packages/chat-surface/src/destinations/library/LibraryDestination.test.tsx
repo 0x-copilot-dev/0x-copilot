@@ -17,11 +17,9 @@ import type {
   Router,
 } from "../../routing/router";
 
-import {
-  LibraryDestination,
-  type LibraryItem,
-  type LibraryItemId,
-} from "./LibraryDestination";
+import type { LibraryItemId } from "@enterprise-search/api-types";
+
+import { LibraryDestination, type LibraryItem } from "./LibraryDestination";
 
 interface DeferredTransport {
   readonly transport: Transport;

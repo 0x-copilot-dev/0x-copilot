@@ -253,6 +253,81 @@ export {
 } from "./thread-canvas";
 // === end Phase 2-E ===
 
+// === Phase 0.5 shared primitives — branded IDs + cross-destination refs ===
+// Source of truth: @enterprise-search/api-types/src/{brands,refs}.ts.
+// Re-exported here so chat-surface consumers can keep their single import
+// site, but the types themselves are NOT redeclared.
+export type {
+  AgentId,
+  ApprovalId,
+  ConnectorId,
+  ConversationId,
+  InboxItemId,
+  ItemKind,
+  ItemRef,
+  ItemRefSnapshot,
+  LibraryDatasetId,
+  LibraryEntityId,
+  LibraryFileId,
+  LibraryItemId,
+  LibraryPageId,
+  MeetingExternalId,
+  MemoryItemId,
+  ProjectId,
+  RoutineId,
+  RunId,
+  SectionResult,
+  SkillId,
+  SubagentId,
+  TenantId,
+  TodoExtractionId,
+  TodoId,
+  ToolId,
+  ToolResultId,
+  UserId,
+} from "@enterprise-search/api-types";
+
+// ItemLink registry + renderer (cross-audit §3.3).
+export {
+  ItemLink,
+  ItemRefResolverAlreadyRegistered,
+  ItemRefResolverNotRegistered,
+  __resetItemRefRegistryForTests,
+  hasItemRefResolver,
+  registerItemRefResolver,
+  resolveItemRef,
+  unregisterItemRefResolver,
+  type ItemLinkProps,
+  type ItemRefResolved,
+  type ItemRefResolver,
+} from "./refs";
+
+// Time formatting (cross-audit §3.4).
+export { formatRelativeTime } from "./util/time";
+
+// Shell primitives.
+export {
+  ActivityList,
+  CardGrid,
+  DocList,
+  EmptyState,
+  FilterTabs,
+  PageHeader,
+  StatusPill,
+  type ActivityListProps,
+  type ActivityRow,
+  type CardGridProps,
+  type EmptyStateAction,
+  type EmptyStateProps,
+  type FilterTabOption,
+  type FilterTabsProps,
+  type PageHeaderPrimaryAction,
+  type PageHeaderProps,
+  type StatusPillProps,
+  type StatusTone,
+} from "./shell";
+// === end Phase 0.5 ===
+
 // === Phase 2-A / 3 destinations ===
 export {
   ChatsDestination,
@@ -261,39 +336,29 @@ export {
 } from "./destinations/chats";
 export {
   HomeDestination,
-  type ConversationId,
   type FavoriteTool,
   type HomePayload,
   type PinnedChat,
   type RecentRun,
   type RecentRunStatus,
-  type RunId,
-  type SkillId,
 } from "./destinations/home";
 export {
   InboxDestination,
   type InboxFilter,
   type InboxItem,
-  type InboxItemId,
   type InboxItemKind,
   type InboxPayload,
 } from "./destinations/inbox";
 export {
   TodosDestination,
   type Todo,
-  type TodoId,
   type TodoStatusFilter,
   type TodosPayload,
 } from "./destinations/todos";
-export {
-  ProjectsDestination,
-  type Project,
-  type ProjectId,
-} from "./destinations/projects";
+export { ProjectsDestination, type Project } from "./destinations/projects";
 export {
   LibraryDestination,
   type LibraryItem,
-  type LibraryItemId,
   type LibraryItemKind,
 } from "./destinations/library";
 export { AgentsDestination, type AgentRunRow } from "./destinations/agents";

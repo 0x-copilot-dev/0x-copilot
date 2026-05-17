@@ -13,13 +13,13 @@ import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
-import {
-  HomeDestination,
-  type ConversationId,
-  type HomePayload,
-  type RunId,
-  type SkillId,
-} from "./HomeDestination";
+import type {
+  ConversationId,
+  RunId,
+  SkillId,
+} from "@enterprise-search/api-types";
+
+import { HomeDestination, type HomePayload } from "./HomeDestination";
 
 interface DeferredController<T> {
   readonly transport: Transport;

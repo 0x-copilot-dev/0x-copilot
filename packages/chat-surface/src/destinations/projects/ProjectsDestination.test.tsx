@@ -18,11 +18,9 @@ import type {
   Router,
 } from "../../routing/router";
 
-import {
-  ProjectsDestination,
-  type Project,
-  type ProjectId,
-} from "./ProjectsDestination";
+import type { ProjectId } from "@enterprise-search/api-types";
+
+import { ProjectsDestination, type Project } from "./ProjectsDestination";
 
 interface DeferredTransport {
   readonly transport: Transport;

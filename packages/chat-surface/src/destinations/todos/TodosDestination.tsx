@@ -6,13 +6,13 @@ import {
   type ReactElement,
 } from "react";
 
+import type { TodoId } from "@enterprise-search/api-types";
+
 import { useRouter } from "../../providers/RouterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 import type { ArtifactRoute } from "../../routing/router";
 
 export type TodoStatusFilter = "open" | "done" | "all";
-
-export type TodoId = string & { readonly __brand: "TodoId" };
 
 export interface Todo {
   readonly id: TodoId;

@@ -6,15 +6,16 @@ import {
   type ReactElement,
 } from "react";
 
+import type { InboxItemId } from "@enterprise-search/api-types";
+
 import { useRouter } from "../../providers/RouterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 import type { ArtifactRoute } from "../../routing/router";
+import { formatRelativeTime } from "../../util/time";
 
 export type InboxFilter = "all" | "mentions" | "approvals" | "errors";
 
 export type InboxItemKind = "mention" | "approval" | "error";
-
-export type InboxItemId = string & { readonly __brand: "InboxItemId" };
 
 export interface InboxItem {
   readonly id: InboxItemId;
@@ -88,23 +89,6 @@ const BADGE_ERROR = "var(--color-danger)";
 const DANGER = "var(--color-danger)";
 
 const SKELETON_ROW_COUNT = 5;
-
-function formatRelativeTime(iso: string, now: number = Date.now()): string {
-  const parsed = Date.parse(iso);
-  if (Number.isNaN(parsed)) return "—";
-  const diff = Math.max(0, now - parsed);
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(months / 12);
-  return `${years}y ago`;
-}
 
 function badgeColor(kind: InboxItemKind): string {
   if (kind === "mention") return BADGE_MENTION;

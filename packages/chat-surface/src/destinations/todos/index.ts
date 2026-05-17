@@ -1,7 +1,9 @@
+// TodoId lives in @enterprise-search/api-types — see Phase 0.5
+// shared-primitives migration. The top-level chat-surface index
+// re-exports it from the canonical site.
 export {
   TodosDestination,
   type Todo,
-  type TodoId,
   type TodoStatusFilter,
   type TodosPayload,
 } from "./TodosDestination";

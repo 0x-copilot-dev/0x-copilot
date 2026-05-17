@@ -13,10 +13,11 @@ import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
+import type { InboxItemId } from "@enterprise-search/api-types";
+
 import {
   InboxDestination,
   type InboxFilter,
-  type InboxItemId,
   type InboxPayload,
 } from "./InboxDestination";
 

@@ -13,11 +13,9 @@ import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
-import {
-  TodosDestination,
-  type TodoId,
-  type TodosPayload,
-} from "./TodosDestination";
+import type { TodoId } from "@enterprise-search/api-types";
+
+import { TodosDestination, type TodosPayload } from "./TodosDestination";
 
 interface DeferredController {
   readonly transport: Transport;
