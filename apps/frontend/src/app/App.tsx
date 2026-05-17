@@ -22,6 +22,7 @@ import { AppearanceProvider } from "../features/appearance/AppearanceContext";
 import { UserPreferencesProvider } from "../features/me/UserPreferencesContext";
 import { useUserProfile } from "../features/me/useUserProfile";
 import { UserProfileProvider } from "../features/me/UserProfileContext";
+import { DEFAULT_SETTINGS_SECTION } from "../features/settings/sections";
 import { useSkills } from "../features/skills/useSkills";
 
 // Route-level code splitting. Each screen is its own Vite chunk so the
@@ -571,6 +572,12 @@ function EnterpriseSearchApp({
       presenceSignal={presenceSignal}
       activeDestination={activeDestination}
       onNavigate={handleRailNavigate}
+      onOpenSettings={() =>
+        router.navigate({
+          screen: "settings",
+          section: DEFAULT_SETTINGS_SECTION,
+        })
+      }
     >
       <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
     </ChatShell>

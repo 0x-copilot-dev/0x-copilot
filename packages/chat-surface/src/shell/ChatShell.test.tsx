@@ -53,6 +53,7 @@ const stubPresence: PresenceSignal = {
 interface MountOptions {
   readonly activeDestination?: ShellDestinationSlug;
   readonly onNavigate?: (slug: ShellDestinationSlug) => void;
+  readonly onOpenSettings?: () => void;
   readonly topbarLeaf?: string | null;
   readonly children?: React.ReactNode;
 }
@@ -60,6 +61,7 @@ interface MountOptions {
 function mount({
   activeDestination = "home",
   onNavigate = () => {},
+  onOpenSettings,
   topbarLeaf,
   children,
 }: MountOptions = {}) {
@@ -71,6 +73,7 @@ function mount({
       presenceSignal={stubPresence}
       activeDestination={activeDestination}
       onNavigate={onNavigate}
+      onOpenSettings={onOpenSettings}
       topbarLeaf={topbarLeaf ?? null}
     >
       {children}
@@ -94,13 +97,15 @@ function shellRoot(): HTMLElement {
 }
 
 describe("ChatShell", () => {
-  it("renders a four-region grid for non-chats destinations", () => {
+  it("renders a four-region grid for non-chats destinations and starts with the right rail closed", () => {
     mount({ activeDestination: "home" });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-destination", "home");
-    expect(shell).toHaveAttribute("data-right-rail-open", "open");
+    // Right rail defaults to closed — Activity / Approvals content is a
+    // Wave 5 thread-canvas job; an open empty rail was visual noise.
+    expect(shell).toHaveAttribute("data-right-rail-open", "closed");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "52px 224px 1fr 380px",
+      gridTemplateColumns: "52px 224px 1fr 0",
     });
   });
 
@@ -109,7 +114,7 @@ describe("ChatShell", () => {
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-destination", "chats");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "52px 1fr 380px",
+      gridTemplateColumns: "52px 1fr 0",
     });
     // The ContextPanel is absent for chats — single source of truth: no
     // double-sidebar.
@@ -124,8 +129,13 @@ describe("ChatShell", () => {
     expect(
       screen.getByRole("complementary", { name: /home panel/i }),
     ).toBeInTheDocument();
+    // Right rail starts collapsed; the collapsed-state aside is still
+    // present (it owns the edge toggle) but its aria-label carries the
+    // "(collapsed)" suffix.
     expect(
-      screen.getByRole("complementary", { name: "Atlas conversation" }),
+      screen.getByRole("complementary", {
+        name: "Atlas conversation (collapsed)",
+      }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("topbar-breadcrumb")).toBeInTheDocument();
   });
@@ -145,15 +155,30 @@ describe("ChatShell", () => {
     expect(screen.getByTestId("custom-body")).toBeInTheDocument();
   });
 
-  it("collapses the right column when the right rail is toggled closed", () => {
+  it("toggles the right column open when the edge toggle is clicked", () => {
     mount({ activeDestination: "home" });
     const shell = shellRoot();
-    expect(shell).toHaveAttribute("data-right-rail-open", "open");
-    fireEvent.click(screen.getByTestId("right-rail-toggle"));
     expect(shell).toHaveAttribute("data-right-rail-open", "closed");
+    fireEvent.click(screen.getByTestId("right-rail-toggle"));
+    expect(shell).toHaveAttribute("data-right-rail-open", "open");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "52px 224px 1fr 0",
+      gridTemplateColumns: "52px 224px 1fr 380px",
     });
+  });
+
+  it("renders a Settings button in the rail foot when onOpenSettings is supplied", () => {
+    const onOpenSettings = vi.fn();
+    mount({ activeDestination: "home", onOpenSettings });
+    const settingsBtn = screen.getByRole("button", { name: "Settings" });
+    expect(settingsBtn).toBeInTheDocument();
+    expect(settingsBtn).toHaveAttribute("data-rail-action", "settings");
+    fireEvent.click(settingsBtn);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the rail Settings button when onOpenSettings is absent", () => {
+    mount({ activeDestination: "home" });
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 
   it("forwards the topbar leaf when supplied", () => {

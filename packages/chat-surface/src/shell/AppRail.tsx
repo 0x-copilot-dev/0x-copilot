@@ -23,6 +23,14 @@ export interface AppRailProps {
    * is delivered too; the host can ignore or treat as a deep-link reset.
    */
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
+  /**
+   * Optional Settings click handler. When supplied, a Settings gear
+   * button renders in the rail's foot section (mirrors os-shell.jsx
+   * rail__foot). Settings isn't a destination — it lives outside the
+   * 11-slug enum — so it gets its own slot rather than being squeezed
+   * in next to the destinations.
+   */
+  readonly onOpenSettings?: () => void;
 }
 
 function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
@@ -122,9 +130,48 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
   }
 }
 
+function SettingsGlyph(): ReactElement {
+  return (
+    <svg
+      aria-hidden
+      focusable={false}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
+  );
+}
+
+function railButtonStyle(isActive: boolean): CSSProperties {
+  return {
+    width: 36,
+    height: 36,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: isActive
+      ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
+      : "transparent",
+    border: "none",
+    borderRadius: 8,
+    color: isActive ? "var(--color-accent)" : "var(--color-text-subtle)",
+    cursor: "pointer",
+    padding: 0,
+  };
+}
+
 export function AppRail({
   activeDestination,
   onNavigate,
+  onOpenSettings,
 }: AppRailProps): ReactElement {
   const railStyle: CSSProperties = {
     width: RAIL_WIDTH,
@@ -137,8 +184,26 @@ export function AppRail({
     alignItems: "center",
     paddingTop: 12,
     paddingBottom: 12,
-    gap: 4,
     boxSizing: "border-box",
+  };
+  // The destinations list takes the available vertical space; the foot
+  // group (currently just Settings) hugs the bottom — mirrors os.css's
+  // `.rail__items { flex: 1 }` + `.rail__foot { border-top }` pattern.
+  const itemsStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 4,
+    flex: 1,
+  };
+  const footStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 4,
+    paddingTop: 8,
+    borderTop: "1px solid var(--color-border)",
+    width: 36,
   };
 
   return (
@@ -147,39 +212,40 @@ export function AppRail({
       style={railStyle}
       data-component="app-rail"
     >
-      {SHELL_DESTINATIONS.map((d) => {
-        const isActive = d.slug === activeDestination;
-        const buttonStyle: CSSProperties = {
-          width: 36,
-          height: 36,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: isActive
-            ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
-            : "transparent",
-          border: "none",
-          borderRadius: 8,
-          color: isActive ? "var(--color-accent)" : "var(--color-text-subtle)",
-          cursor: "pointer",
-          padding: 0,
-        };
-        return (
+      <div style={itemsStyle}>
+        {SHELL_DESTINATIONS.map((d) => {
+          const isActive = d.slug === activeDestination;
+          return (
+            <button
+              key={d.slug}
+              type="button"
+              aria-label={d.label}
+              aria-current={isActive ? "page" : undefined}
+              data-destination={d.slug}
+              data-state={isActive ? "active" : "inactive"}
+              onClick={() => onNavigate(d.slug)}
+              style={railButtonStyle(isActive)}
+              title={d.label}
+            >
+              <Glyph slug={d.slug} />
+            </button>
+          );
+        })}
+      </div>
+      {onOpenSettings ? (
+        <div style={footStyle}>
           <button
-            key={d.slug}
             type="button"
-            aria-label={d.label}
-            aria-current={isActive ? "page" : undefined}
-            data-destination={d.slug}
-            data-state={isActive ? "active" : "inactive"}
-            onClick={() => onNavigate(d.slug)}
-            style={buttonStyle}
-            title={d.label}
+            aria-label="Settings"
+            data-rail-action="settings"
+            onClick={onOpenSettings}
+            style={railButtonStyle(false)}
+            title="Settings"
           >
-            <Glyph slug={d.slug} />
+            <SettingsGlyph />
           </button>
-        );
-      })}
+        </div>
+      ) : null}
     </nav>
   );
 }

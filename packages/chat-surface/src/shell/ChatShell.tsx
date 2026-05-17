@@ -51,6 +51,15 @@ export interface ChatShellProps<TRoute> {
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
 
   /**
+   * Optional Settings click handler. When supplied, the AppRail renders
+   * a Settings button in its foot section. Settings is intentionally
+   * not a destination (it's a per-user/admin screen, not a workspace
+   * surface), so it gets its own slot rather than expanding the 11-slug
+   * `ShellDestinationSlug` enum.
+   */
+  readonly onOpenSettings?: () => void;
+
+  /**
    * Optional sub-crumb for the topbar (e.g. conversation id, server id).
    */
   readonly topbarLeaf?: string | null;
@@ -75,6 +84,7 @@ export function ChatShell<TRoute>({
   presenceSignal,
   activeDestination,
   onNavigate,
+  onOpenSettings,
   topbarLeaf,
   contextPanel,
   children,
@@ -87,6 +97,7 @@ export function ChatShell<TRoute>({
             <ShellGrid
               activeDestination={activeDestination}
               onNavigate={onNavigate}
+              onOpenSettings={onOpenSettings}
               topbarLeaf={topbarLeaf}
               contextPanel={contextPanel}
             >
@@ -102,6 +113,7 @@ export function ChatShell<TRoute>({
 interface ShellGridProps {
   readonly activeDestination: ShellDestinationSlug;
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
+  readonly onOpenSettings?: () => void;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
   readonly children?: ReactNode;
@@ -110,11 +122,16 @@ interface ShellGridProps {
 function ShellGrid({
   activeDestination,
   onNavigate,
+  onOpenSettings,
   topbarLeaf,
   contextPanel,
   children,
 }: ShellGridProps): ReactElement {
-  const [rightOpen, setRightOpen] = useState(true);
+  // Default to closed: the right rail has no destination-specific content
+  // wired yet (Activity / Approvals tabs are a Wave 5 thread-canvas job)
+  // so an open empty rail is visual noise. Users open it via the edge
+  // toggle when there's something to show.
+  const [rightOpen, setRightOpen] = useState(false);
   const fullBleed = FULL_BLEED_DESTINATIONS.has(activeDestination);
 
   const rightCol = rightOpen ? `${RIGHT_RAIL_WIDTH}px` : "0";
@@ -154,7 +171,11 @@ function ShellGrid({
       data-right-rail-open={rightOpen ? "open" : "closed"}
       style={outerStyle}
     >
-      <AppRail activeDestination={activeDestination} onNavigate={onNavigate} />
+      <AppRail
+        activeDestination={activeDestination}
+        onNavigate={onNavigate}
+        onOpenSettings={onOpenSettings}
+      />
       {fullBleed ? null : (
         <ContextPanelSlot
           activeDestination={activeDestination}
