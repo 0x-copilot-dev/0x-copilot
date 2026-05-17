@@ -148,4 +148,50 @@ describe("HashRouter", () => {
     expect(window.location.pathname).toBe("/settings");
     expect(window.location.hash).toBe("");
   });
+
+  // Phase 7C — tier-2 adapter review (admin-only) routing.
+  it("derives the admin adapter-review queue route from the URL", () => {
+    setLocation("/admin/adapter-review", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "admin-adapter-review-queue",
+    });
+  });
+
+  it("derives the admin adapter-review detail route from the URL", () => {
+    setLocation("/admin/adapter-review/cand_42", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "admin-adapter-review-detail",
+      candidateId: "cand_42",
+    });
+  });
+
+  it("decodes the candidate id from the path", () => {
+    setLocation("/admin/adapter-review/cand%2Fwith-slash", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "admin-adapter-review-detail",
+      candidateId: "cand/with-slash",
+    });
+  });
+
+  it("navigate to admin queue updates the URL", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({ screen: "admin-adapter-review-queue" });
+    expect(window.location.pathname).toBe("/admin/adapter-review");
+  });
+
+  it("navigate to admin detail encodes the candidate id", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({
+      screen: "admin-adapter-review-detail",
+      candidateId: "cand/with-slash",
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/adapter-review/cand%2Fwith-slash",
+    );
+  });
 });

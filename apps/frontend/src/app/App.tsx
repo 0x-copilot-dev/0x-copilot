@@ -13,6 +13,8 @@ import { LoginScreen } from "../features/auth/LoginScreen";
 import { MfaPrompt } from "../features/auth/MfaPrompt";
 import { ChatScreen } from "../features/chat/ChatScreen";
 import { ShareScreen } from "../features/share/ShareScreen";
+// Phase 7C — admin-only tier-2 adapter review queue.
+import { AdapterReviewScreen } from "../admin/adapter-review";
 import {
   clearPendingMcpAuthAction,
   readPendingMcpAuthAction,
@@ -160,6 +162,7 @@ function AuthGate(): ReactElement {
               orgId: auth.identity.org_id,
               userId: auth.identity.user_id,
             }}
+            roles={auth.identity.roles}
           />
         </AppearanceProvider>
       </UserPreferencesProvider>
@@ -193,8 +196,10 @@ function completeMcpOAuthOnce(
 
 function EnterpriseSearchApp({
   identity,
+  roles,
 }: {
   identity: RequestIdentity;
+  roles: readonly string[];
 }): ReactElement {
   const connectors = useConnectors(identity);
   const skills = useSkills(identity);
@@ -323,8 +328,54 @@ function EnterpriseSearchApp({
     };
   }, [connectors.refresh, identity]);
 
+  const isAdmin = roles.includes("admin");
+
   let body: ReactElement;
-  if (route.screen === "settings") {
+  if (
+    route.screen === "admin-adapter-review-queue" ||
+    route.screen === "admin-adapter-review-detail"
+  ) {
+    // Phase 7C — admin tier-2 adapter review queue. The role gate here
+    // is defence-in-depth; the backend's
+    // ``admin:adapter_registry_review`` scope is the real boundary. If
+    // a non-admin lands on the route (bookmark, copy-paste), we bounce
+    // back to chat rather than crashing — the API would 403 anyway.
+    if (!isAdmin) {
+      router.navigate({ screen: "chat" }, { replace: true });
+      body = (
+        <ChatScreen
+          connectors={connectors}
+          skills={skills}
+          identity={identity}
+          onOpenSettings={(section = "profile") => {
+            router.navigate({ screen: "settings", section });
+          }}
+          oauthStatus={oauthStatus}
+          completedMcpAuthAction={completedMcpAuthAction}
+        />
+      );
+    } else {
+      const adminRoute =
+        route.screen === "admin-adapter-review-detail"
+          ? { screen: "detail" as const, candidateId: route.candidateId }
+          : { screen: "queue" as const };
+      body = (
+        <AdapterReviewScreen
+          identity={identity}
+          route={adminRoute}
+          onOpenCandidate={(candidateId) =>
+            router.navigate({
+              screen: "admin-adapter-review-detail",
+              candidateId,
+            })
+          }
+          onBackToQueue={() =>
+            router.navigate({ screen: "admin-adapter-review-queue" })
+          }
+        />
+      );
+    }
+  } else if (route.screen === "settings") {
     body = (
       <SettingsScreen
         connectors={connectors}

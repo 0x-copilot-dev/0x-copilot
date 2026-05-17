@@ -11,4 +11,13 @@ export type AppRoute =
   // PR 6.1/6.2 — recipient view of a shared conversation. The token is the
   // access grant; AuthGate still requires a logged-in session because v1
   // keeps shares same-org-only.
-  | { readonly screen: "share"; readonly token: string };
+  | { readonly screen: "share"; readonly token: string }
+  // Phase 7C — admin-only tier-2 adapter review queue. Mounted at
+  // ``/admin/adapter-review`` (queue) and ``/admin/adapter-review/<id>``
+  // (detail). The web router exposes the route shape unconditionally; the
+  // admin role gate lives in App.tsx + on the backend.
+  | { readonly screen: "admin-adapter-review-queue" }
+  | {
+      readonly screen: "admin-adapter-review-detail";
+      readonly candidateId: string;
+    };
