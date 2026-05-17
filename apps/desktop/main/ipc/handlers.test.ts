@@ -346,20 +346,19 @@ describe("TransportBridge.unsubscribeForWebContents", () => {
   });
 });
 
-describe("TransportBridge default — MockTransport when no transport supplied", () => {
-  it("uses MockTransport for request / subscribe paths", async () => {
+describe("TransportBridge — transport injection is required", () => {
+  it("uses exactly the injected transport (no implicit MockTransport default)", () => {
     const events: Array<{
       webContentsId: number;
       payload: StreamEventPayload;
     }> = [];
-    const bridge = new TransportBridge((webContentsId, payload) =>
-      events.push({ webContentsId, payload }),
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(
+      (webContentsId, payload) => events.push({ webContentsId, payload }),
+      { transport },
     );
-    // MockTransport's session is { bearer: null } and capabilities.substrate
-    // is "web" — desktop-webview is the IpcTransport bootstrap value, not
-    // the bridge's. This test asserts the default wiring uses MockTransport.
     const snap = bridge.sessionSnapshot();
     expect(snap.session.bearer).toBeNull();
-    expect(snap.capabilities.substrate).toBe("web");
+    expect(snap.capabilities.substrate).toBe("desktop-webview");
   });
 });

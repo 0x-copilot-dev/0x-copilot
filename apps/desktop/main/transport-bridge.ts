@@ -6,7 +6,6 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@enterprise-search/chat-transport";
-import { MockTransport } from "@enterprise-search/chat-transport";
 
 import type { StreamEventPayload } from "./ipc/schemas";
 
@@ -25,23 +24,20 @@ interface SubscriptionHandle {
 }
 
 export interface TransportBridgeOptions {
-  // Phase 1 default: MockTransport. Phase 5 swaps a real HTTP+SSE pump that
-  // attaches the per-(workspace_id, server) bearer from safeStorage before
-  // making the outbound request (D24 / PRD §6.7).
-  readonly transport?: Transport;
+  // The bridge does not pick a transport — apps/desktop/main/index.ts does,
+  // based on env (MockTransport for dev, WebTransport wrapped with
+  // withBearerRefresh for production). Required so a wiring bug can't
+  // silently inject a fixture into a shipped binary.
+  readonly transport: Transport;
 }
 
-// Main-process counterpart to the renderer's IpcTransport. Holds the actual
-// Transport (HTTP / SSE pump in production; MockTransport in Phase 1) and
-// tracks renderer-owned subscriptions so we can clean them up when a
-// webContents goes away (window close, reload, navigation).
 export class TransportBridge {
   readonly #transport: Transport;
   readonly #emit: StreamEventEmitter;
   readonly #subscriptions = new Map<string, SubscriptionHandle>();
 
-  constructor(emit: StreamEventEmitter, options: TransportBridgeOptions = {}) {
-    this.#transport = options.transport ?? new MockTransport();
+  constructor(emit: StreamEventEmitter, options: TransportBridgeOptions) {
+    this.#transport = options.transport;
     this.#emit = emit;
   }
 
