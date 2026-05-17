@@ -147,3 +147,9 @@ export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === Phase 0-B ports facade ===
 export * from "./ports";
 // === end Phase 0-B ===
+
+// === Phase 1-D routing-palette ===
+export { HashRouter } from "./routing/HashRouter";
+export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
+export { CommandPalette } from "./palette";
+// === end Phase 1-D ===
