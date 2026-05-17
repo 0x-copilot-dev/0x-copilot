@@ -1,0 +1,134 @@
+import type { IpcMain, IpcMainInvokeEvent } from "electron";
+import type { z } from "zod";
+
+import type { TransportBridge } from "../transport-bridge";
+import {
+  CHANNELS,
+  EmptyParamsSchema,
+  IpcValidationError,
+  TransportRequestParamsSchema,
+  TransportSubscribeParamsSchema,
+  TransportUnsubscribeParamsSchema,
+} from "./schemas";
+
+export interface IpcLogger {
+  info(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+}
+
+const defaultLogger: IpcLogger = {
+  info: (msg, ctx) => {
+    console.log(`[ipc] ${msg}`, ctx ?? "");
+  },
+  warn: (msg, ctx) => {
+    console.warn(`[ipc] ${msg}`, ctx ?? "");
+  },
+};
+
+function parseOrThrow<T>(
+  channel: string,
+  schema: z.ZodType<T>,
+  raw: unknown,
+): T {
+  const result = schema.safeParse(raw);
+  if (!result.success) {
+    throw new IpcValidationError(channel, result.error.issues);
+  }
+  return result.data;
+}
+
+export interface RegisterHandlersDeps {
+  readonly ipcMain: IpcMain;
+  readonly bridge: TransportBridge;
+  readonly logger?: IpcLogger;
+}
+
+// Registers every IPC handler the renderer's IpcTransport invokes.
+// Returns a teardown function that removes the handlers AND closes any
+// active subscriptions tracked by the bridge. Agent 1-A's main/index.ts
+// calls this once after window creation and the returned teardown on app
+// shutdown.
+//
+// Race-avoidance contract: the transport.subscribe handler registers the
+// underlying transport subscription SYNCHRONOUSLY inside the handler body
+// before resolving. The renderer-side IpcTransport registers its own
+// subscription record SYNCHRONOUSLY before firing this IPC. Both ends are
+// fully set up before any stream-event can be emitted; the renderer's
+// listener (installed in its constructor) is always wired before any
+// subscribe call lands.
+export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
+  const { ipcMain, bridge } = deps;
+  const logger = deps.logger ?? defaultLogger;
+
+  ipcMain.handle(CHANNELS.transportRequest, async (_event, raw: unknown) => {
+    const params = parseOrThrow(
+      CHANNELS.transportRequest,
+      TransportRequestParamsSchema,
+      raw,
+    );
+    return bridge.request(params);
+  });
+
+  ipcMain.handle(
+    CHANNELS.transportSubscribe,
+    async (event: IpcMainInvokeEvent, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportSubscribe,
+        TransportSubscribeParamsSchema,
+        raw,
+      );
+      const webContentsId = event.sender.id;
+      try {
+        bridge.subscribe(params.subscriptionId, webContentsId, {
+          path: params.path,
+          query: params.query,
+          eventName: params.eventName,
+        });
+      } catch (err) {
+        logger.warn("subscribe failed", {
+          subscriptionId: params.subscriptionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+      return { ok: true as const };
+    },
+  );
+
+  ipcMain.handle(
+    CHANNELS.transportUnsubscribe,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportUnsubscribe,
+        TransportUnsubscribeParamsSchema,
+        raw,
+      );
+      const removed = bridge.unsubscribe(params.subscriptionId);
+      return { removed };
+    },
+  );
+
+  ipcMain.handle(
+    CHANNELS.transportSessionSnapshot,
+    async (_event, raw: unknown) => {
+      parseOrThrow(
+        CHANNELS.transportSessionSnapshot,
+        EmptyParamsSchema,
+        raw ?? {},
+      );
+      return bridge.sessionSnapshot();
+    },
+  );
+
+  return () => {
+    for (const channel of [
+      CHANNELS.transportRequest,
+      CHANNELS.transportSubscribe,
+      CHANNELS.transportUnsubscribe,
+      CHANNELS.transportSessionSnapshot,
+    ]) {
+      ipcMain.removeHandler(channel);
+    }
+    bridge.closeAll();
+  };
+}
