@@ -3459,3 +3459,26 @@ export type {
   UpdateTodoRequest,
 } from "./todos";
 // === end Phase 3 Todos ===
+
+// === Phase 4 Inbox destination ===
+// Canonical CRUD + state-machine + multi-link wire shape. Cross-audit
+// §1.1 (links: ReadonlyArray<ItemRef> replaces ad-hoc string refs),
+// §1.3 (project-scoped ACL — recipient writes, project-member reads,
+// admin compliance reads, 404-not-403), §1.5 (multi-value OR filter
+// axes), §9.1 (Inbox Q6 revised — inline by default; durable item
+// only when user has not viewed thread within tenant-configurable
+// window; priority filter dropped), §9.3 (reply-to-error routing).
+// Single declaration site: ./inbox.ts.
+export type {
+  BulkInboxAction,
+  BulkUpdateInboxItemsRequest,
+  BulkUpdateInboxItemsResponse,
+  InboxItem,
+  InboxItemKind,
+  InboxItemSender,
+  InboxItemState,
+  InboxListResponse,
+  InboxUnreadCountResponse,
+  UpdateInboxItemRequest,
+} from "./inbox";
+// === end Phase 4 Inbox ===

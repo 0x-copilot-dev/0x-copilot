@@ -103,6 +103,12 @@ from backend_app.observability import (
 )
 from backend_app.dev_idp import register_dev_idp_routes
 from backend_app.home import register_home_routes
+from backend_app.inbox import (
+    InMemoryInboxStore,
+    InboxService,
+    InboxStore,
+    register_inbox_routes,
+)
 from backend_app.todos import (
     InMemoryTodosStore,
     TodosService,
@@ -324,6 +330,7 @@ def create_app(
     adapter_registry_store: object | None = None,
     adapter_source_storage: object | None = None,
     todos_store: TodosStore | None = None,
+    inbox_store: InboxStore | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1315,6 +1322,21 @@ def create_app(
     )
     app.state.todos_service = todos_service
     register_todos_routes(app, service=todos_service)
+
+    # Phase 4 — Inbox destination. Recipient-only writes; project-member
+    # reads; admin compliance reads — all enforced in ``InboxService``.
+    # The store defaults to in-memory; production deploys inject the
+    # Postgres adapter via ``inbox_store=`` (out of scope for P4-A1
+    # but the wiring shape is stable). Body markdown is split into
+    # ``inbox_bodies`` so list queries never pay for body bytes.
+    resolved_inbox_store: InboxStore = inbox_store or InMemoryInboxStore()  # type: ignore[assignment]
+    app.state.inbox_store = resolved_inbox_store
+    inbox_service = InboxService(
+        store=resolved_inbox_store,
+        identity_store=resolved_identity_store,
+    )
+    app.state.inbox_service = inbox_service
+    register_inbox_routes(app, service=inbox_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
