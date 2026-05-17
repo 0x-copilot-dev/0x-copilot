@@ -19,6 +19,12 @@ export {
   type EmailFixturePendingDiff,
   type MockTransportConfig,
 } from "./mock";
+export {
+  withBearerRefresh,
+  type BearerRefreshFn,
+  type BearerRefreshResult,
+  type WithBearerRefreshOptions,
+} from "./auth";
 
 // === Phase 1-C IPC transport ===
 export {

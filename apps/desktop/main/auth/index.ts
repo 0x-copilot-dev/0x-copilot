@@ -17,6 +17,15 @@ export { OidcClient } from "./oidc-client";
 export { SecretStorage } from "./secret-storage";
 export { awaitLoopbackCode, type LoopbackHandle } from "./loopback-server";
 
+export {
+  createFileAuthAuditLog,
+  type AuthAuditEntry,
+  type AuthAuditEvent,
+  type AuthAuditLog,
+  type FileAuthAuditLogOptions,
+  type SignInMode,
+} from "./audit-log";
+
 export interface AuthServiceConfig {
   readonly mode: AuthMode;
   readonly facadeBaseUrl: string;
@@ -42,10 +51,6 @@ const BACKEND_KIND: ServerKind = "backend";
 const BACKEND_SERVER_ID = "facade";
 const REFRESH_WINDOW_MS = 60_000;
 
-// Single service the rest of main wires through. Owns the OIDC client +
-// secret-storage pair, exposes get/set/clear and a bearerProvider for the
-// transport bridge. The bearer never crosses the IPC boundary; only the
-// renderer-safe session view does.
 export class AuthService {
   readonly #oidc: OidcClient;
   readonly #storage: SecretStorage;
@@ -111,6 +116,17 @@ export class AuthService {
 
   activeWorkspace(): string | null {
     return this.#storage.getActiveWorkspace();
+  }
+
+  // Sync read of the in-memory bearer cache for WebTransport, whose Transport
+  // contract requires a sync bearer. Returns null when the session hasn't been
+  // loaded yet — the 401 from the server then drives withBearerRefresh, which
+  // calls the async refresh() above and primes the cache for the retry.
+  getBearerCachedSync(workspaceId: string): string | null {
+    const cached = this.#cache.get(workspaceId);
+    if (cached === undefined) return null;
+    if (cached.expiresAt <= this.#clock()) return null;
+    return cached.accessToken;
   }
 
   async getBearer(workspaceId: string): Promise<string | null> {

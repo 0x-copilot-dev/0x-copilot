@@ -6,14 +6,9 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@enterprise-search/chat-transport";
-import { MockTransport } from "@enterprise-search/chat-transport";
 
 import type { StreamEventPayload } from "./ipc/schemas";
 
-// Pushes a stream event back to a renderer's webContents on the allowlisted
-// stream-event channel. Injected so the bridge can be unit-tested without
-// spinning up Electron. Production wires this to
-// webContents.send(CHANNELS.streamEvent, payload).
 export type StreamEventEmitter = (
   webContentsId: number,
   payload: StreamEventPayload,
@@ -25,45 +20,25 @@ interface SubscriptionHandle {
 }
 
 export interface TransportBridgeOptions {
-  // Phase 1 default: MockTransport. Phase 5 swaps a real HTTP+SSE pump that
-  // attaches the per-(workspace_id, server) bearer from safeStorage before
-  // making the outbound request (D24 / PRD §6.7).
-  readonly transport?: Transport;
-  // Async bearer provider invoked per outbound request. Returns null when
-  // the user is not signed in. The returned bearer is attached as
-  // `Authorization: Bearer <token>` on the request before it leaves main.
-  // Bearers never cross IPC back into the renderer — that's the whole
-  // point of the gate (PRD §6.7).
-  readonly bearerProvider?: () => Promise<string | null>;
+  // Bearer attachment + 401 refresh are responsibilities of the transport
+  // decorator chain (WebTransport.bearerProvider + withBearerRefresh).
+  // The bridge bridges IPC <-> Transport and owns subscription lifecycle —
+  // nothing else. Required so a wiring bug can't silently inject a
+  // fixture into a shipped binary.
+  readonly transport: Transport;
 }
 
-// Main-process counterpart to the renderer's IpcTransport. Holds the actual
-// Transport (HTTP / SSE pump in production; MockTransport in Phase 1) and
-// tracks renderer-owned subscriptions so we can clean them up when a
-// webContents goes away (window close, reload, navigation).
 export class TransportBridge {
   readonly #transport: Transport;
   readonly #emit: StreamEventEmitter;
-  readonly #bearerProvider: (() => Promise<string | null>) | null;
   readonly #subscriptions = new Map<string, SubscriptionHandle>();
 
-  constructor(emit: StreamEventEmitter, options: TransportBridgeOptions = {}) {
-    this.#transport = options.transport ?? new MockTransport();
+  constructor(emit: StreamEventEmitter, options: TransportBridgeOptions) {
+    this.#transport = options.transport;
     this.#emit = emit;
-    this.#bearerProvider = options.bearerProvider ?? null;
   }
 
   async request<T>(req: TypedRequest): Promise<T> {
-    if (this.#bearerProvider !== null) {
-      const bearer = await this.#bearerProvider();
-      if (bearer !== null) {
-        const headers = {
-          ...(req.headers ?? {}),
-          authorization: `Bearer ${bearer}`,
-        };
-        return this.#transport.request<T>({ ...req, headers });
-      }
-    }
     return this.#transport.request<T>(req);
   }
 
@@ -119,7 +94,6 @@ export class TransportBridge {
     return true;
   }
 
-  // Agent 1-A wires this to webContents.on('destroyed') in window.ts.
   unsubscribeForWebContents(webContentsId: number): void {
     for (const [id, handle] of this.#subscriptions) {
       if (handle.webContentsId === webContentsId) {
@@ -129,7 +103,6 @@ export class TransportBridge {
     }
   }
 
-  // Called at app shutdown.
   closeAll(): void {
     for (const [, handle] of this.#subscriptions) {
       handle.subscription.close();

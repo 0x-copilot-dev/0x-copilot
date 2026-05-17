@@ -346,21 +346,20 @@ describe("TransportBridge.unsubscribeForWebContents", () => {
   });
 });
 
-describe("TransportBridge default — MockTransport when no transport supplied", () => {
-  it("uses MockTransport for request / subscribe paths", async () => {
+describe("TransportBridge — transport injection is required", () => {
+  it("uses exactly the injected transport (no implicit MockTransport default)", () => {
     const events: Array<{
       webContentsId: number;
       payload: StreamEventPayload;
     }> = [];
-    const bridge = new TransportBridge((webContentsId, payload) =>
-      events.push({ webContentsId, payload }),
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(
+      (webContentsId, payload) => events.push({ webContentsId, payload }),
+      { transport },
     );
-    // MockTransport's session is { bearer: null } and capabilities.substrate
-    // is "web" — desktop-webview is the IpcTransport bootstrap value, not
-    // the bridge's. This test asserts the default wiring uses MockTransport.
     const snap = bridge.sessionSnapshot();
     expect(snap.session.bearer).toBeNull();
-    expect(snap.capabilities.substrate).toBe("web");
+    expect(snap.capabilities.substrate).toBe("desktop-webview");
   });
 });
 
@@ -454,29 +453,5 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(false);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(false);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);
-  });
-});
-
-describe("TransportBridge bearerProvider", () => {
-  it("attaches Authorization: Bearer header to outbound requests", async () => {
-    const transport = new FakeTransport();
-    const bridge = new TransportBridge(() => undefined, {
-      transport,
-      bearerProvider: async () => "tok-1",
-    });
-    await bridge.request({ method: "GET", path: "/foo" });
-    expect(transport.requestCalls[0].headers?.authorization).toBe(
-      "Bearer tok-1",
-    );
-  });
-
-  it("makes a no-auth request when the provider returns null", async () => {
-    const transport = new FakeTransport();
-    const bridge = new TransportBridge(() => undefined, {
-      transport,
-      bearerProvider: async () => null,
-    });
-    await bridge.request({ method: "GET", path: "/foo" });
-    expect(transport.requestCalls[0].headers?.authorization).toBeUndefined();
   });
 });

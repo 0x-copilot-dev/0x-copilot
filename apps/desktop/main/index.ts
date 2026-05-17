@@ -9,14 +9,25 @@ import {
   webContents,
 } from "electron";
 
-import { CHANNELS } from "@enterprise-search/chat-transport";
+import type { Transport } from "@enterprise-search/chat-transport";
+import {
+  CHANNELS,
+  MockTransport,
+  WebTransport,
+  withBearerRefresh,
+} from "@enterprise-search/chat-transport";
 
+import { wireQualityGateForTier2 } from "./adapters/integrate";
+import {
+  AuthService,
+  createFileAuthAuditLog,
+  type AuthAuditLog,
+  type AuthMode,
+} from "./auth";
 import {
   registerAppProtocolHandler,
   registerAppProtocolPrivilege,
 } from "./app-protocol";
-import { wireQualityGateForTier2 } from "./adapters/integrate";
-import { AuthService, type AuthMode } from "./auth";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
@@ -38,7 +49,12 @@ void app.whenReady().then(() => {
   const rendererDir = join(__dirname, "..", "renderer");
   registerAppProtocolHandler(rendererDir, session.defaultSession);
 
+  const auditLog = createFileAuthAuditLog({
+    filePath: join(app.getPath("userData"), "audit", "auth.log"),
+  });
   const authService = buildAuthService();
+  const transport = createTransport(authService, auditLog);
+
   const transportBridge = new TransportBridge(
     (webContentsId, payload) => {
       const target = webContents.fromId(webContentsId);
@@ -46,13 +62,7 @@ void app.whenReady().then(() => {
         target.send(CHANNELS.streamEvent, payload);
       }
     },
-    {
-      bearerProvider: async () => {
-        const ws = authService.activeWorkspace();
-        if (ws === null) return null;
-        return authService.getBearer(ws);
-      },
-    },
+    { transport },
   );
   teardownIpcHandlers = registerIpcHandlers({
     ipcMain,
@@ -103,6 +113,7 @@ interface ActiveAuthService {
   getSession(workspaceId: string): ReturnType<AuthService["getSession"]>;
   refresh(workspaceId: string): ReturnType<AuthService["refresh"]>;
   getBearer(workspaceId: string): Promise<string | null>;
+  getBearerCachedSync(workspaceId: string): string | null;
   activeWorkspace(): string | null;
 }
 
@@ -156,6 +167,63 @@ function buildAuthService(): ActiveAuthService {
     getSession: (workspaceId) => service.getSession(workspaceId),
     refresh: (workspaceId) => service.refresh(workspaceId),
     getBearer: (workspaceId) => service.getBearer(workspaceId),
+    getBearerCachedSync: (workspaceId) =>
+      service.getBearerCachedSync(workspaceId),
     activeWorkspace: () => service.activeWorkspace(),
   };
+}
+
+// Dev (no ATLAS_FACADE_URL): MockTransport — explicit, never an implicit
+// default. Prod: WebTransport with the AuthService-backed bearer provider,
+// wrapped with withBearerRefresh to retry once on 401 by calling
+// authService.refresh. Auth audit events fire for the retry path.
+function createTransport(
+  authService: ActiveAuthService,
+  auditLog: AuthAuditLog,
+): Transport {
+  const facadeUrl = process.env.ATLAS_FACADE_URL;
+  if (!facadeUrl) {
+    return new MockTransport();
+  }
+  const web = new WebTransport({
+    baseUrl: facadeUrl,
+    bearerProvider: () => {
+      const ws = authService.activeWorkspace();
+      if (ws === null) return null;
+      return authService.getBearerCachedSync(ws);
+    },
+  });
+  return withBearerRefresh(web, {
+    workspaceId: process.env.ATLAS_WORKSPACE_ID ?? "wsp_unknown",
+    refresh: async (workspaceId) => {
+      const ws = authService.activeWorkspace() ?? workspaceId;
+      try {
+        const next = await authService.refresh(ws);
+        if (next === null)
+          return { ok: false, reason: "no session to refresh" };
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    onUnauthorizedRetry: (req) => {
+      const ws = authService.activeWorkspace() ?? "wsp_unknown";
+      void auditLog.append({
+        kind: "unauthorized-retry",
+        workspaceId: ws,
+        path: req.path,
+      });
+    },
+    onRefreshFailure: (reason) => {
+      const ws = authService.activeWorkspace() ?? "wsp_unknown";
+      void auditLog.append({
+        kind: "token-refresh-failure",
+        workspaceId: ws,
+        reason,
+      });
+    },
+  });
 }
