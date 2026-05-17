@@ -171,4 +171,115 @@ describe("Composer", () => {
     fireEvent.keyDown(ta, { key: "Escape" });
     expect(screen.queryByTestId("model-picker")).not.toBeInTheDocument();
   });
+
+  /* Locks in the apps/frontend/CLAUDE.md invariant: the kbd hint strip
+   * is stateless info and must render whether or not a run is active.
+   * Gating on `running` was a real shipped regression. */
+  it("always renders the hint row, even while a run is active", () => {
+    const { rerender } = render(
+      withTransport(makeTransport(), <Composer onSend={() => {}} />),
+    );
+    expect(screen.getByTestId("composer-hint")).toBeInTheDocument();
+    rerender(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={() => {}} running={true} />,
+      ),
+    );
+    expect(screen.getByTestId("composer-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent(/send/);
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent(/new line/);
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent(/skills/);
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent(
+      /Sources cited inline/,
+    );
+  });
+
+  it("opens only one popover at a time when Tools and Model are toggled", () => {
+    render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+    fireEvent.click(screen.getByTestId("composer-tools-toggle"));
+    expect(screen.getByTestId("tool-picker")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("composer-model-toggle"));
+    expect(screen.queryByTestId("tool-picker")).not.toBeInTheDocument();
+    expect(screen.getByTestId("model-picker")).toBeInTheDocument();
+  });
+
+  it("renders attach, mic, and send icon buttons in the thin action row", () => {
+    render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+    expect(screen.getByTestId("composer-attach")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-mic")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-send")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-send")).toHaveAttribute(
+      "aria-label",
+      "Send",
+    );
+  });
+
+  it("swaps Send for a Cancel button while a run is active and calls onCancel", () => {
+    const onCancel = vi.fn();
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={() => {}} running={true} onCancel={onCancel} />,
+      ),
+    );
+    expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
+    const cancel = screen.getByTestId("composer-cancel");
+    fireEvent.click(cancel);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks Enter-send while running", () => {
+    const onSend = vi.fn();
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={onSend} running={true} />,
+      ),
+    );
+    const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: "hello" } });
+    fireEvent.keyDown(ta, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("renders the Tools button without count by default and with count when tools selected", () => {
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer
+          onSend={() => {}}
+          initialTools={["gmail.draft.create", "sheets.cell.set"]}
+        />,
+      ),
+    );
+    expect(screen.getByTestId("composer-tools-toggle")).toHaveTextContent(
+      "Tools · 2",
+    );
+  });
+
+  it("combines model + depth label on the model toggle", () => {
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={() => {}} initialDepth="fast" />,
+      ),
+    );
+    /* Substring match — the toggle reads "<Model> · <Depth>". */
+    expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
+      /Opus 4.7/,
+    );
+    expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
+      /Fast/,
+    );
+  });
+
+  it("updates the depth on the toggle when a depth chip is selected", () => {
+    render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+    fireEvent.click(screen.getByTestId("composer-model-toggle"));
+    fireEvent.click(screen.getByTestId("depth-picker-row-deep"));
+    expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
+      /Deep/,
+    );
+  });
 });

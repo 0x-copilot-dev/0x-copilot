@@ -76,7 +76,7 @@ export function MentionPopover(props: MentionPopoverProps): ReactNode {
         position: "absolute",
         top: anchorRect.top,
         left: anchorRect.left,
-        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
+        boxShadow: "var(--shadow-soft)",
       }
     : panelStyle;
 
@@ -153,23 +153,14 @@ function MentionPopoverBody(props: BodyProps): ReactNode {
   );
 }
 
-const PALETTE = {
-  cardBg: "#181a1c",
-  cardBorder: "#2a2d31",
-  rowSelected: "#23262a",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-} as const;
-
 const panelStyle: CSSProperties = {
-  background: PALETTE.cardBg,
-  border: `1px solid ${PALETTE.cardBorder}`,
+  background: "var(--color-bg-elevated)",
+  border: "1px solid var(--color-border)",
   borderRadius: 10,
   padding: 6,
   width: 240,
-  color: PALETTE.textHi,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  color: "var(--color-text)",
+  fontFamily: "var(--font-sans)",
   fontSize: 13,
   display: "flex",
   flexDirection: "column",
@@ -178,7 +169,7 @@ const panelStyle: CSSProperties = {
 
 const statusStyle: CSSProperties = {
   padding: "8px 10px",
-  color: PALETTE.textLo,
+  color: "var(--color-text-muted)",
   fontSize: 12,
 };
 
@@ -206,7 +197,7 @@ const rowStyle: CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "6px 10px",
-  color: PALETTE.textHi,
+  color: "var(--color-text)",
   cursor: "pointer",
   textAlign: "left",
   fontSize: 13,
@@ -218,7 +209,7 @@ const labelStyle: CSSProperties = {
 
 const kindStyle: CSSProperties = {
   fontSize: 11,
-  color: PALETTE.textLo,
+  color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
 };

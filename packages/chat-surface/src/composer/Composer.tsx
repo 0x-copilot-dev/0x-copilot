@@ -9,15 +9,37 @@ import {
 } from "react";
 
 import { MentionPopover, type MentionCandidate } from "./MentionPopover";
-import { ModelPicker } from "./ModelPicker";
+import { ModelPicker, type Depth } from "./ModelPicker";
 import { ToolPicker } from "./ToolPicker";
+
+/* Shared composer for Studio / Focus / Auto.
+ *
+ * Design source: /tmp/atlas-design/enterprise-search-template/project/
+ * composer.jsx and chat1.md L805-820 ("bigger 2-row textarea, single
+ * thin action row with Tools and Model · Depth plus attach, mic, send").
+ *
+ * Invariants (do not regress):
+ * - One component used across all three modes. Variations come through
+ *   props, never a forked variant.
+ * - Hint row (↵ send · ⇧+↵ new line · / skills · model · Sources cited
+ *   inline) renders unconditionally. Hiding it during a run was a real
+ *   shipped regression — see apps/frontend/CLAUDE.md and the AssistantComposer
+ *   note. Tests in this file lock this in.
+ * - Enter sends, Shift+Enter inserts newline, "/" at a word boundary is
+ *   reserved for the skills shortcut (the hint advertises it).
+ * - Tools button = single popover with Skills + MCPs sections.
+ * - Model button = single popover with Model rows + Fast/Balanced/Deep
+ *   depth grid. */
 
 export interface ComposerProps {
   readonly onSend: (text: string) => void;
+  readonly onCancel?: () => void;
+  readonly running?: boolean;
   readonly disabled?: boolean;
   readonly placeholder?: string;
   readonly initialModel?: string;
   readonly initialTools?: ReadonlyArray<string>;
+  readonly initialDepth?: Depth;
   readonly portalTarget?: HTMLElement;
 }
 
@@ -27,19 +49,24 @@ interface MentionTriggerState {
 }
 
 const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_DEPTH: Depth = "balanced";
 
 export function Composer(props: ComposerProps): ReactNode {
   const {
     onSend,
+    onCancel,
+    running = false,
     disabled = false,
     placeholder = "Send a message…",
     initialModel = DEFAULT_MODEL,
     initialTools,
+    initialDepth = DEFAULT_DEPTH,
     portalTarget,
   } = props;
 
   const [text, setText] = useState("");
   const [model, setModel] = useState(initialModel);
+  const [depth, setDepth] = useState<Depth>(initialDepth);
   const [tools, setTools] = useState<ReadonlyArray<string>>(initialTools ?? []);
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -83,7 +110,7 @@ export function Composer(props: ComposerProps): ReactNode {
 
   const send = (): void => {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || disabled) {
+    if (trimmed.length === 0 || disabled || running) {
       return;
     }
     onSend(trimmed);
@@ -136,10 +163,17 @@ export function Composer(props: ComposerProps): ReactNode {
     );
   };
 
-  const canSend = text.trim().length > 0 && !disabled;
+  const canSend = text.trim().length > 0 && !disabled && !running;
+  const modelLabel = labelForModel(model);
+  const depthLabel = labelForDepth(depth);
 
   return (
-    <div data-testid="composer" style={containerStyle} aria-disabled={disabled}>
+    <div
+      data-testid="composer"
+      data-running={running ? "true" : undefined}
+      style={containerStyle}
+      aria-disabled={disabled}
+    >
       <textarea
         ref={textareaRef}
         value={text}
@@ -153,43 +187,114 @@ export function Composer(props: ComposerProps): ReactNode {
           const target = e.currentTarget;
           handleTextChange(target.value, target.selectionStart ?? 0);
         }}
-        rows={1}
+        rows={2}
         aria-label="Message"
         style={textareaStyle}
         data-testid="composer-textarea"
       />
       <div style={toolbarStyle}>
         <div style={toolbarLeftStyle}>
+          {/* Attach. Icon-only; the design composer shows attach as part
+           * of the thin action row alongside Tools. The host wires the
+           * filepicker (out of scope here) — for now this is a visual
+           * affordance with a no-op onClick. */}
           <button
             type="button"
-            onClick={() => setToolPickerOpen((v) => !v)}
+            aria-label="Attach a file"
+            title="Attach a file"
+            data-testid="composer-attach"
+            style={iconButtonStyle(false)}
+          >
+            <PlusIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setToolPickerOpen((v) => !v);
+              setModelPickerOpen(false);
+            }}
             aria-pressed={toolPickerOpen}
             aria-label="Tools"
             data-testid="composer-tools-toggle"
-            style={iconButtonStyle(toolPickerOpen)}
+            style={pillButtonStyle(toolPickerOpen)}
           >
-            {tools.length > 0 ? `Tools · ${tools.length}` : "Tools"}
+            <WrenchIcon />
+            <span>
+              {tools.length > 0 ? `Tools · ${tools.length}` : "Tools"}
+            </span>
           </button>
           <button
             type="button"
-            onClick={() => setModelPickerOpen((v) => !v)}
+            onClick={() => {
+              setModelPickerOpen((v) => !v);
+              setToolPickerOpen(false);
+            }}
             aria-pressed={modelPickerOpen}
-            aria-label="Model"
+            aria-label="Model and depth"
             data-testid="composer-model-toggle"
-            style={iconButtonStyle(modelPickerOpen)}
+            style={pillButtonStyle(modelPickerOpen)}
           >
-            {labelForModel(model)}
+            <span style={modelDotStyle(depth)} aria-hidden="true" />
+            <span>
+              {modelLabel}
+              <span style={modelDepthSepStyle}> · </span>
+              {depthLabel}
+            </span>
           </button>
         </div>
-        <button
-          type="button"
-          onClick={send}
-          disabled={!canSend}
-          data-testid="composer-send"
-          style={sendButtonStyle(canSend)}
-        >
-          Send
-        </button>
+        <div style={toolbarRightStyle}>
+          <button
+            type="button"
+            aria-label="Voice input"
+            title="Voice input"
+            data-testid="composer-mic"
+            style={iconButtonStyle(false)}
+          >
+            <MicIcon />
+          </button>
+          {running ? (
+            <button
+              type="button"
+              onClick={() => onCancel?.()}
+              aria-label="Stop"
+              title="Stop"
+              data-testid="composer-cancel"
+              style={cancelButtonStyle}
+            >
+              <StopIcon />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={send}
+              disabled={!canSend}
+              aria-label="Send"
+              title="Send"
+              data-testid="composer-send"
+              style={sendButtonStyle(canSend)}
+            >
+              <SendIcon />
+            </button>
+          )}
+        </div>
+      </div>
+      {/* Hint row is stateless info — MUST render whether or not a run
+       * is active. See ComposerProps doc comment. */}
+      <div style={hintRowStyle} data-testid="composer-hint">
+        <span style={hintItemStyle}>
+          <kbd style={kbdStyle}>↵</kbd> send
+        </span>
+        <span style={hintSepStyle} aria-hidden="true" />
+        <span style={hintItemStyle}>
+          <kbd style={kbdStyle}>⇧</kbd>+<kbd style={kbdStyle}>↵</kbd> new line
+        </span>
+        <span style={hintSepStyle} aria-hidden="true" />
+        <span style={hintItemStyle}>
+          <kbd style={kbdStyle}>/</kbd> skills
+        </span>
+        <span style={hintTrailingStyle}>
+          {modelLabel} · Sources cited inline
+        </span>
       </div>
       {toolPickerOpen ? (
         <div style={popoverHostStyle}>
@@ -207,7 +312,9 @@ export function Composer(props: ComposerProps): ReactNode {
           <ModelPicker
             open={true}
             selectedModel={model}
+            selectedDepth={depth}
             onSelect={setModel}
+            onDepthChange={setDepth}
             onClose={() => setModelPickerOpen(false)}
             portalTarget={portalTarget}
           />
@@ -241,46 +348,133 @@ function labelForModel(id: string): string {
   return id;
 }
 
-const MAX_TEXTAREA_HEIGHT_PX = 200;
+function labelForDepth(depth: Depth): string {
+  if (depth === "fast") {
+    return "Fast";
+  }
+  if (depth === "deep") {
+    return "Deep";
+  }
+  return "Balanced";
+}
 
-const PALETTE = {
-  cardBg: "#181a1c",
-  cardBorder: "#2a2d31",
-  cardBorderActive: "#3a3e44",
-  inputBg: "#0f1112",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-  accent: "#c2ff5a",
-  accentMuted: "rgba(194, 255, 90, 0.35)",
-} as const;
+/* Inline icons (no external dep). Sized in em so they scale with the
+ * button's font-size and inherit currentColor for token-driven theming. */
+function PlusIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
+function WrenchIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10.5 2.5a3 3 0 0 1 2.83 3.95l-2.45-1.41-1.71 1L8 3.94l1-1.7a3 3 0 0 1 1.5.26ZM6 7.5l-3 5.2a1.5 1.5 0 1 0 2.6 1.5l3-5.2" />
+    </svg>
+  );
+}
+
+function MicIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="6" y="2" width="4" height="7" rx="2" />
+      <path d="M3.5 7a4.5 4.5 0 0 0 9 0M8 11.5V14M5.5 14h5" />
+    </svg>
+  );
+}
+
+function SendIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.5 8 13.5 2.5 11 13.5l-3-4.5-5.5-1Z" />
+    </svg>
+  );
+}
+
+function StopIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+    </svg>
+  );
+}
+
+const MAX_TEXTAREA_HEIGHT_PX = 220;
+const MIN_TEXTAREA_HEIGHT_PX = 56; // ≈ 2 rows of 14px text at 1.5 line-height
 
 const containerStyle: CSSProperties = {
-  background: PALETTE.cardBg,
-  border: `1px solid ${PALETTE.cardBorder}`,
+  background: "var(--color-surface)",
+  border: "1px solid var(--color-border)",
   borderRadius: 12,
   padding: 10,
   display: "flex",
   flexDirection: "column",
-  gap: 8,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  color: PALETTE.textHi,
+  gap: 6,
+  fontFamily: "var(--font-sans)",
+  color: "var(--color-text)",
   position: "relative",
 };
 
 const textareaStyle: CSSProperties = {
-  background: PALETTE.inputBg,
-  color: PALETTE.textHi,
-  border: `1px solid ${PALETTE.cardBorder}`,
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   padding: "10px 12px",
   fontSize: 14,
-  lineHeight: 1.45,
+  lineHeight: 1.5,
   resize: "none",
   outline: "none",
   width: "100%",
   fontFamily: "inherit",
-  minHeight: 40,
+  minHeight: MIN_TEXTAREA_HEIGHT_PX,
   maxHeight: MAX_TEXTAREA_HEIGHT_PX,
   overflowY: "auto",
 };
@@ -290,34 +484,138 @@ const toolbarStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 8,
+  /* Thin action row — single row, low visual weight. */
+  minHeight: 32,
 };
 
 const toolbarLeftStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
+  gap: 4,
+  minWidth: 0,
+};
+
+const toolbarRightStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
 };
 
 const iconButtonStyle = (active: boolean): CSSProperties => ({
-  background: active ? PALETTE.cardBorderActive : "transparent",
-  color: PALETTE.textLo,
-  border: `1px solid ${PALETTE.cardBorder}`,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 28,
+  height: 28,
+  background: active ? "var(--color-surface-muted)" : "transparent",
+  color: "var(--color-text-muted)",
+  border: "1px solid transparent",
   borderRadius: 6,
-  padding: "4px 10px",
-  fontSize: 12,
+  padding: 0,
+  fontSize: 14,
   cursor: "pointer",
 });
 
+const pillButtonStyle = (active: boolean): CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  height: 28,
+  background: active ? "var(--color-surface-muted)" : "transparent",
+  color: "var(--color-text-muted)",
+  border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
+  borderRadius: 999,
+  padding: "0 10px",
+  fontSize: 12,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
+const modelDotStyle = (depth: Depth): CSSProperties => ({
+  width: 6,
+  height: 6,
+  borderRadius: "50%",
+  background:
+    depth === "fast"
+      ? "var(--color-success)"
+      : depth === "deep"
+        ? "var(--color-warning)"
+        : "var(--color-accent)",
+  flexShrink: 0,
+});
+
+const modelDepthSepStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  margin: "0 2px",
+};
+
 const sendButtonStyle = (enabled: boolean): CSSProperties => ({
-  background: enabled ? PALETTE.accent : PALETTE.accentMuted,
-  color: PALETTE.cardBg,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 32,
+  height: 32,
+  background: enabled ? "var(--color-accent)" : "var(--color-surface-muted)",
+  color: enabled ? "var(--color-accent-contrast)" : "var(--color-text-subtle)",
   border: "none",
   borderRadius: 8,
-  padding: "6px 14px",
-  fontSize: 13,
-  fontWeight: 600,
+  padding: 0,
+  fontSize: 14,
   cursor: enabled ? "pointer" : "not-allowed",
 });
+
+const cancelButtonStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 32,
+  height: 32,
+  background: "var(--color-surface-muted)",
+  color: "var(--color-text)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 8,
+  padding: 0,
+  fontSize: 14,
+  cursor: "pointer",
+};
+
+const hintRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "2px 4px 0",
+  fontSize: 11,
+  color: "var(--color-text-subtle)",
+  minHeight: 18,
+};
+
+const hintItemStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+};
+
+const hintTrailingStyle: CSSProperties = {
+  marginLeft: "auto",
+  color: "var(--color-text-subtle)",
+};
+
+const hintSepStyle: CSSProperties = {
+  width: 1,
+  height: 10,
+  background: "var(--color-border)",
+};
+
+const kbdStyle: CSSProperties = {
+  fontFamily: "var(--font-sans)",
+  fontSize: 10.5,
+  background: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border)",
+  borderBottomWidth: 2,
+  borderRadius: 4,
+  padding: "1px 5px",
+  color: "var(--color-text-muted)",
+};
 
 const popoverHostStyle: CSSProperties = {
   marginTop: 4,
