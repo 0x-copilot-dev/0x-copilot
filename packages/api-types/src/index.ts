@@ -3148,3 +3148,92 @@ export interface AuditEventListResponse {
   next_cursor: string | null;
   has_more: boolean;
 }
+
+// =====================================================================
+// Phase 7A — tier-2 adapter registry (community-shared SaaSRendererAdapters).
+//
+// Apps submit locally-generated adapters (`harvest`) that meet the
+// §9.5.3 success criteria; admins review the queue and approve/reject.
+// Approved adapters propagate to every tenant that has not opted out.
+// =====================================================================
+
+export type AdapterRegistryLayout =
+  | "form"
+  | "table"
+  | "kanban"
+  | "definition-list";
+
+export type AdapterCandidateStatus =
+  | "submitted"
+  | "in-review"
+  | "changes-requested"
+  | "approved"
+  | "rejected";
+
+export type AdapterReviewAction = "approve" | "reject" | "request-changes";
+
+export interface AdapterHarvestMetrics {
+  zero_error_sessions: number;
+  total_sessions: number;
+  user_reported_issues?: number;
+  generator_model?: string | null;
+}
+
+export interface AdapterCandidateSubmission {
+  scheme: string;
+  version: number;
+  layout: AdapterRegistryLayout;
+  source: string;
+  harvest_metrics: AdapterHarvestMetrics;
+}
+
+export interface AdapterCandidate {
+  candidate_id: string;
+  tenant_id: string;
+  submitter_user_id: string;
+  scheme: string;
+  version: number;
+  layout: AdapterRegistryLayout;
+  source: string;
+  source_digest: string;
+  harvest_metrics: AdapterHarvestMetrics;
+  status: AdapterCandidateStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdapterCandidateListResponse {
+  candidates: AdapterCandidate[];
+}
+
+export interface AdapterReviewDecision {
+  action: AdapterReviewAction;
+  notes?: string | null;
+}
+
+export interface PromotedAdapter {
+  promoted_id: string;
+  scheme: string;
+  version: number;
+  schema_version: number;
+  layout: AdapterRegistryLayout;
+  source: string;
+  source_digest: string;
+  /** Always `"community"` in Phase 7A; reserved for future provenance values. */
+  origin: "community";
+  promoted_at: string;
+}
+
+export interface PromotedAdaptersResponse {
+  adapters: PromotedAdapter[];
+}
+
+export interface AdapterRegistryOptOutRequest {
+  opted_out: boolean;
+}
+
+export interface AdapterRegistryOptOutResponse {
+  tenant_id: string;
+  opted_out: boolean;
+  updated_at: string;
+}
