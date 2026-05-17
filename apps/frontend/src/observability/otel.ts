@@ -22,7 +22,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { DocumentLoadInstrumentation } from "@opentelemetry/instrumentation-document-load";
 import { FetchInstrumentation } from "@opentelemetry/instrumentation-fetch";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   BatchSpanProcessor,
   type ReadableSpan,
@@ -30,7 +30,10 @@ import {
   type SpanProcessor,
   WebTracerProvider,
 } from "@opentelemetry/sdk-trace-web";
-import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+import {
+  ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
+} from "@opentelemetry/semantic-conventions";
 import { dynamicCorrelationHeaders } from "../api/http";
 
 const SERVICE_NAME = "enterprise-search-frontend";
@@ -130,9 +133,9 @@ export function bootstrapTelemetry(options: BootstrapOptions = {}): void {
     options.environment ??
     (typeof __DEPLOY_ENV__ !== "undefined" ? __DEPLOY_ENV__ : "development");
 
-  const resource = new Resource({
-    [SemanticResourceAttributes.SERVICE_NAME]: SERVICE_NAME,
-    [SemanticResourceAttributes.SERVICE_VERSION]: version,
+  const resource = resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: SERVICE_NAME,
+    [ATTR_SERVICE_VERSION]: version,
     "deployment.environment": env,
   });
 
