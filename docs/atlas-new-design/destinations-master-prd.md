@@ -679,25 +679,28 @@ Required reading:
 
 ---
 
-## 8. Phase plan (10 phases — explicit)
+## 8. Phase plan (11 phases — explicit; updated 2026-05-18 to insert Routines)
 
-(Phase 0 already shipped or in flight; phase 1 is the chats canvas which is the headline.)
+(Phase 0 already shipped; Phases 0.5 + 0.6 prerequisites shipped 2026-05-18 — see `implementation-plan.md §2`. Phase 1 is the chats canvas which is the headline. Routines was added as the 12th destination after the original 10-phase plan was written; Routines lands at Phase 5 and the rest shift by one.)
 
 | Phase | Name                                                       | Sub-agents                                         | Estimated wall time |
 | ----- | ---------------------------------------------------------- | -------------------------------------------------- | ------------------- |
-| 0     | Foundation (shell, composer, Depth contract, Tools kind)   | done + 2 in flight                                 | done                |
+| 0     | Foundation (shell, composer, Depth contract, Tools kind)   | done                                               | done                |
+| 0.5   | Shared primitives (ItemRef, brands, ports, shell)          | 1 agent — SHIPPED 2026-05-18                       | done                |
+| 0.6   | Token-usage tracking CI guard                              | 1 agent — SHIPPED 2026-05-18                       | done                |
 | 1     | Chats thread canvas + right rail tabs + Composer migration | 1 sub-PRD + 3 impl                                 | 1-2 work-days       |
 | 2     | Home                                                       | 1 sub-PRD + 2 impl                                 | 1 work-day          |
 | 3     | Todos                                                      | 1 sub-PRD + 2 impl                                 | 1 work-day          |
 | 4     | Inbox                                                      | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
-| 5     | Projects                                                   | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
-| 6     | Library                                                    | 1 sub-PRD + 3 impl (vector store is its own slice) | 2 work-days         |
-| 7     | Agents                                                     | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
-| 8     | Tools (full destination)                                   | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
-| 9     | Connectors (full destination)                              | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
-| 10    | Team + Memory + ⌘K + polish                                | 1 sub-PRD per area + 2 impl each                   | 2 work-days         |
+| 5     | **Routines** (12th destination)                            | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
+| 6     | Projects                                                   | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
+| 7     | Library                                                    | 1 sub-PRD + 3 impl (vector store is its own slice) | 2 work-days         |
+| 8     | Agents                                                     | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
+| 9     | Tools (full destination; gains code-routines executor)     | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
+| 10    | Connectors (full destination; consolidated webhook UX)     | 1 sub-PRD + 2 impl                                 | 1-2 work-days       |
+| 11    | Team + Memory + ⌘K palette + polish (incl. Settings UI)    | 1 sub-PRD per area + 2 impl each                   | 2 work-days         |
 
-Total: 10 phases after foundation. Each phase ends with a green test suite and a user-visible deliverable. The user pauses and re-prioritizes between phases.
+Total: 11 destination phases after foundation. Each phase ends with a green test suite and a user-visible deliverable. The user pauses and re-prioritizes between phases. The **every-two-phases audit gate** (`implementation-plan.md §4`) runs between paired phases (after 0.5+0.6, 1+2, 3+4, 5+6, 7+8, 9+10, 11).
 
 ---
 

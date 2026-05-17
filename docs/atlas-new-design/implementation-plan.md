@@ -158,6 +158,36 @@ Sub-PRD: pending (`a4c565a71d8cc3725` agent still running). When it lands:
 | **P5-A backend**                 | `worktree-agent-phase5-routines-backend` | `packages/api-types/src/routines.ts` (NEW), `services/backend/src/backend_app/routines/`, facade proxy, `services/ai-backend/src/runtime_worker/jobs/routine_scheduler.py` (cron-claim worker), `services/backend/src/backend_app/app.py` extend (merge AFTER P4-A)                                                                           | SP-1, P1-A, P4-A | Routine CRUD; scheduler; trigger validation; webhook secret rotation; permission intersection at fire-time |
 | **P5-B chat-surface + frontend** | `worktree-agent-phase5-routines-surface` | `packages/chat-surface/src/destinations/routines/` (NEW: RoutinesDestination, RoutinesPanel, RoutineEditor, RoutineDetail), `packages/chat-surface/src/shell/destinations.ts` (extend ShellDestinationSlug to include `"routines"` as the 12th slug — merge BEFORE any other Phase-5 work), `apps/frontend/src/app/App.tsx` extend, all tests | SP-1, P5-A       | Routines UI; cron editor; trigger management; tabs (Connectors/Behavior/Permissions)                       |
 
+### Phase 6+ — later waves (skeleton; sub-PRDs not yet written)
+
+Routines was added as the 12th destination after master PRD §8 was written. Impl-plan numbering inserts Routines at Phase 5 and shifts everything else by one. Each Phase 6+ row is a placeholder — its sub-PRD is written when the previous phase ships and orchestrator dispatches the writer-then-impl pattern (cross-audit §7 dispatch shape).
+
+| Phase | Name                                               | Status   | Sub-PRD                                      | Resolves Routines §9.7 deferrals                                                                                                                                                     |
+| ----- | -------------------------------------------------- | -------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 6     | **Projects** (multi-thread workspace)              | NOT-DONE | `destinations/projects-prd.md` (TBD)         | —                                                                                                                                                                                    |
+| 7     | **Library** (files + pages + datasets + retrieval) | NOT-DONE | `destinations/library-prd.md` (TBD)          | Q3 (library page output target wire shape)                                                                                                                                           |
+| 8     | **Agents** (skill cards, agent identity, registry) | NOT-DONE | `destinations/agents-prd.md` (TBD)           | Q11 (agent_version_pin selection UI)                                                                                                                                                 |
+| 9     | **Tools** (full destination)                       | NOT-DONE | `destinations/tools-prd.md` (TBD)            | Q1 (code-routines executor + sandbox)                                                                                                                                                |
+| 10    | **Connectors** (full destination)                  | NOT-DONE | `destinations/connectors-prd.md` (TBD)       | Q6 (HMAC-of-payload signature UI), webhook UX                                                                                                                                        |
+| 11    | **Team + Memory + ⌘K palette + polish**            | NOT-DONE | `destinations/team-memory-cmdk-prd.md` (TBD) | Q9/Q10 (Atlas-proposed cron suggestions, "Make this a routine?" CTA in ⌘K), Q14 (Settings UI for tenant/user notif defaults), Q12 (admin force-reassign — re-evaluate at this point) |
+
+**Routines §9.7 deferral mapping (binding):**
+
+| Routines §9.7 Q                                       | Wave label in §9.7                           | Lands in impl-plan phase                                                        |
+| ----------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------- |
+| Q1 Code-routines executor                             | "Wave 6"                                     | **Phase 9 Tools** (executor + sandbox is tool infrastructure)                   |
+| Q3 Library page output mode                           | "Phase 5" (wire shape) + Phase 7 (UI polish) | Phase 5 ships wire; Phase 7 polishes editor                                     |
+| Q6 HMAC signature webhook                             | "Wave 5+"                                    | Phase 10 Connectors (consolidated webhook UX)                                   |
+| Q9 Atlas-proposed cron suggestions                    | "Phase 5/6"                                  | Phase 11 (⌘K palette suggestion engine; tied to memory + agent context)         |
+| Q10 Auto-extracted "Make this a routine?" CTA         | "Phase 6"                                    | Phase 11 (post-run CTA on chats canvas → command palette flow)                  |
+| Q12 Admin force-reassign owner                        | "out of scope"                               | Re-evaluate at Phase 11 (Team destination + admin workflows)                    |
+| Q13 Routine forking / templates                       | "Wave 5+"                                    | Phase 8 Agents (templating is an agent-registry concern; Routines just consume) |
+| Q14 Settings UI for tenant/user notification defaults | "Wave 6"                                     | Phase 11 (Settings + Team destination)                                          |
+
+**Why this numbering:** Wave/Phase terminology was loose ("Wave 6 ≈ Phase 6 ≈ later"). After Routines slotted in at Phase 5, "Wave 6" needs to map to "Phase 6 onward". The mapping above pins each Routines deferral to the phase whose primitives unlock it (executors in Tools, HMAC in Connectors UX, command palette in Team+Memory+⌘K, etc.) rather than a generic "Wave 6 someday".
+
+**Master PRD §8 reconciliation:** the original 10-phase plan in `destinations-master-prd.md §8` predates Routines. The impl-plan above is the authoritative numbering going forward. Master PRD §8 will be updated to insert Routines at Phase 5 + shift the rest in a follow-up edit (not blocking).
+
 ---
 
 ## 3. Open product decisions — resolved or escalated
