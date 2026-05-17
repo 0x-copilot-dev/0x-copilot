@@ -31,6 +31,7 @@ class _Fields:
     ANSWER = "answer"
     FORWARD_TO = "forward_to"
     USER_ID = "user_id"
+    EDITED_PAYLOAD = "edited_payload"
 
 
 class ApprovalForwardTarget(RuntimeContract):
@@ -58,6 +59,13 @@ class ApprovalDecisionRequest(RuntimeContract):
     answer: str | None = None
     # PR 1.4 — required when ``decision == FORWARDED``; rejected otherwise.
     forward_to: ApprovalForwardTarget | None = None
+    # P1-A re-scoped — required when ``decision == SUGGEST_EDIT``; rejected
+    # otherwise. Carries the edited tool-call arguments / write payload the
+    # approver wants the assistant to re-confirm before executing. Stored on
+    # the child ``ApprovalRequestRecord.metadata`` under the same key so the
+    # re-emitted ``APPROVAL_REQUESTED`` event carries the edits without an
+    # extra fetch.
+    edited_payload: JsonObject | None = None
 
     @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
@@ -89,6 +97,23 @@ class ApprovalDecisionRequest(RuntimeContract):
                 raise ValueError(Messages.Error.APPROVAL_FORWARD_SELF)
         return self
 
+    @model_validator(mode="after")
+    def _validate_edited_payload(self) -> "ApprovalDecisionRequest":
+        is_suggest_edit = self.decision is ApprovalDecision.SUGGEST_EDIT
+        has_payload = bool(self.edited_payload)
+        if is_suggest_edit and not has_payload:
+            raise ValueError(
+                "edited_payload is required and must be non-empty "
+                "when decision == 'suggest_edit'."
+            )
+        if not is_suggest_edit and self.edited_payload is not None:
+            # The field has no meaning outside SUGGEST_EDIT; reject explicitly
+            # so callers don't silently lose an edit they intended to send.
+            raise ValueError(
+                "edited_payload is only allowed when decision == 'suggest_edit'."
+            )
+        return self
+
 
 class ApprovalDecisionRecord(RuntimeContract):
     """Persisted approval decision.
@@ -96,6 +121,11 @@ class ApprovalDecisionRecord(RuntimeContract):
     ``forwarded_to_user_id`` is set only when ``status == FORWARDED``; the
     worker discriminates on ``status`` to decide whether to resume the
     LangGraph harness.
+
+    ``edited_payload`` is set only when ``status == SUGGEST_EDIT``. The
+    persisted dict is also written onto the freshly-created child
+    ``ApprovalRequestRecord.metadata['edited_payload']`` so subsequent
+    reads round-trip without joining tables.
     """
 
     approval_id: str
@@ -109,6 +139,7 @@ class ApprovalDecisionRecord(RuntimeContract):
     answer: str | None = None
     decided_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     forwarded_to_user_id: str | None = None
+    edited_payload: JsonObject | None = None
 
 
 class ApprovalRequestRecord(RuntimeContract):
@@ -178,6 +209,11 @@ class AssignedApproval(RuntimeContract):
 
     Carries enough chain context to render the forwarded-by chip and a
     deep link back to the source conversation without a second fetch.
+
+    ``edited_payload`` is non-null only on rows produced by a
+    ``SUGGEST_EDIT`` decision so the originator can render a diff of the
+    approver's suggestions versus the original arguments without a second
+    fetch.
     """
 
     approval_id: str
@@ -192,6 +228,7 @@ class AssignedApproval(RuntimeContract):
     risk_class: str | None = None
     expires_at: datetime | None = None
     created_at: datetime
+    edited_payload: JsonObject | None = None
 
 
 class AssignedApprovalsResponse(RuntimeContract):

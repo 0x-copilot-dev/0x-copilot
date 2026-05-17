@@ -300,4 +300,7 @@ class TestRequestApprovalUndo:
             decided_by_user_id=_Values.USER_ID,
         )
         kinds = [event_type for event_type, _record in store.audit_log]
-        assert "approval_undo_requested" in kinds
+        # Audit verb aligned to cross-audit §2.2 — ``approval.undo`` is the
+        # imperative action; the wire still emits APPROVAL_UNDO_REQUESTED
+        # for backwards-compatible stream consumers.
+        assert "approval.undo" in kinds

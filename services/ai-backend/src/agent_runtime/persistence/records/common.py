@@ -61,12 +61,18 @@ class PersistenceApprovalStatus(StrEnum):
     approval chain. The runtime worker never resumes the LangGraph interrupt
     on ``FORWARDED``; resume happens on the leaf child's ``APPROVED`` /
     ``REJECTED`` instead.
+
+    ``SUGGEST_EDIT`` is a terminal state for the parent row when an
+    approver suggests edits to the pending tool-call arguments. A fresh
+    pending child row is created carrying the edited payload; the LangGraph
+    interrupt resumes only when the child reaches ``APPROVED`` / ``REJECTED``.
     """
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
+    SUGGEST_EDIT = "suggest_edit"
 
 
 class AuditActorType(StrEnum):

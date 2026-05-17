@@ -635,6 +635,10 @@ class RuntimeEventPresentationProjector:
         for key in (
             Keys.Field.APPROVAL_ID,
             Keys.Field.APPROVAL_KIND,
+            # P1-A re-scoped — SUGGEST_EDIT child rows surface the parent
+            # link + the editing user; both are short opaque ids.
+            Keys.Field.CHAIN_PARENT_APPROVAL_ID,
+            "edited_by_user_id",
             Keys.Field.SERVER_ID,
             Keys.Field.SERVER_NAME,
             "display_name",
@@ -654,6 +658,12 @@ class RuntimeEventPresentationProjector:
         arguments = payload.get("arguments")
         if isinstance(arguments, dict):
             safe_payload["arguments"] = arguments
+        # P1-A re-scoped — SUGGEST_EDIT carries the approver's proposed
+        # tool-call arguments. Same shape as ``arguments``: arbitrary
+        # JSON object the FE renders as a diff vs the original.
+        edited_payload = payload.get("edited_payload")
+        if isinstance(edited_payload, dict):
+            safe_payload["edited_payload"] = edited_payload
         grant_options = payload.get("grant_options")
         if isinstance(grant_options, list | tuple):
             safe_payload["grant_options"] = [

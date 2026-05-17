@@ -276,13 +276,25 @@ class Messages:
     class Audit:
         """Action-name strings written to audit log rows."""
 
+        # Canonical approval verbs (cross-audit §2.2). Wire nouns stay past-
+        # tense ("approved"/"rejected") on ``ApprovalDecision``; audit verbs
+        # are imperative ``approval.<verb>`` for SIEM compatibility.
+        APPROVAL_ACCEPT = "approval.accept"
+        APPROVAL_REJECT = "approval.reject"
         # Append-only audit action for the forward link. Records the act of forwarding
         # with ``chain_parent_approval_id`` metadata so SIEM exports can reconstruct
         # chains end-to-end.
         APPROVAL_FORWARD = "approval.forward"
+        # P1-A re-scoped — suggest-edit verb. Pairs with the new
+        # ``ApprovalDecision.SUGGEST_EDIT`` flow; metadata carries the
+        # parent approval id, child approval id, and the edited payload
+        # keys (values are persisted under metadata.edited_payload so SIEM
+        # can audit the diff that was suggested).
+        APPROVAL_SUGGEST_EDIT = "approval.suggest_edit"
+        APPROVAL_UNDO = "approval.undo"
         # Non-blocking MCP discovery suggestion audit action. Recorded when the agent
         # surfaces a Connect/Skip card. Correlatable with subsequent
-        # ``mcp.auth.granted`` / ``approval_decision_recorded`` rows when the user resolves.
+        # ``mcp.auth.granted`` / ``approval.accept`` / ``approval.reject`` rows when the user resolves.
         MCP_DISCOVERY_SUGGESTED = "mcp.discovery.suggested"
         # Reasons recorded in audit metadata when a system actor auto-rejects a
         # pending approval. Distinct values feed SIEM dashboards and operational queries.

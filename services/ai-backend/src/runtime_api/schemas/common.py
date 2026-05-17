@@ -213,11 +213,18 @@ class ApprovalDecision(StrEnum):
     ``FORWARDED`` is an API-edge variant: it routes the pending approval to a
     second workspace user and never reaches the LangGraph harness. The worker
     skips ``Command(resume=...)`` for the forwarded case.
+
+    ``SUGGEST_EDIT`` is also an API-edge variant: it resolves the current
+    pending row with the suggested edits captured and immediately emits a
+    fresh ``APPROVAL_REQUESTED`` payload so the originator can accept the
+    edited form. The LangGraph harness is **not** resumed; the run remains
+    in ``WAITING_FOR_APPROVAL`` until the new request is accepted or rejected.
     """
 
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
+    SUGGEST_EDIT = "suggest_edit"
 
 
 class ApprovalStatus(StrEnum):
@@ -226,12 +233,18 @@ class ApprovalStatus(StrEnum):
     ``FORWARDED`` is a terminal state for the parent row in a chain; the
     underlying run resumes only when the child row reaches ``APPROVED`` or
     ``REJECTED``.
+
+    ``SUGGEST_EDIT`` is a terminal state for the parent row when an approver
+    suggests edits; a fresh pending row is created carrying the edited
+    payload, and the LangGraph harness resumes only when that new row
+    reaches ``APPROVED`` / ``REJECTED``.
     """
 
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
+    SUGGEST_EDIT = "suggest_edit"
 
 
 # PR 4.4.6.2 — structured consent-card payload for ``approval_kind ==

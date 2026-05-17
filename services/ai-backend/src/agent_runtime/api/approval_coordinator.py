@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from starlette import status
@@ -17,8 +18,10 @@ from starlette import status
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.membership import (
+    InMemoryProjectMembershipResolver,
     InMemoryWorkspaceMembershipResolver,
     MembershipResolverUnavailable,
+    ProjectMembershipResolver,
     WorkspaceMembershipResolver,
 )
 from agent_runtime.api.notifications import (
@@ -77,6 +80,7 @@ class ApprovalCoordinator:
         queue: RuntimeQueuePort,
         event_producer: RuntimeEventProducer,
         membership_resolver: WorkspaceMembershipResolver | None = None,
+        project_membership_resolver: ProjectMembershipResolver | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
     ) -> None:
         self._persistence = persistence
@@ -84,6 +88,14 @@ class ApprovalCoordinator:
         self._event_producer = event_producer
         self._membership_resolver: WorkspaceMembershipResolver = (
             membership_resolver or InMemoryWorkspaceMembershipResolver()
+        )
+        # P1-A re-scoped (cross-audit §1.3) — project-scoped read ACL hook.
+        # The no-op default returns False for every user×project combination,
+        # which mirrors today's reality (conversations don't yet carry a
+        # ``project_id``). A backend-backed adapter lands with Phase 6
+        # Projects.
+        self._project_membership_resolver: ProjectMembershipResolver = (
+            project_membership_resolver or InMemoryProjectMembershipResolver()
         )
         self._notifications: NotificationDispatcher = (
             notification_dispatcher or LoggingNotificationDispatcher()
@@ -103,6 +115,20 @@ class ApprovalCoordinator:
 
         Enforces the hard cap on page size regardless of the caller-supplied
         limit so a single request cannot exhaust the store.
+
+        Read ACL (cross-audit §1.3):
+
+        - Owner (the user the approval was assigned to) — included.
+        - Project-member — when the approval carries a ``project_id`` (via the
+          originating conversation, populated by Phase 6 Projects), the row
+          is included IFF the requester is a member of that project. Today
+          no approval carries a ``project_id``, so this path is dormant; the
+          hook is wired now so the read contract matches the cross-audit
+          invariant the day Projects ships.
+        - Cross-tenant — never included; the persistence query is
+          ``org_id``-scoped.
+        - Non-readers — receive an empty list (existence-not-leaked
+          equivalent for list reads); the wire never carries a 403.
         """
 
         # Clamp to [1, MAX] so callers can't request an unlimited page.
@@ -118,18 +144,78 @@ class ApprovalCoordinator:
             limit=bounded,
             cursor=decoded_cursor,
         )
-        approvals = tuple(self._record_to_assigned(record) for record in records)
+        readable = await self._filter_records_by_read_acl(
+            records=records,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        approvals = tuple(self._record_to_assigned(record) for record in readable)
         next_cursor = (
             self._encode_assigned_cursor(
-                records[-1].created_at, records[-1].approval_id
+                readable[-1].created_at, readable[-1].approval_id
             )
-            if len(records) == bounded and records
+            if len(readable) == bounded and readable
             else None
         )
         return AssignedApprovalsResponse(
             approvals=approvals,
             next_cursor=next_cursor,
         )
+
+    async def _filter_records_by_read_acl(
+        self,
+        *,
+        records: Sequence[ApprovalRequestRecord],
+        org_id: str,
+        user_id: str,
+    ) -> list[ApprovalRequestRecord]:
+        """Apply the cross-audit §1.3 read ACL to a candidate row list.
+
+        Owner reads pass through. Project-scoped rows consult the
+        :class:`ProjectMembershipResolver`; rows without a ``project_id``
+        and without an owner match are dropped (existence-not-leaked).
+        """
+
+        readable: list[ApprovalRequestRecord] = []
+        for record in records:
+            if record.user_id == user_id:
+                # Owner read — same as today.
+                readable.append(record)
+                continue
+            project_id = self._project_id_for_record(record)
+            if project_id is None:
+                # No project context and not the owner → drop.
+                continue
+            try:
+                is_member = await self._project_membership_resolver.is_project_member(
+                    org_id=org_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                )
+            except MembershipResolverUnavailable:
+                # Transient resolver failure — exclude the row rather than
+                # leak an approval we can't authorize. The caller will see
+                # a partial list; a real consumer can retry.
+                continue
+            if is_member:
+                readable.append(record)
+        return readable
+
+    @staticmethod
+    def _project_id_for_record(record: ApprovalRequestRecord) -> str | None:
+        """Return the project id associated with an approval, or ``None``.
+
+        Phase 1 read path: today neither ``ApprovalRequestRecord`` nor the
+        originating ``ConversationRecord`` carries a project id, so the
+        helper falls back to the metadata bag. When Phase 6 Projects ships,
+        this lookup gains a conversation-join code path; the call site does
+        not change.
+        """
+
+        project_id = record.metadata.get("project_id")
+        if isinstance(project_id, str) and project_id:
+            return project_id
+        return None
 
     @classmethod
     def _record_to_assigned(cls, record: ApprovalRequestRecord) -> AssignedApproval:
@@ -145,6 +231,14 @@ class ApprovalCoordinator:
             "risk_class"
         )
         forwarded_by = record.metadata.get(Keys.Field.FORWARDED_BY_USER_ID)
+        # P1-A re-scoped — surface ``edited_payload`` when present. Stored
+        # under metadata.edited_payload by SUGGEST_EDIT decisions so the
+        # originator can render a diff vs the original arguments without a
+        # second fetch.
+        raw_edited_payload = record.metadata.get("edited_payload")
+        edited_payload = (
+            raw_edited_payload if isinstance(raw_edited_payload, dict) else None
+        )
         return AssignedApproval(
             approval_id=record.approval_id,
             conversation_id=record.conversation_id,
@@ -160,6 +254,7 @@ class ApprovalCoordinator:
             risk_class=risk_class if isinstance(risk_class, str) else None,
             expires_at=record.expires_at,
             created_at=record.created_at,
+            edited_payload=edited_payload,
         )
 
     @staticmethod
@@ -223,6 +318,11 @@ class ApprovalCoordinator:
                 approval=approval,
                 request=request,
             )
+        if request.decision is ApprovalDecision.SUGGEST_EDIT:
+            return await self._decide_suggest_edit(
+                approval=approval,
+                request=request,
+            )
         # Map the decision enum to the persistence status; both share string values.
         status_value = (
             ApprovalStatus.APPROVED
@@ -273,8 +373,12 @@ class ApprovalCoordinator:
                 trace_propagation=QueueTracePropagator.inject(),
             )
         )
+        # Audit verb is imperative per cross-audit §2.2 — wire keeps past-
+        # tense ``approved``/``rejected`` but the audit row records the action
+        # the user took. ``context`` carries the run + conversation pointers
+        # so SIEM consumers can join back without parsing metadata.
         await self._persistence.write_audit_log(
-            event_type="approval_decision_recorded",
+            event_type=self._audit_action_for_decision(record.status),
             record={
                 "org_id": record.org_id,
                 "user_id": record.user_id,
@@ -282,7 +386,13 @@ class ApprovalCoordinator:
                 "resource_id": record.approval_id,
                 "run_id": record.run_id,
                 "outcome": "success",
-                "metadata": {"status": record.status.value},
+                "metadata": {
+                    "status": record.status.value,
+                    "context": self._audit_context_for(
+                        conversation_id=record.conversation_id,
+                        run_id=record.run_id,
+                    ),
+                },
             },
         )
         return ApprovalDecisionResponse(
@@ -292,6 +402,49 @@ class ApprovalCoordinator:
             decided_at=record.decided_at,
             undo_expires_at=self._undo_expires_at_for(approval=approval, record=record),
         )
+
+    @staticmethod
+    def _audit_action_for_decision(record_status: ApprovalStatus) -> str:
+        """Return the canonical audit verb (cross-audit §2.2) for a decision.
+
+        Wire decision values stay past-tense (``approved``/``rejected``); the
+        audit row writes ``approval.accept`` / ``approval.reject`` so SIEM
+        rules ride a stable, imperative vocabulary.
+        """
+
+        if record_status is ApprovalStatus.APPROVED:
+            return Messages.Audit.APPROVAL_ACCEPT
+        if record_status is ApprovalStatus.REJECTED:
+            return Messages.Audit.APPROVAL_REJECT
+        # Defensive default — callers should map FORWARDED / SUGGEST_EDIT to
+        # their own verbs at the emit site. Falling back to ``approval.reject``
+        # here would be misleading; raise instead so a future enum extension
+        # is caught in tests.
+        raise ValueError(f"Unmapped record_status for audit verb: {record_status}")
+
+    @staticmethod
+    def _audit_context_for(
+        *,
+        conversation_id: str,
+        run_id: str,
+        sequence_no: int | None = None,
+    ) -> dict[str, object]:
+        """Build the cross-audit §1.4 ``context`` block for an audit row.
+
+        ``sequence_no`` is included only when known at the emit site; the
+        approval coordinator does not always carry it (the LangGraph harness
+        owns the sequence_no on the underlying interrupt). Absent values are
+        omitted rather than emitted as ``null`` so SIEM dashboards filter on
+        presence cleanly.
+        """
+
+        context: dict[str, object] = {
+            "conversation_id": conversation_id,
+            "run_id": run_id,
+        }
+        if sequence_no is not None:
+            context["sequence_no"] = sequence_no
+        return context
 
     @staticmethod
     def _undo_expires_at_for(
@@ -391,7 +544,7 @@ class ApprovalCoordinator:
             },
         )
         await self._persistence.write_audit_log(
-            event_type="approval_undo_requested",
+            event_type=Messages.Audit.APPROVAL_UNDO,
             record={
                 "org_id": approval.org_id,
                 "user_id": approval.user_id,
@@ -405,6 +558,10 @@ class ApprovalCoordinator:
                     "tool_name": approval.metadata.get("tool_name"),
                     "undo_expires_at": undo_expires_at.isoformat(),
                     "undo_requested_at": now.isoformat(),
+                    "context": self._audit_context_for(
+                        conversation_id=approval.conversation_id,
+                        run_id=approval.run_id,
+                    ),
                 },
             },
         )
@@ -429,6 +586,166 @@ class ApprovalCoordinator:
             return datetime.fromisoformat(raw)
         except ValueError:
             return None
+
+    async def _decide_suggest_edit(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        request: ApprovalDecisionRequest,
+    ) -> ApprovalDecisionResponse:
+        """Resolve a pending approval with a suggested-edit and re-ask.
+
+        Marks the parent as ``SUGGEST_EDIT`` (terminal for that row), creates
+        a fresh pending child approval carrying the edited payload, emits
+        ``APPROVAL_RESOLVED`` (status=suggest_edit) and ``APPROVAL_REQUESTED``
+        for the child, and writes an ``approval.suggest_edit`` audit row.
+
+        The LangGraph harness is **not** resumed — the run remains in
+        ``WAITING_FOR_APPROVAL`` until the new child row reaches
+        ``APPROVED`` / ``REJECTED``.
+        """
+
+        # Idempotency / state-machine guard: SUGGEST_EDIT is valid only from
+        # PENDING. A retry against an already-suggest_edited row is rejected
+        # rather than silently double-emitting the APPROVAL_REQUESTED event.
+        if approval.status is not ApprovalStatus.PENDING:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Only pending approvals can be edited.",
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+            )
+        # The request validator already enforced non-empty edited_payload.
+        edited_payload = request.edited_payload or {}
+        run = await self._persistence.get_run(
+            org_id=approval.org_id,
+            run_id=approval.run_id,
+        )
+        if run is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.RUN_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        now = datetime.now(timezone.utc)
+        decision_record = await self._persistence.record_approval_decision(
+            record=ApprovalDecisionRecord(
+                approval_id=approval.approval_id,
+                run_id=approval.run_id,
+                conversation_id=approval.conversation_id,
+                org_id=approval.org_id,
+                user_id=approval.user_id,
+                status=ApprovalStatus.SUGGEST_EDIT,
+                decided_by_user_id=request.decided_by_user_id,
+                reason=request.reason,
+                edited_payload=edited_payload,
+                decided_at=now,
+            )
+        )
+        # Child row carries the edited payload + the parent link for chain
+        # reconstruction. The recipient stays the same (the originator
+        # re-confirms their own approval); approver-as-editor is recorded
+        # via ``edited_by_user_id`` in metadata so SIEM can trace who edited.
+        child_metadata = dict(approval.metadata)
+        child_metadata[Keys.Field.CHAIN_PARENT_APPROVAL_ID] = approval.approval_id
+        child_metadata["edited_payload"] = edited_payload
+        child_metadata["edited_by_user_id"] = request.decided_by_user_id
+        child_metadata["edited_at"] = now.isoformat()
+        # Strip ``decided_at`` from the inherited metadata so the new row
+        # reads as fresh (the parent's decided_at was copied across by the
+        # store's record_approval_decision side effect).
+        child_metadata.pop("decided_at", None)
+        child = await self._persistence.create_approval_request(
+            record=ApprovalRequestRecord(
+                run_id=approval.run_id,
+                conversation_id=approval.conversation_id,
+                org_id=approval.org_id,
+                user_id=approval.user_id,
+                status=ApprovalStatus.PENDING,
+                created_at=now,
+                expires_at=approval.expires_at,
+                metadata=child_metadata,
+                chain_parent_approval_id=approval.approval_id,
+                chain_depth=approval.chain_depth + 1,
+            )
+        )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        action_summary = approval.metadata.get(Keys.Field.ACTION_SUMMARY)
+        await self._event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
+            payload={
+                Keys.Field.APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                Keys.Field.STATUS: ApprovalStatus.SUGGEST_EDIT.value,
+                Keys.Field.DECISION: ApprovalStatus.SUGGEST_EDIT.value,
+                Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+            },
+        )
+        await self._event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+            payload={
+                Keys.Field.APPROVAL_ID: child.approval_id,
+                Keys.Field.CHAIN_PARENT_APPROVAL_ID: approval.approval_id,
+                Keys.Field.APPROVAL_KIND: approval_kind,
+                "edited_payload": edited_payload,
+                "edited_by_user_id": request.decided_by_user_id,
+                **{
+                    key: value
+                    for key, value in approval.metadata.items()
+                    if isinstance(key, str)
+                    and key
+                    in (
+                        Keys.Field.SERVER_ID,
+                        Keys.Field.SERVER_NAME,
+                        "display_name",
+                        Keys.Field.TOOL_NAME,
+                        "risk_level",
+                        Keys.Field.SOURCE_TOOL_CALL_ID,
+                    )
+                },
+                Keys.Payload.MESSAGE: action_summary
+                if isinstance(action_summary, str)
+                else "",
+            },
+        )
+        await self._persistence.write_audit_log(
+            event_type=Messages.Audit.APPROVAL_SUGGEST_EDIT,
+            record={
+                "org_id": approval.org_id,
+                "user_id": request.decided_by_user_id,
+                "resource_type": "approval",
+                "resource_id": approval.approval_id,
+                "run_id": approval.run_id,
+                "outcome": "success",
+                "metadata": {
+                    "chain_parent_approval_id": approval.approval_id,
+                    "child_approval_id": child.approval_id,
+                    "approval_kind": approval_kind,
+                    "reason": request.reason,
+                    # ``edited_payload`` is stored in the audit metadata for
+                    # SIEM diff inspection. It is NOT logged to stdout — the
+                    # audit writer redacts metadata-encrypted JSONB.
+                    "edited_payload_keys": sorted(edited_payload.keys()),
+                    "edited_payload": edited_payload,
+                    "context": self._audit_context_for(
+                        conversation_id=approval.conversation_id,
+                        run_id=approval.run_id,
+                    ),
+                },
+            },
+        )
+        return ApprovalDecisionResponse(
+            approval_id=approval.approval_id,
+            run_id=approval.run_id,
+            status=ApprovalStatus.SUGGEST_EDIT,
+            decided_at=decision_record.decided_at,
+            child_approval_id=child.approval_id,
+        )
 
     async def _decide_forwarded(
         self,
@@ -570,6 +887,10 @@ class ApprovalCoordinator:
                     "forwarded_to_user_id": target.user_id,
                     "approval_kind": approval_kind,
                     "reason": request.reason,
+                    "context": self._audit_context_for(
+                        conversation_id=approval.conversation_id,
+                        run_id=approval.run_id,
+                    ),
                 },
             },
         )

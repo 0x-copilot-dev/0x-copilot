@@ -167,6 +167,65 @@ class InMemoryWorkspaceMembershipResolver:
         return self._members.get((org_id, user_id), False)
 
 
+# P1-A re-scoped (cross-audit §1.3) — project-scoped read ACL hook. Approvals
+# carry an optional ``project_id`` (via the originating conversation; the
+# field lands as part of Phase 6 Projects). The coordinator consults this
+# resolver alongside the workspace membership check when widening the
+# assigned-inbox read to project members.
+@runtime_checkable
+class ProjectMembershipResolver(Protocol):
+    """Port for resolving whether a user is a member of a given project.
+
+    The default :class:`InMemoryProjectMembershipResolver` returns ``False``
+    for every input — Phase 1 ships the wire shape without a real project
+    table. A future Projects-aware backend adapter implements this against
+    the project_members store. Any uncertainty must raise
+    :class:`MembershipResolverUnavailable` for the same reason as the
+    workspace resolver: 503 (retryable) rather than 422 (definitive deny).
+    """
+
+    async def is_project_member(
+        self,
+        *,
+        org_id: str,
+        project_id: str,
+        user_id: str,
+    ) -> bool:
+        """Return ``True`` iff ``user_id`` is a member of ``project_id`` in ``org_id``."""
+
+
+class InMemoryProjectMembershipResolver:
+    """Test/dev project-membership resolver backed by an explicit dict.
+
+    Production deployments inject a backend-backed adapter. The in-memory
+    variant is the no-op default — empty dict means no user is in any
+    project, which matches the Phase 1 reality where conversations don't
+    yet carry a ``project_id``.
+    """
+
+    def __init__(
+        self,
+        active_members: dict[tuple[str, str, str], bool] | None = None,
+    ) -> None:
+        self._members: dict[tuple[str, str, str], bool] = dict(active_members or {})
+
+    def set(
+        self, *, org_id: str, project_id: str, user_id: str, is_active: bool
+    ) -> None:
+        """Add or overwrite a project-membership entry."""
+        self._members[(org_id, project_id, user_id)] = is_active
+
+    def remove(self, *, org_id: str, project_id: str, user_id: str) -> None:
+        """Remove a project-membership entry (no-op if absent)."""
+        self._members.pop((org_id, project_id, user_id), None)
+
+    async def is_project_member(
+        self, *, org_id: str, project_id: str, user_id: str
+    ) -> bool:
+        """Return the configured membership, defaulting to ``False`` for unknowns."""
+        return self._members.get((org_id, project_id, user_id), False)
+
+
 HttpFetcher = Callable[[str, dict[str, str]], Awaitable[tuple[int, dict[str, object]]]]
 """Callable type for HTTP GET: ``(url, headers) -> (status_code, json_body)``.
 
