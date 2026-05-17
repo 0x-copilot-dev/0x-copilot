@@ -52,23 +52,6 @@ export default [
         { name: "WebSocket", message: BOUNDARY_MESSAGE_GLOBALS },
         { name: "crypto", message: BOUNDARY_MESSAGE_GLOBALS },
       ],
-      // TODO(Phase 4-a): remove this allowance. The EmailRenderer currently
-      // imports Transport as part of the deprecated SurfaceRendererProps
-      // flow from spike-prep. Once Phase 4-a migrates EmailRenderer to the
-      // SaaSRendererAdapter contract (pure render of state — no transport),
-      // this exception goes away and the boundary becomes strict.
-      //
-      // Concretely: when Phase 4-a lands, add the following entry to the
-      // `patterns` array below and remove every chat-transport import from
-      // packages/surface-renderers/src/**:
-      //   {
-      //     group: [
-      //       "@enterprise-search/chat-transport",
-      //       "@enterprise-search/chat-transport/*",
-      //     ],
-      //     message:
-      //       "surface-renderers cannot import Transport. Adapters are pure render of state; the host calls transport. (D28)",
-      //   }
       "no-restricted-imports": [
         "error",
         {
@@ -92,6 +75,14 @@ export default [
                 "@enterprise-search/chat-surface/src/shell/*",
               ],
               message: BOUNDARY_MESSAGE_SHELL_IMPORT,
+            },
+            {
+              group: [
+                "@enterprise-search/chat-transport",
+                "@enterprise-search/chat-transport/*",
+              ],
+              message:
+                "surface-renderers cannot import Transport. Adapters are pure render of state; the host calls transport. (D28)",
             },
           ],
         },
