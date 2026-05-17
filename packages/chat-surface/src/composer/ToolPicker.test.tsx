@@ -52,8 +52,14 @@ function withTransport(transport: Transport, children: ReactNode): ReactNode {
 }
 
 const SAMPLE_TOOLS: ReadonlyArray<ToolDescriptor> = [
-  { name: "gmail.draft.create", label: "Gmail draft" },
-  { name: "sheets.cell.set", label: "Set cell", description: "Mutate a cell" },
+  { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
+  {
+    name: "sheets.cell.set",
+    label: "Set cell",
+    description: "Mutate a cell",
+    kind: "mcp",
+  },
+  { name: "research", label: "Research", kind: "skill" },
 ];
 
 describe("ToolPicker", () => {
@@ -202,6 +208,58 @@ describe("ToolPicker", () => {
     await screen.findByText("Gmail draft");
     fireEvent.click(screen.getByTestId("tool-picker-close"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("partitions entries into Skills and MCPs sections by kind", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ tools: SAMPLE_TOOLS }),
+    );
+    render(
+      withTransport(
+        transport,
+        <ToolPicker
+          open={true}
+          selectedTools={[]}
+          onToggle={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const skillsSection = await screen.findByTestId(
+      "tool-picker-section-skill",
+    );
+    const mcpsSection = screen.getByTestId("tool-picker-section-mcp");
+    expect(skillsSection).toHaveTextContent("Skills");
+    expect(skillsSection).toHaveTextContent("Research");
+    expect(skillsSection).not.toHaveTextContent("Gmail draft");
+    expect(mcpsSection).toHaveTextContent("MCPs");
+    expect(mcpsSection).toHaveTextContent("Gmail draft");
+    expect(mcpsSection).toHaveTextContent("Set cell");
+    expect(mcpsSection).not.toHaveTextContent("Research");
+  });
+
+  it("hides the Skills section when no skill entries are present", async () => {
+    const onlyMcps: ReadonlyArray<ToolDescriptor> = [
+      { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
+    ];
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ tools: onlyMcps }),
+    );
+    render(
+      withTransport(
+        transport,
+        <ToolPicker
+          open={true}
+          selectedTools={[]}
+          onToggle={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await screen.findByTestId("tool-picker-section-mcp");
+    expect(
+      screen.queryByTestId("tool-picker-section-skill"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not refetch when re-opened after a successful first load", async () => {

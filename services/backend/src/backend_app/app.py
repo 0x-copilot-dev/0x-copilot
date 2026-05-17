@@ -45,6 +45,7 @@ from backend_app.contracts import (
     OAuthTokenRequest,
     SkillListResponse,
     SkillResponse,
+    ToolListResponse,
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
@@ -136,6 +137,7 @@ from backend_app.service import (
     DeployAuditService,
     McpRegistryService,
     SkillRegistryService,
+    ToolCatalogService,
 )
 from backend_app.store import PostgresConnectionPool
 
@@ -150,6 +152,10 @@ class _AppServices:
     @staticmethod
     def skills(application: FastAPI) -> SkillRegistryService:
         return application.state.skill_service
+
+    @staticmethod
+    def tool_catalog(application: FastAPI) -> ToolCatalogService:
+        return application.state.tool_catalog_service
 
     @staticmethod
     def deploy_audit(application: FastAPI) -> DeployAuditService:
@@ -320,6 +326,10 @@ def create_app(
         TelemetryBootstrap.instrument_fastapi(app)
     app.state.mcp_service = service or McpRegistryService()
     app.state.skill_service = skill_service or SkillRegistryService()
+    app.state.tool_catalog_service = ToolCatalogService(
+        mcp_service=app.state.mcp_service,
+        skill_service=app.state.skill_service,
+    )
     app.state.deploy_audit_service = deploy_audit_service or DeployAuditService()
     app.state.deployment = resolved_deployment
     # Identity store is shared by sessions + OIDC (and later A4..A10).
@@ -603,6 +613,30 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         return _AppServices.mcp(app).list_servers(
+            org_id=identity.org_id, user_id=identity.user_id
+        )
+
+    # Sectioned listing for the composer Tools popover: user-installed
+    # skill bundles + authenticated MCP servers, each tagged with
+    # ``kind: "skill" | "mcp"`` so the frontend can partition the popover
+    # into its Skills and MCPs sections without re-deriving the type.
+    # Requires both ``MCP_READ`` and ``SKILLS_READ`` because the response
+    # spans both stores. Caller-supplied ``org_id`` / ``user_id`` are
+    # rebound to the verified identity by ``scoped_identity``.
+    @app.get(
+        "/v1/mcp/tools",
+        response_model=ToolListResponse,
+        dependencies=[Depends(RequireScopes(MCP_READ, SKILLS_READ))],
+    )
+    def list_tools(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> ToolListResponse:
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        return _AppServices.tool_catalog(app).list_tools(
             org_id=identity.org_id, user_id=identity.user_id
         )
 

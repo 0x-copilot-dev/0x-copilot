@@ -1995,6 +1995,35 @@ export interface SkillListResponse {
   skills: Skill[];
 }
 
+/**
+ * Composer Tools popover (`GET /v1/mcp/tools`).
+ *
+ * The endpoint aggregates two stores into one sectioned listing for the
+ * composer: user-installed **skill** bundles and **MCP** server tools. The
+ * `kind` discriminator is the single source of truth the UI uses to split
+ * the popover into its Skills and MCPs sections — without it, the Skills
+ * section is empty and skills and MCPs render in one undifferentiated list.
+ */
+export type ToolKind = "skill" | "mcp";
+
+export interface ToolDescriptor {
+  /** Stable id used as the selection key and React list key. */
+  name: string;
+  /** Human-readable name rendered as the row label. */
+  label: string;
+  /** Optional one-line subtitle rendered under the label. */
+  description?: string;
+  /**
+   * Whether this descriptor came from the user's installed skill bundles or
+   * from a registered MCP server. Drives the Skills / MCPs section split.
+   */
+  kind: ToolKind;
+}
+
+export interface ToolListResponse {
+  tools: ToolDescriptor[];
+}
+
 // PR 1.5 — Workspace pane data feeds.
 // Read-only archive contracts that complement the live SUBAGENT_* and
 // `source_ingested` events on the SSE stream. The shape mirrors

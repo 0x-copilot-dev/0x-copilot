@@ -728,6 +728,30 @@ class InternalMcpServerListResponse(BackendContract):
     servers: tuple[InternalMcpServerCard, ...]
 
 
+class ToolKind(StrEnum):
+    SKILL = "skill"
+    MCP = "mcp"
+
+
+class ToolListEntry(BackendContract):
+    """One row in the composer Tools popover.
+
+    Aggregates user-installed skill bundles and registered MCP servers into
+    a single sectioned listing. The ``kind`` discriminator is what lets the
+    frontend partition the popover into its Skills and MCPs sections — same
+    field that the public ``packages/api-types`` mirror exposes.
+    """
+
+    name: str
+    label: str
+    description: str | None = None
+    kind: ToolKind
+
+
+class ToolListResponse(BackendContract):
+    tools: tuple[ToolListEntry, ...]
+
+
 class InternalMcpAuthRequest(BackendContract):
     org_id: str
     user_id: str

@@ -7,13 +7,15 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import type {
+  ToolDescriptor,
+  ToolKind,
+  ToolListResponse,
+} from "@enterprise-search/api-types";
+
 import { useTransport } from "../providers/TransportProvider";
 
-export interface ToolDescriptor {
-  readonly name: string;
-  readonly label: string;
-  readonly description?: string;
-}
+export type { ToolDescriptor, ToolKind } from "@enterprise-search/api-types";
 
 export interface ToolPickerProps {
   readonly open: boolean;
@@ -28,10 +30,6 @@ type LoadState =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly tools: ReadonlyArray<ToolDescriptor> }
   | { readonly status: "error" };
-
-interface ToolListResponse {
-  readonly tools?: ReadonlyArray<ToolDescriptor>;
-}
 
 export function ToolPicker(props: ToolPickerProps): ReactNode {
   const { open, selectedTools, onToggle, onClose, portalTarget } = props;
@@ -136,34 +134,72 @@ function ToolPickerBody(props: BodyProps): ReactNode {
       </div>
     );
   }
+  const skills = state.tools.filter((t) => t.kind === "skill");
+  const mcps = state.tools.filter((t) => t.kind === "mcp");
   return (
-    <ul style={listStyle}>
-      {state.tools.map((t) => {
-        const selected = selectedTools.includes(t.name);
-        return (
-          <li key={t.name} style={listItemStyle}>
-            <button
-              type="button"
-              role="option"
-              aria-selected={selected}
-              onClick={() => onToggle(t.name)}
-              style={rowStyle(selected)}
-              data-testid={`tool-picker-row-${t.name}`}
-            >
-              <span style={labelStyle}>{t.label}</span>
-              {t.description ? (
-                <span style={descriptionStyle}>{t.description}</span>
-              ) : null}
-              {selected ? (
-                <span aria-hidden="true" style={checkStyle}>
-                  ✓
-                </span>
-              ) : null}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <div style={sectionsStyle}>
+      <ToolPickerSection
+        kind="skill"
+        title="Skills"
+        tools={skills}
+        selectedTools={selectedTools}
+        onToggle={onToggle}
+      />
+      <ToolPickerSection
+        kind="mcp"
+        title="MCPs"
+        tools={mcps}
+        selectedTools={selectedTools}
+        onToggle={onToggle}
+      />
+    </div>
+  );
+}
+
+interface SectionProps {
+  readonly kind: ToolKind;
+  readonly title: string;
+  readonly tools: ReadonlyArray<ToolDescriptor>;
+  readonly selectedTools: ReadonlyArray<string>;
+  readonly onToggle: (name: string) => void;
+}
+
+function ToolPickerSection(props: SectionProps): ReactNode {
+  const { kind, title, tools, selectedTools, onToggle } = props;
+  if (tools.length === 0) {
+    return null;
+  }
+  return (
+    <section data-testid={`tool-picker-section-${kind}`}>
+      <div style={sectionTitleStyle}>{title}</div>
+      <ul style={listStyle}>
+        {tools.map((t) => {
+          const selected = selectedTools.includes(t.name);
+          return (
+            <li key={t.name} style={listItemStyle}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => onToggle(t.name)}
+                style={rowStyle(selected)}
+                data-testid={`tool-picker-row-${t.name}`}
+              >
+                <span style={labelStyle}>{t.label}</span>
+                {t.description ? (
+                  <span style={descriptionStyle}>{t.description}</span>
+                ) : null}
+                {selected ? (
+                  <span aria-hidden="true" style={checkStyle}>
+                    ✓
+                  </span>
+                ) : null}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -227,6 +263,22 @@ const statusStyle: CSSProperties = {
   fontSize: 12,
 };
 
+const sectionsStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  maxHeight: 320,
+  overflowY: "auto",
+};
+
+const sectionTitleStyle: CSSProperties = {
+  fontSize: 11,
+  letterSpacing: 0.4,
+  color: PALETTE.textLo,
+  textTransform: "uppercase",
+  padding: "4px 6px 2px",
+};
+
 const listStyle: CSSProperties = {
   listStyle: "none",
   margin: 0,
@@ -234,8 +286,6 @@ const listStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
-  maxHeight: 320,
-  overflowY: "auto",
 };
 
 const listItemStyle: CSSProperties = {

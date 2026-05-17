@@ -192,6 +192,20 @@ def create_app(
             identity=identity,
         )
 
+    # Composer Tools popover — sectioned skill + MCP listing. Pass-through;
+    # backend owns the aggregation and tags each entry with ``kind``.
+    @app.get("/v1/mcp/tools")
+    async def list_mcp_tools(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/mcp/tools",
+            target="backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # PR 4.4.6 — curated catalog (read-only) and explicit install path.
     @app.get("/v1/mcp/catalog")
     async def list_mcp_catalog(request: Request) -> dict[str, object]:
