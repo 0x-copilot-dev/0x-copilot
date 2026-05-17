@@ -104,6 +104,21 @@ function routeFromLocation(): AppRoute {
       return { screen: "share", token };
     }
   }
+  // Phase 7C — admin tier-2 adapter review. The route is matched
+  // unconditionally here; App.tsx renders the chat surface as a
+  // fallback for non-admin callers so a bookmarked link never crashes.
+  if (path === "/admin/adapter-review") {
+    return { screen: "admin-adapter-review-queue" };
+  }
+  if (path.startsWith("/admin/adapter-review/")) {
+    const candidateId = decodeURIComponent(
+      path.slice("/admin/adapter-review/".length),
+    );
+    if (candidateId) {
+      return { screen: "admin-adapter-review-detail", candidateId };
+    }
+    return { screen: "admin-adapter-review-queue" };
+  }
   return { screen: "chat" };
 }
 
@@ -113,6 +128,15 @@ function pathForRoute(route: AppRoute): { path: string; hash: string } {
   }
   if (route.screen === "share") {
     return { path: `/share/${encodeURIComponent(route.token)}`, hash: "" };
+  }
+  if (route.screen === "admin-adapter-review-queue") {
+    return { path: "/admin/adapter-review", hash: "" };
+  }
+  if (route.screen === "admin-adapter-review-detail") {
+    return {
+      path: `/admin/adapter-review/${encodeURIComponent(route.candidateId)}`,
+      hash: "",
+    };
   }
   return {
     path: "/settings",
