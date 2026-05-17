@@ -3481,4 +3481,18 @@ export type {
   InboxUnreadCountResponse,
   UpdateInboxItemRequest,
 } from "./inbox";
+
+// SSE event envelope (P4-A3). Mirrors home SSE pattern. The ``item``
+// field carries the canonical InboxItem from ./inbox.ts. Naming
+// distinct from PR-1.4.1's ``InboxEventType``/``InboxEventEnvelope``
+// (approval-pulse stream); the two converge in phase 4.5.
+import type { InboxItem as _InboxItem } from "./inbox";
+export type InboxStreamEventType = "item_added" | "item_updated" | "heartbeat";
+export interface InboxStreamEnvelope {
+  readonly event_id: string;
+  readonly sequence_no: number;
+  readonly event_type: InboxStreamEventType;
+  readonly item?: _InboxItem;
+  readonly created_at: string;
+}
 // === end Phase 4 Inbox ===

@@ -1,9 +1,10 @@
-"""Inbox destination (Phase 4) — CRUD + ACL + state machine + audit.
+"""Inbox destination (Phase 4) — CRUD + ACL + state machine + audit + SSE.
 
 Public surface: ``GET /v1/inbox``, ``GET /v1/inbox/{id}``,
-``PATCH /v1/inbox/{id}``, ``POST /v1/inbox/bulk``, and
-``GET /v1/inbox/unread_count``. Identity is the verified session
-caller; tenant isolation is enforced at every store call.
+``PATCH /v1/inbox/{id}``, ``POST /v1/inbox/bulk``,
+``GET /v1/inbox/unread_count``, and ``GET /v1/inbox/stream`` (SSE).
+Identity is the verified session caller; tenant isolation is enforced
+at every store call.
 
 Wire shape is canonical at ``packages/api-types/src/inbox.ts``; the
 Python mirrors live in ``inbox.routes``. Routes wire ACL + audit via
@@ -31,12 +32,22 @@ Body split:
 * List rows carry ``body_ref`` opaque pointer; body lives in the
   ``inbox_bodies`` table (inbox-prd §3 + §10).
 * ``GET /v1/inbox/{id}`` lazy-loads the body markdown on detail mount.
+
+SSE (P4-A3):
+
+* ``GET /v1/inbox/stream`` emits ``event: inbox_event`` frames per
+  ``(org_id, user_id)`` channel with monotonic ``sequence_no``;
+  ``Last-Event-ID`` header (or ``?after_sequence=N`` fallback) resumes
+  without replay. 30s heartbeats. P4-A1's mutation handlers and P4-A2's
+  producer publish to ``app.state.inbox_activity_bus`` (set by
+  ``register_inbox_sse_routes``).
 """
 
 from __future__ import annotations
 
 from backend_app.inbox.routes import register_inbox_routes
 from backend_app.inbox.service import InboxService
+from backend_app.inbox.sse import register_inbox_sse_routes
 from backend_app.inbox.store import (
     InMemoryInboxStore,
     InboxAuditRecord,
@@ -53,4 +64,5 @@ __all__ = [
     "InboxService",
     "InboxStore",
     "register_inbox_routes",
+    "register_inbox_sse_routes",
 ]
