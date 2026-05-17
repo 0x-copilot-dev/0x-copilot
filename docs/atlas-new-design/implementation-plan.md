@@ -158,6 +158,20 @@ Sub-PRD: pending (`a4c565a71d8cc3725` agent still running). When it lands:
 | **P5-A backend**                 | `worktree-agent-phase5-routines-backend` | `packages/api-types/src/routines.ts` (NEW), `services/backend/src/backend_app/routines/`, facade proxy, `services/ai-backend/src/runtime_worker/jobs/routine_scheduler.py` (cron-claim worker), `services/backend/src/backend_app/app.py` extend (merge AFTER P4-A)                                                                           | SP-1, P1-A, P4-A | Routine CRUD; scheduler; trigger validation; webhook secret rotation; permission intersection at fire-time |
 | **P5-B chat-surface + frontend** | `worktree-agent-phase5-routines-surface` | `packages/chat-surface/src/destinations/routines/` (NEW: RoutinesDestination, RoutinesPanel, RoutineEditor, RoutineDetail), `packages/chat-surface/src/shell/destinations.ts` (extend ShellDestinationSlug to include `"routines"` as the 12th slug — merge BEFORE any other Phase-5 work), `apps/frontend/src/app/App.tsx` extend, all tests | SP-1, P5-A       | Routines UI; cron editor; trigger management; tabs (Connectors/Behavior/Permissions)                       |
 
+### Phase 1.6 — chat-surface Composer surface-completion (deferred from P1-C; tech-debt)
+
+Phase 1.5 (composer-delete cleanup) escalated 2026-05-18: the chat-surface Composer is structurally different from the frontend's runtime composer (opinionated toolbar vs headless render-prop slots), not just API-incompatible. P1-B added some additive props (mode, attachmentAdapter, onSubmit, forwardRef, topBarSlot, inlineActions) but didn't close the surface to allow a regression-free delete.
+
+Concrete gaps for a future Phase 1.6 agent (single-agent scope; chat-surface only):
+
+1. Extend `ComposerHandle` with `appendText(text)`, `addAttachment(file)`, `submit()` (using flushSync where DOM-visible state must sync)
+2. Add `bottomBarRender` / `hintRender` / `onInputKeyDown` render-prop slots OR replace the hardcoded toolbar with a `toolbarSlot` prop that REPLACES (not supplements) the built-in toolbar
+3. Decide AttachmentAdapter contract: widen chat-surface to the runtime's two-stage (`add() → pending`, `send(pending) → complete`, `remove() → Promise<void>`), OR have AssistantComposer adapt its existing adapters at call-site (lossy on the `content[]` upload payload)
+4. Surface `data-focused` / `data-has-topbar` / `data-running` attributes for `aui-*` CSS parity, OR migrate the ~72 `aui-*` selectors in `apps/frontend/src/styles.css` to the chat-surface token system
+5. Wire the plus-button to a host-supplied filepicker handler so the existing `openFilePicker` path can call into the composer
+
+After Phase 1.6 lands, run the composer-delete cleanup (3-file delete + 2-call-site edit). Sequenced after Phase 5 — does not block destinations work.
+
 ### Phase 6+ — later waves (skeleton; sub-PRDs not yet written)
 
 Routines was added as the 12th destination after master PRD §8 was written. Impl-plan numbering inserts Routines at Phase 5 and shifts everything else by one. Each Phase 6+ row is a placeholder — its sub-PRD is written when the previous phase ships and orchestrator dispatches the writer-then-impl pattern (cross-audit §7 dispatch shape).
