@@ -159,7 +159,7 @@ export function ApprovalTool({
   const submitForward = (member: WorkspaceMember): void => {
     const target: ApprovalForwardTarget = {
       kind: "workspace_user",
-      user_id: member.user_id,
+      user_id: member.user_id as ApprovalForwardTarget["user_id"],
     };
     resume({
       decision: "forwarded",

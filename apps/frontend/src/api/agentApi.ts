@@ -453,7 +453,8 @@ export function decideApproval(
 ): Promise<ApprovalDecisionResponse> {
   const payload: ApprovalDecisionRequest = {
     decision,
-    decided_by_user_id: identity.userId,
+    decided_by_user_id:
+      identity.userId as ApprovalDecisionRequest["decided_by_user_id"],
   };
   if (reason !== undefined) {
     payload.reason = reason;

@@ -47,10 +47,13 @@ import {
   type ReactElement,
 } from "react";
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type {
+  ConversationId,
+  RunId,
+  RuntimeEventEnvelope,
+} from "@enterprise-search/api-types";
 import type { Transport } from "@enterprise-search/chat-transport";
 
-import type { ConversationId, RunId } from "../destinations/home";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import { TcChat } from "./TcChat";
 import { TcMiniTimeline } from "./TcMiniTimeline";

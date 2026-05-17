@@ -1,17 +1,36 @@
-// LOCAL STUB — replaced at merge by P1-A's `@enterprise-search/api-types/approvals`.
+// chat-surface UI approval shape (transitional adapter, kept post-Phase-1).
 //
-// Phase 1 P1-B runs in parallel with P1-A (backend approvals) and P1-C
-// (frontend migration). P1-A owns `packages/api-types/src/approvals.ts`
-// where the canonical `Approval` interface lives. While P1-A is in flight
-// this stub matches the sub-PRD (`docs/atlas-new-design/destinations/
-// chats-canvas-prd.md` §3.6 + §6 audit shape) field-for-field. When P1-A
-// lands the orchestrator deletes this file and rewires every import site
-// to `import { Approval, ApprovalState } from "@enterprise-search/api-types"`.
+// Background: P1-A's audit found the canonical backend approval system uses
+// `AssignedApproval` + `ApprovalStatus` ("pending"|"approved"|"rejected"|
+// "forwarded"|"suggest_edit") in `@enterprise-search/api-types`. P1-B's
+// chat-surface UI was designed against a narrower 4-state enum ("pending"|
+// "accepted"|"rejected"|"edited") that maps more cleanly to the rail's
+// pending-vs-resolved presentation.
 //
-// Brands (`ApprovalId`, `RunId`, …) come from api-types already — only
-// the `Approval` interface is stubbed. The shape is intentionally a
-// superset of the sub-PRD: any extra optional field P1-A introduces is
-// trivially compatible.
+// Rather than rename every chat-surface call site (~7 files, dozens of
+// touches), we keep this **adapter shape** and bridge at the host boundary.
+// `apps/frontend` maps a real `AssignedApproval` → this local `Approval`
+// shape on the way into chat-surface; outbound approval decisions go
+// through the existing `/v1/agent/approvals/{id}/decision` endpoint as
+// the canonical `ApprovalDecision` ("approved"|"rejected"|"forwarded"|
+// "suggest_edit") — see `services/ai-backend/src/runtime_api/schemas/
+// approvals.py` and the wire types in `packages/api-types/src/index.ts`.
+//
+// Field mapping host-side (apps/frontend) when adapting AssignedApproval:
+//   approval_id          → id
+//   status="pending"     → state="pending"
+//   status="approved"    → state="accepted"
+//   status="rejected"    → state="rejected"
+//   status="forwarded"   → state="rejected"  (collapse; rail UI treats both as closed)
+//   status="suggest_edit" → state="edited"
+//   approval_kind        → kind
+//   forwarded_by_user_id → requester
+//
+// Wave 3+ may refactor chat-surface consumers to consume `AssignedApproval`
+// directly and delete this adapter; tracking issue: TODO(Wave3).
+//
+// Brands (`ApprovalId`, `RunId`, etc.) come from api-types — single source
+// of truth per cross-audit §2.1.
 
 import type {
   ApprovalId,

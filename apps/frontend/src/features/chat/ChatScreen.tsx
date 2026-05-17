@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  ApprovalForwardTarget,
   Conversation,
   CreateRunRequest,
   Message,
@@ -1119,7 +1120,7 @@ export function ChatScreen({
     decision: ApprovalDecision,
     answer?: string,
     // PR 1.4 — required iff `decision === "forwarded"`.
-    forwardTo?: { kind: "workspace_user"; user_id: string } | null,
+    forwardTo?: ApprovalForwardTarget | null,
   ): Promise<void> {
     if (pendingApprovalDecisionsRef.current.has(approvalId)) {
       return;
@@ -2364,7 +2365,7 @@ function isApprovalResumePayload(payload: unknown): payload is {
   answer?: string;
   // PR 1.4 — present iff `decision === "forwarded"`. Server-side
   // validators reject malformed combinations.
-  forward_to?: { kind: "workspace_user"; user_id: string } | null;
+  forward_to?: ApprovalForwardTarget | null;
 } {
   if (!payload || typeof payload !== "object") {
     return false;

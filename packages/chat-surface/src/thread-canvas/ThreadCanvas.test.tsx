@@ -24,10 +24,11 @@ import type {
   TypedRequest,
 } from "@enterprise-search/chat-transport";
 
+import type { ConversationId, RunId } from "@enterprise-search/api-types";
+
 import { TransportProvider } from "../providers/TransportProvider";
 import { clearRegistry } from "../surfaces/SurfaceRegistry";
 import { ThreadCanvas, type ThreadMode } from "./ThreadCanvas";
-import type { ConversationId, RunId } from "../destinations/home";
 import type { TcTab } from "./TcTabs";
 
 // ============================================================

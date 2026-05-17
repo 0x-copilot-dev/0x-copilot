@@ -21,7 +21,7 @@ function makeEnvelope(
     conversation_id: "conv-1",
     sequence_no: overrides.sequence_no ?? seq,
     event_type: type,
-    activity_kind: "system",
+    activity_kind: "event",
     payload: {},
     created_at: new Date(1700000000000 + seq * 1000).toISOString(),
     ...overrides,
