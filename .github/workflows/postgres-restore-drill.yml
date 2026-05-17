@@ -70,6 +70,11 @@ jobs:
       DATABASE_URL: postgres://drill:drill@localhost:5432/drill
       BACKEND_DATABASE_URL: postgres://drill:drill@localhost:5432/drill
       RUNTIME_DATABASE_URL: postgres://drill:drill@localhost:5432/drill
+      # yoyo selects its driver from the URL scheme; without the
+      # +psycopg suffix it imports psycopg2, which we deliberately
+      # don't install (see the pip step below).
+      YOYO_BACKEND_URL: postgresql+psycopg://drill:drill@localhost:5432/drill
+      YOYO_RUNTIME_URL: postgresql+psycopg://drill:drill@localhost:5432/drill
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -97,12 +102,12 @@ jobs:
       - name: Apply backend migrations
         run: |
           cd services/backend
-          yoyo apply --batch --database "${BACKEND_DATABASE_URL}" migrations/
+          yoyo apply --batch --database "${YOYO_BACKEND_URL}" migrations/
 
       - name: Apply ai-backend migrations
         run: |
           cd services/ai-backend
-          yoyo apply --batch --database "${RUNTIME_DATABASE_URL}" migrations/
+          yoyo apply --batch --database "${YOYO_RUNTIME_URL}" migrations/
 
       - name: Load restore-drill seed fixture
         run: |
