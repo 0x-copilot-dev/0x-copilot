@@ -121,6 +121,18 @@ jobs:
           cosign sign --yes \
             "ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}"
 
+      # Debug: print the actual CRITICAL fixed CVEs in human-readable form so the
+      # workflow log explains why the gate below fails. Non-blocking — gate is below.
+      - name: Trivy CRITICAL findings (table, debug)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true
+
       # Gating scan: any CRITICAL fixable vulnerability fails the build.
       - name: Run Trivy vulnerability scanner (CRITICAL gate)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
