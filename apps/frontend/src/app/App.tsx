@@ -16,6 +16,7 @@ import {
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
 import { HomeRoute } from "../features/home/HomeRoute";
+import { TodosRoute } from "../features/todos/TodosRoute";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -94,9 +95,10 @@ import {
   ProjectsDestination,
   SecretStorageProvider,
   TeamDestination,
-  TodosDestination,
   ToolsDestination,
   WebSecretStorage,
+  registerItemRefResolver,
+  hasItemRefResolver,
   useKeyValueStore,
   type ArtifactRoute,
   type ShellDestinationSlug,
@@ -114,25 +116,48 @@ import {
   type PortBundle,
 } from "../ports";
 
-// Map every non-chats, non-home destination slug to the placeholder
-// component shipped with the chat-surface package. Chats has a
-// dedicated host component (`ChatScreen`) below; Home has a
-// feature-level data binder (`HomeRoute`) that mounts the package
-// component itself — adding either here would only confuse the
-// renderer.
+// Map every non-chats, non-home, non-todos destination slug to the
+// placeholder component shipped with the chat-surface package. Chats
+// has a dedicated host component (`ChatScreen`) below; Home + Todos
+// have feature-level data binders (`HomeRoute` / `TodosRoute`) that
+// mount the package component themselves — adding any of them here
+// would only confuse the renderer.
 const NON_CHATS_DESTINATIONS: Readonly<
-  Record<Exclude<ShellDestinationSlug, "chats" | "home">, () => ReactElement>
+  Record<
+    Exclude<ShellDestinationSlug, "chats" | "home" | "todos">,
+    () => ReactElement
+  >
 > = {
   agents: AgentsDestination,
   library: LibraryDestination,
   inbox: InboxDestination,
   tools: ToolsDestination,
   projects: ProjectsDestination,
-  todos: TodosDestination,
   connectors: ConnectorsDestination,
   team: TeamDestination,
   memory: MemoryDestination,
 };
+
+// ItemRef resolver registration (cross-audit §3.3) for the `"todo"`
+// kind. The Todos destination owns this kind — when a chat / agent
+// activity entry surfaces an `<ItemLink kind="todo" id={...} />`, the
+// link resolves to the Todos destination's detail surface. Today the
+// destination has no per-todo detail route, so we return `route: null`
+// — `<ItemLink>` falls back to the breadcrumb. Phase 3 Impl-B replaces
+// this with a richer resolver via `{ replace: true }` once the
+// detail surface lands.
+//
+// Guarded with `hasItemRefResolver` so test environments that import
+// the module across multiple vitest realms don't throw
+// `ItemRefResolverAlreadyRegistered`.
+if (!hasItemRefResolver("todo")) {
+  registerItemRefResolver("todo", async (_id) => ({
+    label: "Todo",
+    icon: null,
+    route: null,
+    breadcrumb: "Todos",
+  }));
+}
 
 /**
  * The org slug LoginScreen falls back to when the URL doesn't carry one.
@@ -591,6 +616,25 @@ function EnterpriseSearchApp({
         aria-label="home destination"
       >
         <HomeRoute identity={identity} />
+      </section>
+    );
+  } else if (route.destination === "todos") {
+    // Phase 3 P3-C — Todos gets a feature-level data binder
+    // (`TodosRoute`) that owns the `/v1/todos` fetch, the
+    // overdue-count → `BadgePort.setBadge("todos", n)` wiring
+    // (sub-PRD §14.1), and the context-aware project default
+    // (sub-PRD §16 Q6 / cross-audit §9.6). On the top-level
+    // /todos destination there is no current project, so the
+    // route passes `projectId={null}` — inline-add defaults to
+    // "Unfiled" until the user picks a project filter.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="todos"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="todos destination"
+      >
+        <TodosRoute identity={identity} projectId={null} />
       </section>
     );
   } else {
