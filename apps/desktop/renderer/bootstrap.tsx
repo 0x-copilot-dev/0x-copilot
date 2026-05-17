@@ -1,8 +1,12 @@
 import { useMemo } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ChatShell } from "@enterprise-search/chat-surface";
+import {
+  ChatShell,
+  registerGenericStructuredDiff,
+} from "@enterprise-search/chat-surface";
 import { IpcTransport } from "@enterprise-search/chat-transport";
+import { registerAll as registerSurfaceRenderers } from "@enterprise-search/surface-renderers";
 
 import { DesktopPlaceholder } from "./DesktopPlaceholder";
 import { MemoryKeyValueStore } from "./MemoryKeyValueStore";
@@ -10,6 +14,9 @@ import { StubPresenceSignal } from "./StubPresenceSignal";
 import { StubRouter } from "./StubRouter";
 
 import "../preload/window-bridge-types";
+
+registerGenericStructuredDiff();
+registerSurfaceRenderers();
 
 // Phase 1 anonymous bootstrap. Phase 5 wires the real OIDC flow + per-
 // (workspace_id, server) safeStorage; this object becomes the cached

@@ -144,6 +144,16 @@ export {
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === end Phase 0-A ===
 
+// === Phase 4-B tier3 generic-diff ===
+export {
+  GenericStructuredDiff,
+  registerGenericStructuredDiff,
+  type GenericCurrentState,
+  type GenericFieldChange,
+  type GenericStructuredDiffPayload,
+} from "./surfaces";
+// === end Phase 4-B ===
+
 // === Phase 0-B ports facade ===
 export * from "./ports";
 // === end Phase 0-B ===
