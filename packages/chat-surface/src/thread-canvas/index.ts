@@ -10,6 +10,14 @@ export { ThreadCanvas, type ThreadCanvasProps } from "./ThreadCanvas";
 export { TcTabs, type TcTabsProps, type TcTab } from "./TcTabs";
 // === end Phase 2-B ===
 
+// === Phase 2-C swimlanes ===
+export {
+  TcSwimlanes,
+  type Playhead,
+  type TcSwimlanesProps,
+} from "./TcSwimlanes";
+// === end Phase 2-C ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
