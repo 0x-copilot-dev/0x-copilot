@@ -27,6 +27,7 @@ from backend_facade.auth import (
     FacadeAuthenticator,
     requires_recent_mfa,
 )
+from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
 
 
@@ -50,15 +51,16 @@ def register_auth_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/sessions")
     async def list_sessions(request: Request) -> dict[str, object]:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request, backend_url=backend_url, http_client=client
-            )
-            response = await client.get(
-                f"{backend_url}/internal/v1/auth/sessions",
-                params={"org_id": identity.org_id, "user_id": identity.user_id},
-                headers=FacadeAuthenticator.service_headers(identity),
-            )
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.get(
+            f"{backend_url}/internal/v1/auth/sessions",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -68,16 +70,16 @@ def register_auth_routes(app: FastAPI) -> None:
     )
     async def revoke_session(request: Request, session_id: str) -> Response:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            # cache_bypass=True: revoking a session is a sensitive operation
-            # that must run against the canonical DB state, not a cached
-            # identity that could itself be revoked already.
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request,
-                backend_url=backend_url,
-                http_client=client,
-                cache_bypass=True,
-            )
+        client = http_client(request.app)
+        # cache_bypass=True: revoking a session is a sensitive operation
+        # that must run against the canonical DB state, not a cached
+        # identity that could itself be revoked already.
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request,
+            backend_url=backend_url,
+            http_client=client,
+            cache_bypass=True,
+        )
         await _revoke(app, identity, session_id, reason="user_revoked")
         # Best-effort: drop the caller's own cached identity so the very next
         # request reflects the new state if they revoked their own session.
@@ -91,13 +93,13 @@ def register_auth_routes(app: FastAPI) -> None:
     @app.post("/v1/auth/logout")
     async def logout(request: Request) -> Response:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request,
-                backend_url=backend_url,
-                http_client=client,
-                cache_bypass=True,
-            )
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request,
+            backend_url=backend_url,
+            http_client=client,
+            cache_bypass=True,
+        )
         # Best-effort: derive the session_id from the bearer's `sid` claim;
         # if there isn't one (back-compat token without sid), there is no
         # server-side session to revoke and we fall through to 204.
@@ -128,12 +130,13 @@ def register_auth_routes(app: FastAPI) -> None:
         org_id: str = Query(..., min_length=1),
     ) -> dict[str, object]:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{backend_url}/internal/v1/auth/oidc/providers",
-                params={"org_id": org_id},
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        response = await client.get(
+            f"{backend_url}/internal/v1/auth/oidc/providers",
+            params={"org_id": org_id},
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -147,19 +150,20 @@ def register_auth_routes(app: FastAPI) -> None:
         format: str = Query("redirect", pattern="^(redirect|json)$"),
     ) -> Response:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/oidc/{provider_id}/authorize",
-                json={
-                    "org_id": org_id,
-                    "provider_id": provider_id,
-                    "redirect_uri": redirect_uri,
-                    "return_to": return_to,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/oidc/{provider_id}/authorize",
+            json={
+                "org_id": org_id,
+                "provider_id": provider_id,
+                "redirect_uri": redirect_uri,
+                "return_to": return_to,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         body = response.json()
         if format == "redirect":
@@ -186,17 +190,18 @@ def register_auth_routes(app: FastAPI) -> None:
                 or "OIDC callback missing authorization code",
             )
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/oidc/callback",
-                json={
-                    "state": state,
-                    "code": code,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/oidc/callback",
+            json={
+                "state": state,
+                "code": code,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=15,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -226,18 +231,19 @@ def register_auth_routes(app: FastAPI) -> None:
         format: str = Query("redirect", pattern="^(redirect|json)$"),
     ) -> Response:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/saml/{provider_id}/authorize",
-                json={
-                    "org_id": org_id,
-                    "provider_id": provider_id,
-                    "relay_state": relay_state,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/saml/{provider_id}/authorize",
+            json={
+                "org_id": org_id,
+                "provider_id": provider_id,
+                "relay_state": relay_state,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         body = response.json()
         if format == "redirect":
@@ -263,18 +269,19 @@ def register_auth_routes(app: FastAPI) -> None:
             )
         relay_state = relay_state_raw if isinstance(relay_state_raw, str) else None
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/saml/consume",
-                json={
-                    "provider_id": provider_id,
-                    "saml_response": saml_response,
-                    "relay_state": relay_state,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/saml/consume",
+            json={
+                "provider_id": provider_id,
+                "saml_response": saml_response,
+                "relay_state": relay_state,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=15,
+        )
         _raise_for_upstream(response)
         # The SPA consumes ``relay_state`` from the JSON body to navigate
         # post-login; the facade does not 302 here because the SPA needs
@@ -286,13 +293,13 @@ def register_auth_routes(app: FastAPI) -> None:
         request: Request,
         provider_id: str,
     ) -> Response:
-        del request
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{backend_url}/internal/v1/auth/saml/{provider_id}/metadata",
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.get(
+            f"{backend_url}/internal/v1/auth/saml/{provider_id}/metadata",
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return Response(content=response.content, media_type="application/xml")
 
@@ -306,18 +313,19 @@ def register_auth_routes(app: FastAPI) -> None:
         email = _required_str(payload, "email")
         password = _required_str(payload, "password")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/local/verify",
-                json={
-                    "org_id": org_id,
-                    "email": email,
-                    "password": password,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/local/verify",
+            json={
+                "org_id": org_id,
+                "email": email,
+                "password": password,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -331,16 +339,17 @@ def register_auth_routes(app: FastAPI) -> None:
         org_id = _required_str(payload, "org_id")
         email = _required_str(payload, "email")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"{backend_url}/internal/v1/auth/password/reset/request",
-                json={
-                    "org_id": org_id,
-                    "email": email,
-                    "ip": _client_ip(request),
-                },
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        await client.post(
+            f"{backend_url}/internal/v1/auth/password/reset/request",
+            json={
+                "org_id": org_id,
+                "email": email,
+                "ip": _client_ip(request),
+            },
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         # Always 202 regardless of upstream — anti-enumeration.
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
@@ -354,12 +363,13 @@ def register_auth_routes(app: FastAPI) -> None:
         token = _required_str(payload, "token")
         new_password = _required_str(payload, "new_password")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/password/reset/confirm",
-                json={"token": token, "new_password": new_password},
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/password/reset/confirm",
+            json={"token": token, "new_password": new_password},
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -374,24 +384,25 @@ def register_auth_routes(app: FastAPI) -> None:
         current = _required_str(payload, "current_password")
         new = _required_str(payload, "new_password")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request,
-                backend_url=backend_url,
-                http_client=client,
-                cache_bypass=True,
-            )
-            requires_recent_mfa(identity, max_age_seconds=_DEFAULT_STEP_UP_SECONDS)
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/password/change",
-                json={
-                    "org_id": identity.org_id,
-                    "user_id": identity.user_id,
-                    "current_password": current,
-                    "new_password": new,
-                },
-                headers=FacadeAuthenticator.service_headers(identity),
-            )
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request,
+            backend_url=backend_url,
+            http_client=client,
+            cache_bypass=True,
+        )
+        requires_recent_mfa(identity, max_age_seconds=_DEFAULT_STEP_UP_SECONDS)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/password/change",
+            json={
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+                "current_password": current,
+                "new_password": new,
+            },
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -410,16 +421,17 @@ def register_auth_routes(app: FastAPI) -> None:
     ) -> dict[str, object]:
         email = _required_str(payload, "email")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/discover",
-                json={
-                    "email": email,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/discover",
+            json={
+                "email": email,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -438,17 +450,18 @@ def register_auth_routes(app: FastAPI) -> None:
             else None
         )
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/magic-link/start",
-                json={
-                    "email": email,
-                    "return_to": return_to,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/magic-link/start",
+            json={
+                "email": email,
+                "return_to": return_to,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         # Anti-enumeration: 4xx upstream is also surfaced as 202 unless it's
         # a rate-limit (which is the only signal the caller is allowed to
         # see), or a 422 invalid_email which is structural.
@@ -471,16 +484,17 @@ def register_auth_routes(app: FastAPI) -> None:
         # Convenience GET for email clients that can't POST. Forwards to the
         # backend POST, which is the canonical handler.
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/magic-link/callback",
-                json={
-                    "token": token,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/magic-link/callback",
+            json={
+                "token": token,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -490,16 +504,17 @@ def register_auth_routes(app: FastAPI) -> None:
     ) -> dict[str, object]:
         token = _required_str(payload, "token")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/magic-link/callback",
-                json={
-                    "token": token,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id="-"),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/magic-link/callback",
+            json={
+                "token": token,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -510,17 +525,18 @@ def register_auth_routes(app: FastAPI) -> None:
         pick_token = _required_str(payload, "pick_token")
         org_id = _required_str(payload, "org_id")
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{backend_url}/internal/v1/auth/sessions/select",
-                json={
-                    "pick_token": pick_token,
-                    "org_id": org_id,
-                    "ip": _client_ip(request),
-                    "user_agent": _user_agent(request),
-                },
-                headers=_anonymous_service_headers(org_id=org_id),
-            )
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/sessions/select",
+            json={
+                "pick_token": pick_token,
+                "org_id": org_id,
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id=org_id),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -579,12 +595,13 @@ def register_auth_routes(app: FastAPI) -> None:
     async def mfa_disable_factor(request: Request, factor_id: str) -> Response:
         identity = FacadeAuthenticator.authenticate_request(request)
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.delete(
-                f"{backend_url}/internal/v1/auth/mfa/factors/{factor_id}",
-                params={"org_id": identity.org_id, "user_id": identity.user_id},
-                headers=FacadeAuthenticator.service_headers(identity),
-            )
+        client = http_client(request.app)
+        response = await client.delete(
+            f"{backend_url}/internal/v1/auth/mfa/factors/{factor_id}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=10,
+        )
         if response.status_code != status.HTTP_404_NOT_FOUND:
             _raise_for_upstream(response)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -732,16 +749,17 @@ def register_auth_routes(app: FastAPI) -> None:
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{backend_url}/internal/v1/auth/me/login-attempts",
-                params={
-                    "org_id": identity.org_id,
-                    "user_id": identity.user_id,
-                    "limit": limit,
-                },
-                headers=FacadeAuthenticator.service_headers(identity),
-            )
+        client = http_client(request.app)
+        response = await client.get(
+            f"{backend_url}/internal/v1/auth/me/login-attempts",
+            params={
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+                "limit": limit,
+            },
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -765,12 +783,13 @@ async def _revoke(
     reason: str,
 ) -> None:
     backend_url = settings_for(app).backend_url
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.post(
-            f"{backend_url}/internal/v1/auth/sessions/{session_id}/revoke",
-            json={"org_id": identity.org_id, "reason": reason},
-            headers=FacadeAuthenticator.service_headers(identity),
-        )
+    client = http_client(app)
+    response = await client.post(
+        f"{backend_url}/internal/v1/auth/sessions/{session_id}/revoke",
+        json={"org_id": identity.org_id, "reason": reason},
+        headers=FacadeAuthenticator.service_headers(identity),
+        timeout=10,
+    )
     if response.status_code == status.HTTP_404_NOT_FOUND:
         # Idempotent: revoking an unknown / cross-tenant session id looks the
         # same as a successful revoke from the user's perspective. Avoids
@@ -787,12 +806,13 @@ async def _backend_get(
     params: dict[str, object] | None = None,
 ) -> dict[str, object]:
     backend_url = settings_for(app).backend_url
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(
-            f"{backend_url}{path}",
-            params=params or {},
-            headers=FacadeAuthenticator.service_headers(identity),
-        )
+    client = http_client(app)
+    response = await client.get(
+        f"{backend_url}{path}",
+        params=params or {},
+        headers=FacadeAuthenticator.service_headers(identity),
+        timeout=10,
+    )
     _raise_for_upstream(response)
     return response.json()
 
@@ -806,13 +826,14 @@ async def _backend_post(
     params: dict[str, object] | None = None,
 ) -> dict[str, object]:
     backend_url = settings_for(app).backend_url
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.post(
-            f"{backend_url}{path}",
-            json=json,
-            params=params or {},
-            headers=FacadeAuthenticator.service_headers(identity),
-        )
+    client = http_client(app)
+    response = await client.post(
+        f"{backend_url}{path}",
+        json=json,
+        params=params or {},
+        headers=FacadeAuthenticator.service_headers(identity),
+        timeout=10,
+    )
     _raise_for_upstream(response)
     if response.status_code == status.HTTP_204_NO_CONTENT or not response.content:
         return {}

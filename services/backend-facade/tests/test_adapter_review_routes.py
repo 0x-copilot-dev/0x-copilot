@@ -18,7 +18,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-import backend_facade.adapter_review_routes as adapter_review_module
 from backend_facade.app import create_app
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.settings import FacadeSettings
@@ -72,7 +71,9 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args, **kwargs) -> None:
         return None
 
-    async def request(self, method, url, *, params=None, json=None, headers=None):
+    async def request(
+        self, method, url, *, params=None, json=None, headers=None, timeout=None
+    ):
         self.captured.append(
             {
                 "method": method,
@@ -89,7 +90,9 @@ class _FakeAsyncClient:
 def fake_upstream(monkeypatch):
     _FakeAsyncClient.captured = []
     _FakeAsyncClient.next_response = None
-    monkeypatch.setattr(adapter_review_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+    )
     return _FakeAsyncClient
 
 

@@ -13,7 +13,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend_facade import scim_routes as scim_routes_module
 from backend_facade.app import create_app
 from backend_facade.settings import FacadeSettings
 
@@ -41,7 +40,7 @@ def _install_fake_backend(monkeypatch, *, response_factory) -> list[dict[str, An
             return None
 
         async def request(
-            self, *, method, url, params=None, content=None, headers=None
+            self, *, method, url, params=None, content=None, headers=None, timeout=None
         ):
             captured.append(
                 {
@@ -56,7 +55,9 @@ def _install_fake_backend(monkeypatch, *, response_factory) -> list[dict[str, An
                 method=method, url=url, params=params, content=content
             )
 
-    monkeypatch.setattr(scim_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+    )
     return captured
 
 

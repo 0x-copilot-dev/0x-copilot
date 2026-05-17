@@ -16,9 +16,9 @@ SCIM and avoids a second lookup per request.
 from __future__ import annotations
 
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
+from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
 
 
@@ -89,14 +89,15 @@ async def _proxy(app: FastAPI, request: Request, *, suffix: str) -> Response:
             "content-type", "application/scim+json"
         )
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.request(
-            method=request.method,
-            url=upstream,
-            params=dict(request.query_params),
-            content=await request.body() if request.method != "GET" else None,
-            headers=headers,
-        )
+    client = http_client(request.app)
+    response = await client.request(
+        method=request.method,
+        url=upstream,
+        params=dict(request.query_params),
+        content=await request.body() if request.method != "GET" else None,
+        headers=headers,
+        timeout=30,
+    )
     media_type = response.headers.get("content-type", "application/scim+json")
     return Response(
         content=response.content,

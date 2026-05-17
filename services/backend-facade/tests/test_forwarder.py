@@ -10,7 +10,6 @@ on a 204-with-empty-body response. This test pins the corrected behavior:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import httpx
 import pytest
@@ -33,17 +32,17 @@ def mock_transport_factory():
     return _factory
 
 
-def _patched_forward(monkeypatch, transport: httpx.MockTransport):
-    """Patch httpx.AsyncClient so _forward_json uses the canned transport."""
+def _client(transport: httpx.MockTransport) -> httpx.AsyncClient:
+    """Build an httpx.AsyncClient that routes through the canned transport.
 
-    real_async_client = httpx.AsyncClient
+    Replaces the previous ``monkeypatch.setattr("backend_facade.app.httpx.AsyncClient", ...)``
+    pattern: now ``_forward_json`` takes the client as an explicit parameter
+    (single source of truth lives in ``HttpClientPool``), and tests inject a
+    transport-backed client directly. Cleaner — no module-internal patching,
+    no ordering hazards between fixture and ``create_app()``.
+    """
 
-    class _PatchedClient(real_async_client):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs.setdefault("transport", transport)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr("backend_facade.app.httpx.AsyncClient", _PatchedClient)
+    return httpx.AsyncClient(transport=transport)
 
 
 @pytest.mark.parametrize(
@@ -60,10 +59,10 @@ def test_no_content_returns_empty_dict(
     """2xx no-content responses return ``{}`` when ``expect_json=True``."""
 
     transport = mock_transport_factory(status_code, content, headers)
-    _patched_forward(monkeypatch, transport)
 
     result = asyncio.run(
         _forward_json(
+            client=_client(transport),
             base_url="http://upstream.test",
             method="DELETE",
             path="/v1/anything",
@@ -74,13 +73,13 @@ def test_no_content_returns_empty_dict(
 
 
 def test_no_content_returns_none_when_expect_json_false(
-    monkeypatch, mock_transport_factory
+    mock_transport_factory,
 ) -> None:
     transport = mock_transport_factory(204, b"")
-    _patched_forward(monkeypatch, transport)
 
     result = asyncio.run(
         _forward_json(
+            client=_client(transport),
             base_url="http://upstream.test",
             method="DELETE",
             path="/v1/anything",
@@ -90,16 +89,16 @@ def test_no_content_returns_none_when_expect_json_false(
     assert result is None
 
 
-def test_normal_json_path_unchanged(monkeypatch, mock_transport_factory) -> None:
+def test_normal_json_path_unchanged(mock_transport_factory) -> None:
     transport = mock_transport_factory(
         200,
         b'{"hello":"world"}',
         {"content-type": "application/json"},
     )
-    _patched_forward(monkeypatch, transport)
 
     result = asyncio.run(
         _forward_json(
+            client=_client(transport),
             base_url="http://upstream.test",
             method="GET",
             path="/v1/anything",
@@ -109,17 +108,17 @@ def test_normal_json_path_unchanged(monkeypatch, mock_transport_factory) -> None
 
 
 def test_json_array_allowed_when_object_check_disabled(
-    monkeypatch, mock_transport_factory
+    mock_transport_factory,
 ) -> None:
     transport = mock_transport_factory(
         200,
         b'[{"conversation_id":"conv_1","total":42}]',
         {"content-type": "application/json"},
     )
-    _patched_forward(monkeypatch, transport)
 
     result = asyncio.run(
         _forward_json(
+            client=_client(transport),
             base_url="http://upstream.test",
             method="GET",
             path="/v1/anything",
@@ -130,13 +129,13 @@ def test_json_array_allowed_when_object_check_disabled(
     assert result == [{"conversation_id": "conv_1", "total": 42}]
 
 
-def test_upstream_error_still_raises(monkeypatch, mock_transport_factory) -> None:
+def test_upstream_error_still_raises(mock_transport_factory) -> None:
     transport = mock_transport_factory(404, b'{"detail":"missing"}')
-    _patched_forward(monkeypatch, transport)
 
     with pytest.raises(Exception) as exc_info:
         asyncio.run(
             _forward_json(
+                client=_client(transport),
                 base_url="http://upstream.test",
                 method="GET",
                 path="/v1/anything",
@@ -146,7 +145,7 @@ def test_upstream_error_still_raises(monkeypatch, mock_transport_factory) -> Non
     assert getattr(exc_info.value, "status_code", None) == 404
 
 
-def test_forward_json_target_routes_to_correct_upstream(monkeypatch) -> None:
+def test_forward_json_target_routes_to_correct_upstream() -> None:
     """``target="backend"`` and ``target="ai_backend"`` resolve different base URLs."""
 
     from backend_facade.app import create_app
@@ -160,7 +159,10 @@ def test_forward_json_target_routes_to_correct_upstream(monkeypatch) -> None:
         return httpx.Response(204)
 
     transport = httpx.MockTransport(_handler)
-    _patched_forward(monkeypatch, transport)
+    # Swap the lifespan-owned pool for one that routes through the mock
+    # transport. This is the production-shaped substitution path — the
+    # pool field on app.state is the seam.
+    app.state.http_client = _client(transport)
 
     identity = AuthenticatedIdentity(org_id="o", user_id="u")
 

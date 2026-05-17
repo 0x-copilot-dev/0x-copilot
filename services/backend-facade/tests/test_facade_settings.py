@@ -190,7 +190,9 @@ class TestFacadeSettings(FacadeAuthTestMixin):
                     json={"detail": "Skill name already exists"},
                 )
 
-        monkeypatch.setattr(facade_app.httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", FakeAsyncClient
+        )
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
         )

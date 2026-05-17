@@ -21,6 +21,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from backend_facade.auth import FacadeAuthenticator
+from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
 
 
@@ -28,18 +29,19 @@ def register_me_routes(app: FastAPI) -> None:
     @app.get("/v1/me/workspaces")
     async def list_my_workspaces(request: Request) -> dict[str, object]:
         backend_url = settings_for(app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request, backend_url=backend_url, http_client=client
-            )
-            response = await client.get(
-                f"{backend_url}/internal/v1/me/workspaces",
-                params={
-                    "org_id": identity.org_id,
-                    "user_id": identity.user_id,
-                },
-                headers=FacadeAuthenticator.service_headers(identity),
-            )
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.get(
+            f"{backend_url}/internal/v1/me/workspaces",
+            params={
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+            },
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=10,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -124,24 +126,25 @@ def register_me_routes(app: FastAPI) -> None:
     async def upload_my_avatar(request: Request) -> dict[str, object]:
         backend_url = settings_for(request.app).backend_url
         body = await request.body()
-        async with httpx.AsyncClient(timeout=30) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request, backend_url=backend_url, http_client=client
-            )
-            headers = FacadeAuthenticator.service_headers(identity)
-            # Preserve the multipart boundary the browser sent.
-            ct = request.headers.get("content-type")
-            if ct:
-                headers = {**headers, "content-type": ct}
-            response = await client.post(
-                f"{backend_url}/internal/v1/me/avatar",
-                params={
-                    "org_id": identity.org_id,
-                    "user_id": identity.user_id,
-                },
-                content=body,
-                headers=headers,
-            )
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        headers = FacadeAuthenticator.service_headers(identity)
+        # Preserve the multipart boundary the browser sent.
+        ct = request.headers.get("content-type")
+        if ct:
+            headers = {**headers, "content-type": ct}
+        response = await client.post(
+            f"{backend_url}/internal/v1/me/avatar",
+            params={
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+            },
+            content=body,
+            headers=headers,
+            timeout=30,
+        )
         _raise_for_upstream(response)
         return response.json()
 
@@ -152,22 +155,23 @@ def register_me_routes(app: FastAPI) -> None:
     @app.get("/v1/me/avatar/{user_id}")
     async def get_avatar(request: Request, user_id: str) -> Response:
         backend_url = settings_for(request.app).backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request, backend_url=backend_url, http_client=client
-            )
-            headers = FacadeAuthenticator.service_headers(identity)
-            if_none_match = request.headers.get("if-none-match")
-            if if_none_match:
-                headers = {**headers, "if-none-match": if_none_match}
-            response = await client.get(
-                f"{backend_url}/internal/v1/me/avatar/{user_id}",
-                params={
-                    "org_id": identity.org_id,
-                    "user_id": identity.user_id,
-                },
-                headers=headers,
-            )
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        headers = FacadeAuthenticator.service_headers(identity)
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match:
+            headers = {**headers, "if-none-match": if_none_match}
+        response = await client.get(
+            f"{backend_url}/internal/v1/me/avatar/{user_id}",
+            params={
+                "org_id": identity.org_id,
+                "user_id": identity.user_id,
+            },
+            headers=headers,
+            timeout=10,
+        )
         if response.status_code == 304:
             return Response(status_code=304)
         _raise_for_upstream(response)
@@ -300,27 +304,28 @@ async def _forward_me(
     body: bytes | None = None
     if method != "GET":
         body = await request.body()
-    async with httpx.AsyncClient(timeout=10) as client:
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        headers = FacadeAuthenticator.service_headers(identity)
-        if method != "GET":
-            # Preserve the JSON content-type so FastAPI on the upstream
-            # parses Pydantic without needing a manual Content-Type header.
-            headers = {**headers, "content-type": "application/json"}
-        # Pass org_id / user_id as query params too. With the service token
-        # set, the backend route trusts the headers and ignores the params;
-        # in dev (no service token) the params are the dev fallback. This
-        # matches the pattern /v1/me/workspaces uses.
-        params = {"org_id": identity.org_id, "user_id": identity.user_id}
-        response = await client.request(
-            method,
-            f"{backend_url}/internal/v1/me/{slug}",
-            params=params,
-            content=body,
-            headers=headers,
-        )
+    client = http_client(request.app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    headers = FacadeAuthenticator.service_headers(identity)
+    if method != "GET":
+        # Preserve the JSON content-type so FastAPI on the upstream
+        # parses Pydantic without needing a manual Content-Type header.
+        headers = {**headers, "content-type": "application/json"}
+    # Pass org_id / user_id as query params too. With the service token
+    # set, the backend route trusts the headers and ignores the params;
+    # in dev (no service token) the params are the dev fallback. This
+    # matches the pattern /v1/me/workspaces uses.
+    params = {"org_id": identity.org_id, "user_id": identity.user_id}
+    response = await client.request(
+        method,
+        f"{backend_url}/internal/v1/me/{slug}",
+        params=params,
+        content=body,
+        headers=headers,
+        timeout=10,
+    )
     _raise_for_upstream(response)
     if not expect_json:
         return {}
@@ -348,21 +353,22 @@ async def _forward_workspace(
     body: bytes | None = None
     if method != "GET":
         body = await request.body()
-    async with httpx.AsyncClient(timeout=10) as client:
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        headers = FacadeAuthenticator.service_headers(identity)
-        if method != "GET":
-            headers = {**headers, "content-type": "application/json"}
-        params = {"org_id": identity.org_id, "user_id": identity.user_id}
-        response = await client.request(
-            method,
-            f"{backend_url}/internal/v1/workspace/{slug}",
-            params=params,
-            content=body,
-            headers=headers,
-        )
+    client = http_client(request.app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    headers = FacadeAuthenticator.service_headers(identity)
+    if method != "GET":
+        headers = {**headers, "content-type": "application/json"}
+    params = {"org_id": identity.org_id, "user_id": identity.user_id}
+    response = await client.request(
+        method,
+        f"{backend_url}/internal/v1/workspace/{slug}",
+        params=params,
+        content=body,
+        headers=headers,
+        timeout=10,
+    )
     _raise_for_upstream(response)
     if not expect_json:
         return {}
@@ -391,26 +397,27 @@ async def _forward_policy(
     body: bytes | None = None
     if method != "GET":
         body = await request.body()
-    async with httpx.AsyncClient(timeout=10) as client:
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        headers = FacadeAuthenticator.service_headers(identity)
-        if method != "GET":
-            headers = {**headers, "content-type": "application/json"}
-        params: dict[str, str] = {
-            "org_id": identity.org_id,
-            "user_id": identity.user_id,
-        }
-        if scope == "user":
-            params["scope_user_id"] = identity.user_id
-        response = await client.request(
-            method,
-            f"{backend_url}/internal/v1/policies/{policy_kind}",
-            params=params,
-            content=body,
-            headers=headers,
-        )
+    client = http_client(request.app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    headers = FacadeAuthenticator.service_headers(identity)
+    if method != "GET":
+        headers = {**headers, "content-type": "application/json"}
+    params: dict[str, str] = {
+        "org_id": identity.org_id,
+        "user_id": identity.user_id,
+    }
+    if scope == "user":
+        params["scope_user_id"] = identity.user_id
+    response = await client.request(
+        method,
+        f"{backend_url}/internal/v1/policies/{policy_kind}",
+        params=params,
+        content=body,
+        headers=headers,
+        timeout=10,
+    )
     _raise_for_upstream(response)
     if not response.content:
         return {}

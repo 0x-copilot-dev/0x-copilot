@@ -12,7 +12,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend_facade import auth_routes as auth_routes_module
 from backend_facade.app import create_app
 from backend_facade.settings import FacadeSettings
 
@@ -65,7 +64,9 @@ def _install_fake_backend(
             )
             return response_factory(verb="GET", url=url, params=params)
 
-    monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+    )
     return captured
 
 

@@ -18,6 +18,7 @@ from backend_facade.adapter_registry_routes import (
 from backend_facade.adapter_review_routes import register_adapter_review_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
+from backend_facade.http_client import HttpClientPool, http_client
 from backend_facade.me_routes import register_me_routes
 from backend_facade.scim_routes import register_scim_routes
 from backend_facade.workspace_routes import register_workspace_routes
@@ -80,12 +81,21 @@ def create_app(
         TelemetryBootstrap.instrument_httpx_clients()
     resolved_deployment = deployment or resolve_or_exit()
     log_profile(resolved_deployment)
-    app = FastAPI(title="Enterprise Search Backend Facade")
+    app = FastAPI(
+        title="Enterprise Search Backend Facade",
+        lifespan=HttpClientPool.lifespan,
+    )
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     if configure_telemetry_on_create:
         TelemetryBootstrap.instrument_fastapi(app)
     app.state.settings = settings or FacadeSettings.load()
     app.state.deployment = resolved_deployment
+    # One shared httpx.AsyncClient per worker process — every facade route
+    # that hits backend / ai-backend reads it off app.state. Construction
+    # is sync (httpx defers sockets to first use); the lifespan closes
+    # the pool on graceful shutdown. See backend_facade/http_client.py
+    # for the full why.
+    HttpClientPool.attach(app)
 
     @app.get("/v1/health")
     async def health() -> dict[str, object]:
@@ -124,12 +134,12 @@ def create_app(
         if ct:
             outbound_headers["content-type"] = ct
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                upstream = await client.post(
-                    f"{endpoint.rstrip('/')}/v1/traces",
-                    content=body,
-                    headers=outbound_headers,
-                )
+            upstream = await http_client(app).post(
+                f"{endpoint.rstrip('/')}/v1/traces",
+                content=body,
+                headers=outbound_headers,
+                timeout=15,
+            )
         except httpx.HTTPError:
             # Telemetry must never break the user; swallow upstream errors and
             # let the browser keep trying. The facade access log records the
@@ -956,25 +966,27 @@ def create_app(
     ) -> StreamingResponse:
         identity = FacadeAuthenticator.authenticate_request(request)
 
-        client = httpx.AsyncClient(timeout=None)
-        try:
-            upstream = await client.send(
-                client.build_request(
-                    "GET",
-                    f"{settings_for(app).ai_backend_url}/v1/agent/runs/{run_id}/stream",
-                    params=identity.scoped_params({"after_sequence": after_sequence}),
-                    headers=_outbound_headers(identity),
-                ),
-                stream=True,
-            )
-        except Exception:
-            await client.aclose()
-            raise
+        # SSE stream uses the shared pooled client. Only the upstream
+        # response holds the connection; closing it returns the socket
+        # to the pool for the next request — no per-stream client to
+        # open/close. ``timeout=None`` per request keeps the stream
+        # open indefinitely while the pool's default timeout protects
+        # other callers.
+        client = http_client(app)
+        upstream = await client.send(
+            client.build_request(
+                "GET",
+                f"{settings_for(app).ai_backend_url}/v1/agent/runs/{run_id}/stream",
+                params=identity.scoped_params({"after_sequence": after_sequence}),
+                headers=_outbound_headers(identity),
+                timeout=None,
+            ),
+            stream=True,
+        )
 
         if upstream.status_code >= 400:
             await upstream.aread()
             await upstream.aclose()
-            await client.aclose()
             raise HTTPException(
                 upstream.status_code,
                 _upstream_error_detail(upstream),
@@ -988,7 +1000,6 @@ def create_app(
                     yield chunk
             finally:
                 await upstream.aclose()
-                await client.aclose()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1272,6 +1283,7 @@ async def forward_json(
         else settings_for(app).ai_backend_url
     )
     return await _forward_json(
+        client=http_client(app),
         base_url=base_url,
         method=method,
         path=path,
@@ -1337,12 +1349,12 @@ async def _proxy_dev(
     """Unauthenticated proxy to ``services/backend`` for dev-only endpoints."""
 
     base_url = settings_for(app).backend_url
-    async with httpx.AsyncClient(timeout=10) as client:
-        upstream = await client.request(
-            method,
-            f"{base_url}{path}",
-            json=json,
-        )
+    upstream = await http_client(app).request(
+        method,
+        f"{base_url}{path}",
+        json=json,
+        timeout=10,
+    )
     if upstream.status_code >= 400:
         raise HTTPException(upstream.status_code, _upstream_error_detail(upstream))
     if upstream.status_code == 204 or not upstream.content:
@@ -1357,6 +1369,7 @@ async def _proxy_dev(
 
 async def _forward_json(
     *,
+    client: httpx.AsyncClient,
     base_url: str,
     method: str,
     path: str,
@@ -1366,14 +1379,14 @@ async def _forward_json(
     expect_object: bool = True,
     headers: dict[str, str] | None = None,
 ) -> object:
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.request(
-            method,
-            f"{base_url}{path}",
-            params=params,
-            json=json,
-            headers=headers,
-        )
+    response = await client.request(
+        method,
+        f"{base_url}{path}",
+        params=params,
+        json=json,
+        headers=headers,
+        timeout=30,
+    )
     if response.status_code >= 400:
         raise HTTPException(response.status_code, _upstream_error_detail(response))
     # HTTP-aware no-content handling. ai-backend's DELETE / idempotent POST

@@ -36,6 +36,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 
 from backend_facade.auth import FacadeAuthenticator
+from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
 
 
@@ -101,24 +102,25 @@ async def _forward_json(
     json: dict[str, object] | None = None,
 ) -> dict[str, object]:
     backend_url = _settings_for(request.app).backend_url
-    async with httpx.AsyncClient(timeout=15) as client:
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        merged_params: dict[str, str] = {
-            "org_id": identity.org_id,
-            "user_id": identity.user_id,
-        }
-        if params:
-            merged_params.update(params)
-        headers = FacadeAuthenticator.service_headers(identity)
-        response = await client.request(
-            method,
-            f"{backend_url}{path}",
-            params=merged_params,
-            json=json,
-            headers=headers,
-        )
+    client = http_client(request.app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    merged_params: dict[str, str] = {
+        "org_id": identity.org_id,
+        "user_id": identity.user_id,
+    }
+    if params:
+        merged_params.update(params)
+    headers = FacadeAuthenticator.service_headers(identity)
+    response = await client.request(
+        method,
+        f"{backend_url}{path}",
+        params=merged_params,
+        json=json,
+        headers=headers,
+        timeout=15,
+    )
     _raise_for_upstream(response)
     if response.status_code == 204 or not response.content:
         return {}

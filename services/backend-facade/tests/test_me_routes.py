@@ -11,7 +11,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-import backend_facade.me_routes as me_routes_module
 from backend_facade.app import create_app
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.settings import FacadeSettings
@@ -108,14 +107,17 @@ class TestListMyWorkspacesProxy:
                 )
                 return httpx.Response(200, json=upstream_body)
 
-        monkeypatch.setattr(me_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
         # auth_routes.verify_with_touch uses the auth_routes httpx client by
         # default — but verify_with_touch is itself called via the helper that
         # uses whatever httpx client is passed in. The patch on me_routes is
         # what _our_ proxy uses.
-        import backend_facade.auth_routes as auth_routes_module
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
 
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
@@ -178,10 +180,13 @@ class TestListMyWorkspacesProxy:
             async def get(self, url, *, params, headers, timeout=None):
                 return httpx.Response(404, json={"detail": "workspace_not_found"})
 
-        monkeypatch.setattr(me_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
-        import backend_facade.auth_routes as auth_routes_module
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
 
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))

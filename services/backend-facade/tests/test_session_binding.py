@@ -12,7 +12,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-import backend_facade.auth_routes as auth_routes_module
 from backend_facade.app import create_app
 from datetime import datetime, timedelta, timezone
 
@@ -169,7 +168,9 @@ class TestPublicAuthRoutes:
                     )
                 return httpx.Response(204)
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
         monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", _TEST_SECRET)
         monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
 
@@ -282,11 +283,13 @@ class TestVerifyWithTouch:
                 captured.append(url)
                 return httpx.Response(204)
 
-            async def get(self, url, *, params, headers):
+            async def get(self, url, *, params, headers, timeout=None):
                 captured.append(url)
                 return httpx.Response(200, json={"sessions": []})
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
         token = _hmac_token(
             {"org_id": "org_a", "user_id": "usr_a"},  # no sid
             _TEST_SECRET,
@@ -321,11 +324,13 @@ class TestVerifyWithTouch:
                     return httpx.Response(401, json={"detail": "revoked"})
                 return httpx.Response(204)
 
-            async def get(self, url, *, params, headers):
+            async def get(self, url, *, params, headers, timeout=None):
                 # Should never reach here — touch fails first.
                 return httpx.Response(500)
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
         )
@@ -376,7 +381,9 @@ class TestVerifyWithTouch:
                     )
                 return httpx.Response(204)
 
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
         )
@@ -510,7 +517,9 @@ class TestPasswordChangeStepUp:
         client_class, _ = self._fake_async_client(
             mfa_satisfied_at="2000-01-01T00:00:00+00:00"
         )
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", client_class)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", client_class
+        )
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
         )
@@ -530,7 +539,9 @@ class TestPasswordChangeStepUp:
         monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
         recent = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
         client_class, captured = self._fake_async_client(mfa_satisfied_at=recent)
-        monkeypatch.setattr(auth_routes_module.httpx, "AsyncClient", client_class)
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", client_class
+        )
         client = TestClient(
             create_app(FacadeSettings(backend_url="http://backend.local"))
         )

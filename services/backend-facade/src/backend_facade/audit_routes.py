@@ -29,6 +29,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 
 from backend_facade.auth import FacadeAuthenticator
+from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
 
 
@@ -96,43 +97,43 @@ def register_audit_routes(app: FastAPI) -> None:
         settings = settings_for(app)
         backend_url = settings.backend_url
         ai_backend_url = settings.ai_backend_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            identity = await FacadeAuthenticator.verify_with_touch(
-                request, backend_url=backend_url, http_client=client
-            )
-            backend_cursor, ai_cursor = _decode_composite_cursor(
-                request.query_params.get("cursor")
-            )
-            shared: dict[str, str] = {
-                "org_id": identity.org_id,
-                "user_id": identity.user_id,
-            }
-            for key in _FORWARDED_PARAMS:
-                value = request.query_params.get(key)
-                if value is not None and value != "":
-                    shared[key] = value
-            backend_params = dict(shared)
-            if backend_cursor is not None:
-                backend_params["cursor"] = backend_cursor
-            ai_params = dict(shared)
-            if ai_cursor is not None:
-                ai_params["cursor"] = ai_cursor
-            headers = FacadeAuthenticator.service_headers(identity)
+        client = http_client(request.app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        backend_cursor, ai_cursor = _decode_composite_cursor(
+            request.query_params.get("cursor")
+        )
+        shared: dict[str, str] = {
+            "org_id": identity.org_id,
+            "user_id": identity.user_id,
+        }
+        for key in _FORWARDED_PARAMS:
+            value = request.query_params.get(key)
+            if value is not None and value != "":
+                shared[key] = value
+        backend_params = dict(shared)
+        if backend_cursor is not None:
+            backend_params["cursor"] = backend_cursor
+        ai_params = dict(shared)
+        if ai_cursor is not None:
+            ai_params["cursor"] = ai_cursor
+        headers = FacadeAuthenticator.service_headers(identity)
 
-            backend_resp, ai_resp = await asyncio.gather(
-                _call_upstream(
-                    client,
-                    url=f"{backend_url}/internal/v1/audit/list",
-                    params=backend_params,
-                    headers=headers,
-                ),
-                _call_upstream(
-                    client,
-                    url=f"{ai_backend_url}/internal/v1/audit/list",
-                    params=ai_params,
-                    headers=headers,
-                ),
-            )
+        backend_resp, ai_resp = await asyncio.gather(
+            _call_upstream(
+                client,
+                url=f"{backend_url}/internal/v1/audit/list",
+                params=backend_params,
+                headers=headers,
+            ),
+            _call_upstream(
+                client,
+                url=f"{ai_backend_url}/internal/v1/audit/list",
+                params=ai_params,
+                headers=headers,
+            ),
+        )
 
         # If backend is unauthorized/forbidden, surface its status; that's
         # the canonical "you're not allowed to read audit" answer.
