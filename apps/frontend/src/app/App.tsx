@@ -16,6 +16,7 @@ import {
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
 import { HomeRoute } from "../features/home/HomeRoute";
+import { InboxRoute } from "../features/inbox/InboxRoute";
 import { TodosRoute } from "../features/todos/TodosRoute";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
@@ -87,7 +88,6 @@ import {
   ChatShell,
   ConnectorsDestination,
   DocumentPresenceSignal,
-  InboxDestination,
   KeyValueStoreProvider,
   LibraryDestination,
   LocalStorageKeyValueStore,
@@ -116,21 +116,20 @@ import {
   type PortBundle,
 } from "../ports";
 
-// Map every non-chats, non-home, non-todos destination slug to the
-// placeholder component shipped with the chat-surface package. Chats
-// has a dedicated host component (`ChatScreen`) below; Home + Todos
-// have feature-level data binders (`HomeRoute` / `TodosRoute`) that
-// mount the package component themselves — adding any of them here
-// would only confuse the renderer.
+// Map every non-chats, non-home, non-todos, non-inbox destination slug
+// to the placeholder component shipped with the chat-surface package.
+// Chats has a dedicated host component (`ChatScreen`) below; Home,
+// Todos, and Inbox have feature-level data binders (`HomeRoute` /
+// `TodosRoute` / `InboxRoute`) that mount the package component
+// themselves — adding any of them here would only confuse the renderer.
 const NON_CHATS_DESTINATIONS: Readonly<
   Record<
-    Exclude<ShellDestinationSlug, "chats" | "home" | "todos">,
+    Exclude<ShellDestinationSlug, "chats" | "home" | "todos" | "inbox">,
     () => ReactElement
   >
 > = {
   agents: AgentsDestination,
   library: LibraryDestination,
-  inbox: InboxDestination,
   tools: ToolsDestination,
   projects: ProjectsDestination,
   connectors: ConnectorsDestination,
@@ -156,6 +155,24 @@ if (!hasItemRefResolver("todo")) {
     icon: null,
     route: null,
     breadcrumb: "Todos",
+  }));
+}
+
+// ItemRef resolver registration (cross-audit §3.3) for the
+// `"inbox_item"` kind. The Inbox destination owns this kind — when a
+// chat / agent activity / notification surfaces an `<ItemLink
+// kind="inbox_item" id={...} />`, the link resolves to the Inbox
+// destination. Today the destination has no per-item detail route
+// (`/inbox/<id>` lands in Phase 4 Impl-B), so we return `route: null` —
+// `<ItemLink>` falls back to the breadcrumb. Same `hasItemRefResolver`
+// guard pattern as the `"todo"` registration above so cross-realm
+// vitest imports don't throw `ItemRefResolverAlreadyRegistered`.
+if (!hasItemRefResolver("inbox_item")) {
+  registerItemRefResolver("inbox_item", async (_id) => ({
+    label: "Inbox item",
+    icon: null,
+    route: null,
+    breadcrumb: "Inbox",
   }));
 }
 
@@ -635,6 +652,27 @@ function EnterpriseSearchApp({
         aria-label="todos destination"
       >
         <TodosRoute identity={identity} projectId={null} />
+      </section>
+    );
+  } else if (route.destination === "inbox") {
+    // Phase 4 P4-C — Inbox gets a feature-level data binder
+    // (`InboxRoute`) that owns the `/v1/inbox` fetch, the
+    // `/v1/inbox/unread_count` badge-warmup query, the
+    // `/v1/inbox/stream` SSE subscription with `?after_sequence=N`
+    // resume, the unread-count → `BadgePort.setBadge("inbox", n)`
+    // wiring (sub-PRD §3.6, §14), the `NotificationPort.notify(...)`
+    // gating for high-priority `item_created` envelopes (sub-PRD §14
+    // — `isAvailable()` keeps the web no-op silent), and the
+    // polling-fallback on `/v1/inbox/unread_count` when SSE cannot
+    // establish (sub-PRD §3.6 degraded mode).
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="inbox"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="inbox destination"
+      >
+        <InboxRoute identity={identity} />
       </section>
     );
   } else {
