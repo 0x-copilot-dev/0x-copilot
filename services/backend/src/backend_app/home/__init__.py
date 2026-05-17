@@ -1,9 +1,12 @@
-"""Home destination (Phase 2) — morning-briefing aggregator.
+"""Home destination (Phase 2) — morning-briefing aggregator + SSE stream.
 
-The aggregator composes sections from disparate stores (conversations,
-runs, todos, approvals, inbox, calendar connectors). Each section
-returns a ``SectionResult`` so a partial outage degrades gracefully
-instead of blanking the whole page.
+The aggregator (``GET /v1/home``) composes sections from disparate
+stores (conversations, runs, todos, approvals, inbox, calendar
+connectors). Each section returns a ``SectionResult`` so a partial
+outage degrades gracefully instead of blanking the whole page.
+
+The SSE stream (``GET /v1/home/stream``) pushes live activity-feed
+events to clients with ``Last-Event-ID`` resume.
 
 Wire shape lives in ``packages/api-types/src/home.ts``; the Python
 mirror is the response_model on ``home.routes.register_home_routes``.
@@ -19,6 +22,9 @@ Current state (Phase 2 redispatch, scope narrowed):
 * ``activity`` — stub (unified activity log)
 """
 
-from backend_app.home.routes import register_home_routes
+from __future__ import annotations
 
-__all__ = ["register_home_routes"]
+from backend_app.home.routes import register_home_routes
+from backend_app.home.sse import register_home_sse_routes
+
+__all__ = ["register_home_routes", "register_home_sse_routes"]

@@ -3411,4 +3411,29 @@ export type {
   HomeRunStatus,
   TimeSegment,
 } from "./home";
+
+// === Phase 2 Home SSE event envelope ===
+// Live-updated activity feed. Mirrors the existing run-event SSE pattern:
+// monotonic ``sequence_no`` per ``(org_id, user_id)`` channel; ``id:`` SSE
+// field carries the sequence so browsers replay via ``Last-Event-ID`` header.
+// Server also accepts ``?after_sequence=N`` query fallback.
+//
+// Wire framing (matches services/backend/src/backend_app/home/sse.py):
+//   event: home_activity
+//   id: 42
+//   data: { "event_id": "...", "sequence_no": 42, ... }
+export type HomeActivityEventType =
+  | "activity_added"
+  | "activity_updated"
+  | "heartbeat";
+
+import type { HomeActivityRow as _HomeActivityRow } from "./home";
+export interface HomeActivityEvent {
+  readonly event_id: string;
+  readonly sequence_no: number;
+  readonly event_type: HomeActivityEventType;
+  // ``row`` is present for ``activity_added``/``activity_updated``; absent for ``heartbeat``.
+  readonly row?: _HomeActivityRow;
+  readonly created_at: string;
+}
 // === end Phase 2 Home ===
