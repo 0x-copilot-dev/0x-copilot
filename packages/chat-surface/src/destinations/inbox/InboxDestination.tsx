@@ -70,18 +70,22 @@ const FILTERS: ReadonlyArray<FilterDescriptor> = [
   },
 ];
 
-const APP_BACKGROUND = "#0F1218";
-const PANEL_BACKGROUND = "#131722";
-const PANEL_BORDER = "#22252E";
-const PANEL_BORDER_STRONG = "#2C3140";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const TEXT_FAINT = "#5A606E";
-const ACCENT = "#7B9BFF";
-const BADGE_MENTION = "#7BB7FF";
-const BADGE_APPROVAL = "#F0B450";
-const BADGE_ERROR = "#E26A6A";
-const DANGER = "#E26A6A";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const APP_BACKGROUND = "var(--color-bg)";
+const PANEL_BACKGROUND = "var(--color-surface)";
+const PANEL_BORDER = "var(--color-border)";
+const PANEL_BORDER_STRONG = "var(--color-border-strong)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const TEXT_FAINT = "var(--color-text-subtle)";
+const ACCENT = "var(--color-accent)";
+const SKELETON_FILL = "var(--color-surface-muted)";
+const BADGE_MENTION = "var(--color-accent)";
+const BADGE_APPROVAL = "var(--color-warning)";
+const BADGE_ERROR = "var(--color-danger)";
+const DANGER = "var(--color-danger)";
 
 const SKELETON_ROW_COUNT = 5;
 
@@ -127,7 +131,7 @@ function SkeletonRow({ index }: { index: number }): ReactElement {
     opacity: 0.7,
   };
   const bar: CSSProperties = {
-    backgroundColor: "#1A1E2A",
+    backgroundColor: SKELETON_FILL,
     borderRadius: 4,
     height: 12,
   };
@@ -143,7 +147,7 @@ function SkeletonRow({ index }: { index: number }): ReactElement {
           width: 56,
           height: 18,
           borderRadius: 9,
-          backgroundColor: "#1A1E2A",
+          backgroundColor: SKELETON_FILL,
         }}
       />
       <div
@@ -157,12 +161,17 @@ function SkeletonRow({ index }: { index: number }): ReactElement {
 }
 
 function KindBadge({ kind }: { kind: InboxItemKind }): ReactElement {
+  const tone = badgeColor(kind);
+  // Previously appended hex alpha "33" (~20%) to the tone literal; CSS
+  // custom properties can't be string-concatenated that way, so build a
+  // translucent border via color-mix against the token instead.
+  const borderTone = `color-mix(in srgb, ${tone} 20%, transparent)`;
   const style: CSSProperties = {
     fontSize: 11,
     fontWeight: 600,
-    color: badgeColor(kind),
-    backgroundColor: "#1A1E2A",
-    border: `1px solid ${badgeColor(kind)}33`,
+    color: tone,
+    backgroundColor: SKELETON_FILL,
+    border: `1px solid ${borderTone}`,
     borderRadius: 6,
     padding: "2px 8px",
     textTransform: "uppercase",
@@ -416,7 +425,7 @@ function TabBar({
           fontSize: 11,
           fontWeight: 600,
           color: isActive ? ACCENT : TEXT_FAINT,
-          backgroundColor: "#1A1E2A",
+          backgroundColor: SKELETON_FILL,
           borderRadius: 999,
           padding: "1px 8px",
           minWidth: 18,

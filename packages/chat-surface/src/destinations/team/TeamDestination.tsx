@@ -53,11 +53,19 @@ const ROLE_TONE: Record<
   guest: "warning",
 };
 
-const PANEL_BG = "#0E1015";
-const PANEL_BORDER = "#22252E";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const ROW_HOVER = "rgba(123,155,255,0.08)";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const PANEL_BG = "var(--color-bg)";
+const PANEL_BORDER = "var(--color-border)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const HEADER_CELL_BG = "var(--color-bg-elevated)";
+const SKELETON_FILL = "var(--color-surface-muted)";
+// Subtle accent tint for row hover — mirrors design-system .ui-status-pill
+// pattern (color-mix against transparent). Kept off the accent variable so
+// theme/accent rotation flows through unchanged.
+const ROW_HOVER = "color-mix(in srgb, var(--color-accent) 8%, transparent)";
 
 const rootStyle: CSSProperties = {
   display: "flex",
@@ -108,7 +116,7 @@ const tableStyle: CSSProperties = {
 const theadCellStyle: CSSProperties = {
   textAlign: "left",
   padding: "0.625rem 0.875rem",
-  background: "#14171E",
+  background: HEADER_CELL_BG,
   borderBottom: `1px solid ${PANEL_BORDER}`,
   fontSize: "var(--font-size-xs, 0.75rem)",
   fontWeight: "var(--font-weight-medium, 500)",
@@ -150,7 +158,7 @@ const skeletonRowStyle: CSSProperties = {
 };
 
 const skeletonBoxStyle: CSSProperties = {
-  background: "#1A1D26",
+  background: SKELETON_FILL,
   borderRadius: "0.25rem",
   height: "0.75rem",
 };

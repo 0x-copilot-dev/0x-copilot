@@ -14,11 +14,14 @@ import { useRouter } from "../../providers/RouterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 import type { ArtifactRoute } from "../../routing/router";
 
-const BACKGROUND = "#11141B";
-const BORDER = "#22252E";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const HEADER_BG = "#191C24";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const BACKGROUND = "var(--color-bg)";
+const BORDER = "var(--color-border)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const HEADER_BG = "var(--color-bg-elevated)";
 
 interface SkillListResponse {
   readonly skills: readonly Skill[];

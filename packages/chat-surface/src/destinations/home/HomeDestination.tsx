@@ -52,18 +52,23 @@ type ViewState =
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "ready"; readonly payload: HomePayload };
 
-const APP_BACKGROUND = "#0F1218";
-const PANEL_BACKGROUND = "#131722";
-const PANEL_BORDER = "#22252E";
-const PANEL_BORDER_STRONG = "#2C3140";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const TEXT_FAINT = "#5A606E";
-const ACCENT = "#7B9BFF";
-const STATUS_RUNNING = "#7BB7FF";
-const STATUS_OK = "#6CC58A";
-const STATUS_FAIL = "#E26A6A";
-const STATUS_IDLE = "#7E8492";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const APP_BACKGROUND = "var(--color-bg)";
+const PANEL_BACKGROUND = "var(--color-surface)";
+const PANEL_CARD_BACKGROUND = "var(--color-bg-elevated)";
+const PANEL_BORDER = "var(--color-border)";
+const PANEL_BORDER_STRONG = "var(--color-border-strong)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const TEXT_FAINT = "var(--color-text-subtle)";
+const ACCENT = "var(--color-accent)";
+const SKELETON_FILL = "var(--color-surface-muted)";
+const STATUS_RUNNING = "var(--color-accent)";
+const STATUS_OK = "var(--color-success)";
+const STATUS_FAIL = "var(--color-danger)";
+const STATUS_IDLE = "var(--color-text-muted)";
 
 const SKELETON_ROW_COUNT = 3;
 
@@ -112,7 +117,7 @@ function SkeletonCard({ index }: { index: number }): ReactElement {
     opacity: 0.7,
   };
   const bar: CSSProperties = {
-    backgroundColor: "#1A1E2A",
+    backgroundColor: SKELETON_FILL,
     borderRadius: 4,
     height: 12,
   };
@@ -249,7 +254,7 @@ function PinnedCard({
     padding: "10px 12px",
     borderRadius: 10,
     border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: "#161A26",
+    backgroundColor: PANEL_CARD_BACKGROUND,
     color: TEXT_PRIMARY,
     cursor: "pointer",
     textAlign: "left",
@@ -308,7 +313,7 @@ function RecentRunCard({
     padding: "10px 12px",
     borderRadius: 10,
     border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: "#161A26",
+    backgroundColor: PANEL_CARD_BACKGROUND,
     color: TEXT_PRIMARY,
     cursor: "pointer",
     textAlign: "left",
@@ -372,7 +377,7 @@ function FavoriteCard({
     padding: "10px 12px",
     borderRadius: 10,
     border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: "#161A26",
+    backgroundColor: PANEL_CARD_BACKGROUND,
     color: TEXT_PRIMARY,
     cursor: "pointer",
     textAlign: "left",
