@@ -170,6 +170,15 @@ class RuntimeApiEventType(StrEnum):
     # ``<NoteCard>`` ("Atlas summarised N older messages to keep this
     # conversation efficient.").
     COMPRESSION_NOTE = "compression_note"
+    # Phase 6B — agent-generated tier-2 render adapter ready to install.
+    # Emitted by ``RenderAdapterGenerator`` when the constrained-template
+    # codegen produces a complete ``SaaSRendererAdapter`` source string.
+    # Payload carries ``scheme`` / ``layout`` / ``schema_version`` /
+    # ``adapter_source``. Projects to ``RuntimeActivityKind.EVENT``; the
+    # desktop's tier-2 lifecycle (6C) subscribes via the existing SSE
+    # channel, persists to ``{userData}/adapters/{scheme}-v{n}.js``, and
+    # hands the source to the local quality gate (6D).
+    ADAPTER_GENERATED = "adapter_generated"
 
     @classmethod
     def from_stream_event_type(
