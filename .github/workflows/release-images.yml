@@ -88,6 +88,11 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          # Always re-resolve and pull base image tags so newly published security
+          # patches in upstream :latest-style tags don't get masked by a cached layer.
+          # Without this, the Trivy CRITICAL gate flips red as soon as a CVE for an
+          # older base digest enters the DB, even though the upstream tag is patched.
+          pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
