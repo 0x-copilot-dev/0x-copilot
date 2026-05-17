@@ -19,8 +19,11 @@ export interface ThinkingDepthControlProps {
 }
 
 /**
- * Three-segment radiogroup for Fast / Balanced / Deep. Maps to the
- * model's `reasoning.effort` slot through `applyDepth` in `depth.ts`.
+ * Three-segment radiogroup for Fast / Balanced / Deep. The selection
+ * flows to the run-start payload as a top-level `reasoning_depth` wire
+ * field (chats-canvas-prd §16) — the runtime applies depth as a
+ * multiplier on timeout, max_output_tokens, and tool-call budgets
+ * (services/ai-backend/src/agent_runtime/execution/depth.py).
  */
 export function ThinkingDepthControl({
   value,
