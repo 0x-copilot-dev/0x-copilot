@@ -27,10 +27,9 @@ import globals from "globals";
 //   - Member-expression bans: document.cookie, navigator.clipboard.write*.
 //   - Dynamic import() of any specifier outside the allowlist above.
 //
-// Migration carve-out: src/email/** retains the chat-transport import
-// allowance because the spike-prep EmailRenderer still consumes the
-// deprecated SurfaceRendererProps shape. Phase 4-C migrates EmailRenderer
-// onto the SaaSRendererAdapter contract and removes that carve-out.
+// Phase 4-C removed the src/email/** carve-out. EmailRenderer now
+// conforms to the SaaSRendererAdapter contract and the strict boundary
+// applies uniformly to every renderer.
 
 const BOUNDARY_MESSAGE_GLOBALS =
   "surface-renderers is substrate-agnostic and pure-render (D28). Browser primitives belong behind a Transport / KeyValueStore / etc. port implemented by the host substrate.";
@@ -100,10 +99,6 @@ const TRANSPORT_IMPORT_PATTERN = {
   message: BOUNDARY_MESSAGE_TRANSPORT_IMPORT,
 };
 
-// AST selectors for property-access and dynamic-import bans. We accept the
-// false-negative on aliased / destructured access (e.g. `const c = document;
-// c.cookie`) — the same false-negative applies to no-restricted-globals
-// and is good enough for tier-1. Tier-2's AST scanner closes the gap.
 const DOC_COOKIE_SELECTOR =
   "MemberExpression[object.name='document'][property.name='cookie']";
 const CLIPBOARD_WRITE_SELECTOR =
@@ -143,10 +138,9 @@ export default [
     },
   },
 
-  // Default tier-1 rules: D28 / D29 enforcement, full Transport ban.
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/email/**", "src/__lint-negatives__/**"],
+    ignores: ["src/__lint-negatives__/**"],
     rules: {
       "no-restricted-globals": ["error", ...RESTRICTED_GLOBALS],
       "no-restricted-imports": [
@@ -159,26 +153,6 @@ export default [
     },
   },
 
-  // Carve-out for src/email/**: the spike-prep EmailRenderer still uses
-  // the deprecated SurfaceRendererProps shape that takes a Transport.
-  // Phase 4-C migrates it onto SaaSRendererAdapter and deletes this block.
-  {
-    files: ["src/email/**/*.{ts,tsx}"],
-    rules: {
-      "no-restricted-globals": ["error", ...RESTRICTED_GLOBALS],
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: APP_IMPORT_PATTERNS,
-        },
-      ],
-      "no-restricted-syntax": ["error", ...RESTRICTED_SYNTAX],
-    },
-  },
-
-  // Lint negatives: these files deliberately violate the rules and are
-  // exercised via `npm run lint:negatives`. They must NOT be ignored from
-  // ESLint discovery — running lint on them is the assertion.
   {
     files: ["src/__lint-negatives__/**/*.{ts,tsx}"],
     rules: {

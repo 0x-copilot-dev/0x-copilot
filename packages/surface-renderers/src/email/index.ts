@@ -1,13 +1,17 @@
-import { registerSurface } from "@enterprise-search/chat-surface";
+import {
+  registerAdapter,
+  type SaaSRendererAdapter,
+} from "@enterprise-search/chat-surface";
 
-import { EmailRenderer } from "./EmailRenderer";
+import { emailAdapter } from "./EmailRenderer";
 
-export { EmailRenderer } from "./EmailRenderer";
 export {
-  EmailDiffOverlay,
-  type EmailDiffOverlayProps,
-} from "./EmailDiffOverlay";
+  emailAdapter,
+  type EmailDiff,
+  type EmailDiffPending,
+  type EmailState,
+} from "./EmailRenderer";
 
-export function registerEmailSurface(): void {
-  registerSurface("email", EmailRenderer);
+export function registerEmailAdapter(): void {
+  registerAdapter(emailAdapter as SaaSRendererAdapter);
 }

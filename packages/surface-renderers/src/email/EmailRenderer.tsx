@@ -1,57 +1,35 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
-import type {
-  InlineDiffState,
-  PendingDiff,
-  SurfaceRendererProps,
+import {
+  TcInlineDiff,
+  type SaaSRendererAdapter,
 } from "@enterprise-search/chat-surface";
 
-import { EmailDiffOverlay } from "./EmailDiffOverlay";
+type DiffVisualState = "pending" | "streaming";
 
-interface EmailDraftPayload {
-  readonly draftId: string;
+export interface EmailState {
   readonly to: string;
   readonly cc: string;
   readonly subject: string;
-  readonly bodyPrefix: string;
-  readonly bodySuffix: string;
+  readonly body: string;
+  readonly autoSavedLabel?: string;
 }
 
-interface PendingDiffEvent {
-  readonly type: "pending_diff_appeared";
-  readonly diffId: string;
+export interface EmailDiffPending {
   readonly provenance: string;
   readonly title: string;
   readonly description?: string;
-  readonly regionAnchorId: string;
-}
-
-interface ToolCallChunkEvent {
-  readonly type: "tool_call_chunk";
-  readonly chunk: string;
+  readonly bodyPrefix: string;
+  readonly streamingBody: string;
+  readonly bodySuffix: string;
   readonly progressPercent?: number;
+  readonly streaming?: boolean;
 }
 
-interface ToolCallStartEvent {
-  readonly type: "tool_call_start";
+export interface EmailDiff {
+  readonly base: EmailState;
+  readonly pending: EmailDiffPending;
 }
-
-interface ToolCallEndEvent {
-  readonly type: "tool_call_end";
-}
-
-type StreamEvent =
-  | ToolCallStartEvent
-  | ToolCallChunkEvent
-  | ToolCallEndEvent
-  | PendingDiffEvent
-  | { readonly type: string };
 
 const PALETTE = {
   pageBg: "#101113",
@@ -65,129 +43,56 @@ const PALETTE = {
   limeBgSoft: "rgba(194, 255, 90, 0.12)",
 } as const;
 
-const NULL_DRAFT: EmailDraftPayload = {
-  draftId: "",
-  to: "",
-  cc: "",
-  subject: "",
-  bodyPrefix: "",
-  bodySuffix: "",
+const DEFAULT_AUTOSAVED_LABEL = "Auto-saved · 2s ago";
+
+const STREAM_KEYFRAMES_ID = "tc-email-streaming-cursor-keyframes";
+const STREAM_KEYFRAMES_CSS = `
+@keyframes tc-email-streaming-cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+`;
+
+export const emailAdapter: SaaSRendererAdapter<EmailState, EmailDiff> = {
+  scheme: "email",
+  matches: (uri: string): boolean => uri.startsWith("email://"),
+  renderCurrent: (state: EmailState): ReactElement => (
+    <EmailComposerShell state={state}>
+      <EmailBodyParagraph text={state.body} />
+    </EmailComposerShell>
+  ),
+  renderDiff: (diff: EmailDiff): ReactElement => (
+    <EmailComposerShell state={diff.base} drafting={diff.pending.streaming}>
+      <EmailDiffBody diff={diff} />
+    </EmailComposerShell>
+  ),
+  metadata: {
+    origin: "first-party",
+    schemaVersion: 1,
+  },
 };
 
-export function EmailRenderer(props: SurfaceRendererProps): ReactNode {
-  const { transport, activeDiff, onApproveDiff, onRejectDiff } = props;
+interface EmailComposerShellProps {
+  readonly state: EmailState;
+  readonly children: ReactNode;
+  readonly drafting?: boolean;
+}
 
-  const [draft, setDraft] = useState<EmailDraftPayload>(NULL_DRAFT);
-  const [streamedBody, setStreamedBody] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [diffState, setDiffState] = useState<InlineDiffState>("idle");
-  const [streamedDiff, setStreamedDiff] = useState<PendingDiff | null>(null);
-  const hasMounted = useRef(false);
-
-  useEffect(() => {
-    // StrictMode double-invoke guard. We only want one request + one
-    // subscription per renderer instance.
-    if (hasMounted.current) {
-      return;
-    }
-    hasMounted.current = true;
-
-    let cancelled = false;
-    void transport
-      .request<EmailDraftPayload>({
-        method: "GET",
-        path: "/drafts/draft-1",
-      })
-      .then((payload) => {
-        if (!cancelled) setDraft(payload);
-      })
-      .catch(() => {
-        // Intentionally swallow — the spike renderer keeps NULL_DRAFT
-        // so the UI still mounts. Production renderers surface this.
-      });
-
-    const subscription = transport.subscribeServerSentEvents({
-      path: "/drafts/draft-1/events",
-      onMessage: (raw: string) => {
-        if (cancelled) return;
-        let evt: StreamEvent;
-        try {
-          evt = JSON.parse(raw) as StreamEvent;
-        } catch {
-          return;
-        }
-        applyEvent(evt);
-      },
-    });
-
-    const applyEvent = (evt: StreamEvent): void => {
-      switch (evt.type) {
-        case "tool_call_start": {
-          setDiffState("streaming");
-          break;
-        }
-        case "tool_call_chunk": {
-          const chunk = evt as ToolCallChunkEvent;
-          setStreamedBody((prev) => prev + chunk.chunk);
-          if (typeof chunk.progressPercent === "number") {
-            setProgress(chunk.progressPercent);
-          }
-          break;
-        }
-        case "tool_call_end": {
-          setProgress(100);
-          break;
-        }
-        case "pending_diff_appeared": {
-          const diff = evt as PendingDiffEvent;
-          setStreamedDiff({
-            diffId: diff.diffId,
-            provenance: diff.provenance,
-            title: diff.title,
-            description: diff.description,
-            regionAnchorId: diff.regionAnchorId,
-          });
-          setDiffState("pending");
-          break;
-        }
-        default:
-          break;
-      }
-    };
-
-    return () => {
-      cancelled = true;
-      subscription.close();
-    };
-  }, [transport]);
-
-  const renderedDiff = activeDiff ?? streamedDiff;
-
-  const handleApprove = (): void => {
-    if (renderedDiff && onApproveDiff) {
-      onApproveDiff(renderedDiff.diffId);
-    }
-    setDiffState("accepted");
-  };
-
-  const handleReject = (): void => {
-    if (renderedDiff && onRejectDiff) {
-      onRejectDiff(renderedDiff.diffId);
-    }
-    setDiffState("rejected");
-  };
-
+function EmailComposerShell(props: EmailComposerShellProps): ReactElement {
+  const { state, children, drafting } = props;
+  const autoSavedLabel = state.autoSavedLabel ?? DEFAULT_AUTOSAVED_LABEL;
   return (
     <form
       onSubmit={(e) => e.preventDefault()}
       style={pageStyle}
       data-testid="email-renderer"
+      aria-label="Email composer"
     >
       <div style={cardStyle}>
         <header style={headerRowStyle}>
           <span style={titleLabelStyle}>New message</span>
           <div style={headerRightStyle}>
-            {diffState === "streaming" || diffState === "pending" ? (
+            {drafting ? (
               <span style={draftingPillStyle} data-testid="drafting-pill">
                 Drafting…
               </span>
@@ -198,43 +103,11 @@ export function EmailRenderer(props: SurfaceRendererProps): ReactNode {
           </div>
         </header>
 
-        <FieldRow id="email-to" label="To:" value={draft.to} />
-        <FieldRow id="email-cc" label="Cc:" value={draft.cc} />
-        <FieldRow id="email-subject" label="Subject:" value={draft.subject} />
+        <FieldRow id="email-to" label="To:" value={state.to} />
+        <FieldRow id="email-cc" label="Cc:" value={state.cc} />
+        <FieldRow id="email-subject" label="Subject:" value={state.subject} />
 
-        <div style={bodyContainerStyle}>
-          {draft.bodyPrefix ? (
-            <p style={bodyParagraphStyle}>{draft.bodyPrefix.trim()}</p>
-          ) : null}
-          <section
-            id="pending-block"
-            aria-label="Pending edit"
-            style={pendingAnchorStyle(diffState)}
-            data-testid="pending-block"
-            data-state={diffState}
-          >
-            <span style={pendingLabelStyle}>
-              {(renderedDiff ?? streamedDiff)
-                ? `PENDING · ${(renderedDiff ?? streamedDiff)!.provenance}`
-                : "PENDING · DRAFTED FROM SALESFORCE + Q4 SHEET"}
-            </span>
-            <div style={pendingBodyStyle} data-testid="pending-body">
-              {streamedBody.length > 0 ? streamedBody : " "}
-            </div>
-            {renderedDiff ? (
-              <EmailDiffOverlay
-                diff={renderedDiff}
-                state={diffState === "idle" ? "pending" : diffState}
-                progressPercent={progress}
-                onApprove={handleApprove}
-                onReject={handleReject}
-              />
-            ) : null}
-          </section>
-          {draft.bodySuffix ? (
-            <p style={bodyParagraphStyle}>{draft.bodySuffix.trim()}</p>
-          ) : null}
-        </div>
+        <div style={bodyContainerStyle}>{children}</div>
 
         <footer style={footerRowStyle}>
           <div style={footerLeftStyle}>
@@ -245,31 +118,148 @@ export function EmailRenderer(props: SurfaceRendererProps): ReactNode {
               Schedule
             </button>
           </div>
-          <span style={autoSavedStyle}>Auto-saved · 2s ago</span>
+          <span style={autoSavedStyle} data-testid="email-auto-saved">
+            {autoSavedLabel}
+          </span>
         </footer>
       </div>
     </form>
   );
 }
 
-function FieldRow({
-  id,
-  label,
-  value,
-}: {
-  id: string;
-  label: string;
-  value: string;
-}): ReactNode {
+interface FieldRowProps {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+function FieldRow(props: FieldRowProps): ReactElement {
+  const { id, label, value } = props;
   return (
     <div style={fieldRowStyle}>
       <label htmlFor={id} style={fieldLabelStyle}>
         {label}
       </label>
-      <div id={id} style={fieldValueStyle} data-testid={id}>
-        {value || " "}
-      </div>
+      <input
+        id={id}
+        type="text"
+        readOnly
+        value={value}
+        style={fieldInputStyle}
+        data-testid={id}
+      />
     </div>
+  );
+}
+
+interface EmailBodyParagraphProps {
+  readonly text: string;
+}
+
+function EmailBodyParagraph(props: EmailBodyParagraphProps): ReactElement {
+  return <p style={bodyParagraphStyle}>{props.text}</p>;
+}
+
+interface EmailDiffBodyProps {
+  readonly diff: EmailDiff;
+}
+
+function EmailDiffBody(props: EmailDiffBodyProps): ReactElement {
+  const { diff } = props;
+  const { pending } = diff;
+  const state: DiffVisualState = pending.streaming ? "streaming" : "pending";
+  return (
+    <>
+      {pending.bodyPrefix ? (
+        <p style={bodyParagraphStyle}>{pending.bodyPrefix}</p>
+      ) : null}
+      <section
+        id="pending-block"
+        aria-label="Pending edit"
+        style={pendingAnchorStyle(state)}
+        data-testid="pending-block"
+        data-state={state}
+      >
+        <div style={pendingHeaderRowStyle}>
+          <span style={pendingLabelStyle} data-testid="pending-label">
+            {`PENDING · ${pending.provenance}`}
+          </span>
+          <ProvenancePill provenance={pending.provenance} />
+        </div>
+        <div style={pendingBodyStyle} data-testid="pending-body">
+          <span>{pending.streamingBody}</span>
+          {pending.streaming ? <StreamingCursor /> : null}
+        </div>
+        {pending.streaming ? (
+          <TcInlineDiff
+            state="streaming"
+            progressPercent={pending.progressPercent}
+            provenance={pending.provenance}
+            title={pending.title}
+            description={pending.description}
+          />
+        ) : (
+          <PendingDiffSummary
+            title={pending.title}
+            description={pending.description}
+          />
+        )}
+      </section>
+      {pending.bodySuffix ? (
+        <p style={bodyParagraphStyle}>{pending.bodySuffix}</p>
+      ) : null}
+    </>
+  );
+}
+
+interface ProvenancePillProps {
+  readonly provenance: string;
+}
+
+function ProvenancePill(props: ProvenancePillProps): ReactElement {
+  return (
+    <span style={provenancePillStyle} data-testid="email-provenance-pill">
+      <span aria-hidden="true" style={provenanceDotStyle} />
+      {props.provenance}
+    </span>
+  );
+}
+
+interface PendingDiffSummaryProps {
+  readonly title: string;
+  readonly description?: string;
+}
+
+// The non-streaming pending state cannot delegate to TcInlineDiff: that
+// primitive forces Approve/Reject buttons inside the card when state is
+// 'pending', and PRD D28 mandates the host owns those buttons. We render
+// a small inline summary that mirrors TcInlineDiff's title+description
+// styling for visual continuity without the action surface.
+function PendingDiffSummary(props: PendingDiffSummaryProps): ReactElement {
+  return (
+    <div style={pendingSummaryStyle} data-testid="email-pending-summary">
+      <div style={pendingSummaryTitleStyle}>{props.title}</div>
+      {props.description ? (
+        <div style={pendingSummaryDescStyle}>{props.description}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function StreamingCursor(): ReactElement {
+  return (
+    <>
+      <style data-testid="streaming-cursor-keyframes" id={STREAM_KEYFRAMES_ID}>
+        {STREAM_KEYFRAMES_CSS}
+      </style>
+      <span
+        aria-hidden="true"
+        data-testid="streaming-cursor"
+        style={streamingCursorStyle}
+      >
+        ▍
+      </span>
+    </>
   );
 }
 
@@ -353,9 +343,15 @@ const fieldLabelStyle: CSSProperties = {
   textTransform: "uppercase",
 };
 
-const fieldValueStyle: CSSProperties = {
+const fieldInputStyle: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  outline: "none",
   color: PALETTE.textHi,
   fontSize: 13,
+  width: "100%",
+  padding: 0,
+  font: "inherit",
 };
 
 const bodyContainerStyle: CSSProperties = {
@@ -374,27 +370,26 @@ const bodyParagraphStyle: CSSProperties = {
   color: PALETTE.textMid,
 };
 
-const pendingAnchorStyle = (state: InlineDiffState): CSSProperties => ({
+const pendingAnchorStyle = (state: DiffVisualState): CSSProperties => ({
   position: "relative",
   padding: 12,
   borderRadius: 8,
-  background:
-    state === "accepted"
-      ? "rgba(61, 220, 151, 0.12)"
-      : state === "rejected"
-        ? "rgba(239, 90, 90, 0.10)"
-        : PALETTE.limeBgSoft,
-  border: `1px solid ${
-    state === "accepted"
-      ? "#3ddc97"
-      : state === "rejected"
-        ? "#ef5a5a"
-        : PALETTE.lime
-  }`,
+  background: PALETTE.limeBgSoft,
+  border: `1px solid ${PALETTE.lime}`,
   display: "flex",
   flexDirection: "column",
   gap: 8,
+  outline: state === "streaming" ? `1px dashed ${PALETTE.lime}` : "none",
+  outlineOffset: 2,
 });
+
+const pendingHeaderRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  flexWrap: "wrap",
+};
 
 const pendingLabelStyle: CSSProperties = {
   fontSize: 10.5,
@@ -403,12 +398,64 @@ const pendingLabelStyle: CSSProperties = {
   color: PALETTE.lime,
 };
 
+const provenancePillStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "2px 8px",
+  borderRadius: 999,
+  border: `1px solid ${PALETTE.border}`,
+  fontSize: 11,
+  letterSpacing: 0.4,
+  color: PALETTE.textLo,
+  textTransform: "uppercase",
+};
+
+const provenanceDotStyle: CSSProperties = {
+  display: "inline-block",
+  width: 6,
+  height: 6,
+  borderRadius: "50%",
+  background: PALETTE.lime,
+};
+
+const pendingSummaryStyle: CSSProperties = {
+  marginTop: 4,
+  paddingTop: 8,
+  borderTop: `1px solid ${PALETTE.border}`,
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+};
+
+const pendingSummaryTitleStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.4,
+  color: PALETTE.textHi,
+};
+
+const pendingSummaryDescStyle: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.5,
+  color: PALETTE.textLo,
+};
+
 const pendingBodyStyle: CSSProperties = {
   fontSize: 14,
   lineHeight: 1.55,
   whiteSpace: "pre-wrap",
   color: PALETTE.textHi,
   minHeight: 22,
+  display: "inline-flex",
+  alignItems: "baseline",
+  flexWrap: "wrap",
+};
+
+const streamingCursorStyle: CSSProperties = {
+  display: "inline-block",
+  marginLeft: 2,
+  color: PALETTE.lime,
+  animation: "tc-email-streaming-cursor-blink 1s steps(1, end) infinite",
 };
 
 const footerRowStyle: CSSProperties = {

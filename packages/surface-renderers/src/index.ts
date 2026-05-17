@@ -1,11 +1,13 @@
-import { registerEmailSurface } from "./email";
+import { registerEmailAdapter } from "./email";
 
 export {
-  EmailRenderer,
-  EmailDiffOverlay,
-  type EmailDiffOverlayProps,
+  emailAdapter,
+  registerEmailAdapter,
+  type EmailDiff,
+  type EmailDiffPending,
+  type EmailState,
 } from "./email";
 
 export function registerAll(): void {
-  registerEmailSurface();
+  registerEmailAdapter();
 }
