@@ -19,13 +19,12 @@ export interface SlideDiffProps {
   readonly diff: SlideDiffPayload;
 }
 
+import { SURFACE_PALETTE } from "../_shared/palette";
+
 const PALETTE = {
-  surfaceMute: "#1f2226",
-  border: "#2a2d31",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-  beforeAccent: "#9aa0a6",
-  afterAccent: "#c2ff5a",
+  ...SURFACE_PALETTE,
+  beforeAccent: SURFACE_PALETTE.textLo,
+  afterAccent: SURFACE_PALETTE.lime,
 } as const;
 
 export function SlideDiff(props: SlideDiffProps): ReactElement {

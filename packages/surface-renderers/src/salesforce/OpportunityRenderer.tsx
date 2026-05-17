@@ -46,14 +46,7 @@ const STANDARD_FIELDS: readonly StandardField[] = [
   { key: "owner", label: "Owner" },
 ];
 
-const PALETTE = {
-  pageBg: "#101113",
-  surface: "#181a1c",
-  border: "#2a2d31",
-  textHi: "#f4f5f6",
-  textMid: "#c8ccd1",
-  textLo: "#9aa0a6",
-} as const;
+import { SURFACE_PALETTE as PALETTE } from "../_shared/palette";
 
 export function OpportunityRenderer(
   opportunity: SalesforceOpportunity,
@@ -86,6 +79,7 @@ function renderOpportunity(
       data-testid="sf-opportunity-renderer"
       data-mode={isDiff ? "diff" : "current"}
       data-opportunity-id={opportunity.id}
+      aria-label={`Salesforce opportunity ${opportunity.name}`}
     >
       <section style={cardStyle}>
         <header style={headerRowStyle}>

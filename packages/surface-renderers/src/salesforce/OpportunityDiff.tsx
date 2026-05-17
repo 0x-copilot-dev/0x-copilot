@@ -15,14 +15,7 @@ export interface OpportunityFieldRowProps {
   readonly change?: SalesforceOpportunityFieldChange;
 }
 
-const PALETTE = {
-  border: "#2a2d31",
-  textHi: "#f4f5f6",
-  textMid: "#c8ccd1",
-  textLo: "#9aa0a6",
-  lime: "#c2ff5a",
-  limeBgSoft: "rgba(194, 255, 90, 0.12)",
-} as const;
+import { SURFACE_PALETTE as PALETTE } from "../_shared/palette";
 
 export function OpportunityFieldRow(
   props: OpportunityFieldRowProps,

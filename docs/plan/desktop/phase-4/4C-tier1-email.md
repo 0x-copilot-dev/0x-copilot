@@ -36,20 +36,20 @@ This locks the first tier-1 adapter against the frozen contract — proving the 
 
 ## Functional requirements
 
-- [ ] FR-1: `emailAdapter: SaaSRendererAdapter<EmailState, EmailDiff>` is a plain object literal — no closures over state, no hooks at construction. `scheme: 'email'`. `matches(uri)` returns true iff `uri.startsWith('email://')`. `metadata: { origin: 'first-party', schemaVersion: 1 }`.
-- [ ] FR-2: `EmailState` shape: `{ readonly to: string; readonly cc: string; readonly subject: string; readonly body: string; readonly autoSavedLabel?: string }`. Substring of what the spike-prep `EmailDraftPayload` carried; `bodyPrefix`/`bodySuffix` collapse into a single `body` because the adapter no longer assembles them around a streaming PENDING block — that's the diff's job.
-- [ ] FR-3: `EmailDiff` shape: `{ readonly base: EmailState; readonly pending: { readonly provenance: string; readonly title: string; readonly description?: string; readonly bodyPrefix: string; readonly streamingBody: string; readonly bodySuffix: string; readonly progressPercent?: number; readonly streaming?: boolean } }`. Captures what's needed to render the highlighted PENDING block over the rest of the composer.
-- [ ] FR-4: `renderCurrent(state)` renders the composer chrome — `<form>` wrapping a card with: header label "New message", a "Save draft" affordance (ghost button, no `onClick` handler — pure render), three semantic `<label for="…">` + value pairs for To / Cc / Subject, the body in `<p>` paragraphs (whitespace-preserving), and a footer with primary "Send" + ghost "Schedule" buttons and an "Auto-saved · 2s ago" indicator (text overridable via `state.autoSavedLabel`). NO Approve / Reject — those are host-rendered.
-- [ ] FR-5: `renderDiff(diff)` renders the same composer chrome populated from `diff.base`, plus a PENDING block highlight in the body region. The PENDING block: `<section aria-label="Pending edit" data-state="pending|streaming">` containing a "PENDING · {provenance}" label, the streaming body text (with a streaming cursor when `diff.pending.streaming === true`), and provenance/progress surfaced via a composed `<TcInlineDiff>` in the `pending` / `streaming` state. Approve / Reject callbacks on `TcInlineDiff` are NOT wired — the diff render passes neither `onApprove` nor `onReject`, so the inline-diff card does NOT show those buttons (host's `TcSurfaceMount` renders them outside this adapter's output).
-- [ ] FR-6: Streaming cursor is a pure visual element (`<span data-testid="streaming-cursor" aria-hidden="true">▍</span>` styled with `animation`-based blink via inline CSS keyframes, mirroring `TcInlineDiff`'s pattern of a single `<style>` block keyed by id to avoid duplicate injection).
-- [ ] FR-7: `registerEmailAdapter()` calls `registerAdapter(emailAdapter)`. Exported from `packages/surface-renderers/src/email/index.ts` and re-exported from `packages/surface-renderers/src/index.ts`. The top-level `registerAll()` calls `registerEmailAdapter()` (renamed entry, same semantics).
-- [ ] FR-8: NO state hooks (`useState`, `useReducer`, `useEffect`) inside `renderCurrent` / `renderDiff`. NO `useRef`. NO `transport.*`. NO `fetch`. NO browser globals. The adapter is callable from a worker if needed (D29 forward-compat).
-- [ ] FR-9: Tests:
+- [x] FR-1: `emailAdapter: SaaSRendererAdapter<EmailState, EmailDiff>` is a plain object literal — no closures over state, no hooks at construction. `scheme: 'email'`. `matches(uri)` returns true iff `uri.startsWith('email://')`. `metadata: { origin: 'first-party', schemaVersion: 1 }`.
+- [x] FR-2: `EmailState` shape: `{ readonly to: string; readonly cc: string; readonly subject: string; readonly body: string; readonly autoSavedLabel?: string }`. Substring of what the spike-prep `EmailDraftPayload` carried; `bodyPrefix`/`bodySuffix` collapse into a single `body` because the adapter no longer assembles them around a streaming PENDING block — that's the diff's job.
+- [x] FR-3: `EmailDiff` shape: `{ readonly base: EmailState; readonly pending: { readonly provenance: string; readonly title: string; readonly description?: string; readonly bodyPrefix: string; readonly streamingBody: string; readonly bodySuffix: string; readonly progressPercent?: number; readonly streaming?: boolean } }`. Captures what's needed to render the highlighted PENDING block over the rest of the composer.
+- [x] FR-4: `renderCurrent(state)` renders the composer chrome — `<form>` wrapping a card with: header label "New message", a "Save draft" affordance (ghost button, no `onClick` handler — pure render), three semantic `<label for="…">` + value pairs for To / Cc / Subject, the body in `<p>` paragraphs (whitespace-preserving), and a footer with primary "Send" + ghost "Schedule" buttons and an "Auto-saved · 2s ago" indicator (text overridable via `state.autoSavedLabel`). NO Approve / Reject — those are host-rendered.
+- [x] FR-5: `renderDiff(diff)` renders the same composer chrome populated from `diff.base`, plus a PENDING block highlight in the body region. The PENDING block: `<section aria-label="Pending edit" data-state="pending|streaming">` containing a "PENDING · {provenance}" label, the streaming body text (with a streaming cursor when `diff.pending.streaming === true`), and provenance/progress surfaced via a composed `<TcInlineDiff>` in the `pending` / `streaming` state. Approve / Reject callbacks on `TcInlineDiff` are NOT wired — the diff render passes neither `onApprove` nor `onReject`, so the inline-diff card does NOT show those buttons (host's `TcSurfaceMount` renders them outside this adapter's output).
+- [x] FR-6: Streaming cursor is a pure visual element (`<span data-testid="streaming-cursor" aria-hidden="true">▍</span>` styled with `animation`-based blink via inline CSS keyframes, mirroring `TcInlineDiff`'s pattern of a single `<style>` block keyed by id to avoid duplicate injection).
+- [x] FR-7: `registerEmailAdapter()` calls `registerAdapter(emailAdapter)`. Exported from `packages/surface-renderers/src/email/index.ts` and re-exported from `packages/surface-renderers/src/index.ts`. The top-level `registerAll()` calls `registerEmailAdapter()` (renamed entry, same semantics).
+- [x] FR-8: NO state hooks (`useState`, `useReducer`, `useEffect`) inside `renderCurrent` / `renderDiff`. NO `useRef`. NO `transport.*`. NO `fetch`. NO browser globals. The adapter is callable from a worker if needed (D29 forward-compat).
+- [x] FR-9: Tests:
   - `renderCurrent` populates To / Cc / Subject from the passed state and surfaces the "Auto-saved · 2s ago" string. NO Approve / Reject in the DOM.
   - `renderDiff` shows the PENDING block, the provenance pill, the streaming cursor when `streaming: true`, and the same composer chrome as `renderCurrent` would render around it.
   - Accessibility: every field has a semantic `<label htmlFor>` paired with the field's id; the form is keyboard-tabbable through To → Cc → Subject → Save draft → Send → Schedule; Approve / Reject are NOT in the document (host renders those). Use Testing Library's queryByRole / getByLabelText assertions, not just `data-testid`.
   - Registration: after `registerEmailAdapter()`, `resolveAdapter('email://draft-1')` returns the email adapter.
-- [ ] FR-10: ESLint carve-out for `src/email/**` is removed AND the boundary now bans `@enterprise-search/chat-transport` imports across all of `src/**`. Phase 4-A's TODO comment is also removed; the deprecated `SurfaceRendererProps` import path no longer needs an exception.
+- [x] FR-10: ESLint carve-out for `src/email/**` is removed AND the boundary now bans `@enterprise-search/chat-transport` imports across all of `src/**`. Phase 4-A's TODO comment is also removed; the deprecated `SurfaceRendererProps` import path no longer needs an exception.
 
 ## Non-functional requirements
 
@@ -119,14 +119,14 @@ export function registerAll(): void; // calls registerEmailAdapter()
 
 ## Done criteria
 
-- [ ] All FRs met
-- [ ] `npm test --workspace @enterprise-search/surface-renderers` passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/surface-renderers` passes with no carve-out
-- [ ] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes
-- [ ] No imports of `@enterprise-search/chat-transport` anywhere under `packages/surface-renderers/src/`
-- [ ] No `Transport`, `fetch`, `window`, `document`, `localStorage`, `EventSource`, `useState`, `useEffect`, `useRef` inside `packages/surface-renderers/src/email/EmailRenderer.tsx`
-- [ ] `packages/chat-surface/src/index.ts` UNCHANGED by this branch
+- [x] All FRs met
+- [x] `npm test --workspace @enterprise-search/surface-renderers` passes
+- [x] `npm test --workspace @enterprise-search/chat-surface` passes
+- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes with no carve-out
+- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes
+- [x] No imports of `@enterprise-search/chat-transport` anywhere under `packages/surface-renderers/src/`
+- [x] No `Transport`, `fetch`, `window`, `document`, `localStorage`, `EventSource`, `useState`, `useEffect`, `useRef` inside `packages/surface-renderers/src/email/EmailRenderer.tsx`
+- [x] `packages/chat-surface/src/index.ts` UNCHANGED by this branch
 
 ## Notes for orchestrator review
 

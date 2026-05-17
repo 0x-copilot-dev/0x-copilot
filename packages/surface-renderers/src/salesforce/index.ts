@@ -33,5 +33,5 @@ export type {
 };
 
 export function registerSalesforceAdapter(): void {
-  registerAdapter(opportunityAdapter as unknown as SaaSRendererAdapter);
+  registerAdapter(opportunityAdapter as SaaSRendererAdapter);
 }

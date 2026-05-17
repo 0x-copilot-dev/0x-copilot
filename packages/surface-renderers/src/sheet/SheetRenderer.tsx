@@ -5,6 +5,7 @@ import {
   type SaaSRendererAdapter,
 } from "@enterprise-search/chat-surface";
 
+import { resolveColumnWindow } from "./_columns";
 import { SheetDiff as SheetDiffView } from "./SheetDiff";
 
 export interface SheetCellValue {
@@ -41,9 +42,6 @@ export interface SheetDiff {
   readonly changes: readonly SheetCellChange[];
 }
 
-const VIRTUALIZATION_THRESHOLD = 50;
-const DEFAULT_VIEWPORT_WIDTH = 50;
-
 const PALETTE = {
   pageBg: "#0F1218",
   surface: "#131722",
@@ -59,42 +57,6 @@ const PALETTE = {
   changedBg: "rgba(194, 255, 90, 0.12)",
   removed: "#ef5a5a",
 } as const;
-
-interface ColumnWindow {
-  readonly startColumn: number;
-  readonly endColumn: number;
-  readonly virtualized: boolean;
-  readonly totalColumns: number;
-}
-
-function resolveColumnWindow(region: SheetRegion): ColumnWindow {
-  const totalColumns = region.headers.length;
-  if (totalColumns < VIRTUALIZATION_THRESHOLD) {
-    return {
-      startColumn: 0,
-      endColumn: totalColumns,
-      virtualized: false,
-      totalColumns,
-    };
-  }
-  const requested = region.viewport;
-  if (!requested) {
-    return {
-      startColumn: 0,
-      endColumn: Math.min(DEFAULT_VIEWPORT_WIDTH, totalColumns),
-      virtualized: true,
-      totalColumns,
-    };
-  }
-  const start = Math.max(0, Math.min(requested.startColumn, totalColumns));
-  const end = Math.max(start, Math.min(requested.endColumn, totalColumns));
-  return {
-    startColumn: start,
-    endColumn: end,
-    virtualized: true,
-    totalColumns,
-  };
-}
 
 function formatCellValue(cell: SheetCellValue): string {
   if (cell.value === null) {

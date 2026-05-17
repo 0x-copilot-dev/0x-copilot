@@ -233,12 +233,12 @@ The agent **proceeds to implementation** with the documented placeholders.
 
 ## Done criteria
 
-- [ ] All FRs met
-- [ ] `npm test --workspace @enterprise-search/surface-renderers` passes
-- [ ] `npm run lint --workspace @enterprise-search/surface-renderers` passes
-- [ ] No imports outside scope; no edits outside the In-scope list
-- [ ] No transport / fetch / MCP / `window` / `document` references
-- [ ] No new third-party dependency
+- [x] All FRs met
+- [x] `npm test --workspace @enterprise-search/surface-renderers` passes
+- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes
+- [x] No imports outside scope; no edits outside the In-scope list
+- [x] No transport / fetch / MCP / `window` / `document` references
+- [x] No new third-party dependency
 
 ## Notes for orchestrator review
 

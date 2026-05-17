@@ -17,16 +17,7 @@ export interface SlideRendererProps {
   readonly slide: Slide;
 }
 
-const PALETTE = {
-  pageBg: "#101113",
-  surface: "#181a1c",
-  surfaceMute: "#1f2226",
-  border: "#2a2d31",
-  textHi: "#f4f5f6",
-  textMid: "#c8ccd1",
-  textLo: "#9aa0a6",
-  lime: "#c2ff5a",
-} as const;
+import { SURFACE_PALETTE as PALETTE } from "../_shared/palette";
 
 export function SlideRenderer(props: SlideRendererProps): ReactElement {
   const { slide } = props;

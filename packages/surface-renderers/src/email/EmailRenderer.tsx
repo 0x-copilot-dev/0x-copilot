@@ -5,6 +5,8 @@ import {
   type SaaSRendererAdapter,
 } from "@enterprise-search/chat-surface";
 
+import { SURFACE_PALETTE as PALETTE } from "../_shared/palette";
+
 type DiffVisualState = "pending" | "streaming";
 
 export interface EmailState {
@@ -30,18 +32,6 @@ export interface EmailDiff {
   readonly base: EmailState;
   readonly pending: EmailDiffPending;
 }
-
-const PALETTE = {
-  pageBg: "#101113",
-  surface: "#181a1c",
-  surfaceMute: "#1f2226",
-  border: "#2a2d31",
-  textHi: "#f4f5f6",
-  textMid: "#c8ccd1",
-  textLo: "#9aa0a6",
-  lime: "#c2ff5a",
-  limeBgSoft: "rgba(194, 255, 90, 0.12)",
-} as const;
 
 const DEFAULT_AUTOSAVED_LABEL = "Auto-saved · 2s ago";
 

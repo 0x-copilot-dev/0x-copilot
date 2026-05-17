@@ -45,23 +45,23 @@ The contract that ships here does not change in Phase 6 / 7. Only its consumers 
 
 ## Functional requirements
 
-- [ ] FR-1: `SaaSRendererAdapter<TResource, TDiff>` interface continues to match PRD §3.3 verbatim. File header documents the D28 contract: adapters MUST NOT call `Transport`, `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, or touch `window` / `document` / `localStorage` / `sessionStorage` / `history` / `navigator`. ESLint enforces for tier-1; AST scanner (Phase 6) enforces for tier-2; the file comment is the canonical English statement.
-- [ ] FR-2: `SurfaceRegistry` semantics (already implemented; verified by extended tests):
+- [x] FR-1: `SaaSRendererAdapter<TResource, TDiff>` interface continues to match PRD §3.3 verbatim. File header documents the D28 contract: adapters MUST NOT call `Transport`, `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, or touch `window` / `document` / `localStorage` / `sessionStorage` / `history` / `navigator`. ESLint enforces for tier-1; AST scanner (Phase 6) enforces for tier-2; the file comment is the canonical English statement.
+- [x] FR-2: `SurfaceRegistry` semantics (already implemented; verified by extended tests):
   - `registerAdapter` keeps versions for a scheme sorted by `metadata.schemaVersion` desc.
   - `resolveAdapter(uri)` walks the highest-version-first list for the URI's scheme; for each entry, skips broken, then evaluates `matches(uri)`; returns the first hit; otherwise walks the wildcard list with the same rule.
   - `unregisterAdapter(scheme)` removes all versions; `unregisterAdapter(scheme, version)` removes one.
   - `markBroken(scheme, version, reason)` hides that version; a subsequent `registerAdapter` of `{scheme, version}` re-installs and clears the broken flag (hot-swap).
-- [ ] FR-3: `TcSurfaceMount` resolves the adapter for the URI, calls `renderCurrent` (no `pendingDiff` prop) or `renderDiff` (with `pendingDiff` prop), wraps the output in an error boundary and a 100 ms wall-clock budget. On throw or budget overrun: re-resolves the URI against the wildcard (tier-3) and renders that adapter's output. On both adapter and tier-3 absence: renders the existing `surface-placeholder` empty state — never crashes.
-- [ ] FR-4: `TcSurfaceMount` surrounds the rendered output with host-owned `Approve` / `Reject` / `Suggest changes` controls. Controls are rendered only when a `pendingDiff` is present. The adapter's own JSX never includes these buttons (D28). The controls fire `onApprove(diffId)`, `onReject(diffId)`, `onSuggestChanges(diffId)` from `props`. The same control band wraps both the adapter render path and the tier-3 fallback path — the host's UX does not depend on which tier resolved.
-- [ ] FR-5: ESLint rule for `packages/surface-renderers/src/**` (excluding `__lint-negatives__/`):
+- [x] FR-3: `TcSurfaceMount` resolves the adapter for the URI, calls `renderCurrent` (no `pendingDiff` prop) or `renderDiff` (with `pendingDiff` prop), wraps the output in an error boundary and a 100 ms wall-clock budget. On throw or budget overrun: re-resolves the URI against the wildcard (tier-3) and renders that adapter's output. On both adapter and tier-3 absence: renders the existing `surface-placeholder` empty state — never crashes.
+- [x] FR-4: `TcSurfaceMount` surrounds the rendered output with host-owned `Approve` / `Reject` / `Suggest changes` controls. Controls are rendered only when a `pendingDiff` is present. The adapter's own JSX never includes these buttons (D28). The controls fire `onApprove(diffId)`, `onReject(diffId)`, `onSuggestChanges(diffId)` from `props`. The same control band wraps both the adapter render path and the tier-3 fallback path — the host's UX does not depend on which tier resolved.
+- [x] FR-5: ESLint rule for `packages/surface-renderers/src/**` (excluding `__lint-negatives__/`):
   - Existing global bans (`window`, `document`, `history`, `navigator`, `location`, `localStorage`, `sessionStorage`, `fetch`, `EventSource`, `XMLHttpRequest`, `WebSocket`, `crypto`) preserved.
   - Added globals: `clipboard`.
   - Member-expression ban: `document.cookie`, `navigator.clipboard.writeText`, `navigator.clipboard.write`.
   - Import bans: `@enterprise-search/chat-transport`, `@enterprise-search/chat-transport/*`, plus the new allowlist for `@enterprise-search/chat-surface` (allowed for design tokens / `TcInlineDiff`), `react`, `react-dom`, `@enterprise-search/design-system`. Dynamic `import()` of any other specifier fails.
   - Existing `chat-surface/shell` import-ban preserved.
-- [ ] FR-6: ESLint negative-test files in `packages/surface-renderers/src/__lint-negatives__/` deliberately violate each ban. A script (`lint-negatives.sh`) runs ESLint on the directory and asserts every file errors out. Wired into a `npm run lint:negatives --workspace @enterprise-search/surface-renderers` script and exercised in this phase's verification (not as a vitest test; ESLint is the assertion).
-- [ ] FR-7: New `TcSurfaceMount` props remain optional so the existing Phase 0-A consumers (`<TcSurfaceMount uri transport />`) keep compiling. Adding `pendingDiff`, `state`, `onApprove`, `onReject`, `onSuggestChanges` is additive.
-- [ ] FR-8: Tests cover: hot-swap (A → A' visible on re-resolve), miss → tier-3 fallback, `markBroken` → tier-3 fallback, render-with-timeout fallback to tier-3, error boundary fallback to tier-3, version disambiguation (v2 wins, fall through to v1 when v2's `matches` rejects, `markBroken(v2)` → v1 resolves). `TcSurfaceMount` tests cover: controls absent when no `pendingDiff`, controls present + firing handlers when `pendingDiff`, controls present around tier-3 fallback, tier-3-and-empty case → placeholder.
+- [x] FR-6: ESLint negative-test files in `packages/surface-renderers/src/__lint-negatives__/` deliberately violate each ban. A script (`lint-negatives.sh`) runs ESLint on the directory and asserts every file errors out. Wired into a `npm run lint:negatives --workspace @enterprise-search/surface-renderers` script and exercised in this phase's verification (not as a vitest test; ESLint is the assertion).
+- [x] FR-7: New `TcSurfaceMount` props remain optional so the existing Phase 0-A consumers (`<TcSurfaceMount uri transport />`) keep compiling. Adding `pendingDiff`, `state`, `onApprove`, `onReject`, `onSuggestChanges` is additive.
+- [x] FR-8: Tests cover: hot-swap (A → A' visible on re-resolve), miss → tier-3 fallback, `markBroken` → tier-3 fallback, render-with-timeout fallback to tier-3, error boundary fallback to tier-3, version disambiguation (v2 wins, fall through to v1 when v2's `matches` rejects, `markBroken(v2)` → v1 resolves). `TcSurfaceMount` tests cover: controls absent when no `pendingDiff`, controls present + firing handlers when `pendingDiff`, controls present around tier-3 fallback, tier-3-and-empty case → placeholder.
 
 ## Non-functional requirements
 
@@ -128,15 +128,15 @@ ALLOWED IMPORTS (static or dynamic):
 
 ## Done criteria
 
-- [ ] All FRs met.
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes (existing 135 tests + new tests).
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes (deprecated `EmailRenderer` still typechecks).
-- [ ] `npm run lint --workspace @enterprise-search/surface-renderers` passes on production code.
-- [ ] `npm run lint:negatives --workspace @enterprise-search/surface-renderers` fails as expected (each negative file errors).
-- [ ] No new third-party dependency.
-- [ ] No imports outside scope.
+- [x] All FRs met.
+- [x] `npm test --workspace @enterprise-search/chat-surface` passes (existing 135 tests + new tests).
+- [x] `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
+- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes.
+- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes (deprecated `EmailRenderer` still typechecks).
+- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes on production code.
+- [x] `npm run lint:negatives --workspace @enterprise-search/surface-renderers` fails as expected (each negative file errors).
+- [x] No new third-party dependency.
+- [x] No imports outside scope.
 
 ## Notes for orchestrator review
 

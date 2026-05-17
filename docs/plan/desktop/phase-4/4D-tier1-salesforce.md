@@ -116,42 +116,42 @@ with provenance." No second state argument needed.
 
 ## Functional requirements
 
-- [ ] FR-S1 — Adapter exports `scheme: 'sf-opp'` and
+- [x] FR-S1 — Adapter exports `scheme: 'sf-opp'` and
       `matches(uri) === uri.startsWith('sf-opp://')`. Verified against
       `sf-opp://acme/006XYZ` (match) and `email://draft-1` (no match) and
       empty string (no match).
-- [ ] FR-S2 — `renderCurrent(opportunity)` renders the five standard
+- [x] FR-S2 — `renderCurrent(opportunity)` renders the five standard
       fields in this order: Account, Stage, Close Date, ARR, Owner. Each
       uses the shared `FieldRow` primitive (label + value, no diff
       overlay).
-- [ ] FR-S3 — Custom fields render after standard fields, in the order
+- [x] FR-S3 — Custom fields render after standard fields, in the order
       they appear in `customFields`, also through `FieldRow`. Custom
       fields with empty values still render the label and a blank value
       cell (no crashes, no hidden rows).
-- [ ] FR-S4 — `renderDiff(diff)` renders the same field layout as
+- [x] FR-S4 — `renderDiff(diff)` renders the same field layout as
       `renderCurrent` but for each field in `diff.changes` overlays:
       previous value (struck-through, muted) → next value (highlighted)
       and a provenance pill on the changed row. Fields not in
       `diff.changes` render exactly as in `renderCurrent` (no change
       annotation).
-- [ ] FR-S5 — Changed-field annotation composes `TcInlineDiff` only for
+- [x] FR-S5 — Changed-field annotation composes `TcInlineDiff` only for
       the provenance pill and state semantics; the field-row chrome is
       local to the salesforce renderer. The state passed is `pending`
       (the host controls accept/reject — D28 — so no buttons are wired
       from the adapter).
-- [ ] FR-S6 — Unknown custom-field keys (anything not in the standard
+- [x] FR-S6 — Unknown custom-field keys (anything not in the standard
       five) fall through to the generic `FieldRow` path. This is the same
       code path as known custom fields; the test exercises a custom field
       that does NOT appear in any registry to prove there is no crash and
       no missing rendering.
-- [ ] FR-S7 — Adapter `metadata` is `{ origin: 'first-party',
+- [x] FR-S7 — Adapter `metadata` is `{ origin: 'first-party',
 schemaVersion: 1 }`.
-- [ ] FR-S8 — No transport, no fetch, no `window`, no `document`, no
+- [x] FR-S8 — No transport, no fetch, no `window`, no `document`, no
       `localStorage`, no `IPC`. Adapter component is a pure function of
       its single argument. Enforced by ESLint config from Phase 4-A and
       by the contract types (`renderCurrent: (state) => ReactElement`,
       `renderDiff: (diff) => ReactElement`).
-- [ ] FR-S9 — Module exports `registerSalesforceAdapter()` which calls
+- [x] FR-S9 — Module exports `registerSalesforceAdapter()` which calls
       `registerAdapter(opportunityAdapter)`. Idempotent for the same
       schemaVersion (`SurfaceRegistry.registerAdapter` already replaces
       same-version entries — Phase 4-A guarantee).
@@ -160,30 +160,30 @@ schemaVersion: 1 }`.
 
 `OpportunityRenderer.test.tsx`:
 
-- [ ] T-S1 — Adapter satisfies the contract: `scheme === 'sf-opp'`,
+- [x] T-S1 — Adapter satisfies the contract: `scheme === 'sf-opp'`,
       `matches('sf-opp://acme/006XYZ')` is `true`,
       `matches('email://draft-1')` is `false`.
-- [ ] T-S2 — `renderCurrent` renders all five standard fields with the
+- [x] T-S2 — `renderCurrent` renders all five standard fields with the
       expected label + value pairings.
-- [ ] T-S3 — `renderCurrent` renders custom fields below standard fields
+- [x] T-S3 — `renderCurrent` renders custom fields below standard fields
       in input order.
-- [ ] T-S4 — `renderCurrent` handles an empty `customFields` array
+- [x] T-S4 — `renderCurrent` handles an empty `customFields` array
       without crashing.
-- [ ] T-S5 — Unknown custom-field key renders through the generic field
+- [x] T-S5 — Unknown custom-field key renders through the generic field
       row (label + value visible; no error).
-- [ ] T-S6 — `registerSalesforceAdapter()` registers, and
+- [x] T-S6 — `registerSalesforceAdapter()` registers, and
       `resolveAdapter('sf-opp://acme/006XYZ')` returns the salesforce
       adapter.
 
 `OpportunityDiff.test.tsx`:
 
-- [ ] T-S7 — `renderDiff` overlays a provenance pill on each changed
+- [x] T-S7 — `renderDiff` overlays a provenance pill on each changed
       field.
-- [ ] T-S8 — `renderDiff` shows previous and next value for each changed
+- [x] T-S8 — `renderDiff` shows previous and next value for each changed
       field (previous struck-through, next highlighted).
-- [ ] T-S9 — `renderDiff` leaves unchanged fields untouched (no pill, no
+- [x] T-S9 — `renderDiff` leaves unchanged fields untouched (no pill, no
       strikethrough).
-- [ ] T-S10 — `renderDiff` works with a custom-field change (proves the
+- [x] T-S10 — `renderDiff` works with a custom-field change (proves the
       diff path also flows through the generic row).
 
 ## Non-goals
