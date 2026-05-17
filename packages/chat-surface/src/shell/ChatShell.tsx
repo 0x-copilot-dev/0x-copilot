@@ -7,6 +7,17 @@ import {
   type ReactNode,
 } from "react";
 
+import { AgentsDestination } from "../destinations/agents";
+import { ChatsDestination } from "../destinations/chats";
+import { ConnectorsDestination } from "../destinations/connectors";
+import { HomeDestination } from "../destinations/home";
+import { InboxDestination } from "../destinations/inbox";
+import { LibraryDestination } from "../destinations/library";
+import { MemoryDestination } from "../destinations/memory";
+import { ProjectsDestination } from "../destinations/projects";
+import { TeamDestination } from "../destinations/team";
+import { TodosDestination } from "../destinations/todos";
+import { ToolsDestination } from "../destinations/tools";
 import type { PresenceSignal } from "../presence/presence-signal";
 import { KeyValueStoreProvider } from "../providers/KeyValueStoreProvider";
 import { PresenceSignalProvider } from "../providers/PresenceSignalProvider";
@@ -24,10 +35,25 @@ import {
 import { RightRail } from "./RightRail";
 import { Topbar } from "./Topbar";
 
+const DESTINATION_COMPONENTS: Readonly<
+  Record<ShellDestinationSlug, () => ReactElement>
+> = {
+  home: HomeDestination,
+  chats: ChatsDestination,
+  agents: AgentsDestination,
+  library: LibraryDestination,
+  inbox: InboxDestination,
+  tools: ToolsDestination,
+  projects: ProjectsDestination,
+  todos: TodosDestination,
+  connectors: ConnectorsDestination,
+  team: TeamDestination,
+  memory: MemoryDestination,
+};
+
 const APP_BACKGROUND = "#0B0C10";
 const MAIN_BACKGROUND = "#11141B";
 const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
 
 function destinationFromRoute(
   route: ArtifactRoute | null,
@@ -68,47 +94,16 @@ function DestinationOutlet(): ReactElement {
   }, [router]);
 
   const slug = destinationFromRoute(route);
-
-  let leaf = "—";
-  if (route !== null) {
-    if (route.kind === "chat" || route.kind === "conversation") {
-      leaf = route.conversationId === "" ? "—" : route.conversationId;
-    } else if (route.kind === "run") {
-      leaf = route.runId;
-    } else if (route.kind === "skill") {
-      leaf = route.skillId;
-    } else if (route.kind === "mcp") {
-      leaf = route.serverId;
-    } else if (route.kind === "workspace") {
-      leaf = route.workspaceId;
-    }
-  }
-
-  const stubStyle: CSSProperties = {
-    padding: 24,
-    color: TEXT_PRIMARY,
-    fontSize: 14,
-    fontFamily: "ui-monospace, SFMono-Regular, monospace",
-  };
-  const secondaryStyle: CSSProperties = {
-    color: TEXT_SECONDARY,
-    marginTop: 8,
-    fontSize: 13,
-  };
+  const Destination = DESTINATION_COMPONENTS[slug];
 
   return (
     <section
       aria-label={`${slug} destination`}
       data-testid="destination-outlet"
       data-destination={slug}
-      style={stubStyle}
+      style={{ height: "100%", overflow: "auto" }}
     >
-      <div>
-        {slug}: {leaf}
-      </div>
-      <div style={secondaryStyle}>
-        Phase-3 destination content renders here.
-      </div>
+      <Destination />
     </section>
   );
 }

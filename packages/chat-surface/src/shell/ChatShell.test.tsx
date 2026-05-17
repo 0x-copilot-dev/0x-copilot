@@ -25,7 +25,18 @@ function staticRouter(route: ArtifactRoute | null): Router<ArtifactRoute> {
   };
 }
 
-const stubTransport = {} as unknown as Transport;
+const stubTransport: Transport = {
+  request: () => new Promise(() => {}),
+  subscribeServerSentEvents: () => ({ close: () => {} }),
+  getSession: () => ({ bearer: null }),
+  capabilities: () => ({
+    substrate: "web",
+    nativeSecretStorage: false,
+    fileSystemAccess: false,
+    clipboardWrite: true,
+    openExternal: false,
+  }),
+};
 const stubKv: KeyValueStore = {
   get: () => null,
   set: () => {},
@@ -73,25 +84,20 @@ describe("ChatShell", () => {
     expect(screen.getByTestId("topbar-breadcrumb")).toBeInTheDocument();
   });
 
-  it("renders the DestinationOutlet stub by default with the destination name", () => {
+  it("renders the chats destination for chat routes", () => {
     mount({ kind: "chat", conversationId: "c-42" });
-    const outlet = screen.getByTestId("destination-outlet");
-    expect(outlet).toHaveAttribute("data-destination", "chats");
-    expect(outlet).toHaveTextContent(/chats: c-42/);
-  });
-
-  it("DestinationOutlet stub falls back to '—' for empty chat conversationId", () => {
-    mount({ kind: "chat", conversationId: "" });
-    expect(screen.getByTestId("destination-outlet")).toHaveTextContent(
-      /chats: —/,
+    expect(screen.getByTestId("destination-outlet")).toHaveAttribute(
+      "data-destination",
+      "chats",
     );
   });
 
-  it("DestinationOutlet maps mcp routes to the connectors destination", () => {
+  it("maps mcp routes to the connectors destination", () => {
     mount({ kind: "mcp", serverId: "srv-x" });
-    const outlet = screen.getByTestId("destination-outlet");
-    expect(outlet).toHaveAttribute("data-destination", "connectors");
-    expect(outlet).toHaveTextContent(/connectors: srv-x/);
+    expect(screen.getByTestId("destination-outlet")).toHaveAttribute(
+      "data-destination",
+      "connectors",
+    );
   });
 
   it("suppresses the DestinationOutlet when children are passed", () => {

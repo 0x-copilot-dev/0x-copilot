@@ -157,3 +157,50 @@ export { HashRouter } from "./routing/HashRouter";
 export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
 export { CommandPalette } from "./palette";
 // === end Phase 1-D ===
+
+// === Phase 2-B thread-canvas ===
+export {
+  ThreadCanvas,
+  type ThreadCanvasProps,
+  TcTabs,
+  type TcTabsProps,
+  type TcTab,
+} from "./thread-canvas";
+// === end Phase 2-B ===
+
+// === Phase 2-C swimlanes ===
+export {
+  TcSwimlanes,
+  type Playhead,
+  type TcSwimlanesProps,
+} from "./thread-canvas";
+// === end Phase 2-C ===
+
+// === Phase 2-E inline-diff state-machine ===
+export {
+  nextInlineDiffState,
+  useInlineDiffReducer,
+  InvalidInlineDiffTransitionError,
+  type InlineDiffEvent,
+  __dev__inlineDiffFixtures,
+  type __dev__InlineDiffFixture,
+} from "./thread-canvas";
+// === end Phase 2-E ===
+
+// === Phase 2-A / 3 destinations ===
+export {
+  ChatsDestination,
+  ChatsSidebar,
+  type ChatsSidebarProps,
+} from "./destinations/chats";
+export { HomeDestination } from "./destinations/home";
+export { InboxDestination } from "./destinations/inbox";
+export { TodosDestination } from "./destinations/todos";
+export { ProjectsDestination } from "./destinations/projects";
+export { LibraryDestination } from "./destinations/library";
+export { AgentsDestination } from "./destinations/agents";
+export { ToolsDestination } from "./destinations/tools";
+export { ConnectorsDestination } from "./destinations/connectors";
+export { TeamDestination } from "./destinations/team";
+export { MemoryDestination } from "./destinations/memory";
+// === end Phase 2-A / 3 destinations ===
