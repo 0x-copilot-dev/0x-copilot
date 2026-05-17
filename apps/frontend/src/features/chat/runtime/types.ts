@@ -9,6 +9,28 @@
 
 import type { ReactNode } from "react";
 
+// Message-part shapes live in @enterprise-search/chat-surface so the
+// migrated PlainText / Reasoning components consume them at a single
+// source of truth. Imported here so this file's other type aliases can
+// reference them, AND re-exported so the rest of apps/frontend keeps
+// importing them via the runtime/types barrel without callsite churn.
+import type {
+  MessagePartState,
+  MessagePartStatus,
+  ReasoningMessagePart,
+  ReasoningMessagePartProps,
+  TextMessagePart,
+  TextMessagePartProps,
+} from "@enterprise-search/chat-surface";
+export type {
+  MessagePartState,
+  MessagePartStatus,
+  ReasoningMessagePart,
+  ReasoningMessagePartProps,
+  TextMessagePart,
+  TextMessagePartProps,
+};
+
 // ─── Message status ────────────────────────────────────────────────────────
 
 /** Status of a top-level message. */
@@ -21,22 +43,6 @@ export type MessageStatus =
       readonly error?: unknown;
     }
   | { readonly type: "requires-action"; readonly reason?: string };
-
-/**
- * Status of an individual message part. Distinct from `MessageStatus`
- * because the part-level "requires-action" reason is constrained to
- * "interrupt" (the runtime only stalls a part for an interrupt; other
- * stop-reasons live at the message level).
- */
-export type MessagePartStatus =
-  | { readonly type: "running" }
-  | { readonly type: "complete"; readonly reason?: string }
-  | {
-      readonly type: "incomplete";
-      readonly reason?: string;
-      readonly error?: unknown;
-    }
-  | { readonly type: "requires-action"; readonly reason?: "interrupt" };
 
 /**
  * Per-message timing analytics. Schema is Atlas-internal; only
@@ -59,33 +65,10 @@ export interface MessageTiming {
 }
 
 // ─── Message parts ─────────────────────────────────────────────────────────
-
-export interface TextMessagePart {
-  readonly type: "text";
-  readonly text: string;
-  readonly status?: MessagePartStatus;
-}
-
-export interface ReasoningMessagePart {
-  readonly type: "reasoning";
-  readonly text: string;
-  readonly status?: MessagePartStatus;
-  /**
-   * `event.created_at` (epoch ms) of the first delta/cap that contributed
-   * to this part. Together with `updatedAtMs` it lets the
-   * `<ReasoningGroup>` render the "Thought process · Ns" elapsed-time
-   * stamp without an additional event-time clock per message. Optional
-   * because pre-PR-3.6 messages and synthesised parts may lack one.
-   */
-  readonly startedAtMs?: number;
-  /**
-   * `event.created_at` (epoch ms) of the latest event applied to this
-   * part. While the part is `running` the difference between
-   * `updatedAtMs` and `startedAtMs` is the live "Thinking… · Ns"
-   * counter; once `complete`, it freezes the final span length.
-   */
-  readonly updatedAtMs?: number;
-}
+//
+// TextMessagePart, ReasoningMessagePart, MessagePartState,
+// TextMessagePartProps, and ReasoningMessagePartProps live in
+// @enterprise-search/chat-surface (re-exported at the top of this file).
 
 export interface ToolCallMessagePart<
   TArgs = Record<string, unknown>,
@@ -260,19 +243,6 @@ export interface AppendMessage {
 }
 
 // ─── Component props ───────────────────────────────────────────────────────
-
-/**
- * Per-part state the runtime synthesises before handing parts to a
- * renderer. `status` is required at this layer — the walker fills
- * it in (defaulting to "complete" or "running" depending on whether
- * a tool-call already has a result).
- */
-export interface MessagePartState {
-  readonly status: MessagePartStatus;
-}
-
-export type TextMessagePartProps = MessagePartState & TextMessagePart;
-export type ReasoningMessagePartProps = MessagePartState & ReasoningMessagePart;
 
 export interface ReasoningGroupProps {
   readonly startIndex: number;

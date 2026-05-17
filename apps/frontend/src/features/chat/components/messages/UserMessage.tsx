@@ -1,3 +1,4 @@
+import { PlainText } from "@enterprise-search/chat-surface";
 import type { ReactElement } from "react";
 import {
   Message,
@@ -5,7 +6,6 @@ import {
   MessageParts,
 } from "../../runtime/components";
 import type { ThreadMessageLike } from "../../runtime/types";
-import { PlainText } from "../markdown/PlainText";
 import { AttachmentPill } from "../composer/AttachmentPill";
 
 export function UserMessage({

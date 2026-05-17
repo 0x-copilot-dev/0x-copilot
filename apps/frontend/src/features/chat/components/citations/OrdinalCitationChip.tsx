@@ -18,12 +18,18 @@
 // window. Once PR 1.1's ``[c<id>]`` path is removed, the two chips
 // merge or the legacy file is deleted.
 
+import { CITATION_ORDINAL_HREF_PREFIX } from "@enterprise-search/chat-surface";
 import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
-import { useResolvedOrdinalCitation } from "./citationsContext";
-import { citationDebug } from "../../chatModel/citationDebug";
 
-export const CITATION_ORDINAL_HREF_PREFIX = "#cite-ord:";
+import { citationDebug } from "../../chatModel/citationDebug";
+import { useResolvedOrdinalCitation } from "./citationsContext";
+
+// CITATION_ORDINAL_HREF_PREFIX is the single source of truth in
+// @enterprise-search/chat-surface (shared by the citation remark plugin
+// that emits these hrefs and by this chip that parses them). Imported
+// for local use only — deliberately NOT re-exported from here, so the
+// constant has exactly one canonical import path.
 
 /** Returns ``true`` for hrefs the ordinal chip should claim. */
 export function isOrdinalCitationHref(href: string | undefined): boolean {

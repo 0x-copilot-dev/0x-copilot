@@ -9,12 +9,16 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "streamdown": "^2.0.0"
   },
   "dependencies": {
-    "@enterprise-search/chat-transport": "0.1.0"
+    "@enterprise-search/chat-transport": "0.1.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
+    "@types/mdast": "^4.0.0",
     "@types/react": "19.2.14",
     "typescript": "6.0.3"
   }

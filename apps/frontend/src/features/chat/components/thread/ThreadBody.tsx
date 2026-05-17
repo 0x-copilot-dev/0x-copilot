@@ -15,7 +15,7 @@ import { useMyProfile } from "../../../auth/useMyProfile";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
-import { PlainText } from "../markdown/PlainText";
+import { PlainText } from "@enterprise-search/chat-surface";
 import { firstNameFromDisplayName } from "../../utils/greeting";
 import {
   Composer,

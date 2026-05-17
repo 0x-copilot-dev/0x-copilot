@@ -10,11 +10,16 @@ import type {
   CitationSourceRef,
   SourceEntry,
 } from "@enterprise-search/api-types";
+import { CITATION_HREF_PREFIX } from "@enterprise-search/chat-surface";
 import { useMemo, type ReactElement } from "react";
 import { useCitation } from "./citationsContext";
 import { useSourcePreviewTrigger } from "./SourcePreview";
 
-export const CITATION_HREF_PREFIX = "#cite:";
+// CITATION_HREF_PREFIX is the single source of truth in
+// @enterprise-search/chat-surface (shared by the citation remark plugin
+// that emits these hrefs and by this chip that parses them). Imported
+// for local use only — deliberately NOT re-exported from here, so the
+// constant has exactly one canonical import path.
 
 export function isCitationHref(href: string | undefined): boolean {
   return typeof href === "string" && href.startsWith(CITATION_HREF_PREFIX);

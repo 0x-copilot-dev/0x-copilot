@@ -31,7 +31,12 @@ vi.mock("./runtime/components", async (orig) => {
 vi.mock("./components/markdown/MarkdownText", () => ({
   MarkdownText: () => null,
 }));
-vi.mock("./components/markdown/Reasoning", () => ({ Reasoning: () => null }));
+vi.mock("@enterprise-search/chat-surface", async () => ({
+  ...(await vi.importActual<typeof import("@enterprise-search/chat-surface")>(
+    "@enterprise-search/chat-surface",
+  )),
+  Reasoning: () => null,
+}));
 vi.mock("./components/markdown/ReasoningGroup", () => ({
   ReasoningGroup: () => null,
 }));

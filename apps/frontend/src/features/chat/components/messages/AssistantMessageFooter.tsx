@@ -1,12 +1,12 @@
 import type { AssistantPerformanceMetrics } from "@enterprise-search/api-types";
+import { CopyIcon, RetryIcon } from "@enterprise-search/chat-surface";
 import type { ReactElement } from "react";
+
 import {
   ActionBar,
   ActionBarCopy,
   ActionBarReload,
 } from "../../runtime/components";
-import { CopyIcon } from "../icons/CopyIcon";
-import { RetryIcon } from "../icons/RetryIcon";
 import { AssistantMessageMetrics } from "./AssistantMessageMetrics";
 
 export function AssistantMessageFooter({

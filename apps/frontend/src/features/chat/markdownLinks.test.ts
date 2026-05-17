@@ -1,5 +1,5 @@
+import { markdownLinkLabel } from "@enterprise-search/chat-surface";
 import { describe, expect, it } from "vitest";
-import { markdownLinkLabel } from "./markdownLinks";
 
 describe("markdownLinkLabel", () => {
   it("keeps descriptive markdown link labels", () => {

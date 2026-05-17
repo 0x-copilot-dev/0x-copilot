@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import type { ThreadMessageLike } from "../../runtime/types";
 
-vi.mock("../markdown/PlainText", () => ({
+vi.mock("@enterprise-search/chat-surface", async () => ({
+  ...(await vi.importActual<typeof import("@enterprise-search/chat-surface")>(
+    "@enterprise-search/chat-surface",
+  )),
   PlainText: () => <span data-testid="plain" />,
 }));
 

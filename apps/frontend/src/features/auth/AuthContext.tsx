@@ -46,6 +46,7 @@ import {
   configureUnauthorizedHandler,
   UnauthorizedError,
 } from "../../api/http";
+import { stripMagicLinkTokenFromUrl } from "../../app/authUrlHygiene";
 import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";
 
 const BEARER_STORAGE_KEY = "enterprise.auth.bearer";
@@ -337,6 +338,10 @@ export function AuthProvider({
       setState((prev) => ({ ...prev, status: "loading", error: null }));
       try {
         const result = await consumeMagicLinkApi(token);
+        // Strip ?token= from the URL on success so the back button can't
+        // replay magic-link consumption. Lives in app/ not features/ so
+        // the substrate-boundary lint rule isn't tripped here.
+        stripMagicLinkTokenFromUrl();
         if (result.outcome === "session_minted") {
           if (!result.bearer_token) {
             throw new Error("session_minted response missing bearer_token");

@@ -6,8 +6,8 @@ import {
   performanceMetricsFromMetadata,
 } from "../../utils/activityDataBuilders";
 import { useRunCitations } from "../citations/citationsContext";
+import { Reasoning } from "@enterprise-search/chat-surface";
 import { MarkdownText } from "../markdown/MarkdownText";
-import { Reasoning } from "../markdown/Reasoning";
 import { ReasoningGroup } from "../markdown/ReasoningGroup";
 import { ApprovalTool } from "../tools/ApprovalTool";
 import { ConnectorAuthTool } from "../tools/ConnectorAuthTool";

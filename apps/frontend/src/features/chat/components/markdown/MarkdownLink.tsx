@@ -1,5 +1,6 @@
+import { markdownLinkLabel } from "@enterprise-search/chat-surface";
 import type { AnchorHTMLAttributes, ReactElement } from "react";
-import { markdownLinkLabel } from "../../markdownLinks";
+
 import {
   CitationChip,
   citationIdFromHref,

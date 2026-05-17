@@ -573,14 +573,9 @@ function MagicLinkCallbackStep({
         await auth.consumeMagicLink(token);
         // On session_minted, AuthContext flips to authenticated → AuthGate
         // remounts the app shell. On workspace_pick_required, AuthContext
-        // flips to workspace_pick → the parent re-anchors. Nothing else
-        // for us to do here.
-        if (typeof window !== "undefined") {
-          // Strip ?token= from the URL so a back-button doesn't replay.
-          const url = new URL(window.location.href);
-          url.searchParams.delete("token");
-          window.history.replaceState({}, "", url.pathname);
-        }
+        // flips to workspace_pick → the parent re-anchors. URL hygiene
+        // (stripping ?token=) is owned by AuthContext.consumeMagicLink
+        // so the call site only handles errors.
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "could not consume link";

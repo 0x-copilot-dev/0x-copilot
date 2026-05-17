@@ -1,5 +1,17 @@
 import type { ReactNode } from "react";
 
+// Pick the label to render inside a markdown anchor.
+//
+// Streamdown hands us the raw children + href for every `<a>` it
+// renders. When the visible text IS the URL (e.g. autolinks like
+// `<https://example.com/path>` or bare URLs the parser interpreted as
+// links), the bare string is visually noisy — long URLs wrap awkwardly
+// inside chat bubbles. Substitute a compact "host + path, middle-elided"
+// label so the link reads as a destination rather than a raw blob.
+//
+// Descriptive labels (`[See the docs](https://…)`) pass through
+// untouched. Anything that isn't a parseable URL falls back to the
+// original children.
 export function markdownLinkLabel(
   href: string | undefined,
   children: ReactNode,

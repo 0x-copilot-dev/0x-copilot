@@ -1,6 +1,7 @@
-import type { ReasoningGroupProps } from "../../runtime/types";
+import { ThinkingIcon } from "@enterprise-search/chat-surface";
 import type { ReactElement } from "react";
-import { ThinkingIcon } from "../icons/ThinkingIcon";
+
+import type { ReasoningGroupProps } from "../../runtime/types";
 
 /**
  * Atlas thought-process accordion. Renders as a native `<details>` —

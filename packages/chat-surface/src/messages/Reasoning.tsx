@@ -1,6 +1,7 @@
-import type { ReasoningMessagePartProps } from "../../runtime/types";
 import type { ReactElement } from "react";
 import { Streamdown } from "streamdown";
+
+import type { ReasoningMessagePartProps } from "./types";
 
 export function Reasoning({
   text,
