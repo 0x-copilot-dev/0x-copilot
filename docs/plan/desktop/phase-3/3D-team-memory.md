@@ -79,48 +79,48 @@ Staff-engineer take, applied to this phase's primitives:
 
 ## Functional requirements — Team
 
-- [ ] FR-T1: `TeamDestination` mounts and calls `transport.request` for
+- [x] FR-T1: `TeamDestination` mounts and calls `transport.request` for
       `GET /v1/workspace/members` exactly once on mount. Loading renders
       a skeleton; error renders an inline error row with the message;
       empty renders an empty-state card; success renders a table.
-- [ ] FR-T2: Each member row shows an avatar (initial-circle via
+- [x] FR-T2: Each member row shows an avatar (initial-circle via
       design-system `AppIcon`), name, email, role badge (Owner / Admin /
       Member / Guest with tone variants), and a relative last-active label.
-- [ ] FR-T3: Header has an "Invite" button (design-system primary
+- [x] FR-T3: Header has an "Invite" button (design-system primary
       button). Click emits `props.onInvite()` if provided; otherwise
       no-op. The button is always enabled.
-- [ ] FR-T4: Clicking a member row calls
+- [x] FR-T4: Clicking a member row calls
       `router.navigate({kind: 'workspace', workspaceId})` where
       `workspaceId` is taken from `member.workspaceId` (server-provided).
       Rows are keyboard-focusable (`<button>`-like semantics via
       `role="button"` + `tabIndex={0}` + `onKeyDown` for Enter/Space).
-- [ ] FR-T5: Public exports: `TeamDestination`, `TeamDestinationProps`,
+- [x] FR-T5: Public exports: `TeamDestination`, `TeamDestinationProps`,
       `Member`, `MemberRole`.
 
 ## Functional requirements — Memory
 
-- [ ] FR-M1: `MemoryDestination` renders a tab bar with three tabs: "User
+- [x] FR-M1: `MemoryDestination` renders a tab bar with three tabs: "User
       memories" (type=`user`), "Project memories" (type=`project`),
       "Reference memories" (type=`reference`). Default tab is `user`.
-- [ ] FR-M2: Switching tabs triggers a new `transport.request` for
+- [x] FR-M2: Switching tabs triggers a new `transport.request` for
       `GET /v1/memory?type=<tab>`. The previous in-flight request is
       aborted via the `signal` on the typed request. Each tab maintains
       an independent loading / error / data state — switching back to a
       previously-loaded tab does not refetch (cache by type).
-- [ ] FR-M3: Each tab's body renders a search input (filters across the
+- [x] FR-M3: Each tab's body renders a search input (filters across the
       tab's loaded memories), and a list of memory cards. Each card shows:
       title, description (truncated to ~2 lines), last-updated relative
       label, a type-tag badge, a pin/unpin icon button, and a delete icon
       button. Pinned memories sort first.
-- [ ] FR-M4: Search is case-insensitive substring match against
+- [x] FR-M4: Search is case-insensitive substring match against
       `title` + `description`. Empty search shows all.
-- [ ] FR-M5: Pin/unpin and delete buttons emit `props.onTogglePin(memory)`
+- [x] FR-M5: Pin/unpin and delete buttons emit `props.onTogglePin(memory)`
       and `props.onDelete(memory)` respectively. Local pin state updates
       optimistically for visual feedback; if the parent does not provide
       the callback, the buttons are present but no-op.
-- [ ] FR-M6: Loading / error / empty / populated states per tab. Empty
+- [x] FR-M6: Loading / error / empty / populated states per tab. Empty
       while searching shows a "No memories match …" card.
-- [ ] FR-M7: Public exports: `MemoryDestination`, `MemoryDestinationProps`,
+- [x] FR-M7: Public exports: `MemoryDestination`, `MemoryDestinationProps`,
       `Memory`, `MemoryType`.
 
 ## Non-functional requirements
